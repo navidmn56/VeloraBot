@@ -1,24 +1,24 @@
-<div align="center">
-
 # VeloraBot
 
 **Telegram VPN Configuration Management Bot**
 
 Python-based Telegram bot for VPN configuration sales, user management, payments, referrals and automated configuration delivery.
 
-<br>
-
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge\&logo=python\&logoColor=white)](https://www.python.org/)
-[![3X-UI](https://img.shields.io/badge/3X--UI-MHSanaei-181717?style=for-the-badge\&logo=github\&logoColor=white)](https://github.com/MHSanaei/3x-ui)
-[![License](https://img.shields.io/badge/Status-Active-success?style=for-the-badge)](https://github.com/navidmn56/VeloraBot)
-
-</div>
-
----
-
 <div align="center">
 
-<img src="docs/screenshot/Screenshot.png" alt="VeloraBot" width="360">
+<table>
+<tr>
+<td align="center">
+<img src="screenshot-1.png" width="280">
+</td>
+<td align="center">
+<img src="screenshot-2.png" width="280">
+</td>
+<td align="center">
+<img src="screenshot-3.png" width="280">
+</td>
+</tr>
+</table>
 
 </div>
 
@@ -49,7 +49,7 @@ VeloraBot is developed specifically for:
 
 **MHSanaei 3X-UI**
 
-https://github.com/MHSanaei/3x-ui
+[GitHub](https://github.com/MHSanaei/3x-ui)
 
 Other VPN management panels are not supported.
 
@@ -181,5 +181,4 @@ This project is actively developed and may contain bugs.
 
 **Navid**
 
-GitHub:
-https://github.com/navidmn56/VeloraBot
+[GitHub](https://github.com/navidmn56/VeloraBot)
