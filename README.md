@@ -18,7 +18,7 @@ Python-based Telegram bot for VPN configuration sales, user management, payments
 
 <div align="center">
 
-<img src="screenshot.png" alt="VeloraBot" width="850">
+<img src="docs/screenshot/Screenshot.png" alt="VeloraBot" width="850">
 
 </div>
 
