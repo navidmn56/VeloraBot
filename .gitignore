@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+
+# Runtime
+shutdown_stats.json
+
+# Ignore everything inside data
+data/*
+
+# Keep data directory
+!data/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
