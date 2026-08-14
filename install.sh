@@ -5,43 +5,6 @@ set -Eeuo pipefail
 # ============================================================
 # VeloraBot Smart Installer / Updater
 # ============================================================
-#
-# Repository:
-#   https://github.com/navidmn56/VeloraBot
-#
-# What this script does:
-#
-#   NEW INSTALLATION
-#     - Downloads latest GitHub Release
-#     - Creates Python virtual environment
-#     - Installs dependencies
-#     - Configures config.py
-#     - Creates systemd service
-#     - Starts and verifies the bot
-#
-#   EXISTING INSTALLATION
-#     - Detects current version
-#     - Detects latest GitHub Release
-#     - Checks config.py
-#     - Repairs missing critical settings
-#     - Updates the entire application
-#     - Preserves config values
-#     - Preserves data/
-#     - Installs new dependencies
-#     - Restarts and verifies the bot
-#
-# IMPORTANT:
-#   config.py from GitHub IS updated during upgrades.
-#   Critical user settings are then restored into the
-#   new config.py.
-#
-#   data/ is NEVER deleted during an update.
-#
-# ============================================================
-
-# ============================================================
-# Colors
-# ============================================================
 
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
@@ -73,7 +36,6 @@ readonly SERVICE_NAME="velorabot"
 readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 readonly BACKUP_ROOT="/opt/VeloraBot-backups"
-
 readonly INSTALL_LOG="/tmp/velorabot-install.log"
 
 # ============================================================
@@ -83,11 +45,9 @@ readonly INSTALL_LOG="/tmp/velorabot-install.log"
 CURRENT_VERSION=""
 LATEST_VERSION=""
 LATEST_RELEASE_URL=""
-LATEST_TARBALL_URL=""
 
 INSTALL_MODE=""
 NEEDS_CONFIG_REPAIR="false"
-NEEDS_UPDATE="false"
 
 # Skip configuration prompts (for automated updates)
 SKIP_CONFIG="${SKIP_CONFIG:-false}"
@@ -193,7 +153,7 @@ trap '
 ' ERR
 
 # ============================================================
-# Input Functions (Improved)
+# Input Functions (Fixed)
 # ============================================================
 
 read_tty() {
@@ -201,20 +161,19 @@ read_tty() {
     local __resultvar="$2"
     local value=""
 
-    # Try multiple methods to read input
+    # Simple and reliable read
     if [[ -t 0 ]]; then
         # stdin is a terminal
-        read -r -p "$prompt" value
+        printf "%s" "$prompt" >&2
+        read -r value
     elif [[ -c /dev/tty ]]; then
         # /dev/tty is available
-        read -r -p "$prompt" value < /dev/tty
-    elif [[ -t 1 ]]; then
-        # stdout is a terminal, try reading from it
-        read -r -p "$prompt" value >&1
+        printf "%s" "$prompt" >&2
+        read -r value < /dev/tty
     else
-        # Last resort: read from stdin without prompt
-        echo -n "$prompt" >&2
-        read -r value
+        # Last resort: read from stdin
+        printf "%s" "$prompt" >&2
+        read -r value || value=""
     fi
 
     printf -v "$__resultvar" '%s' "$value"
@@ -225,23 +184,21 @@ read_secret_tty() {
     local __resultvar="$2"
     local value=""
 
-    # Try multiple methods to read secret input
+    # Simple and reliable secret read
     if [[ -t 0 ]]; then
         # stdin is a terminal
-        read -r -s -p "$prompt" value
-        echo
+        printf "%s" "$prompt" >&2
+        read -r -s value
+        echo >&2
     elif [[ -c /dev/tty ]]; then
         # /dev/tty is available
-        read -r -s -p "$prompt" value < /dev/tty
-        echo
-    elif [[ -t 1 ]]; then
-        # stdout is a terminal
-        read -r -s -p "$prompt" value >&1
-        echo
+        printf "%s" "$prompt" >&2
+        read -r -s value < /dev/tty
+        echo >&2
     else
         # Last resort
-        echo -n "$prompt" >&2
-        read -r -s value
+        printf "%s" "$prompt" >&2
+        read -r -s value || value=""
         echo >&2
     fi
 
@@ -498,18 +455,41 @@ create_backup() {
 }
 
 # ============================================================
-# Extract Configuration (Improved with Regex Fallback)
+# Fix config.py syntax errors
+# ============================================================
+
+fix_config_syntax() {
+    local config_file="$1"
+    
+    # Fix AI_BLOCKED_STATES if it's not closed
+    if [[ -f "$config_file" ]]; then
+        # Check if AI_BLOCKED_STATES exists but doesn't have closing bracket
+        if grep -q "AI_BLOCKED_STATES" "$config_file" && \
+           ! grep -A 5 "AI_BLOCKED_STATES" "$config_file" | grep -q ']'; then
+            warning "Fixing syntax error in AI_BLOCKED_STATES..."
+            
+            # Add closing bracket after the last item
+            sed -i "/AI_BLOCKED_STATES/,/awaiting_manual_balance/s/awaiting_manual_balance'/awaiting_manual_balance'\n]/" "$config_file"
+            
+            success "Fixed AI_BLOCKED_STATES syntax error."
+        fi
+    fi
+}
+
+# ============================================================
+# Extract Configuration (Robust with Regex Fallback)
 # ============================================================
 
 extract_config_values() {
     [[ -f "$CONFIG_FILE" ]] || return 1
 
-    local values
-    local extraction_success=false
+    # First, try to fix common syntax errors
+    fix_config_syntax "$CONFIG_FILE"
 
-    # Try AST parsing first
-    values="$(
-        python3 - "$CONFIG_FILE" <<'PY'
+    local values=""
+    
+    # Method 1: Try AST parsing
+    values="$(python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || echo "{}"
 import ast
 import json
 import sys
@@ -551,29 +531,16 @@ try:
                 continue
     
     print(json.dumps(result))
-    
-except SyntaxError:
-    # If syntax error, output empty JSON
-    print("{}")
-except Exception as e:
-    # For any other error, also output empty JSON
-    print("{}", file=sys.stderr)
+except Exception:
     print("{}")
 PY
-    )"
+)"
 
-    # Check if we got valid JSON and it's not empty
-    if [[ -n "$values" ]] && python3 -c "import json; d=json.loads('''$values'''); exit(0 if d else 1)" 2>/dev/null; then
-        extraction_success=true
-    fi
-
-    # If AST parsing failed, try regex extraction
-    if [[ "$extraction_success" == "false" ]]; then
-        warning "config.py has syntax errors. Using regex extraction..."
+    # Method 2: If AST failed, try regex
+    if [[ -z "$values" ]] || [[ "$values" == "{}" ]]; then
+        warning "Using regex extraction for config values..."
         
-        # Extract using regex
-        local regex_values
-        regex_values="$(python3 - "$CONFIG_FILE" <<'PY'
+        values="$(python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || echo "{}"
 import json
 import re
 import sys
@@ -591,20 +558,20 @@ result = {}
 
 # Define patterns for each key
 patterns = {
-    "BOT_TOKEN": r'^BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
-    "ADMIN_ID": r'^ADMIN_ID\s*=\s*["\']?(\d+)["\']?',
-    "LOG_BOT_TOKEN": r'^LOG_BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
-    "LOG_CHANNEL_ID": r'^LOG_CHANNEL_ID\s*=\s*(-?\d+)',
-    "BANK_CARD_NUMBER": r'^BANK_CARD_NUMBER\s*=\s*["\']([^"\']+)["\']',
-    "BANK_CARD_HOLDER": r'^BANK_CARD_HOLDER\s*=\s*["\']([^"\']+)["\']',
-    "BANK_NAME": r'^BANK_NAME\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_PANEL_URL": r'^SENAI_PANEL_URL\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_PANEL_USERNAME": r'^SENAI_PANEL_USERNAME\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_PANEL_PASSWORD": r'^SENAI_PANEL_PASSWORD\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_SUB_URL": r'^SENAI_SUB_URL\s*=\s*["\']([^"\']+)["\']',
-    "SUPPORT_USERNAME": r'^SUPPORT_USERNAME\s*=\s*["\']([^"\']+)["\']',
-    "GEMINI_ENABLED": r'^GEMINI_ENABLED\s*=\s*["\']?(True|False)["\']?',
-    "GEMINI_API_KEY": r'^GEMINI_API_KEY\s*=\s*["\']([^"\']+)["\']',
+    "BOT_TOKEN": r'BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
+    "ADMIN_ID": r'ADMIN_ID\s*=\s*["\']?(\d+)["\']?',
+    "LOG_BOT_TOKEN": r'LOG_BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
+    "LOG_CHANNEL_ID": r'LOG_CHANNEL_ID\s*=\s*(-?\d+)',
+    "BANK_CARD_NUMBER": r'BANK_CARD_NUMBER\s*=\s*["\']([^"\']+)["\']',
+    "BANK_CARD_HOLDER": r'BANK_CARD_HOLDER\s*=\s*["\']([^"\']+)["\']',
+    "BANK_NAME": r'BANK_NAME\s*=\s*["\']([^"\']+)["\']',
+    "SENAI_PANEL_URL": r'SENAI_PANEL_URL\s*=\s*["\']([^"\']+)["\']',
+    "SENAI_PANEL_USERNAME": r'SENAI_PANEL_USERNAME\s*=\s*["\']([^"\']+)["\']',
+    "SENAI_PANEL_PASSWORD": r'SENAI_PANEL_PASSWORD\s*=\s*["\']([^"\']+)["\']',
+    "SENAI_SUB_URL": r'SENAI_SUB_URL\s*=\s*["\']([^"\']+)["\']',
+    "SUPPORT_USERNAME": r'SUPPORT_USERNAME\s*=\s*["\']([^"\']+)["\']',
+    "GEMINI_ENABLED": r'GEMINI_ENABLED\s*=\s*["\']?(True|False)["\']?',
+    "GEMINI_API_KEY": r'GEMINI_API_KEY\s*=\s*["\']([^"\']+)["\']',
 }
 
 for key, pattern in patterns.items():
@@ -613,18 +580,19 @@ for key, pattern in patterns.items():
         if key == "GEMINI_ENABLED":
             result[key] = match.group(1) == "True"
         elif key in ["ADMIN_ID", "LOG_CHANNEL_ID"]:
-            result[key] = int(match.group(1))
+            try:
+                result[key] = int(match.group(1))
+            except:
+                result[key] = match.group(1)
         else:
             result[key] = match.group(1)
 
 print(json.dumps(result))
 PY
 )"
-
-        values="$regex_values"
     fi
 
-    # Extract values using a more robust method
+    # Extract values from JSON
     extract_single_value() {
         local key="$1"
         local default="$2"
@@ -633,11 +601,15 @@ PY
         value="$(python3 -c "
 import json, sys
 try:
-    d = json.load(sys.stdin)
-    print(d.get('$key', '$default'))
-except:
+    d = json.loads('''$values''')
+    val = d.get('$key', '$default')
+    if isinstance(val, bool):
+        print('True' if val else 'False')
+    else:
+        print(val)
+except Exception as e:
     print('$default')
-" <<< "$values" 2>/dev/null)"
+" 2>/dev/null)"
         
         echo "$value"
     }
@@ -1162,7 +1134,10 @@ values = {
 
 for key, value in values.items():
     if key == "LOG_CHANNEL_ID":
-        replacement = f"{key} = {int(value)}"
+        try:
+            replacement = f"{key} = {int(value)}"
+        except:
+            replacement = f'{key} = "{value}"'
     elif key == "GEMINI_ENABLED":
         replacement = f"{key} = {value == 'True'}"
     else:
@@ -1353,7 +1328,7 @@ setup_python_environment() {
 }
 
 # ============================================================
-# Validate Final Configuration
+# Validate Final Configuration (Fixed)
 # ============================================================
 
 validate_final_config() {
@@ -1363,24 +1338,45 @@ validate_final_config() {
         die "config.py does not exist."
     fi
 
+    # Fix any syntax errors
+    fix_config_syntax "$CONFIG_FILE"
+
+    # Check if config.py can be imported from the INSTALL_DIR
+    cd "$INSTALL_DIR"
+    
     "$VENV_DIR/bin/python" - <<'PY'
-import config
+import sys
+import os
 
-required = [
-    "BOT_TOKEN", "ADMIN_ID", "LOG_BOT_TOKEN", "LOG_CHANNEL_ID",
-    "BANK_CARD_NUMBER", "BANK_CARD_HOLDER", "BANK_NAME",
-    "SENAI_PANEL_URL", "SENAI_PANEL_USERNAME", "SENAI_PANEL_PASSWORD",
-    "SENAI_SUB_URL", "SUPPORT_USERNAME",
-    "GEMINI_ENABLED", "GEMINI_API_KEY",
-]
+# Add the install directory to Python path
+sys.path.insert(0, os.getcwd())
 
-missing = [name for name in required if not hasattr(config, name)]
-
-if missing:
-    raise RuntimeError("Missing configuration: " + ", ".join(missing))
-
-print("config.py import: OK")
-print("Required configuration: OK")
+try:
+    import config
+    
+    required = [
+        "BOT_TOKEN", "ADMIN_ID", "LOG_BOT_TOKEN", "LOG_CHANNEL_ID",
+        "BANK_CARD_NUMBER", "BANK_CARD_HOLDER", "BANK_NAME",
+        "SENAI_PANEL_URL", "SENAI_PANEL_USERNAME", "SENAI_PANEL_PASSWORD",
+        "SENAI_SUB_URL", "SUPPORT_USERNAME",
+        "GEMINI_ENABLED", "GEMINI_API_KEY",
+    ]
+    
+    missing = [name for name in required if not hasattr(config, name)]
+    
+    if missing:
+        print(f"Missing configuration: {', '.join(missing)}")
+        sys.exit(1)
+    
+    print("config.py import: OK")
+    print("Required configuration: OK")
+    
+except SyntaxError as e:
+    print(f"Syntax error in config.py: {e}")
+    sys.exit(1)
+except Exception as e:
+    print(f"Error importing config.py: {e}")
+    sys.exit(1)
 PY
 
     chmod 600 "$CONFIG_FILE"
