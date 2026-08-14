@@ -120,14 +120,21 @@ sudo nano /etc/systemd/system/velorabot.service
 ```ini
 [Unit]
 Description=VeloraBot
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
+
+User=root
 WorkingDirectory=/opt/VeloraBot
+
 ExecStart=/opt/VeloraBot/.venv/bin/python /opt/VeloraBot/main.py
+
 Restart=always
 RestartSec=5
+
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
