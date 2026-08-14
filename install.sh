@@ -153,56 +153,107 @@ trap '
 ' ERR
 
 # ============================================================
-# Input Functions (Fixed)
+# Input Functions - FIXED VERSION
 # ============================================================
+
+# This function ensures we can always read from terminal
+ensure_tty() {
+    # Try to open /dev/tty for reading
+    if [[ -c /dev/tty ]]; then
+        exec 3</dev/tty
+        return 0
+    fi
+    
+    # If /dev/tty is not available, try to use current stdin
+    if [[ -t 0 ]]; then
+        exec 3<&0
+        return 0
+    fi
+    
+    # Last resort: try to open /dev/tty again
+    if [[ -r /dev/tty ]]; then
+        exec 3</dev/tty
+        return 0
+    fi
+    
+    return 1
+}
 
 read_tty() {
     local prompt="$1"
     local __resultvar="$2"
     local value=""
-
-    # Simple and reliable read
-    if [[ -t 0 ]]; then
-        # stdin is a terminal
-        printf "%s" "$prompt" >&2
-        read -r value
-    elif [[ -c /dev/tty ]]; then
-        # /dev/tty is available
-        printf "%s" "$prompt" >&2
-        read -r value < /dev/tty
-    else
-        # Last resort: read from stdin
-        printf "%s" "$prompt" >&2
-        read -r value || value=""
+    
+    # Print prompt to stderr so it always shows
+    printf "%s" "$prompt" >&2
+    
+    # Try to read from /dev/tty first
+    if [[ -c /dev/tty ]]; then
+        if read -r value < /dev/tty 2>/dev/null; then
+            printf -v "$__resultvar" '%s' "$value"
+            return 0
+        fi
     fi
-
-    printf -v "$__resultvar" '%s' "$value"
+    
+    # If /dev/tty failed, try stdin
+    if [[ -t 0 ]]; then
+        if read -r value 2>/dev/null; then
+            printf -v "$__resultvar" '%s' "$value"
+            return 0
+        fi
+    fi
+    
+    # Last resort: use /dev/tty with explicit redirect
+    if [[ -r /dev/tty ]]; then
+        if read -r value < /dev/tty 2>/dev/null; then
+            printf -v "$__resultvar" '%s' "$value"
+            return 0
+        fi
+    fi
+    
+    # If all else fails, set empty value
+    printf -v "$__resultvar" '%s' ""
+    return 1
 }
 
 read_secret_tty() {
     local prompt="$1"
     local __resultvar="$2"
     local value=""
-
-    # Simple and reliable secret read
-    if [[ -t 0 ]]; then
-        # stdin is a terminal
-        printf "%s" "$prompt" >&2
-        read -r -s value
-        echo >&2
-    elif [[ -c /dev/tty ]]; then
-        # /dev/tty is available
-        printf "%s" "$prompt" >&2
-        read -r -s value < /dev/tty
-        echo >&2
-    else
-        # Last resort
-        printf "%s" "$prompt" >&2
-        read -r -s value || value=""
-        echo >&2
+    
+    # Print prompt to stderr so it always shows
+    printf "%s" "$prompt" >&2
+    
+    # Try to read from /dev/tty first (for secrets)
+    if [[ -c /dev/tty ]]; then
+        if read -r -s value < /dev/tty 2>/dev/null; then
+            echo >&2
+            printf -v "$__resultvar" '%s' "$value"
+            return 0
+        fi
     fi
-
-    printf -v "$__resultvar" '%s' "$value"
+    
+    # If /dev/tty failed, try stdin
+    if [[ -t 0 ]]; then
+        if read -r -s value 2>/dev/null; then
+            echo >&2
+            printf -v "$__resultvar" '%s' "$value"
+            return 0
+        fi
+    fi
+    
+    # Last resort: use /dev/tty with explicit redirect
+    if [[ -r /dev/tty ]]; then
+        if read -r -s value < /dev/tty 2>/dev/null; then
+            echo >&2
+            printf -v "$__resultvar" '%s' "$value"
+            return 0
+        fi
+    fi
+    
+    # If all else fails, set empty value
+    printf -v "$__resultvar" '%s' ""
+    return 1
 }
 
 # ============================================================
@@ -761,7 +812,7 @@ ask_main_config() {
             break
         fi
 
-        error "Invalid Telegram Bot Token format."
+        error "Invalid Telegram Bot Token format. Got: '$value'"
     done
 }
 
@@ -791,7 +842,7 @@ ask_admin_id() {
             break
         fi
 
-        error "Admin ID must contain numbers only."
+        error "Admin ID must contain numbers only. Got: '$value'"
     done
 }
 
@@ -820,7 +871,7 @@ ask_log_bot() {
             break
         fi
 
-        error "Invalid Telegram Bot Token format."
+        error "Invalid Telegram Bot Token format. Got: '$value'"
     done
 }
 
@@ -861,7 +912,7 @@ ask_log_group() {
             break
         fi
 
-        error "Group ID must be a negative number."
+        error "Group ID must be a negative number. Got: '$value'"
     done
 }
 
@@ -887,7 +938,7 @@ ask_bank_card() {
             break
         fi
 
-        error "Card number must contain exactly 16 digits."
+        error "Card number must contain exactly 16 digits. Got: '$value'"
     done
 }
 
@@ -949,7 +1000,7 @@ ask_panel_url() {
             break
         fi
 
-        error "URL must start with http:// or https://."
+        error "URL must start with http:// or https://. Got: '$value'"
     done
 }
 
@@ -998,7 +1049,7 @@ ask_subscription_url() {
             break
         fi
 
-        error "URL must start with http:// or https://."
+        error "URL must start with http:// or https://. Got: '$value'"
     done
 }
 
