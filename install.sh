@@ -5,18 +5,26 @@ set -Eeuo pipefail
 # ============================================================
 # VeloraBot Smart Installer / Updater / Repairer
 # ============================================================
-#
-# Repository:
-#   https://github.com/navidmn56/VeloraBot
-#
-# Features:
-#   - Fresh installation from GitHub Releases
-#   - Smart update with version detection
-#   - Configuration repair without data loss
-#   - Automatic backup before any operation
-#   - Preserves user data during updates
-#
-# ============================================================
+
+# IMPORTANT: This section must be at the top to handle input correctly
+# when script is executed via: curl ... | bash
+
+# Save the original stdin
+if [[ -t 0 ]]; then
+    # stdin is a terminal, we can use it directly
+    exec 3<&0
+elif [[ -c /dev/tty ]]; then
+    # Open /dev/tty for user input
+    exec 3</dev/tty
+else
+    # Try to reopen terminal
+    if exec 3< /dev/tty 2>/dev/null; then
+        :
+    else
+        echo "ERROR: Interactive terminal is required." >&2
+        exit 1
+    fi
+fi
 
 # ============================================================
 # Colors
@@ -169,27 +177,31 @@ trap '
 ' ERR
 
 # ============================================================
-# Interactive Terminal Input (Fixed)
+# Input Functions (Fixed for curl | bash)
 # ============================================================
-
-# Open a fixed file descriptor for terminal input
-if [[ -t 0 ]]; then
-    exec 3<&0
-elif [[ -r /dev/tty ]]; then
-    exec 3</dev/tty
-else
-    echo "ERROR: Interactive terminal is required." >&2
-    exit 1
-fi
 
 read_tty() {
     local prompt="$1"
     local __resultvar="$2"
     local value=""
 
+    # Print prompt to stderr so it always shows
     printf "%s" "$prompt" >&2
 
-    if IFS= read -r value <&3; then
+    # Read from file descriptor 3 (which is /dev/tty or original stdin)
+    if IFS= read -r value <&3 2>/dev/null; then
+        printf -v "$__resultvar" '%s' "$value"
+        return 0
+    fi
+
+    # Fallback: try reading from /dev/tty directly
+    if IFS= read -r value < /dev/tty 2>/dev/null; then
+        printf -v "$__resultvar" '%s' "$value"
+        return 0
+    fi
+
+    # Last resort: try reading from stdin
+    if IFS= read -r value; then
         printf -v "$__resultvar" '%s' "$value"
         return 0
     fi
@@ -203,9 +215,25 @@ read_secret_tty() {
     local __resultvar="$2"
     local value=""
 
+    # Print prompt to stderr so it always shows
     printf "%s" "$prompt" >&2
 
-    if IFS= read -r -s value <&3; then
+    # Read from file descriptor 3 (which is /dev/tty or original stdin)
+    if IFS= read -r -s value <&3 2>/dev/null; then
+        printf '\n' >&2
+        printf -v "$__resultvar" '%s' "$value"
+        return 0
+    fi
+
+    # Fallback: try reading from /dev/tty directly
+    if IFS= read -r -s value < /dev/tty 2>/dev/null; then
+        printf '\n' >&2
+        printf -v "$__resultvar" '%s' "$value"
+        return 0
+    fi
+
+    # Last resort: try reading from stdin
+    if IFS= read -r -s value; then
         printf '\n' >&2
         printf -v "$__resultvar" '%s' "$value"
         return 0
