@@ -308,44 +308,116 @@ install_repository() {
 
     if [[ -d "$INSTALL_DIR" ]]; then
 
-        print_warning "An existing installation was found at:"
+        print_warning "An existing VeloraBot installation was found at:"
         echo
         echo "    $INSTALL_DIR"
         echo
 
-        read -rp "Update the existing installation? [Y/n]: " answer
-        answer="${answer:-Y}"
+        echo -e "${CYAN}Choose what you want to do:${NC}"
+        echo
+        echo "  [Y] Keep the existing installation"
+        echo "      - Keep the current bot files"
+        echo "      - Keep the current virtual environment"
+        echo "      - Keep the current dependencies"
+        echo "      - Only update/reconfigure config.py"
+        echo
+        echo "  [N] Remove the existing installation"
+        echo "      - Stop the existing bot"
+        echo "      - Remove the entire /opt/VeloraBot directory"
+        echo "      - Remove the old systemd service"
+        echo "      - Clone VeloraBot again"
+        echo "      - Create a fresh virtual environment"
+        echo "      - Install dependencies again"
+        echo
+        echo -e "${YELLOW}WARNING: Choosing N will delete the existing VeloraBot installation.${NC}"
+        echo
 
-        if [[ "$answer" =~ ^[Yy]$ ]]; then
+        while true; do
 
-            print_info "Stopping existing VeloraBot service..."
+            read -rp "Keep existing installation? [Y/n]: " answer
 
-            systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+            answer="${answer:-Y}"
 
-            if [[ -d "$INSTALL_DIR/.git" ]]; then
-                cd "$INSTALL_DIR"
+            case "$answer" in
 
-                print_command "git fetch origin"
+                [Yy]|[Yy][Ee][Ss])
 
-                git fetch origin
+                    echo
+                    print_success "Keeping the existing VeloraBot installation."
+                    echo
+                    print_info "The bot files will NOT be re-downloaded."
+                    print_info "The virtual environment will NOT be recreated."
+                    print_info "Only configuration will be updated."
 
-                print_command "git reset --hard origin/main"
+                    return 0
+                    ;;
 
-                git reset --hard origin/main
+                [Nn]|[Nn][Oo])
 
-                print_success "Repository updated."
-            else
-                die "$INSTALL_DIR exists but is not a Git repository."
-            fi
+                    echo
+                    print_warning "You selected a fresh installation."
+                    echo
+                    print_warning "The existing VeloraBot installation will be deleted."
+                    echo
 
-        else
-            print_error "Installation cancelled."
-            exit 1
-        fi
+                    read -rp "Are you absolutely sure? Type YES to continue: " confirmation
+
+                    if [[ "$confirmation" != "YES" ]]; then
+                        echo
+                        print_info "Deletion cancelled."
+                        print_info "Keeping the existing installation."
+
+                        return 0
+                    fi
+
+                    echo
+                    print_info "Stopping existing VeloraBot service..."
+
+                    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+                    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+
+                    echo
+                    print_info "Removing existing systemd service..."
+
+                    rm -f "$SERVICE_FILE"
+
+                    systemctl daemon-reload
+
+                    echo
+                    print_info "Removing existing VeloraBot files..."
+
+                    rm -rf "$INSTALL_DIR"
+
+                    print_success "Existing installation removed."
+                    echo
+
+                    print_info "Cloning a fresh copy of VeloraBot..."
+
+                    git clone "$REPO_URL" "$INSTALL_DIR"
+
+                    print_success "Fresh VeloraBot installation downloaded."
+
+                    return 0
+                    ;;
+
+                *)
+
+                    print_warning "Invalid choice."
+                    print_info "Please enter Y or N."
+
+                    ;;
+
+            esac
+
+        done
 
     else
 
-        print_command "git clone $REPO_URL $INSTALL_DIR"
+        print_info "No existing installation was found."
+
+        echo
+        print_info "Cloning VeloraBot from GitHub..."
+        echo
 
         git clone "$REPO_URL" "$INSTALL_DIR"
 
