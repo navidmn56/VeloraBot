@@ -17,39 +17,32 @@ CONFIGS_FILE = os.path.join(DATA_DIR, "configs.json")
 
 
 
-# توکن و تنظیمات اصلی
-BOT_TOKEN = "Main_bot_token"  # توکن ربات اصلی
-ADMIN_ID = "7281221827"
-LOG_BOT_TOKEN = "Log_bot_token"  # توکن ربات دوم برای دریافت لاگ‌ها
-LOG_CHANNEL_ID = -5145528893  # شناسه کانال یا گروه برای ارسال لاگ‌ها (مثلاً -1001234567890)
-BANK_CARD_NUMBER = "676778785656565656"
-BANK_CARD_HOLDER = "Navid"
-BANK_NAME = "Blue Bank" 
-#SENAI_PANEL_ENABLED = False  # True = فعال، False = غیرفعال
-SENAI_PANEL_URL = "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW  or https://127.0.0.1:2053/c7UvLu2tMjFjP8BwiW"
-SENAI_PANEL_USERNAME = "Panel_username"
-SENAI_PANEL_PASSWORD = "Panel_password"
-SENAI_SUB_URL = "https://sub.Domain.com:2083"
+# ==================== 🔴 REQUIRED SETTINGS 🔴 ====================
+# These settings MUST be filled for the bot to work properly
+BOT_TOKEN = "Main_bot_token"  # Get from @BotFather
+ADMIN_ID = "YOUR_TELEGRAM_USER_ID" # Your Telegram ID (get from @myidbot)
+LOG_BOT_TOKEN = "Log_bot_token"  # Token of the second bot (will work after make it admin in LOG Group)
+LOG_CHANNEL_ID = -5145528893  # group ID where logs will be sent (add @myidbot to your Group then get group Id)
+BANK_CARD_NUMBER = "676778785656565656" # Your bank card number (16 digits)
+BANK_CARD_HOLDER = "Navid" # Card holder's full name
+BANK_NAME = "Blue Bank" # e.g., "Blue Bank", "Melli", "Mellat"
+SENAI_PANEL_URL = "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW" # OR use localhost: "https://127.0.0.1:2053/your_Web_Path"
+SENAI_PANEL_USERNAME = "Panel_username" # Panel admin username
+SENAI_PANEL_PASSWORD = "Panel_password" # Panel admin password
+SENAI_SUB_URL = "https://sub.Domain.com:2083" # Subscription URL for clients
 SUPPORT_USERNAME = "@your_username_here"
 
 
 
+# =============== 🟡 OPTIONAL: Google Gemini ===============
+GEMINI_ENABLED = False # Set to True to enable Gemini AI
+GEMINI_API_KEY = "Gemini_API_Key" # Get from https://ai.google.dev/
+GEMINI_MODEL = "gemini-2.5-flash" #you can set it to any model of gemini
+GEMINI_TEMPERATURE = 0.7  # Controls randomness (0.0 to 1.0)
+GEMINI_MAX_TOKENS = 90  # Maximum response length
+GEMINI_DAILY_LIMIT = 3 # Max AI responses per user per day
 
-
-
-
-
-
-
-# =============== تنظیمات Google Gemini (با کتابخانه جدید google.genai) ===============
-GEMINI_ENABLED = False  # True = فعال، False = غیرفعال
-GEMINI_API_KEY = "Gemini_API_Key"  # کلید واقعی خود را وارد کنید
-GEMINI_MODEL = "gemini-2.5-flash"  # یا gemini-1.5-flash, gemini-1.5-pro
-GEMINI_TEMPERATURE = 0.7
-GEMINI_MAX_TOKENS = 90  
-GEMINI_DAILY_LIMIT = 3
-
-# System Prompt بهینه شده برای Gemini
+# System Prompt you can costumize it
 GEMINI_SYSTEM_PROMPT = """دستیار فروش کانفیگ VPN. پاسخ‌ها کوتاه، مفید و مستقیم باشد.
 
 ⚡ سرعت کانفیگ‌ها:
@@ -83,6 +76,7 @@ GEMINI_SYSTEM_PROMPT = """دستیار فروش کانفیگ VPN. پاسخ‌ه�
 """
 
 
+#✅Configuration complete! Enjoy your bot.
 
 
 
@@ -94,7 +88,7 @@ GEMINI_SYSTEM_PROMPT = """دستیار فروش کانفیگ VPN. پاسخ‌ه�
 
 
 
-#this is not working do not enable it
+# ⚠️ Note: This feature is currently not working, do not enable
 
 OPENROUTER_ENABLED = False
 OPENROUTER_API_KEY = "Api_Token"
