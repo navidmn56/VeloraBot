@@ -3,7 +3,23 @@
 set -Eeuo pipefail
 
 # ============================================================
-# VeloraBot Smart Installer / Updater
+# VeloraBot Smart Installer / Updater / Repairer
+# ============================================================
+#
+# Repository:
+#   https://github.com/navidmn56/VeloraBot
+#
+# Features:
+#   - Fresh installation from GitHub Releases
+#   - Smart update with version detection
+#   - Configuration repair without data loss
+#   - Automatic backup before any operation
+#   - Preserves user data during updates
+#
+# ============================================================
+
+# ============================================================
+# Colors
 # ============================================================
 
 readonly RED='\033[0;31m'
@@ -18,7 +34,7 @@ readonly BOLD='\033[1m'
 readonly NC='\033[0m'
 
 # ============================================================
-# Application
+# Application Constants
 # ============================================================
 
 readonly APP_NAME="VeloraBot"
@@ -31,6 +47,7 @@ readonly INSTALL_DIR="/opt/VeloraBot"
 readonly VENV_DIR="${INSTALL_DIR}/.venv"
 readonly CONFIG_FILE="${INSTALL_DIR}/config.py"
 readonly DATA_DIR="${INSTALL_DIR}/data"
+readonly VERSION_FILE="${INSTALL_DIR}/.version"
 
 readonly SERVICE_NAME="velorabot"
 readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -39,7 +56,7 @@ readonly BACKUP_ROOT="/opt/VeloraBot-backups"
 readonly INSTALL_LOG="/tmp/velorabot-install.log"
 
 # ============================================================
-# Runtime
+# Runtime Variables
 # ============================================================
 
 CURRENT_VERSION=""
@@ -49,12 +66,11 @@ LATEST_RELEASE_URL=""
 INSTALL_MODE=""
 NEEDS_CONFIG_REPAIR="false"
 
-# Skip configuration prompts (for automated updates)
 SKIP_CONFIG="${SKIP_CONFIG:-false}"
 FORCE_UPDATE="${FORCE_UPDATE:-false}"
 
 # ============================================================
-# Critical Configuration
+# Critical Configuration Values
 # ============================================================
 
 BOT_TOKEN=""
@@ -153,65 +169,31 @@ trap '
 ' ERR
 
 # ============================================================
-# Input Functions - FIXED VERSION
+# Interactive Terminal Input (Fixed)
 # ============================================================
 
-# This function ensures we can always read from terminal
-ensure_tty() {
-    # Try to open /dev/tty for reading
-    if [[ -c /dev/tty ]]; then
-        exec 3</dev/tty
-        return 0
-    fi
-    
-    # If /dev/tty is not available, try to use current stdin
-    if [[ -t 0 ]]; then
-        exec 3<&0
-        return 0
-    fi
-    
-    # Last resort: try to open /dev/tty again
-    if [[ -r /dev/tty ]]; then
-        exec 3</dev/tty
-        return 0
-    fi
-    
-    return 1
-}
+# Open a fixed file descriptor for terminal input
+if [[ -t 0 ]]; then
+    exec 3<&0
+elif [[ -r /dev/tty ]]; then
+    exec 3</dev/tty
+else
+    echo "ERROR: Interactive terminal is required." >&2
+    exit 1
+fi
 
 read_tty() {
     local prompt="$1"
     local __resultvar="$2"
     local value=""
-    
-    # Print prompt to stderr so it always shows
+
     printf "%s" "$prompt" >&2
-    
-    # Try to read from /dev/tty first
-    if [[ -c /dev/tty ]]; then
-        if read -r value < /dev/tty 2>/dev/null; then
-            printf -v "$__resultvar" '%s' "$value"
-            return 0
-        fi
+
+    if IFS= read -r value <&3; then
+        printf -v "$__resultvar" '%s' "$value"
+        return 0
     fi
-    
-    # If /dev/tty failed, try stdin
-    if [[ -t 0 ]]; then
-        if read -r value 2>/dev/null; then
-            printf -v "$__resultvar" '%s' "$value"
-            return 0
-        fi
-    fi
-    
-    # Last resort: use /dev/tty with explicit redirect
-    if [[ -r /dev/tty ]]; then
-        if read -r value < /dev/tty 2>/dev/null; then
-            printf -v "$__resultvar" '%s' "$value"
-            return 0
-        fi
-    fi
-    
-    # If all else fails, set empty value
+
     printf -v "$__resultvar" '%s' ""
     return 1
 }
@@ -220,38 +202,15 @@ read_secret_tty() {
     local prompt="$1"
     local __resultvar="$2"
     local value=""
-    
-    # Print prompt to stderr so it always shows
+
     printf "%s" "$prompt" >&2
-    
-    # Try to read from /dev/tty first (for secrets)
-    if [[ -c /dev/tty ]]; then
-        if read -r -s value < /dev/tty 2>/dev/null; then
-            echo >&2
-            printf -v "$__resultvar" '%s' "$value"
-            return 0
-        fi
+
+    if IFS= read -r -s value <&3; then
+        printf '\n' >&2
+        printf -v "$__resultvar" '%s' "$value"
+        return 0
     fi
-    
-    # If /dev/tty failed, try stdin
-    if [[ -t 0 ]]; then
-        if read -r -s value 2>/dev/null; then
-            echo >&2
-            printf -v "$__resultvar" '%s' "$value"
-            return 0
-        fi
-    fi
-    
-    # Last resort: use /dev/tty with explicit redirect
-    if [[ -r /dev/tty ]]; then
-        if read -r -s value < /dev/tty 2>/dev/null; then
-            echo >&2
-            printf -v "$__resultvar" '%s' "$value"
-            return 0
-        fi
-    fi
-    
-    # If all else fails, set empty value
+
     printf -v "$__resultvar" '%s' ""
     return 1
 }
@@ -289,7 +248,9 @@ check_os() {
         echo
 
         local answer
-        read_tty "Continue anyway? [y/N]: " answer
+        if ! read_tty "Continue anyway? [y/N]: " answer; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ ! "$answer" =~ ^[Yy]$ ]]; then
             exit 0
@@ -428,42 +389,32 @@ print(data.get("html_url", ""))
 }
 
 # ============================================================
-# Detect Installed Version
+# Detect Installed Version (Using .version file)
 # ============================================================
 
 get_current_version() {
-    if [[ ! -d "$INSTALL_DIR" ]]; then
-        CURRENT_VERSION="none"
-        return
-    fi
-
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-        CURRENT_VERSION="$(
-            git -C "$INSTALL_DIR" describe \
-                --tags \
-                --exact-match \
-                2>/dev/null || true
-        )"
-
-        if [[ -z "$CURRENT_VERSION" ]]; then
+    if [[ ! -f "$VERSION_FILE" ]]; then
+        # Fallback to git if .version doesn't exist
+        if [[ -d "$INSTALL_DIR/.git" ]]; then
             CURRENT_VERSION="$(
                 git -C "$INSTALL_DIR" describe \
                     --tags \
-                    --abbrev=0 \
+                    --exact-match \
                     2>/dev/null || true
             )"
         fi
-
+        
         if [[ -z "$CURRENT_VERSION" ]]; then
-            CURRENT_VERSION="$(
-                git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || true
-            )"
+            CURRENT_VERSION="unknown"
         fi
+    else
+        CURRENT_VERSION="$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")"
     fi
+}
 
-    if [[ -z "$CURRENT_VERSION" ]]; then
-        CURRENT_VERSION="unknown"
-    fi
+save_version_file() {
+    echo "$LATEST_VERSION" > "$VERSION_FILE"
+    chmod 644 "$VERSION_FILE"
 }
 
 # ============================================================
@@ -484,7 +435,7 @@ version_is_equal() {
 }
 
 # ============================================================
-# Backup
+# Backup (Enhanced)
 # ============================================================
 
 create_backup() {
@@ -494,37 +445,27 @@ create_backup() {
 
     mkdir -p "$backup_dir"
 
+    # Backup config.py
     if [[ -f "$CONFIG_FILE" ]]; then
         cp -a "$CONFIG_FILE" "$backup_dir/config.py"
     fi
 
+    # Backup data directory
     if [[ -d "$DATA_DIR" ]]; then
         cp -a "$DATA_DIR" "$backup_dir/data"
     fi
 
-    echo "$backup_dir"
-}
-
-# ============================================================
-# Fix config.py syntax errors
-# ============================================================
-
-fix_config_syntax() {
-    local config_file="$1"
-    
-    # Fix AI_BLOCKED_STATES if it's not closed
-    if [[ -f "$config_file" ]]; then
-        # Check if AI_BLOCKED_STATES exists but doesn't have closing bracket
-        if grep -q "AI_BLOCKED_STATES" "$config_file" && \
-           ! grep -A 5 "AI_BLOCKED_STATES" "$config_file" | grep -q ']'; then
-            warning "Fixing syntax error in AI_BLOCKED_STATES..."
-            
-            # Add closing bracket after the last item
-            sed -i "/AI_BLOCKED_STATES/,/awaiting_manual_balance/s/awaiting_manual_balance'/awaiting_manual_balance'\n]/" "$config_file"
-            
-            success "Fixed AI_BLOCKED_STATES syntax error."
-        fi
+    # Backup version file
+    if [[ -f "$VERSION_FILE" ]]; then
+        cp -a "$VERSION_FILE" "$backup_dir/.version"
     fi
+
+    # Backup requirements.txt
+    if [[ -f "$INSTALL_DIR/requirements.txt" ]]; then
+        cp -a "$INSTALL_DIR/requirements.txt" "$backup_dir/requirements.txt"
+    fi
+
+    echo "$backup_dir"
 }
 
 # ============================================================
@@ -533,9 +474,6 @@ fix_config_syntax() {
 
 extract_config_values() {
     [[ -f "$CONFIG_FILE" ]] || return 1
-
-    # First, try to fix common syntax errors
-    fix_config_syntax "$CONFIG_FILE"
 
     local values=""
     
@@ -805,7 +743,9 @@ ask_main_config() {
         echo "  5. Copy the complete token."
         echo
 
-        read_secret_tty "Bot Token: " value
+        if ! read_secret_tty "Bot Token: " value; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ "$value" =~ ^[0-9]{6,12}:[A-Za-z0-9_-]{20,}$ ]]; then
             BOT_TOKEN="$value"
@@ -835,7 +775,9 @@ ask_admin_id() {
         echo "  123456789"
         echo
 
-        read_tty "Admin ID: " value
+        if ! read_tty "Admin ID: " value; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ "$value" =~ ^[0-9]+$ ]]; then
             ADMIN_ID="$value"
@@ -864,7 +806,9 @@ ask_log_bot() {
         echo "  5. Then enter its Bot Token below."
         echo
 
-        read_secret_tty "Log Bot Token: " value
+        if ! read_secret_tty "Log Bot Token: " value; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ "$value" =~ ^[0-9]{6,12}:[A-Za-z0-9_-]{20,}$ ]]; then
             LOG_BOT_TOKEN="$value"
@@ -905,7 +849,9 @@ ask_log_group() {
         echo "  -107637"
         echo
 
-        read_tty "Log Group ID: " value
+        if ! read_tty "Log Group ID: " value; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ "$value" =~ ^-[0-9]+$ ]]; then
             LOG_CHANNEL_ID="$value"
@@ -931,7 +877,9 @@ ask_bank_card() {
         echo "  6037991234567890"
         echo
 
-        read_tty "Card Number: " value
+        if ! read_tty "Card Number: " value; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ "$value" =~ ^[0-9]{16}$ ]]; then
             BANK_CARD_NUMBER="$value"
@@ -952,7 +900,9 @@ ask_card_holder() {
     echo "  Navid Moradi"
     echo
 
-    read_tty "Card Holder Name: " BANK_CARD_HOLDER
+    if ! read_tty "Card Holder Name: " BANK_CARD_HOLDER; then
+        die "Could not read input from the terminal."
+    fi
 }
 
 ask_bank_name() {
@@ -965,7 +915,9 @@ ask_bank_name() {
     echo "  Mellat"
     echo
 
-    read_tty "Bank Name: " BANK_NAME
+    if ! read_tty "Bank Name: " BANK_NAME; then
+        die "Could not read input from the terminal."
+    fi
 }
 
 ask_panel_url() {
@@ -993,7 +945,9 @@ ask_panel_url() {
         echo "If the panel is on another server, use its accessible URL."
         echo
 
-        read_tty "3X-UI Panel URL: " value
+        if ! read_tty "3X-UI Panel URL: " value; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ "$value" =~ ^https?:// ]]; then
             SENAI_PANEL_URL="$value"
@@ -1011,14 +965,18 @@ ask_panel_credentials() {
     echo "Enter the administrator username used to log into 3X-UI."
     echo
 
-    read_tty "Panel Username: " SENAI_PANEL_USERNAME
+    if ! read_tty "Panel Username: " SENAI_PANEL_USERNAME; then
+        die "Could not read input from the terminal."
+    fi
 
     echo
     echo "Enter the administrator password."
     echo "The password will not be displayed."
     echo
 
-    read_secret_tty "Panel Password: " SENAI_PANEL_PASSWORD
+    if ! read_secret_tty "Panel Password: " SENAI_PANEL_PASSWORD; then
+        die "Could not read input from the terminal."
+    fi
 }
 
 ask_subscription_url() {
@@ -1042,7 +1000,9 @@ ask_subscription_url() {
         echo "    https://sub.example.com:2083"
         echo
 
-        read_tty "Subscription URL: " value
+        if ! read_tty "Subscription URL: " value; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ "$value" =~ ^https?:// ]]; then
             SENAI_SUB_URL="$value"
@@ -1064,7 +1024,9 @@ ask_support() {
     echo "  @your_username"
     echo
 
-    read_tty "Support Username: " SUPPORT_USERNAME
+    if ! read_tty "Support Username: " SUPPORT_USERNAME; then
+        die "Could not read input from the terminal."
+    fi
 }
 
 ask_gemini() {
@@ -1080,7 +1042,9 @@ ask_gemini() {
     echo "Would you like to enable Gemini?"
     echo
 
-    read_tty "Enable Gemini? [y/N]: " answer
+    if ! read_tty "Enable Gemini? [y/N]: " answer; then
+        die "Could not read input from the terminal."
+    fi
 
     if [[ "$answer" =~ ^[Yy]$ ]]; then
         GEMINI_ENABLED="True"
@@ -1092,7 +1056,9 @@ ask_gemini() {
         echo
 
         while true; do
-            read_secret_tty "Gemini API Key: " value
+            if ! read_secret_tty "Gemini API Key: " value; then
+                die "Could not read input from the terminal."
+            fi
 
             if [[ ${#value} -ge 20 ]]; then
                 GEMINI_API_KEY="$value"
@@ -1109,53 +1075,7 @@ ask_gemini() {
 }
 
 # ============================================================
-# Repair Configuration
-# ============================================================
-
-repair_config() {
-    step "Repairing Configuration"
-
-    if [[ "$SKIP_CONFIG" == "true" ]]; then
-        warning "Skipping configuration repair (SKIP_CONFIG=true)"
-        return 0
-    fi
-
-    echo "The current config.py is incomplete."
-    echo
-    echo "Only missing or invalid critical settings will be requested."
-    echo "Existing valid settings will be preserved."
-    echo
-
-    is_placeholder "$BOT_TOKEN" && ask_main_config
-    [[ "$ADMIN_ID" =~ ^[0-9]+$ ]] || ask_admin_id
-    is_placeholder "$LOG_BOT_TOKEN" && ask_log_bot
-    [[ "$LOG_CHANNEL_ID" =~ ^-[0-9]+$ ]] || ask_log_group
-    [[ "$BANK_CARD_NUMBER" =~ ^[0-9]{16}$ ]] || ask_bank_card
-    is_placeholder "$BANK_CARD_HOLDER" && ask_card_holder
-    is_placeholder "$BANK_NAME" && ask_bank_name
-    [[ "$SENAI_PANEL_URL" =~ ^https?:// ]] || ask_panel_url
-
-    if is_placeholder "$SENAI_PANEL_USERNAME"; then
-        ask_panel_credentials
-    elif is_placeholder "$SENAI_PANEL_PASSWORD"; then
-        echo
-        header "3X-UI PANEL PASSWORD"
-        read_secret_tty "Panel Password: " SENAI_PANEL_PASSWORD
-    fi
-
-    [[ "$SENAI_SUB_URL" =~ ^https?:// ]] || ask_subscription_url
-    is_placeholder "$SUPPORT_USERNAME" && ask_support
-
-    if [[ "$GEMINI_ENABLED" == "True" ]] && is_placeholder "$GEMINI_API_KEY"; then
-        ask_gemini
-    fi
-
-    write_critical_values
-    success "Configuration repaired successfully."
-}
-
-# ============================================================
-# Write Critical Values
+# Write Critical Values (More Robust)
 # ============================================================
 
 write_critical_values() {
@@ -1194,17 +1114,70 @@ for key, value in values.items():
     else:
         replacement = f"{key} = {value!r}"
 
-    pattern = rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*$"
+    # More flexible pattern matching
+    pattern = rf"(?m)^[ \t]*{re.escape(key)}[ \t]*[:=][^\n]*$"
     text, count = re.subn(pattern, replacement, text, count=1)
 
     if count == 0:
-        # If key not found, add it at the end
-        text += f"\n{replacement}\n"
+        # If key not found, add it after the REQUIRED SETTINGS marker
+        marker = "# ==================== 🔴 REQUIRED SETTINGS 🔴 ===================="
+        if marker in text:
+            text = text.replace(marker, marker + "\n" + replacement)
+        else:
+            text += f"\n{replacement}\n"
 
 path.write_text(text, encoding="utf-8")
 PY
 
     chmod 600 "$CONFIG_FILE"
+}
+
+# ============================================================
+# Repair Configuration
+# ============================================================
+
+repair_config() {
+    step "Repairing Configuration"
+
+    if [[ "$SKIP_CONFIG" == "true" ]]; then
+        warning "Skipping configuration repair (SKIP_CONFIG=true)"
+        return 0
+    fi
+
+    echo "The current config.py is incomplete."
+    echo
+    echo "Only missing or invalid critical settings will be requested."
+    echo "Existing valid settings will be preserved."
+    echo
+
+    is_placeholder "$BOT_TOKEN" && ask_main_config
+    [[ "$ADMIN_ID" =~ ^[0-9]+$ ]] || ask_admin_id
+    is_placeholder "$LOG_BOT_TOKEN" && ask_log_bot
+    [[ "$LOG_CHANNEL_ID" =~ ^-[0-9]+$ ]] || ask_log_group
+    [[ "$BANK_CARD_NUMBER" =~ ^[0-9]{16}$ ]] || ask_bank_card
+    is_placeholder "$BANK_CARD_HOLDER" && ask_card_holder
+    is_placeholder "$BANK_NAME" && ask_bank_name
+    [[ "$SENAI_PANEL_URL" =~ ^https?:// ]] || ask_panel_url
+
+    if is_placeholder "$SENAI_PANEL_USERNAME"; then
+        ask_panel_credentials
+    elif is_placeholder "$SENAI_PANEL_PASSWORD"; then
+        echo
+        header "3X-UI PANEL PASSWORD"
+        if ! read_secret_tty "Panel Password: " SENAI_PANEL_PASSWORD; then
+            die "Could not read input from the terminal."
+        fi
+    fi
+
+    [[ "$SENAI_SUB_URL" =~ ^https?:// ]] || ask_subscription_url
+    is_placeholder "$SUPPORT_USERNAME" && ask_support
+
+    if [[ "$GEMINI_ENABLED" == "True" ]] && is_placeholder "$GEMINI_API_KEY"; then
+        ask_gemini
+    fi
+
+    write_critical_values
+    success "Configuration repaired successfully."
 }
 
 # ============================================================
@@ -1218,13 +1191,22 @@ fresh_install() {
 
     if [[ -d "$INSTALL_DIR" ]]; then
         warning "Existing installation found."
-
+        
         local answer
-        read_tty "Remove existing installation and start fresh? [y/N]: " answer
+        if ! read_tty "Remove existing installation and start fresh? [y/N]: " answer; then
+            die "Could not read input from the terminal."
+        fi
 
         if [[ ! "$answer" =~ ^[Yy]$ ]]; then
             die "Fresh installation cancelled."
         fi
+
+        # Create backup before removing
+        local backup_dir
+        backup_dir="$(create_backup)"
+        info "Backup created before fresh install:"
+        echo "  $backup_dir"
+        echo
 
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
         systemctl disable "$SERVICE_NAME" 2>/dev/null || true
@@ -1266,6 +1248,9 @@ fresh_install() {
     rm -f "$archive"
 
     mkdir -p "$DATA_DIR"
+    
+    # Save version file
+    save_version_file
 
     success "VeloraBot ${LATEST_VERSION} downloaded."
 }
@@ -1338,6 +1323,9 @@ update_existing() {
 
     # Restore critical settings into NEW config.py
     write_critical_values
+    
+    # Save version file
+    save_version_file
 
     success "Application updated to ${LATEST_VERSION}."
     success "config.py updated from GitHub."
@@ -1379,7 +1367,7 @@ setup_python_environment() {
 }
 
 # ============================================================
-# Validate Final Configuration (Fixed)
+# Validate Final Configuration
 # ============================================================
 
 validate_final_config() {
@@ -1389,8 +1377,20 @@ validate_final_config() {
         die "config.py does not exist."
     fi
 
-    # Fix any syntax errors
-    fix_config_syntax "$CONFIG_FILE"
+    # Check if config.py has syntax errors
+    if ! python3 -m py_compile "$CONFIG_FILE" 2>/dev/null; then
+        error "config.py has syntax errors."
+        
+        # Try to extract values and rewrite
+        extract_config_values
+        write_critical_values
+        
+        if ! python3 -m py_compile "$CONFIG_FILE" 2>/dev/null; then
+            die "Could not fix config.py syntax errors."
+        fi
+        
+        warning "Fixed config.py syntax errors."
+    fi
 
     # Check if config.py can be imported from the INSTALL_DIR
     cd "$INSTALL_DIR"
@@ -1493,24 +1493,6 @@ start_and_check() {
 }
 
 # ============================================================
-# Get Installed Version
-# ============================================================
-
-get_installed_version() {
-    if [[ -d "$INSTALL_DIR/.git" ]]; then
-        CURRENT_VERSION="$(
-            git -C "$INSTALL_DIR" describe --tags --exact-match 2>/dev/null || true
-        )"
-
-        if [[ -z "$CURRENT_VERSION" ]]; then
-            CURRENT_VERSION="$LATEST_VERSION"
-        fi
-    else
-        CURRENT_VERSION="$LATEST_VERSION"
-    fi
-}
-
-# ============================================================
 # Show Logs
 # ============================================================
 
@@ -1525,7 +1507,10 @@ show_logs() {
     echo
 
     local answer
-    read_tty "Watch live logs now? [Y/n]: " answer
+    if ! read_tty "Watch live logs now? [Y/n]: " answer; then
+        warning "Could not read input. Skipping live logs."
+        return
+    fi
 
     answer="${answer:-Y}"
 
@@ -1546,8 +1531,6 @@ show_logs() {
 # ============================================================
 
 final_summary() {
-    get_installed_version
-
     header "INSTALLATION COMPLETE"
 
     echo -e "${GREEN}${BOLD}VeloraBot is ready.${NC}"
@@ -1597,7 +1580,7 @@ final_summary() {
 }
 
 # ============================================================
-# Handle Existing Installation
+# Handle Existing Installation (Optimized)
 # ============================================================
 
 handle_existing_installation() {
@@ -1631,7 +1614,7 @@ handle_existing_installation() {
         NEEDS_CONFIG_REPAIR="true"
     fi
 
-    # Already latest and no repair needed
+    # Already latest and no repair needed - EXIT EARLY
     if [[ "$NEEDS_CONFIG_REPAIR" == "false" ]] && \
        [[ "$FORCE_UPDATE" != "true" ]] && \
        version_is_equal "$CURRENT_VERSION" "$LATEST_VERSION"; then
@@ -1646,8 +1629,13 @@ handle_existing_installation() {
         echo "Latest Release:"
         echo -e "  ${GREEN}${LATEST_VERSION}${NC}"
         echo
+        echo -e "${GREEN}✔ Configuration is valid.${NC}"
+        echo -e "${GREEN}✔ No update is required.${NC}"
+        echo
+        echo "Nothing was changed."
+        echo
 
-        return 0
+        exit 0
     fi
 
     # Repair configuration if needed
@@ -1674,7 +1662,9 @@ handle_existing_installation() {
         if [[ "$FORCE_UPDATE" == "true" ]]; then
             answer="Y"
         else
-            read_tty "Update VeloraBot to ${LATEST_VERSION}? [Y/n]: " answer
+            if ! read_tty "Update VeloraBot to ${LATEST_VERSION}? [Y/n]: " answer; then
+                die "Could not read input from the terminal."
+            fi
             answer="${answer:-Y}"
         fi
 
@@ -1724,7 +1714,8 @@ main() {
         esac
     done
 
-    clear || true
+    # Don't clear screen - keep history visible
+    # clear || true
 
     echo
     echo -e "${CYAN}${BOLD}"
