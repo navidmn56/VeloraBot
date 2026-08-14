@@ -10,20 +10,18 @@ set -Eeuo pipefail
 # when script is executed via: curl ... | bash
 
 # Save the original stdin
-if [[ -t 0 ]]; then
-    # stdin is a terminal, we can use it directly
-    exec 3<&0
-elif [[ -c /dev/tty ]]; then
-    # Open /dev/tty for user input
+# ============================================================
+# Interactive Terminal
+# ============================================================
+
+# Always read interactive input from /dev/tty.
+# This works even when the installer is executed using:
+# curl ... | bash
+if [[ -r /dev/tty ]]; then
     exec 3</dev/tty
 else
-    # Try to reopen terminal
-    if exec 3< /dev/tty 2>/dev/null; then
-        :
-    else
-        echo "ERROR: Interactive terminal is required." >&2
-        exit 1
-    fi
+    echo "ERROR: Interactive terminal is required." >&2
+    exit 1
 fi
 
 # ============================================================
@@ -185,29 +183,13 @@ read_tty() {
     local __resultvar="$2"
     local value=""
 
-    # Print prompt to stderr so it always shows
     printf "%s" "$prompt" >&2
 
-    # Read from file descriptor 3 (which is /dev/tty or original stdin)
-    if IFS= read -r value <&3 2>/dev/null; then
-        printf -v "$__resultvar" '%s' "$value"
-        return 0
+    if ! IFS= read -r value <&3; then
+        return 1
     fi
 
-    # Fallback: try reading from /dev/tty directly
-    if IFS= read -r value < /dev/tty 2>/dev/null; then
-        printf -v "$__resultvar" '%s' "$value"
-        return 0
-    fi
-
-    # Last resort: try reading from stdin
-    if IFS= read -r value; then
-        printf -v "$__resultvar" '%s' "$value"
-        return 0
-    fi
-
-    printf -v "$__resultvar" '%s' ""
-    return 1
+    printf -v "$__resultvar" '%s' "$value"
 }
 
 read_secret_tty() {
@@ -215,32 +197,15 @@ read_secret_tty() {
     local __resultvar="$2"
     local value=""
 
-    # Print prompt to stderr so it always shows
     printf "%s" "$prompt" >&2
 
-    # Read from file descriptor 3 (which is /dev/tty or original stdin)
-    if IFS= read -r -s value <&3 2>/dev/null; then
-        printf '\n' >&2
-        printf -v "$__resultvar" '%s' "$value"
-        return 0
+    if ! IFS= read -r -s value <&3; then
+        return 1
     fi
 
-    # Fallback: try reading from /dev/tty directly
-    if IFS= read -r -s value < /dev/tty 2>/dev/null; then
-        printf '\n' >&2
-        printf -v "$__resultvar" '%s' "$value"
-        return 0
-    fi
+    printf '\n' >&2
 
-    # Last resort: try reading from stdin
-    if IFS= read -r -s value; then
-        printf '\n' >&2
-        printf -v "$__resultvar" '%s' "$value"
-        return 0
-    fi
-
-    printf -v "$__resultvar" '%s' ""
-    return 1
+    printf -v "$__resultvar" '%s' "$value"
 }
 
 # ============================================================
