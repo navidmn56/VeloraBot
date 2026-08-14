@@ -3,25 +3,16 @@
 set -Eeuo pipefail
 
 # ============================================================
-# VeloraBot Smart Installer / Updater / Repairer
-# ============================================================
-
-# IMPORTANT: This section must be at the top to handle input correctly
-# when script is executed via: curl ... | bash
-
-# Save the original stdin
-# ============================================================
 # Interactive Terminal
 # ============================================================
 
-# Always read interactive input from /dev/tty.
-# This works even when the installer is executed using:
-# curl ... | bash
-if [[ -r /dev/tty ]]; then
-    exec 3</dev/tty
-else
-    echo "ERROR: Interactive terminal is required." >&2
-    exit 1
+if [[ ! -t 0 ]]; then
+    if [[ -r /dev/tty ]]; then
+        exec </dev/tty
+    else
+        echo "ERROR: Interactive terminal is required." >&2
+        exit 1
+    fi
 fi
 
 # ============================================================
@@ -183,9 +174,9 @@ read_tty() {
     local __resultvar="$2"
     local value=""
 
-    printf "%s" "$prompt" >&2
+    printf "%s" "$prompt"
 
-    if ! IFS= read -r value <&3; then
+    if ! IFS= read -r value; then
         return 1
     fi
 
@@ -197,13 +188,13 @@ read_secret_tty() {
     local __resultvar="$2"
     local value=""
 
-    printf "%s" "$prompt" >&2
+    printf "%s" "$prompt"
 
-    if ! IFS= read -r -s value <&3; then
+    if ! IFS= read -r -s value; then
         return 1
     fi
 
-    printf '\n' >&2
+    printf '\n'
 
     printf -v "$__resultvar" '%s' "$value"
 }
