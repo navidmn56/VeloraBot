@@ -1,15 +1,19 @@
 
 
 <div align="center">
-# VeloraBot
-**Telegram VPN Configuration Management Bot**
 
+<h1>VeloraBot</h1>
+
+<strong>Telegram VPN Configuration Management Bot</strong>
+
+<p>
 Python-based Telegram bot for automated VPN configuration sales, user management, payments, referrals, service renewal, and configuration delivery.
+</p>
 
 <br>
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge\&logo=python\&logoColor=white)](https://www.python.org/)
-[![3X-UI](https://img.shields.io/badge/3X--UI-MHSanaei-181717?style=for-the-badge\&logo=github\&logoColor=white)](https://github.com/MHSanaei/3x-ui)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![3X-UI](https://img.shields.io/badge/3X--UI-MHSanaei-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/MHSanaei/3x-ui)
 [![Status](https://img.shields.io/badge/Status-Active-success?style=for-the-badge)](https://github.com/navidmn56/VeloraBot)
 
 </div>
