@@ -9142,7 +9142,8 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
     if lang == "fa":
         if show_qr:
             return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📝 مشاهده متن کانفیگ", callback_data=f"show_text_{order_id}")],
+                [InlineKeyboardButton(text="📝 مشاهده متن کانفیگ", callback_data=f"show_text_{order_id}", style="primary")],
+                [InlineKeyboardButton(text="🔄 تمدید سرویس", callback_data=f"extend_service_{order_id}", style="success")],
                 [
                     InlineKeyboardButton(text=f"📁 لیست کانفیگ‌ها", callback_data="my_configs", style="primary"),
                     InlineKeyboardButton(text=f"🔙 صفحه اصلی", callback_data="back_to_main", style="danger")
@@ -9150,7 +9151,8 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
             ])
         else:
             return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📱 تبدیل به QR Code", callback_data=f"show_qr_{order_id}")],
+                [InlineKeyboardButton(text="📱 تبدیل به QR Code", callback_data=f"show_qr_{order_id}", style="primary")],
+                [InlineKeyboardButton(text="🔄 تمدید سرویس", callback_data=f"extend_service_{order_id}", style="success")],
                 [
                     InlineKeyboardButton(text=f"📁 لیست کانفیگ‌ها", callback_data="my_configs", style="primary"),
                     InlineKeyboardButton(text=f"🔙 صفحه اصلی", callback_data="back_to_main", style="danger")
@@ -9159,7 +9161,8 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
     else:
         if show_qr:
             return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📝 View Config Text", callback_data=f"show_text_{order_id}")],
+                [InlineKeyboardButton(text="📝 View Config Text", callback_data=f"show_text_{order_id}", style="primary")],
+                [InlineKeyboardButton(text="🔄 Extend Service", callback_data=f"extend_service_{order_id}", style="success")],
                 [
                     InlineKeyboardButton(text=f"📁 Configs List", callback_data="my_configs", style="primary"),
                     InlineKeyboardButton(text=f"🔙 Main Menu", callback_data="back_to_main", style="danger")
@@ -9167,7 +9170,8 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
             ])
         else:
             return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📱 Convert to QR Code", callback_data=f"show_qr_{order_id}")],
+                [InlineKeyboardButton(text="📱 Convert to QR Code", callback_data=f"show_qr_{order_id}", style="primary")],
+                [InlineKeyboardButton(text="🔄 Extend Service", callback_data=f"extend_service_{order_id}", style="success")],
                 [
                     InlineKeyboardButton(text=f"📁 Configs List", callback_data="my_configs", style="primary"),
                     InlineKeyboardButton(text=f"🔙 Main Menu", callback_data="back_to_main", style="danger")
@@ -11600,7 +11604,7 @@ async def get_test_service(callback: CallbackQuery):
             # =============== ارسال کانفیگ به کاربر ===============
             await send_config_with_qr_option(user_id, order_id, volume_gb, days, 0, sub_link, lang)
             
-            # =============== نمایش محدودیت IP ===============
+            
             if ip_limit == 0:
                 ip_display = "♾️ نامحدود"
             elif ip_limit == 1:
@@ -11608,7 +11612,7 @@ async def get_test_service(callback: CallbackQuery):
             else:
                 ip_display = f"{ip_limit} دستگاه"
             
-            # =============== پیام موفقیت ===============
+            
             remaining_tests = max_tests - (test_count + 1)
             remaining_text = str(remaining_tests) if remaining_tests > 0 else "۰"
             
@@ -11646,7 +11650,7 @@ async def get_test_service(callback: CallbackQuery):
                 reply_markup=get_back_only_keyboard(lang)
             )
             
-            # =============== لاگ ===============
+            
             inbound_display = test_inbound_ids if test_inbound_ids else 'پیش‌فرض'
             logger.info(f"🧪 کاربر {user_id} تست سرویس دریافت کرد - سفارش #{order_id} - {volume_display}/{days} روز - اینباندها: {inbound_display} - IP Limit: {ip_limit}")
             
@@ -11660,7 +11664,7 @@ async def get_test_service(callback: CallbackQuery):
             await callback.answer("✅ سرویس تست فعال شد!" if lang == "fa" else "✅ Test service activated!")
             
         else:
-            # =============== خطا در ساخت تست ===============
+            
             error_msg = "❌ خطا در ساخت سرویس تست. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error creating test service. Please try again."
             await callback.message.edit_text(
                 error_msg,
@@ -11682,8 +11686,672 @@ async def get_test_service(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
         
         
-# =============== بکاپ اضطراری از پنل ===============
 
+
+
+
+
+async def xui_update_client(email: str, total_gb: float, expiry_time: int) -> bool:
+    """به‌روزرسانی حجم و تاریخ انقضای کلاینت با UPDATE API"""
+    try:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            cookie = await xui_login()
+            if not cookie:
+                return False
+
+            csrf = await xui_get_csrf_token(session)
+            headers = {"X-CSRF-Token": csrf} if csrf else {}
+
+            # ابتدا اطلاعات کامل کلاینت را دریافت کن
+            client_info = await xui_get_client_info(email)
+            if not client_info:
+                return False
+
+            # داده کامل برای به‌روزرسانی (همه فیلدها)
+            update_data = {
+                "email": email,
+                "totalGB": int(total_gb * 1024 * 1024 * 1024),
+                "expiryTime": expiry_time,
+                "enable": client_info.get('enable', True),
+                "tgId": client_info.get('tgId', 0),
+                "subId": client_info.get('subId', email),
+                "flow": client_info.get('flow', ''),
+                "limitIp": client_info.get('limitIp', 0),
+                "comment": client_info.get('comment', ''),
+                "resetStrategy": client_info.get('resetStrategy', 'no_reset'),
+                "inboundIds": await get_client_inbounds(email)  # اینباندهای فعلی را حفظ کن
+            }
+
+            async with session.post(
+                f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}",
+                cookies={"3x-ui": cookie},
+                headers=headers,
+                json=update_data,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                response_text = await response.text()
+                logger.info(f"📥 به‌روزرسانی کلاینت: Status {response.status}")
+                
+                if response.status == 200:
+                    data = json.loads(response_text)
+                    return data.get("success", False)
+                return False
+
+    except Exception as e:
+        logger.error(f"❌ خطا در به‌روزرسانی کلاینت {email}: {e}")
+        return False
+    finally:
+        try:
+            await connector.close()
+        except:
+            pass
+        
+        
+        
+        
+
+async def _finalize_extension(
+    order_id: int, 
+    user_id: int, 
+    email: str, 
+    new_volume_gb: float, 
+    new_expiry_date: datetime, 
+    current_volume_gb: float, 
+    extra_volume: int, 
+    extra_days: int, 
+    combined_inbounds: list
+) -> bool:
+    """نهایی‌سازی تمدید سرویس"""
+    
+    order = orders.get(str(order_id))
+    if not order:
+        logger.error(f"❌ سفارش #{order_id} یافت نشد")
+        return False
+    
+    new_volume_total = current_volume_gb + extra_volume
+    new_days_total = order.get('days', 0) + extra_days
+    
+    logger.info(f"📝 به‌روزرسانی سفارش #{order_id} در دیتابیس...")
+    logger.info(f"   📦 حجم جدید: {new_volume_total:.2f} GB")
+    logger.info(f"   ⏱ روز جدید: {new_days_total}")
+    logger.info(f"   📡 اینباندها: {combined_inbounds}")
+    
+    update_order(order_id, 
+                volume=new_volume_total,
+                days=new_days_total,
+                inbound_id=combined_inbounds,
+                updated_at=datetime.now().isoformat())
+    
+    if combined_inbounds:
+        save_user_inbound_selection(user_id, combined_inbounds)
+    
+    logger.info(f"✅ تمدید سرویس {email} با موفقیت انجام شد!")
+    logger.info(f"   📦 حجم جدید: {new_volume_gb:.2f} GB")
+    logger.info(f"   ⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"   📡 اینباندها: {combined_inbounds}")
+    
+    return True
+
+
+
+
+
+async def _finalize_extension(order_id: int, user_id: int, email: str, new_volume_gb: float, new_expiry_date: datetime, current_volume_gb: float, extra_volume: int, extra_days: int, combined_inbounds: list) -> bool:
+    """نهایی‌سازی تمدید سرویس (بعد از موفقیت در پنل)"""
+    
+    order = orders.get(str(order_id))
+    if not order:
+        logger.error(f"❌ [_finalize_extension] سفارش #{order_id} یافت نشد")
+        return False
+    
+    # =============== به‌روزرسانی سفارش در دیتابیس ===============
+    new_volume_total = current_volume_gb + extra_volume
+    new_days_total = order.get('days', 0) + extra_days
+    
+    logger.info(f"📝 [_finalize_extension] به‌روزرسانی سفارش #{order_id} در دیتابیس...")
+    logger.info(f"   📦 حجم جدید در دیتابیس: {new_volume_total:.2f} GB")
+    logger.info(f"   ⏱ روز جدید در دیتابیس: {new_days_total}")
+    logger.info(f"   📡 اینباندهای جدید: {combined_inbounds}")
+    
+    update_order(order_id, 
+                volume=new_volume_total,
+                days=new_days_total,
+                inbound_id=combined_inbounds,
+                updated_at=datetime.now().isoformat())
+    
+    logger.info(f"✅ [_finalize_extension] سفارش #{order_id} با موفقیت به‌روزرسانی شد")
+    
+    # =============== ذخیره اینباندهای ترکیبی برای کاربر ===============
+    if combined_inbounds:
+        save_user_inbound_selection(user_id, combined_inbounds)
+        logger.info(f"📡 [_finalize_extension] اینباندهای ترکیبی برای کاربر {user_id} ذخیره شد: {combined_inbounds}")
+    
+    # =============== لاگ در سیستم ===============
+    if log_system:
+        await log_system.log_user_action(
+            user_id,
+            "تمدید سرویس",
+            f"سفارش #{order_id} | +{extra_volume}GB | +{extra_days} روز | حجم جدید: {new_volume_total:.2f}GB | روز جدید: {new_days_total} | اینباندها: {combined_inbounds}"
+        )
+    
+    CustomLogger.log_event('SERVICE_EXTENDED', 
+        f'سرویس #{order_id} تمدید شد - کاربر: {user_id} - +{extra_volume}GB - +{extra_days} روز - اینباندها: {combined_inbounds}', 
+        user_id)
+    
+    logger.info(f"✅ [_finalize_extension] تمدید سرویس {email} با موفقیت انجام شد!")
+    logger.info(f"   📦 حجم جدید: {new_volume_gb:.2f} GB")
+    logger.info(f"   ⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"   📡 اینباندها: {combined_inbounds}")
+    
+    return True
+
+
+async def get_client_inbounds(email: str) -> list:
+    """دریافت لیست اینباندهایی که کلاینت به آنها متصل است"""
+    try:
+        client_info = await xui_get_client_info(email)
+        if client_info:
+            inbound_ids = client_info.get('inboundIds', [])
+            if inbound_ids:
+                return inbound_ids if isinstance(inbound_ids, list) else [inbound_ids]
+            
+            inbound_id = client_info.get('inboundId')
+            if inbound_id:
+                return [inbound_id]
+        
+        inbounds = await xui_get_inbounds()
+        found_inbounds = []
+        for inbound in inbounds:
+            settings = inbound.get('settings', {})
+            clients = settings.get('clients', [])
+            for client in clients:
+                if client.get('email') == email:
+                    found_inbounds.append(inbound.get('id'))
+                    break
+        return found_inbounds
+        
+    except Exception as e:
+        logger.error(f"❌ خطا در دریافت اینباندهای کلاینت {email}: {e}")
+        return []
+
+
+async def xui_detach_inbounds(email: str, inbound_ids: list) -> bool:
+    """
+    حذف یک یا چند اینباند از کلاینت
+    POST /panel/api/clients/{email}/detach
+    Body: {"inboundIds": [7, 9]}
+    """
+    if not inbound_ids:
+        logger.info("ℹ️ هیچ اینباندی برای detach وجود ندارد")
+        return True
+
+    try:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            cookie = await xui_login()
+            if not cookie:
+                logger.error("❌ خطا در ورود به پنل")
+                return False
+
+            csrf = await xui_get_csrf_token(session)
+            headers = {"X-CSRF-Token": csrf} if csrf else {}
+
+            detach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/detach"
+            detach_data = {"inboundIds": inbound_ids}
+
+            logger.info(f"📤 ارسال درخواست detach به: {detach_url}")
+            logger.info(f"📝 داده: {json.dumps(detach_data)}")
+
+            async with session.post(
+                detach_url,
+                cookies={"3x-ui": cookie},
+                headers=headers,
+                json=detach_data,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                response_text = await response.text()
+                logger.info(f"📥 پاسخ detach: Status {response.status}")
+
+                if response.status == 200:
+                    try:
+                        data = json.loads(response_text)
+                        if data.get("success"):
+                            logger.info(f"✅ اینباندهای {inbound_ids} با موفقیت از کلاینت {email} حذف شدند")
+                            return True
+                        else:
+                            logger.error(f"❌ detach ناموفق: {data.get('msg', 'Unknown error')}")
+                            return False
+                    except json.JSONDecodeError:
+                        logger.error(f"❌ خطا در دیکد JSON: {response_text[:200]}")
+                        return False
+                else:
+                    logger.error(f"❌ detach ناموفق: Status {response.status}")
+                    return False
+
+    except Exception as e:
+        logger.error(f"❌ خطا در detach اینباندها از کلاینت {email}: {e}")
+        return False
+    finally:
+        try:
+            await connector.close()
+        except:
+            pass
+        
+
+
+async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
+    """
+    اضافه کردن یک یا چند اینباند به کلاینت موجود
+    POST /panel/api/clients/{email}/attach
+    Body: {"inboundIds": [7, 9]}
+    """
+    if not inbound_ids:
+        logger.info("ℹ️ هیچ اینباندی برای attach وجود ندارد")
+        return True
+
+    try:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            cookie = await xui_login()
+            if not cookie:
+                logger.error("❌ خطا در ورود به پنل")
+                return False
+
+            csrf = await xui_get_csrf_token(session)
+            headers = {"X-CSRF-Token": csrf} if csrf else {}
+
+            attach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/attach"
+            attach_data = {"inboundIds": inbound_ids}
+
+            logger.info(f"📤 ارسال درخواست attach به: {attach_url}")
+            logger.info(f"📝 داده: {json.dumps(attach_data)}")
+
+            async with session.post(
+                attach_url,
+                cookies={"3x-ui": cookie},
+                headers=headers,
+                json=attach_data,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                response_text = await response.text()
+                logger.info(f"📥 پاسخ attach: Status {response.status}")
+
+                if response.status == 200:
+                    try:
+                        data = json.loads(response_text)
+                        if data.get("success"):
+                            logger.info(f"✅ اینباندهای {inbound_ids} با موفقیت به کلاینت {email} اضافه شدند")
+                            return True
+                        else:
+                            error_msg = data.get('msg', 'Unknown error')
+                            logger.error(f"❌ attach ناموفق: {error_msg}")
+                            return False
+                    except json.JSONDecodeError:
+                        logger.error(f"❌ خطا در دیکد JSON: {response_text[:200]}")
+                        return False
+                else:
+                    logger.error(f"❌ attach ناموفق: Status {response.status}")
+                    return False
+
+    except Exception as e:
+        logger.error(f"❌ خطا در attach اینباندها به کلاینت {email}: {e}")
+        return False
+    finally:
+        try:
+            await connector.close()
+        except:
+            pass
+        
+
+
+async def extend_service(
+    order_id: int, 
+    user_id: int, 
+    extra_volume: int, 
+    extra_days: int,
+    new_inbounds: list = None,
+    new_ip_limit: int = None
+) -> bool:
+    """
+    تمدید سرویس موجود - افزایش حجم و روز + جایگزینی اینباندها
+    مراحل:
+    1. UPDATE برای حجم، تاریخ و IP
+    2. DETACH برای حذف اینباندهای اضافی
+    3. ATTACH برای اضافه کردن اینباندهای جدید
+    """
+    logger.info(f"🔄 [extend_service] شروع تمدید سرویس - order_id={order_id}, user_id={user_id}")
+    logger.info(f"   📦 حجم اضافی: {extra_volume}GB {'(نامحدود)' if extra_volume == 0 else ''}")
+    logger.info(f"   ⏱ روز اضافی: {extra_days} روز")
+    logger.info(f"   👤 محدودیت IP جدید: {new_ip_limit if new_ip_limit is not None else 'بدون تغییر'}")
+    
+    # =============== 1. بررسی سفارش ===============
+    order = orders.get(str(order_id))
+    if not order:
+        logger.error(f"❌ سفارش #{order_id} برای تمدید یافت نشد")
+        return False
+    
+    email = order.get('email')
+    if not email:
+        logger.error(f"❌ ایمیل سفارش #{order_id} یافت نشد")
+        return False
+    
+    if not SENAI_PANEL_ENABLED:
+        logger.error("❌ پنل برای تمدید سرویس فعال نیست")
+        return False
+    
+    # =============== 2. دریافت اطلاعات کلاینت از پنل ===============
+    try:
+        logger.info(f"📡 دریافت اطلاعات کلاینت {email} از پنل...")
+        client_info = await xui_get_client_info(email)
+        
+        if not client_info:
+            logger.error(f"❌ کلاینت {email} در پنل یافت نشد")
+            return False
+        
+        # =============== 3. دریافت اینباندهای فعلی ===============
+        current_inbounds = await get_client_inbounds(email)
+        if not isinstance(current_inbounds, list):
+            current_inbounds = [current_inbounds] if current_inbounds else []
+        
+        logger.info(f"📡 اینباندهای فعلی: {current_inbounds}")
+        
+        # =============== 4. دریافت اینباندهای جدید ===============
+        if new_inbounds is not None:
+            selected_inbounds = new_inbounds
+        else:
+            selected_inbounds = order.get('inbound_id', [])
+            if not selected_inbounds:
+                selected_inbounds = get_user_inbound(user_id)
+        
+        if not isinstance(selected_inbounds, list):
+            selected_inbounds = [selected_inbounds] if selected_inbounds else []
+        
+        logger.info(f"📡 اینباندهای جدید (انتخاب شده): {selected_inbounds}")
+        
+        # =============== 5. پیدا کردن اینباندهای حذف و اضافه ===============
+        inbounds_to_detach = []
+        for inbound_id in current_inbounds:
+            if inbound_id and inbound_id not in selected_inbounds:
+                inbounds_to_detach.append(inbound_id)
+                logger.info(f"➖ اینباند {inbound_id} باید حذف شود")
+        
+        inbounds_to_attach = []
+        for inbound_id in selected_inbounds:
+            if inbound_id and inbound_id not in current_inbounds:
+                inbounds_to_attach.append(inbound_id)
+                logger.info(f"➕ اینباند {inbound_id} باید اضافه شود")
+        
+        # =============== 6. محاسبه مقادیر جدید ===============
+        current_volume_gb = client_info.get('totalGB', 0) / (1024**3)
+        current_expiry = client_info.get('expiryTime', 0)
+        current_ip_limit = client_info.get('limitIp', 0)
+        
+        logger.info(f"📊 اطلاعات فعلی کلاینت:")
+        logger.info(f"   📦 حجم فعلی: {current_volume_gb:.2f} GB")
+        logger.info(f"   ⏱ انقضای فعلی: {datetime.fromtimestamp(current_expiry/1000).strftime('%Y-%m-%d %H:%M:%S') if current_expiry > 0 else 'نامحدود'}")
+        logger.info(f"   👤 محدودیت IP فعلی: {current_ip_limit if current_ip_limit > 0 else 'نامحدود'}")
+        
+        # حجم جدید
+        if extra_volume == 0:
+            new_volume_bytes = 0
+            new_volume_gb = 0
+            logger.info(f"📦 حجم جدید: نامحدود (0 bytes)")
+        else:
+            new_volume_bytes = int((current_volume_gb + extra_volume) * 1024 * 1024 * 1024)
+            new_volume_gb = current_volume_gb + extra_volume
+            logger.info(f"📦 حجم جدید: {new_volume_gb:.2f} GB")
+        
+        # تاریخ جدید
+        if current_expiry > 0:
+            current_expiry_date = datetime.fromtimestamp(current_expiry / 1000)
+            new_expiry = int((current_expiry_date + timedelta(days=extra_days)).timestamp() * 1000)
+            new_expiry_date = current_expiry_date + timedelta(days=extra_days)
+        else:
+            new_expiry = int((datetime.now() + timedelta(days=extra_days)).timestamp() * 1000)
+            new_expiry_date = datetime.now() + timedelta(days=extra_days)
+        
+        logger.info(f"⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # محدودیت IP
+        final_ip_limit = new_ip_limit if new_ip_limit is not None else current_ip_limit
+        logger.info(f"👤 محدودیت IP جدید: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
+        
+        # =============== 7. به‌روزرسانی کلاینت (UPDATE) ===============
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            logger.info(f"🔑 ورود به پنل...")
+            cookie = await xui_login()
+            if not cookie:
+                logger.error(f"❌ خطا در ورود به پنل")
+                return False
+            
+            logger.info(f"🔐 دریافت CSRF token...")
+            csrf = await xui_get_csrf_token(session)
+            headers = {"X-CSRF-Token": csrf} if csrf else {}
+            
+            # داده UPDATE (بدون inboundIds)
+            update_data = {
+                "email": email,
+                "totalGB": new_volume_bytes,
+                "expiryTime": new_expiry,
+                "enable": client_info.get('enable', True),
+                "tgId": client_info.get('tgId', 0),
+                "subId": client_info.get('subId', email),
+                "flow": client_info.get('flow', ''),
+                "limitIp": final_ip_limit,
+                "comment": client_info.get('comment', ''),
+                "resetStrategy": client_info.get('resetStrategy', 'no_reset')
+            }
+            
+            logger.info(f"📤 ارسال درخواست UPDATE به پنل...")
+            logger.info(f"   🌐 URL: {SENAI_PANEL_URL}/panel/api/clients/update/{email}")
+            logger.info(f"   📝 حجم: {'نامحدود' if new_volume_bytes == 0 else f'{new_volume_gb:.2f}GB'}")
+            logger.info(f"   👤 محدودیت IP: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
+            
+            async with session.post(
+                f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}",
+                cookies={"3x-ui": cookie},
+                headers=headers,
+                json=update_data,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                response_text = await response.text()
+                logger.info(f"📥 پاسخ UPDATE: Status {response.status}")
+                
+                if response.status != 200:
+                    logger.error(f"❌ خطا در UPDATE: Status {response.status}")
+                    return False
+                
+                try:
+                    data = json.loads(response_text)
+                    if not data.get("success"):
+                        logger.error(f"❌ UPDATE ناموفق: {data.get('msg', 'Unknown error')}")
+                        return False
+                except json.JSONDecodeError:
+                    logger.error(f"❌ پاسخ JSON نامعتبر")
+                    return False
+            
+            logger.info(f"✅ UPDATE با موفقیت انجام شد")
+            
+            # =============== 8. حذف اینباندهای اضافی (DETACH) ===============
+            if inbounds_to_detach:
+                logger.info(f"📤 حذف اینباندهای {inbounds_to_detach} از کلاینت {email}...")
+                detach_success = await xui_detach_inbounds(email, inbounds_to_detach)
+                if detach_success:
+                    logger.info(f"✅ اینباندهای {inbounds_to_detach} با موفقیت حذف شدند")
+                else:
+                    logger.warning(f"⚠️ خطا در detach اینباندها")
+            
+            # =============== 9. اضافه کردن اینباندهای جدید (ATTACH) ===============
+            if inbounds_to_attach:
+                logger.info(f"📤 اضافه کردن اینباندهای {inbounds_to_attach} به کلاینت {email}...")
+                attach_success = await xui_attach_inbounds(email, inbounds_to_attach)
+                if attach_success:
+                    logger.info(f"✅ اینباندهای {inbounds_to_attach} با موفقیت اضافه شدند")
+                else:
+                    logger.warning(f"⚠️ خطا در attach اینباندها")
+        
+        # =============== 10. نهایی‌سازی ===============
+        new_volume_total = 0 if extra_volume == 0 else (current_volume_gb + extra_volume)
+        new_days_total = order.get('days', 0) + extra_days
+        
+        logger.info(f"📝 به‌روزرسانی سفارش #{order_id} در دیتابیس...")
+        logger.info(f"   📦 حجم جدید: {'نامحدود' if new_volume_total == 0 else f'{new_volume_total:.2f}GB'}")
+        logger.info(f"   ⏱ روز جدید: {new_days_total}")
+        logger.info(f"   👤 محدودیت IP جدید: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
+        logger.info(f"   📡 اینباندها: {selected_inbounds}")
+        
+        update_order(order_id, 
+                    volume=new_volume_total,
+                    days=new_days_total,
+                    inbound_id=selected_inbounds,
+                    ip_limit=final_ip_limit,
+                    updated_at=datetime.now().isoformat())
+        
+        if selected_inbounds:
+            save_user_inbound_selection(user_id, selected_inbounds)
+        
+        logger.info(f"✅ تمدید سرویس {email} با موفقیت انجام شد!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ خطا در تمدید: {e}", exc_info=True)
+        return False
+    finally:
+        try:
+            await connector.close()
+        except:
+            pass
+        
+              
+async def update_client_full(email: str, update_data: dict) -> bool:
+    """
+    به‌روزرسانی کامل یک کلاینت با حفظ همه اطلاعات
+    از مسیر POST /panel/api/clients/update/{email} استفاده می‌کند
+    """
+    try:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            cookie = await xui_login()
+            if not cookie:
+                logger.error(f"❌ [update_client_full] خطا در ورود به پنل")
+                return False
+            
+            csrf = await xui_get_csrf_token(session)
+            headers = {"X-CSRF-Token": csrf} if csrf else {}
+            
+            update_url = f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}"
+            
+            async with session.post(
+                update_url,
+                cookies={"3x-ui": cookie},
+                headers=headers,
+                json=update_data,
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as response:
+                response_text = await response.text()
+                logger.info(f"📥 [update_client_full] Status {response.status}")
+                
+                if response.status == 200:
+                    data = json.loads(response_text)
+                    return data.get("success", False)
+                
+                return False
+                
+    except Exception as e:
+        logger.error(f"❌ [update_client_full] خطا: {e}")
+        return False
+    finally:
+        try:
+            await connector.close()
+        except:
+            pass
+
+@dp.callback_query(F.data.startswith("extend_service_"))
+async def extend_service_start(callback: CallbackQuery):
+    """شروع فرآیند تمدید سرویس"""
+    user_id = callback.from_user.id
+    order_id = int(callback.data.split("_")[2])
+    lang = get_user(user_id).get('lang', 'fa')
+    
+    # بررسی دسترسی کاربر
+    order = orders.get(str(order_id))
+    if not order or order.get('user_id') != user_id:
+        await callback.answer("❌ سفارش یافت نشد" if lang == "fa" else "❌ Order not found", show_alert=True)
+        return
+    
+    if order.get('status') != 'approved':
+        await callback.answer("❌ این سرویس قابل تمدید نیست" if lang == "fa" else "❌ This service cannot be extended", show_alert=True)
+        return
+    
+    # ذخیره اطلاعات در user_states برای پردازش بعدی
+    user_states[user_id] = {
+        'extend_order_id': order_id,
+        'current_volume': order.get('volume', 0),
+        'current_days': order.get('days', 0),
+        'email': order.get('email'),
+        'is_extend': True,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # تنظیم حجم و روز پیش‌فرض برای خرید
+    update_user(user_id, 'volume', 1)
+    update_user(user_id, 'days', 30)
+    
+    # =============== فراخوانی buy_service برای نمایش کیبورد ===============
+    await buy_service(callback)
+    
+    # =============== بعد از buy_service، پیام رو به روز می‌کنیم ===============
+    try:
+        await asyncio.sleep(0.5)  # کمی صبر تا buy_service کامل اجرا بشه
+        
+        # دریافت وضعیت جدید
+        user = get_user(user_id)
+        vol = user.get('volume', 1)
+        days = user.get('days', 30)
+        price = calculate_price(vol, days)
+        balance = user.get('balance', 0)
+        
+        if lang == "fa":
+            new_text = f"""
+🔄 <b>تمدید سرویس</b>
+
+حجم و مدت مورد نظر برای <b>افزودن</b> به سرویس فعلی را انتخاب کنید.
+⚠️ این مقادیر به سرویس فعلی شما <b>اضافه</b> می‌شوند.
+
+{premium_emoji('config', '📦')} حجم: {vol} GB
+{premium_emoji('time', '⏱')} مدت: {days} روز
+{premium_emoji('money', '💰')} قیمت: {price:,} تومان
+
+{premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
+"""
+        else:
+            new_text = f"""
+🔄 <b>Extend Service</b>
+
+Select the volume and duration to <b>add</b> to your current service.
+⚠️ These values will be <b>added</b> to your existing service.
+
+{premium_emoji('config', '📦')} Volume: {vol} GB
+{premium_emoji('time', '⏱')} Duration: {days} days
+{premium_emoji('money', '💰')} Price: {price:,} Toman
+
+{premium_emoji('wallet', '💰')} Your balance: {balance:,} Toman
+"""
+        
+        # ویرایش پیام با متن جدید (کیبورد قبلی حفظ میشه)
+        await callback.message.edit_text(
+            new_text,
+            reply_markup=callback.message.reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        logger.warning(f"خطا در به‌روزرسانی متن تمدید: {e}")
+    
+    await callback.answer()
+    
+    
 async def emergency_backup_from_panel():
     """
     بکاپ اضطراری - بازنویسی کامل اوردرها از پنل با پشتیبانی از IP Limit
@@ -11700,7 +12368,7 @@ async def emergency_backup_from_panel():
         return {"success": False, "error": "پنل غیرفعال است"}
     
     try:
-        # =============== 1. گرفتن بکاپ از وضعیت فعلی ===============
+        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         old_backup_dir = os.path.join(DATA_DIR, 'backups')
         os.makedirs(old_backup_dir, exist_ok=True)
@@ -11720,7 +12388,7 @@ async def emergency_backup_from_panel():
             json.dump(old_data, f, ensure_ascii=False, indent=2)
         logger.info(f"💾 بکاپ از وضعیت قبلی در {old_backup_file} ذخیره شد")
         
-        # =============== 2. دریافت اطلاعات از پنل ===============
+        
         logger.info("📡 دریافت اطلاعات از پنل...")
         
         inbounds = await xui_get_inbounds()
@@ -11728,7 +12396,7 @@ async def emergency_backup_from_panel():
             logger.error("❌ هیچ اینباندی یافت نشد")
             return {"success": False, "error": "هیچ اینباندی یافت نشد"}
         
-        # =============== 3. استخراج و گروه‌بندی کلاینت‌های ربات ===============
+        
         import re
         
         clients_dict = {}
@@ -11737,7 +12405,7 @@ async def emergency_backup_from_panel():
         all_inbounds_info = []
         users_with_configs = set()
         
-        # ✅ دیکشنری برای ذخیره نام کاربران از کامنت‌ها
+        
         user_names_from_panel = {}
         
         # =============== تابع extract_user_info ===============
@@ -11769,7 +12437,7 @@ async def emergency_backup_from_panel():
                 if match:
                     user_id = int(match.group(1))
             
-            # =============== 2. از کامنت: اسم (حتی اگه از ایمیل پیدا شده) ===============
+            
             if comment:
                 match = re.search(r'^(.*?)\s*\(ID[:=](\d+)\)', comment)
                 if match:
@@ -11819,18 +12487,18 @@ async def emergency_backup_from_panel():
                 
                 comment = client.get('comment', '')
                 
-                # =============== استخراج اطلاعات ===============
+                
                 user_id, user_name, order_type = extract_user_info(email, comment)
                 
                 if user_id:
                     bot_clients += 1
                     users_with_configs.add(user_id)
                     
-                    # ✅ ذخیره نام از کامنت
+                    
                     if user_name:
                         user_names_from_panel[str(user_id)] = user_name
                     
-                    # =============== ✅ به‌روزرسانی clients_dict ===============
+                    
                     if email not in clients_dict:
                         clients_dict[email] = {
                             'email': email,
@@ -11846,24 +12514,24 @@ async def emergency_backup_from_panel():
                             'user_name': user_name
                         }
                     else:
-                        # =============== ✅ اگر قبلاً موجود است، به‌روزرسانی کن ===============
+                        
                         existing = clients_dict[email]
                         
-                        # اگر قبلاً purchase بوده ولی الان test هست
+                        
                         if order_type == 'test' and existing['order_type'] != 'test':
                             existing['order_type'] = 'test'
                             logger.info(f"🔄 به‌روزرسانی نوع: {email} → test")
                         
-                        # اگر user_name قبلاً خالی بوده و الان داریم
+                        
                         if not existing.get('user_name') and user_name:
                             existing['user_name'] = user_name
                             logger.info(f"🔄 به‌روزرسانی نام: {email} → {user_name}")
                         
-                        # اگر کامنت جدید کامل‌تر است
+                        
                         if comment and len(comment) > len(existing.get('comment', '')):
                             existing['comment'] = comment
                     
-                    # اضافه کردن اینباند
+                    
                     clients_dict[email]['inbound_ids'].append(inbound_id)
                     clients_dict[email]['inbound_details'].append({
                         'inbound_id': inbound_id,
@@ -11879,7 +12547,7 @@ async def emergency_backup_from_panel():
         
         clients = list(clients_dict.values())
         
-        # =============== 📊 آمار دقیق ===============
+        
         test_count = len([c for c in clients if c.get('order_type') == 'test'])
         purchase_count = len([c for c in clients if c.get('order_type') == 'purchase'])
         names_found = len(user_names_from_panel)
@@ -11893,23 +12561,23 @@ async def emergency_backup_from_panel():
         if not clients:
             return {"success": False, "error": "هیچ کلاینتی که توسط ربات ساخته شده باشد، در پنل یافت نشد!"}
         
-        # =============== 4. حذف اوردرهای قبلی ===============
+        
         logger.info("🗑 پاک کردن اوردرهای قبلی...")
         orders.clear()
         logger.info("✅ اوردرهای قبلی پاک شدند")
         
-        # =============== 5. به‌روزرسانی کاربران ===============
+        
         updated_users = 0
         new_users = 0
         
         for user_id in users_with_configs:
             uid = str(user_id)
             
-            # ✅ اسم از کامنت پنل
+            
             panel_name = user_names_from_panel.get(uid)
             
             if uid in users:
-                # =============== کاربر موجود ===============
+                
                 old_name = users[uid].get('name', '')
                 
                 if panel_name and (old_name.startswith('کاربر_') or old_name == 'کاربر ناشناس' or 'ناشناس' in old_name):
@@ -11923,7 +12591,7 @@ async def emergency_backup_from_panel():
                 updated_users += 1
                 logger.info(f"👤 کاربر {user_id} به‌روزرسانی شد")
             else:
-                # =============== کاربر جدید - با اسم از کامنت ===============
+                
                 final_name = panel_name if panel_name else f'کاربر_{user_id}'
                 
                 users[uid] = {
@@ -11960,7 +12628,7 @@ async def emergency_backup_from_panel():
         logger.info(f"✅ {updated_users} کاربر به‌روزرسانی شدند")
         logger.info(f"✅ {new_users} کاربر جدید ایجاد شدند")
         
-        # =============== 6. ساخت اوردرهای جدید ===============
+       
         new_orders = {}
         order_counter = 0
         
@@ -12025,7 +12693,7 @@ async def emergency_backup_from_panel():
             logger.info(f"📝 اوردر #{order_id} برای کاربر {user_id} ساخته شد")
             logger.info(f"   📦 {total_gb}GB/{days} روز - نوع: {order_type} - قیمت: {price:,} تومان")
         
-        # =============== 7. جایگزینی اوردرها ===============
+        
         orders.clear()
         orders.update(new_orders)
         
@@ -12033,11 +12701,11 @@ async def emergency_backup_from_panel():
         logger.info(f"   🧪 تست‌ها: {len([o for o in new_orders.values() if o.get('type') == 'test'])}")
         logger.info(f"   🛒 خریدها: {len([o for o in new_orders.values() if o.get('type') == 'purchase'])}")
         
-        # =============== 8. ذخیره نهایی ===============
+        
         save_all()
         logger.info("✅ دیتابیس با موفقیت ذخیره شد")
         
-        # =============== 9. ذخیره بکاپ ===============
+       
         backup_dir = os.path.join(DATA_DIR, 'emergency_backups')
         os.makedirs(backup_dir, exist_ok=True)
         backup_file = os.path.join(backup_dir, f'emergency_backup_{timestamp}.json')
@@ -12167,13 +12835,13 @@ async def confirm_emergency_backup(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
-    # =============== پیام در حال اجرا ===============
+    
     await callback.message.edit_text(
         "⏳ در حال اجرای بکاپ اضطراری..." if lang == "fa" else "⏳ Executing emergency backup..."
     )
     
     try:
-        # =============== اجرای بکاپ اضطراری ===============
+        
         result = await emergency_backup_from_panel()
         
         if result.get("success"):
@@ -12266,8 +12934,8 @@ async def admin_test_user_reset_single(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
-    # =============== استخراج صحیح target_id ===============
-    # فرمت: admin_test_user_reset_single_123456789
+   
+    
     try:
         target_id = int(callback.data.split("_")[-1])  # ✅ گرفتن آخرین قسمت
     except (ValueError, IndexError):
@@ -12287,7 +12955,7 @@ async def admin_test_user_reset_single(callback: CallbackQuery):
     old_data = USER_TEST_USAGE[uid].copy()
     old_count = old_data.get('count', 0)
     
-    # ریست تست کاربر
+    
     del USER_TEST_USAGE[uid]
     save_test_usage()
     
@@ -14433,7 +15101,19 @@ async def show_ready_categories(callback: CallbackQuery):
             callback_data="back_to_main"
         )]]
         
-        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+        # =============== اصلاح: مدیریت خطای message to edit not found ===============
+        try:
+            await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+        except Exception as e:
+            if "message to edit not found" in str(e) or "there is no text in the message to edit" in str(e):
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+            else:
+                raise
+        
         await callback.answer()
         return
     
@@ -14484,7 +15164,19 @@ Please select a package:{coupon_text}
         style="danger"
     )])
     
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+    # =============== اصلاح: مدیریت خطای message to edit not found ===============
+    try:
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+    except Exception as e:
+        if "message to edit not found" in str(e) or "there is no text in the message to edit" in str(e):
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+        else:
+            raise
+    
     await callback.answer()
 
 @dp.message(Command("test_keyboard"))
@@ -14677,7 +15369,7 @@ Please select a package:
         
 @dp.callback_query(F.data.startswith("buy_package_"))
 async def buy_specific_package(callback: CallbackQuery):
-    """خرید یک بسته مشخص از یک دسته با نمایش تعداد کاربر"""
+    """خرید یک بسته مشخص از یک دسته با پشتیبانی از تمدید سرویس"""
     user_id = callback.from_user.id
     save_coupon_to_user_db(user_id)
     
@@ -14720,6 +15412,20 @@ async def buy_specific_package(callback: CallbackQuery):
     
     lang = get_user(user_id).get('lang', 'fa')
     user = get_user(user_id)
+    
+    # =============== دریافت وضعیت کامل کاربر (برای تشخیص تمدید) ===============
+    full_state = user_states.get(user_id, {})
+    
+    # =============== بررسی وضعیت تمدید ===============
+    is_extend = full_state.get('is_extend', False)
+    extend_order_id = full_state.get('extend_order_id')
+    current_volume = full_state.get('current_volume', 0)
+    current_days = full_state.get('current_days', 0)
+    
+    # =============== لاگ وضعیت تمدید ===============
+    if is_extend and extend_order_id:
+        logger.info(f"🔄 [buy_specific_package] کاربر {user_id} در حالت تمدید است - سفارش اصلی: #{extend_order_id}")
+        logger.info(f"   📦 حجم فعلی: {current_volume}GB - ⏱ مدت فعلی: {current_days} روز")
     
     volume = package.get('volume', 0)
     days = package.get('days', 30)
@@ -14803,7 +15509,7 @@ async def buy_specific_package(callback: CallbackQuery):
         save_user_inbound_selection(user_id, category_inbound_ids)
         logger.info(f"📡 اینباندهای {category_inbound_ids} برای کاربر {user_id} تنظیم شد (بسته آماده)")
     
-    # =============== ذخیره اطلاعات بسته ===============
+    # =============== ذخیره اطلاعات بسته با وضعیت تمدید ===============
     user_states[user_id] = {
         'payment_type': 'ready_package',
         'category_id': category_id,
@@ -14818,8 +15524,18 @@ async def buy_specific_package(callback: CallbackQuery):
         'is_ready_package': True,
         'category_icon': category.get('icon', '📦'),
         'current_page': 'package_payment',
-        'ip_limit': ip_limit
+        'ip_limit': ip_limit,
+        # =============== اضافه کردن وضعیت تمدید ===============
+        'is_extend': is_extend,
+        'extend_order_id': extend_order_id,
+        'current_volume': current_volume,
+        'current_days': current_days
     }
+    
+    if is_extend and extend_order_id:
+        logger.info(f"🔄 [buy_specific_package] وضعیت تمدید در user_states ذخیره شد: order_id={extend_order_id}")
+        logger.info(f"   user_states[{user_id}]['is_extend'] = {user_states[user_id].get('is_extend')}")
+        logger.info(f"   user_states[{user_id}]['extend_order_id'] = {user_states[user_id].get('extend_order_id')}")
     
     if coupon_applied and coupon_code and discount_percent > 0:
         user_states[user_id]['coupon_code'] = coupon_code
@@ -14827,7 +15543,7 @@ async def buy_specific_package(callback: CallbackQuery):
         user_states[user_id]['coupon_discount'] = discount_percent
         logger.info(f"🏷️ کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
     
-    # =============== نمایش صفحه پرداخت ===============
+    # =============== نمایش صفحه پرداخت با وضعیت تمدید ===============
     category_icon = category.get('icon', '📦')
     category_name = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
     balance = user.get('balance', 0)
@@ -14836,10 +15552,19 @@ async def buy_specific_package(callback: CallbackQuery):
     if discount_percent > 0 and final_price != original_price:
         discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
     
+    # =============== نمایش وضعیت تمدید در پیام ===============
+    extend_text = ""
+    if is_extend and extend_order_id:
+        extend_text = f"""
+🔄 <b>تمدید سرویس #{extend_order_id}</b>
+این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
+        """
+    
     if lang == "fa":
         text = f"""
 {category_icon} <b>خرید بسته آماده: {category_name}</b>
 
+{extend_text}
 {premium_emoji('config', '📦')} حجم: {volume_display}
 {premium_emoji('time', '⏱')} مدت: {days} روز
 {ip_display}
@@ -14849,11 +15574,13 @@ async def buy_specific_package(callback: CallbackQuery):
 {premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
 
 {premium_emoji('info', '💡')} این یک بسته آماده است و قابل تغییر نمی‌باشد.
+
 """
     else:
         text = f"""
 {category_icon} <b>Ready Package: {category_name}</b>
 
+{extend_text}
 {premium_emoji('config', '📦')} Volume: {volume_display}
 {premium_emoji('time', '⏱')} Duration: {days} days
 {ip_display}
@@ -14863,6 +15590,7 @@ async def buy_specific_package(callback: CallbackQuery):
 {premium_emoji('wallet', '💰')} Your balance: {balance:,} Toman
 
 {premium_emoji('info', '💡')} This is a ready package and cannot be modified.
+
 """
     
     buttons = [
@@ -19212,7 +19940,7 @@ def detect_safe_parse_mode(text: str) -> Optional[ParseMode]:
 
 @dp.callback_query(F.data == "buy_service")
 async def buy_service(callback: CallbackQuery):
-    """خرید سرویس - نسخه نهایی با حفظ کوپن"""
+    """خرید سرویس - نسخه نهایی با حفظ کوپن و پشتیبانی از تمدید"""
     user_id = callback.from_user.id
     
     # =============== چک لیست سیاه ===============
@@ -19220,6 +19948,7 @@ async def buy_service(callback: CallbackQuery):
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
+    
     # =============== بررسی دسترسی ===============
     can_purchase, msg = can_user_purchase(user_id)
     if not can_purchase:
@@ -19253,6 +19982,10 @@ async def buy_service(callback: CallbackQuery):
     coupon_discount = full_state.get('coupon_discount')
     coupon_applied = full_state.get('coupon_applied', False)
     
+    # =============== بررسی حالت تمدید ===============
+    is_extend = full_state.get('is_extend', False)
+    extend_order_id = full_state.get('extend_order_id')
+    
     # =============== اگر کوپن در user_states نیست، از دیتابیس چک کن ===============
     if not coupon_applied or not coupon_code:
         logger.info(f"🔍 [buy_service] کوپن در user_states نیست، بررسی دیتابیس...")
@@ -19260,11 +19993,10 @@ async def buy_service(callback: CallbackQuery):
         for code, coupon in COUPONS.items():
             if coupon.get('status') == 'active':
                 if user_id not in coupon.get('used_by', []):
-                    # این کوپن قبلاً توسط کاربر مصرف نشده
-                    # اما ممکن است کاربر آن را اعمال کرده باشد
                     pass
     
     logger.info(f"🔍 [buy_service] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
+    logger.info(f"🔍 [buy_service] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
     
     # =============== اعمال تخفیف کوپن ===============
     discount_percent = 0
@@ -19288,7 +20020,7 @@ async def buy_service(callback: CallbackQuery):
                     user_states[user_id].pop('coupon_applied', None)
                 coupon_applied = False
         else:
-            logger.warning(f"⚠️ [buy_service] کوپن {coupon_code} نامعتبر است (status: {coupon.get('status') if coupon else 'not found'})")
+            logger.warning(f"⚠️ [buy_service] کوپن {coupon_code} نامعتبر است")
             if user_id in user_states:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
@@ -19330,7 +20062,6 @@ async def buy_service(callback: CallbackQuery):
         final_price = package_price
         logger.info(f"📦 [buy_service] بسته آماده: {category_name} - قیمت ثابت: {final_price:,} تومان")
         
-        # =============== ساخت کیبورد بسته آماده ===============
         discount_text = ""
         if discount_percent > 0 and final_price != original_price:
             discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
@@ -19352,12 +20083,19 @@ async def buy_service(callback: CallbackQuery):
             'current_page': 'package_payment'
         }
         
-        # ✅ اگر کوپن فعال است، دوباره به user_states اضافه کن
         if coupon_applied and coupon_code and discount_percent > 0:
             user_states[user_id]['coupon_code'] = coupon_code
             user_states[user_id]['coupon_applied'] = True
             user_states[user_id]['coupon_discount'] = discount_percent
             logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+        
+        # =============== ✅ اگر حالت تمدید است، به user_states اضافه کن ===============
+        if is_extend and extend_order_id:
+            user_states[user_id]['is_extend'] = True
+            user_states[user_id]['extend_order_id'] = extend_order_id
+            user_states[user_id]['current_volume'] = full_state.get('current_volume', 0)
+            user_states[user_id]['current_days'] = full_state.get('current_days', 0)
+            logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
         
         if lang == "fa":
             text = f"""
@@ -19438,7 +20176,6 @@ async def buy_service(callback: CallbackQuery):
     if ready_enabled and has_active_packages:
         logger.info(f"📦 بسته‌های آماده فعال هستند - کاربر {user_id} به صفحه دسته‌بندی هدایت شد")
         
-        # ✅ قبل از رفتن به صفحه دسته‌بندی، اطلاعات خرید سفارشی را ذخیره کن
         user_states[user_id] = {
             'payment_type': 'purchase',
             'volume': vol,
@@ -19450,12 +20187,19 @@ async def buy_service(callback: CallbackQuery):
             'current_page': 'purchase'
         }
         
-        # ✅ اگر کوپن فعال است، دوباره به user_states اضافه کن
         if coupon_applied and coupon_code and discount_percent > 0:
             user_states[user_id]['coupon_code'] = coupon_code
             user_states[user_id]['coupon_applied'] = True
             user_states[user_id]['coupon_discount'] = discount_percent
             logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+        
+        # =============== ✅ اگر حالت تمدید است، به user_states اضافه کن ===============
+        if is_extend and extend_order_id:
+            user_states[user_id]['is_extend'] = True
+            user_states[user_id]['extend_order_id'] = extend_order_id
+            user_states[user_id]['current_volume'] = full_state.get('current_volume', 0)
+            user_states[user_id]['current_days'] = full_state.get('current_days', 0)
+            logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
         
         await show_ready_categories(callback)
         return
@@ -19475,12 +20219,19 @@ async def buy_service(callback: CallbackQuery):
         'current_page': 'purchase'
     }
     
-    # ✅ اگر کوپن فعال است، دوباره به user_states اضافه کن
     if coupon_applied and coupon_code and discount_percent > 0:
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = discount_percent
         logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+    
+    # =============== ✅ اگر حالت تمدید است، به user_states اضافه کن ===============
+    if is_extend and extend_order_id:
+        user_states[user_id]['is_extend'] = True
+        user_states[user_id]['extend_order_id'] = extend_order_id
+        user_states[user_id]['current_volume'] = full_state.get('current_volume', 0)
+        user_states[user_id]['current_days'] = full_state.get('current_days', 0)
+        logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
     
     # =============== ساخت کیبورد خرید سفارشی ===============
     discount_text = ""
@@ -19530,7 +20281,6 @@ async def buy_service(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML
             )
     
-    # =============== دیباگ نهایی ===============
     debug_coupon_state(user_id, "buy_service_end")
     
     try:
@@ -19803,6 +20553,13 @@ async def show_config_text(callback: CallbackQuery):
                         callback_data=f"show_single_qr_{order_id}_{idx}"  # ایندکس واقعی
                     )])
                 
+                # دکمه تمدید
+                buttons.append([InlineKeyboardButton(
+                    text="🔄 تمدید سرویس" if lang == "fa" else "🔄 Extend Service",
+                    callback_data=f"extend_service_{order_id}",
+                    style="success"
+                )])
+                
                 buttons.append([InlineKeyboardButton(
                     text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
                     callback_data="back_to_main",
@@ -19811,23 +20568,39 @@ async def show_config_text(callback: CallbackQuery):
                 
                 keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
                 
+                # =============== اصلاح: بررسی نوع پیام ===============
                 try:
-                    await callback.message.edit_text(
-                        config_text,
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=keyboard
-                    )
-                except:
-                    try:
-                        await callback.message.delete()
-                    except:
-                        pass
-                    await bot.send_message(
-                        user_id,
-                        config_text,
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=keyboard
-                    )
+                    if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
+                        try:
+                            await callback.message.delete()
+                        except:
+                            pass
+                        await bot.send_message(
+                            user_id,
+                            config_text,
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=keyboard
+                        )
+                    else:
+                        await callback.message.edit_text(
+                            config_text,
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=keyboard
+                        )
+                except Exception as e:
+                    if "there is no text in the message to edit" in str(e):
+                        try:
+                            await callback.message.delete()
+                        except:
+                            pass
+                        await bot.send_message(
+                            user_id,
+                            config_text,
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=keyboard
+                        )
+                    else:
+                        raise
                 
                 await callback.answer("✅ نمایش همه کانفیگ‌ها" if lang == 'fa' else "✅ Showing all configs")
                 return
@@ -19841,7 +20614,7 @@ async def show_config_text(callback: CallbackQuery):
     else:
         config_text = order['config_link']
     
-    # ... ادامه برای یک لینک
+    # ... ادامه کد برای یک لینک ...
     
     # اگر فقط یک لینک داریم
     display_email = email if email else ("نامشخص" if lang == "fa" else "Unknown")
@@ -19857,27 +20630,43 @@ async def show_config_text(callback: CallbackQuery):
         text = (f"{premium_emoji('link','🔗')} <b>کانفیگ #{order_id}</b>\n"
                 f"{premium_emoji('anime','👤')} <b>نام کانفیگ:</b> <code>{display_email}</code>\n\n"
                 f"<code>{config_text}</code>")
-        back_btn = InlineKeyboardButton(text="🔙 صفحه اصلی", callback_data="back_to_main")
+        back_btn = InlineKeyboardButton(text="🔙 صفحه اصلی", callback_data="back_to_main", style="danger")
         qr_btn = InlineKeyboardButton(text="📱 نمایش QR", callback_data=f"show_qr_{order_id}")
+        
     else:
         text = (f"{premium_emoji('link','🔗')} <b>Config #{order_id}</b>\n"
                 f"{premium_emoji('anime','👤')} <b>Config Name:</b> <code>{display_email}</code>\n\n"
                 f"<code>{config_text}</code>")
         back_btn = InlineKeyboardButton(text="🔙 Main Menu", callback_data="back_to_main", style="danger")
         qr_btn = InlineKeyboardButton(text="📱 Show QR", callback_data=f"show_qr_{order_id}")
+        
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[qr_btn, back_btn]])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [qr_btn],
+        [back_btn]
+    ])
     
+    # =============== اصلاح: بررسی نوع پیام ===============
     try:
-        await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-    except:
-        try:
-            await callback.message.delete()
-        except:
-            pass
-        await bot.send_message(user_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            await bot.send_message(user_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        else:
+            await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    except Exception as e:
+        if "there is no text in the message to edit" in str(e):
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            await bot.send_message(user_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        else:
+            raise
     
-    await callback.answer("✅ مشاهده متن کانفیگ" if lang == 'fa' else "✅ Config text")    
+    await callback.answer("✅ مشاهده متن کانفیگ" if lang == 'fa' else "✅ Config text")
 @dp.callback_query(F.data.startswith("show_single_qr_"))
 async def show_single_qr(callback: CallbackQuery):
     """نمایش QR Code برای یک لینک خاص از بین چندین لینک"""
@@ -20038,10 +20827,10 @@ async def day_up(callback: CallbackQuery):
         else:
             await callback.answer("⚠️ Maximum duration is 365 days!", show_alert=True)
 
-# =============== پرداخت از کارت (اصلاح شده) ===============
+# =============== پرداخت از کارت (اصلاح شده با تمدید) ===============
 @dp.callback_query(F.data == "pay_card")
 async def pay_card(callback: CallbackQuery):
-    """پرداخت با کارت بانکی - نسخه کامل اصلاح شده"""
+    """پرداخت با کارت بانکی - نسخه کامل با پشتیبانی از تمدید"""
     user_id = callback.from_user.id
     save_coupon_to_user_db(user_id)
     
@@ -20071,7 +20860,16 @@ async def pay_card(callback: CallbackQuery):
     
     # =============== دریافت وضعیت کامل از user_states ===============
     full_state = user_states.get(user_id, {})
+    
+    # =============== بررسی حالت تمدید (از هر دو منبع) ===============
+    is_extend = full_state.get('is_extend', False)
+    extend_order_id = full_state.get('extend_order_id')
+    current_volume = full_state.get('current_volume', 0)
+    current_days = full_state.get('current_days', 0)
+    
     logger.info(f"🔍 [pay_card] وضعیت کامل قبل: {full_state}")
+    logger.info(f"🔍 [pay_card] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [pay_card] current_volume={current_volume}GB, current_days={current_days}روز")
     
     # =============== استخراج کوپن ===============
     coupon_code = full_state.get('coupon_code')
@@ -20132,11 +20930,120 @@ async def pay_card(callback: CallbackQuery):
         logger.info(f"💰 [pay_card] پرداخت رایگان برای کاربر {user_id}")
         await callback.message.edit_text("⏳ در حال فعال‌سازی سرویس رایگان...")
         
+        # =============== بررسی حالت تمدید ===============
+        if is_extend and extend_order_id:
+            # =============== تمدید سرویس موجود ===============
+            logger.info(f"🔄 [pay_card] شروع تمدید رایگان سفارش #{extend_order_id}")
+            
+            # =============== دریافت اطلاعات سفارش اصلی ===============
+            parent_order = orders.get(str(extend_order_id))
+            if not parent_order:
+                logger.error(f"❌ [pay_card] سفارش اصلی #{extend_order_id} یافت نشد")
+                await callback.message.edit_text(
+                    "❌ خطا: سفارش اصلی برای تمدید یافت نشد. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error: Original order not found. Please try again.",
+                    reply_markup=get_back_only_keyboard(lang)
+                )
+                return
+            
+            success = await extend_service(extend_order_id, user_id, vol, days)
+            if success:
+                # ثبت سفارش جدید برای تمدید
+                order_id = create_order(user_id, vol, days, 0, "extend", ip_limit=ip_limit)
+                update_order(order_id, 
+                            status='approved',
+                            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            payment_method='free_coupon_extend',
+                            payment_label='🎁 رایگان (تمدید)',
+                            parent_order_id=extend_order_id,
+                            is_extend=True)
+                
+                # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
+                if is_ready_package:
+                    update_order(order_id, 
+                                category_id=category_id,
+                                category_name=category_name,
+                                package_id=package_id,
+                                inbound_id=inbound_ids)
+                
+                consume_coupon(user_id)
+                
+                # پاک کردن وضعیت تمدید
+                if user_id in user_states:
+                    user_states[user_id].pop('is_extend', None)
+                    user_states[user_id].pop('extend_order_id', None)
+                    user_states[user_id].pop('current_volume', None)
+                    user_states[user_id].pop('current_days', None)
+                
+                # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
+                updated_parent = orders.get(str(extend_order_id))
+                new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
+                new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
+                
+                # ارسال نوتیفیکیشن به ادمین
+                await send_admin_notification('extend', {
+                    'user_id': user_id,
+                    'volume': vol,
+                    'days': days,
+                    'price': 0,
+                    'discount_percent': discount_percent,
+                    'balance_before': user.get('balance', 0),
+                    'balance_after': user.get('balance', 0),
+                    'order_id': order_id,
+                    'payment_type': 'free_extend',
+                    'payment_label': '🎁 رایگان (تمدید)',
+                    'payment_emoji': '🎁',
+                    'is_extend': True,
+                    'parent_order_id': extend_order_id,
+                    'old_volume': current_volume,
+                    'old_days': current_days,
+                    'new_volume': new_volume,
+                    'new_days': new_days,
+                    'category_name': category_name
+                })
+                
+                # =============== حذف پیام "در حال فعال‌سازی" ===============
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                
+                if lang == "fa":
+                    text = f"""
+✅ <b>سرویس با موفقیت تمدید شد!</b>
+
+📦 +{vol}GB به حجم شما اضافه شد
+⏱ +{days} روز به مدت شما اضافه شد
+🎁 روش پرداخت: رایگان (تمدید)
+💰 مبلغ پرداختی: ۰ تومان
+"""
+                else:
+                    text = f"""
+✅ <b>Service extended successfully!</b>
+
+📦 +{vol}GB added to your volume
+⏱ +{days} days added to your duration
+🎁 Payment method: Free (Extended)
+💰 Amount paid: 0 Toman
+"""
+                
+                await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
+                logger.info(f"✅ [pay_card] تمدید رایگان برای کاربر {user_id} - سفارش #{order_id}")
+                await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
+                return
+            else:
+                await callback.message.edit_text(
+                    "❌ خطا در تمدید سرویس. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error extending service. Please try again.",
+                    reply_markup=get_back_only_keyboard(lang)
+                )
+                return
+        
+        # =============== ساخت سرویس جدید (غیر تمدید) ===============
         order_id = create_order(user_id, vol, days, 0, order_type, ip_limit=ip_limit)
         update_order(order_id, 
                     status='approved',
                     approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    payment_method='free_coupon')
+                    payment_method='free_coupon',
+                    payment_label='🎁 رایگان (کوپن)')
         
         if is_ready_package:
             update_order(order_id, 
@@ -20172,8 +21079,7 @@ async def pay_card(callback: CallbackQuery):
 
 {category_display}📦 حجم: {volume_display_text}
 ⏱ مدت: {days} روز
-💰 قیمت اصلی: {original_price:,} تومان
-🏷️ تخفیف {discount_percent}%: -{original_price:,} تومان
+🎁 روش پرداخت: رایگان (کوپن)
 💰 مبلغ پرداختی: ۰ تومان
 
 ✅ کانفیگ شما در بخش «کانفیگ‌های من» موجود است.
@@ -20184,8 +21090,7 @@ async def pay_card(callback: CallbackQuery):
 
 {category_display}📦 Volume: {volume_display_text}
 ⏱ Duration: {days} days
-💰 Original price: {original_price:,} Toman
-🏷️ {discount_percent}% discount: -{original_price:,} Toman
+🎁 Payment method: Free (Coupon)
 💰 Amount paid: 0 Toman
 
 ✅ Your config is available in 'My Configs'.
@@ -20215,15 +21120,39 @@ async def pay_card(callback: CallbackQuery):
     # =============== ایجاد سفارش ===============
     order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
     
+    # =============== ✅ تنظیم payment_method ===============
     if is_ready_package:
         update_order(order_id, 
                     category_id=category_id,
                     category_name=category_name,
                     package_id=package_id,
                     inbound_id=inbound_ids,
-                    status='awaiting_payment')
+                    status='awaiting_payment',
+                    payment_method='card',  # ✅ تنظیم روش پرداخت
+                    payment_label='💳 کارت به کارت')  # ✅ برچسب نمایشی
+    else:
+        update_order(order_id, 
+                    status='awaiting_payment',
+                    payment_method='card',  # ✅ تنظیم روش پرداخت
+                    payment_label='💳 کارت به کارت')  # ✅ برچسب نمایشی
+    
+    # =============== اگر حالت تمدید است، parent_order_id رو ذخیره کن ===============
+    if is_extend and extend_order_id:
+        # =============== بررسی وجود سفارش اصلی ===============
+        parent_order = orders.get(str(extend_order_id))
+        if parent_order:
+            update_order(order_id, 
+                        parent_order_id=extend_order_id,
+                        is_extend=True)  # ✅ اضافه کردن فلگ تمدید
+            logger.info(f"🔄 [pay_card] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} ایجاد شد")
+        else:
+            logger.warning(f"⚠️ [pay_card] سفارش اصلی #{extend_order_id} یافت نشد، تمدید لغو شد")
+            # اگر سفارش اصلی وجود نداشت، تمدید را غیرفعال کن
+            is_extend = False
+            extend_order_id = None
     
     logger.info(f"📝 [pay_card] سفارش #{order_id} ایجاد شد - نوع: {order_type} - حجم: {vol}GB")
+    logger.info(f"💳 [pay_card] روش پرداخت: کارت به کارت")
     
     # =============== ارسال استیکر ===============
     try:
@@ -20243,7 +21172,7 @@ async def pay_card(callback: CallbackQuery):
     # =============== حجم نمایشی ===============
     volume_display_text = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
     
-    # =============== ساخت متن پرداخت ===============
+    # =============== ساخت متن پرداخت با نمایش تمدید ===============
     if is_ready_package and category_name:
         icon = "📦"
         if category_id:
@@ -20252,11 +21181,20 @@ async def pay_card(callback: CallbackQuery):
                     icon = cat.get('icon', '📦')
                     break
         
+        # =============== ✅ نمایش ساده تمدید ===============
+        extend_display = ""
+        if is_extend and extend_order_id:
+            extend_display = f"""
+🔄 <b>تمدید سرویس #{extend_order_id}</b>
+این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
+"""
+        
         if lang == "fa":
             text = f"""
 {premium_emoji('config', icon)} <b>پرداخت بسته آماده: {category_name}</b>
 
 {premium_emoji('id', '🆔')} <b>شماره سفارش:</b> #{order_id}
+{extend_display}
 {premium_emoji('config', '📦')} <b>حجم:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>مدت:</b> {days} روز
 {premium_emoji('money', '💰')} <b>مبلغ:</b> {price_display}
@@ -20274,6 +21212,7 @@ async def pay_card(callback: CallbackQuery):
 {premium_emoji('config', icon)} <b>Ready Package Payment: {category_name}</b>
 
 {premium_emoji('id', '🆔')} <b>Order Number:</b> #{order_id}
+{extend_display}
 {premium_emoji('config', '📦')} <b>Volume:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>Duration:</b> {days} days
 {premium_emoji('money', '💰')} <b>Amount:</b> {price_display}
@@ -20287,11 +21226,21 @@ async def pay_card(callback: CallbackQuery):
 {premium_emoji('receipt', '📸')} <b>Please send the receipt photo</b>
 """
     else:
+        # =============== پیام تمدید یا خرید عادی ===============
+        if is_extend and extend_order_id:
+            extend_display = f"""
+🔄 <b>تمدید سرویس #{extend_order_id}</b>
+این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
+"""
+        else:
+            extend_display = ""
+        
         if lang == "fa":
             text = f"""
 {premium_emoji('card', '💳')} <b>پرداخت با کارت بانکی</b>
 
 {premium_emoji('id', '🆔')} <b>شماره سفارش:</b> #{order_id}
+{extend_display}
 {premium_emoji('config', '📦')} <b>حجم:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>مدت:</b> {days} روز
 {premium_emoji('money', '💰')} <b>مبلغ:</b> {price_display}
@@ -20309,6 +21258,7 @@ async def pay_card(callback: CallbackQuery):
 {premium_emoji('card', '💳')} <b>Bank Card Payment</b>
 
 {premium_emoji('id', '🆔')} <b>Order Number:</b> #{order_id}
+{extend_display}
 {premium_emoji('config', '📦')} <b>Volume:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>Duration:</b> {days} days
 {premium_emoji('money', '💰')} <b>Amount:</b> {price_display}
@@ -20345,7 +21295,7 @@ async def pay_card(callback: CallbackQuery):
     except:
         pass
     
-    # =============== تنظیم user_states با حفظ کامل کوپن ===============
+    # =============== تنظیم user_states با حفظ کامل کوپن و تمدید ===============
     new_state = {
         'awaiting_receipt': True, 
         'current_order_id': order_id, 
@@ -20353,10 +21303,12 @@ async def pay_card(callback: CallbackQuery):
         'payment_type': order_type,
         'final_price': final_price,
         'original_price': original_price,
-        'discount_percent': discount_percent
+        'discount_percent': discount_percent,
+        'payment_method': 'card',  # ✅ ذخیره در state
+        'payment_label': '💳 کارت به کارت'  # ✅ ذخیره در state
     }
     
-    # ✅ انتقال کوپن به state جدید (فقط اگر وجود داشته باشد)
+    # ✅ انتقال کوپن به state جدید
     if coupon_applied and coupon_code:
         new_state['coupon_code'] = coupon_code
         new_state['coupon_applied'] = True
@@ -20371,10 +21323,26 @@ async def pay_card(callback: CallbackQuery):
         new_state['inbound_id'] = inbound_ids
         new_state['category_name'] = category_name
     
+    # ✅ انتقال اطلاعات تمدید
+    if is_extend and extend_order_id:
+        new_state['is_extend'] = True
+        new_state['extend_order_id'] = extend_order_id
+        new_state['current_volume'] = current_volume
+        new_state['current_days'] = current_days
+        logger.info(f"🔄 [pay_card] اطلاعات تمدید به state جدید منتقل شد: order_id={extend_order_id}")
+    else:
+        if full_state.get('is_extend', False) and full_state.get('extend_order_id'):
+            new_state['is_extend'] = full_state.get('is_extend')
+            new_state['extend_order_id'] = full_state.get('extend_order_id')
+            new_state['current_volume'] = full_state.get('current_volume', 0)
+            new_state['current_days'] = full_state.get('current_days', 0)
+            logger.info(f"🔄 [pay_card] اطلاعات تمدید از full_state به new_state منتقل شد: order_id={full_state.get('extend_order_id')}")
+    
     # ذخیره state جدید
     user_states[user_id] = new_state
     
     logger.info(f"✅ [pay_card] وضعیت کاربر {user_id} تنظیم شد: awaiting_receipt برای سفارش #{order_id}")
+    logger.info(f"🔍 [pay_card] new_state: {new_state}")
     
     # =============== دیباگ نهایی ===============
     debug_coupon_state(user_id, "pay_card_end")
@@ -20660,7 +21628,7 @@ async def admin_coupons_stats(callback: CallbackQuery):
 
 
 async def send_admin_notification(purchase_type: str, data: dict):
-    """ارسال نوتیفیکیشن به ادمین با تبدیل هوشمند حجم"""
+    """ارسال نوتیفیکیشن ساده و مینیمال به ادمین"""
     
     user_id = data.get('user_id')
     
@@ -20675,96 +21643,91 @@ async def send_admin_notification(purchase_type: str, data: dict):
         user_name_escaped = f"کاربر {user_id}"
         username_display = 'ندارد'
     
-    emojis = {
-        'balance': '💰',
-        'test': '🧪',
-        'purchase': '🛒'
-    }
-    emoji = emojis.get(purchase_type, '🛒')
+    # =============== تشخیص نوع پرداخت ===============
+    payment_type = data.get('payment_type', 'unknown')
+    payment_label = data.get('payment_label', '')
+    is_extend = data.get('is_extend', False)
     
-    titles = {
-        'balance': 'خرید با موجودی',
-        'test': 'تست رایگان جدید',
-        'purchase': 'خرید جدید'
-    }
-    title = titles.get(purchase_type, 'خرید جدید')
-    
-    # =============== تبدیل هوشمند حجم ===============
-    volume = data.get('volume', 'نامشخص')
-    is_test = (purchase_type == 'test')
-    
-    if isinstance(volume, (int, float)):
-        if volume == 0:
-            volume_display = "نامحدود"
-        elif is_test:
-            # تست: volume به مگابایت است
-            volume_display = format_volume(volume, is_test=True)
+    # =============== عنوان و ایموجی ===============
+    if is_extend:
+        if 'balance' in payment_type:
+            title = "🔄 تمدید با موجودی"
+        elif 'card' in payment_type:
+            title = "🔄 تمدید با کارت"
+        elif 'free' in payment_type:
+            title = "🔄 تمدید رایگان"
         else:
-            # خرید: volume به گیگابایت است
-            volume_display = format_volume(volume, is_test=False)
+            title = "🔄 تمدید سرویس"
     else:
-        volume_display = volume
+        if 'balance' in payment_type:
+            title = "💰 خرید با موجودی"
+        elif 'card' in payment_type:
+            title = "💳 خرید با کارت"
+        elif 'free' in payment_type:
+            title = "🎁 خرید رایگان"
+        elif payment_type == 'test':
+            title = "🧪 تست رایگان"
+        else:
+            title = "🛒 خرید جدید"
     
-    # =============== محدودیت IP ===============
-    ip_limit = data.get('ip_limit', 0)
-    ip_display = "نامحدود" if ip_limit == 0 else str(ip_limit)
+    # =============== ساخت متن ===============
+    text = f"{title}\n\n"
+    text += f"👤 {user_name_escaped}\n"
+    text += f"🆔 {user_id}\n"
+    text += f"📛 {username_display}\n"
+    text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    text += f"📦 {data.get('volume', 0)} GB\n"
+    text += f"⏱️ {data.get('days', 0)} روز\n"
+    text += f"💰 {data.get('price', 0):,} تومان\n"
     
-    text = f"""
-{emoji} <b>{title}</b>
-
-👤 کاربر: {user_name_escaped}
-🆔 آیدی: <code>{user_id}</code>
-📛 یوزرنیم: {username_display}
-━━━━━━━━━━━━━━━━━━━━━━
-📦 حجم: {volume_display}
-⏱️ مدت: {data.get('days', 'نامشخص')} روز
-💰 قیمت: {data.get('price', 0):,} تومان
-"""
+    # =============== اطلاعات تمدید ===============
+    if is_extend:
+        old_volume = data.get('old_volume', 0)
+        old_days = data.get('old_days', 0)
+        new_volume = data.get('new_volume', 0)
+        new_days = data.get('new_days', 0)
+        parent_order_id = data.get('parent_order_id', 'نامشخص')
+        
+        text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        text += f"🆔 سفارش اصلی: #{parent_order_id}\n"
+        text += f"📦 {old_volume}GB → {new_volume}GB (+{data.get('volume', 0)}GB)\n"
+        text += f"⏱️ {old_days} → {new_days} روز (+{data.get('days', 0)} روز)\n"
     
-    if data.get('discount_percent', 0) > 0:
-        text += f"🏷️ تخفیف: {data.get('discount_percent')}%\n"
+    # =============== اطلاعات بسته آماده ===============
+    if data.get('category_name'):
+        text += f"📦 بسته: {data.get('category_name')}\n"
     
+    if data.get('order_id'):
+        text += f"🆔 سفارش: #{data.get('order_id')}\n"
+    
+    # =============== اطلاعات موجودی ===============
     if data.get('balance_before') is not None:
         text += f"💰 موجودی قبلی: {data.get('balance_before'):,} تومان\n"
     if data.get('balance_after') is not None:
         text += f"💰 موجودی جدید: {data.get('balance_after'):,} تومان\n"
     
-    if data.get('order_id'):
-        text += f"🆔 سفارش: #{data.get('order_id')}\n"
+    # =============== اینباندها ===============
+    inbound_ids = data.get('inbound_ids')
+    if inbound_ids:
+        if isinstance(inbound_ids, list):
+            text += f"📡 اینباندها: {inbound_ids}\n"
+        else:
+            text += f"📡 اینباند: {inbound_ids}\n"
     
-    if purchase_type == 'test':
-        text += f"🧪 تعداد تست‌های باقیمانده: {data.get('remaining_tests', 'نامشخص')}\n"
-        text += f"👤 محدودیت IP: {ip_display}\n"
-    
-    if data.get('payment_type') == 'ready_package' or data.get('category_name'):
-        category_name = data.get('category_name', 'بسته آماده')
-        category_name_escaped = html.escape(category_name)
-        text += f"📦 بسته: {category_name_escaped}\n"
-    
-    text += f"📅 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    text += f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
     try:
         await bot.send_message(ADMIN_ID_INT, text, parse_mode=ParseMode.HTML)
         logger.info(f"📨 نوتیفیکیشن {purchase_type} به ادمین ارسال شد - کاربر {user_id}")
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال نوتیفیکیشن به ادمین: {e}")
-        try:
-            await bot.send_message(
-                ADMIN_ID_INT,
-                f"⚠️ نوتیفیکیشن جدید\nکاربر: {user_name_escaped}\nمبلغ: {data.get('price', 0):,} تومان\nنوع: {title}",
-                parse_mode=None
-            )
-            logger.info(f"📨 نوتیفیکیشن {purchase_type} با متن ساده ارسال شد")
-        except Exception as e2:
-            logger.error(f"❌ خطا در ارسال نوتیفیکیشن ساده: {e2}")
+        logger.error(f"❌ خطا در ارسال نوتیفیکیشن به ادمین: {e}")  
         
         
         
-        
-# =============== پرداخت از موجودی ===============
+# =============== پرداخت از موجودی (اصلاح شده با تمدید) ===============
 @dp.callback_query(F.data == "pay_balance")
 async def pay_balance(callback: CallbackQuery):
-    """پرداخت از موجودی - نسخه کامل اصلاح شده"""
+    """پرداخت از موجودی - نسخه کامل با پشتیبانی از تمدید و ترکیب اینباندها"""
     user_id = callback.from_user.id
     
     # =============== دیباگ اولیه ===============
@@ -20793,9 +21756,26 @@ async def pay_balance(callback: CallbackQuery):
     
     # =============== دریافت وضعیت کامل از user_states ===============
     full_state = user_states.get(user_id, {})
+    
+    # =============== بررسی حالت تمدید ===============
+    is_extend = full_state.get('is_extend', False)
+    extend_order_id = full_state.get('extend_order_id')
+    current_volume = full_state.get('current_volume', 0)
+    current_days = full_state.get('current_days', 0)
+    
     is_ready_package = full_state.get('is_ready_package', False)
     
+    # =============== ✅ دریافت ip_limit و inbound_ids ===============
+    ip_limit = full_state.get('ip_limit', 0)
+    inbound_ids = full_state.get('inbound_ids', [])
+    
+    if not isinstance(inbound_ids, list):
+        inbound_ids = [inbound_ids] if inbound_ids else []
+    
     logger.info(f"🔍 [pay_balance] وضعیت کامل: {full_state}")
+    logger.info(f"🔍 [pay_balance] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [pay_balance] current_volume={current_volume}GB, current_days={current_days}روز")
+    logger.info(f"🔍 [pay_balance] ip_limit={ip_limit}, inbound_ids={inbound_ids}")
     
     # =============== تعیین نوع سفارش و حجم ===============
     if is_ready_package:
@@ -20805,11 +21785,9 @@ async def pay_balance(callback: CallbackQuery):
         final_price = full_state.get('price', 0)
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
-        inbound_ids = full_state.get('inbound_ids', [])
         category_name = full_state.get('category_name', '')
         category_id = full_state.get('category_id')
         package_id = full_state.get('package_id')
-        ip_limit = full_state.get('ip_limit', 0)
         order_type = "ready_package"
         
         volume_display = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
@@ -20822,11 +21800,9 @@ async def pay_balance(callback: CallbackQuery):
         final_price = original_price
         discount_percent = 0
         order_type = "purchase"
-        inbound_ids = []
         category_name = None
         category_id = None
         package_id = None
-        ip_limit = 0
         
         # اعمال تخفیف کوپن برای خرید سفارشی
         coupon_code = full_state.get('coupon_code')
@@ -20854,18 +21830,139 @@ async def pay_balance(callback: CallbackQuery):
         logger.info(f"💰 [pay_balance] پرداخت رایگان برای کاربر {user_id}")
         await callback.message.edit_text("⏳ در حال فعال‌سازی سرویس رایگان...")
         
+        # =============== بررسی حالت تمدید ===============
+        if is_extend and extend_order_id:
+            # =============== تمدید سرویس موجود ===============
+            logger.info(f"🔄 [pay_balance] شروع تمدید رایگان سفارش #{extend_order_id}")
+            
+            # =============== دریافت اطلاعات سفارش اصلی ===============
+            parent_order = orders.get(str(extend_order_id))
+            if not parent_order:
+                logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
+                await callback.message.edit_text(
+                    "❌ خطا: سفارش اصلی برای تمدید یافت نشد. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error: Original order not found. Please try again.",
+                    reply_markup=get_back_only_keyboard(lang)
+                )
+                return
+            
+            # ✅ ارسال inbound_ids و ip_limit به extend_service
+            success = await extend_service(
+                extend_order_id, 
+                user_id, 
+                vol, 
+                days,
+                inbound_ids,  # ✅ اینباندهای انتخاب شده
+                ip_limit      # ✅ محدودیت IP
+            )
+            
+            if success:
+                # ثبت سفارش جدید برای تمدید
+                order_id = create_order(user_id, vol, days, 0, "extend", ip_limit=ip_limit)
+                update_order(order_id, 
+                            status='approved',
+                            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            payment_method='free_coupon_extend',
+                            payment_label='🎁 رایگان (تمدید)',
+                            parent_order_id=extend_order_id,
+                            is_extend=True,
+                            inbound_id=inbound_ids)
+                
+                # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
+                if is_ready_package:
+                    update_order(order_id, 
+                                category_id=category_id,
+                                category_name=category_name,
+                                package_id=package_id)
+                
+                consume_coupon(user_id)
+                
+                # پاک کردن وضعیت تمدید
+                if user_id in user_states:
+                    user_states[user_id].pop('is_extend', None)
+                    user_states[user_id].pop('extend_order_id', None)
+                    user_states[user_id].pop('current_volume', None)
+                    user_states[user_id].pop('current_days', None)
+                
+                # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
+                updated_parent = orders.get(str(extend_order_id))
+                new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
+                new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
+                
+                # =============== ارسال نوتیفیکیشن به ادمین ===============
+                await send_admin_notification('extend', {
+                    'user_id': user_id,
+                    'volume': vol,
+                    'days': days,
+                    'price': 0,
+                    'discount_percent': discount_percent,
+                    'balance_before': balance,
+                    'balance_after': balance,
+                    'order_id': order_id,
+                    'payment_type': 'free_extend',
+                    'payment_label': '🎁 رایگان (تمدید)',
+                    'payment_emoji': '🎁🔄',
+                    'is_extend': True,
+                    'parent_order_id': extend_order_id,
+                    'old_volume': current_volume,
+                    'old_days': current_days,
+                    'new_volume': new_volume,
+                    'new_days': new_days,
+                    'category_name': category_name,
+                    'inbound_ids': inbound_ids,
+                    'ip_limit': ip_limit
+                })
+                
+                # =============== حذف پیام "در حال فعال‌سازی" ===============
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                
+                # =============== پیام ساده به کاربر ===============
+                if lang == "fa":
+                    text = f"""
+✅ <b>سرویس با موفقیت تمدید شد!</b>
+
+📦 +{vol}GB به حجم شما اضافه شد
+⏱ +{days} روز به مدت شما اضافه شد
+🎁 روش پرداخت: رایگان (تمدید)
+💰 مبلغ پرداختی: ۰ تومان
+"""
+                else:
+                    text = f"""
+✅ <b>Service extended successfully!</b>
+
+📦 +{vol}GB added to your volume
+⏱ +{days} days added to your duration
+🎁 Payment method: Free (Extended)
+💰 Amount paid: 0 Toman
+"""
+                
+                await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
+                logger.info(f"✅ [pay_balance] تمدید رایگان برای کاربر {user_id} - سفارش #{order_id}")
+                await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
+                return
+            else:
+                await callback.message.edit_text(
+                    "❌ خطا در تمدید سرویس. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error extending service. Please try again.",
+                    reply_markup=get_back_only_keyboard(lang)
+                )
+                return
+        
+        # =============== ساخت سرویس جدید (غیر تمدید) ===============
         order_id = create_order(user_id, vol, days, 0, order_type, ip_limit=ip_limit)
         update_order(order_id, 
                     status='approved',
                     approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    payment_method='free_coupon')
+                    payment_method='free_coupon',
+                    payment_label='🎁 رایگان (کوپن)',
+                    inbound_id=inbound_ids)
         
         if is_ready_package:
             update_order(order_id, 
                         category_id=category_id,
                         category_name=category_name,
-                        package_id=package_id,
-                        inbound_id=inbound_ids)
+                        package_id=package_id)
         
         # =============== ارسال نوتیفیکیشن به ادمین ===============
         await send_admin_notification('balance', {
@@ -20877,7 +21974,11 @@ async def pay_balance(callback: CallbackQuery):
             'balance_before': balance,
             'balance_after': balance,
             'order_id': order_id,
-            'payment_type': 'free_coupon'
+            'payment_type': 'free',
+            'payment_label': '🎁 رایگان (کوپن)',
+            'payment_emoji': '🎁',
+            'inbound_ids': inbound_ids,
+            'ip_limit': ip_limit
         })
         
         # =============== ساخت کلاینت ===============
@@ -20908,8 +22009,7 @@ async def pay_balance(callback: CallbackQuery):
 
 {category_display}📦 حجم: {volume_display_text}
 ⏱ مدت: {days} روز
-💰 قیمت اصلی: {original_price:,} تومان
-🏷️ تخفیف {discount_percent}%: -{original_price:,} تومان
+🎁 روش پرداخت: رایگان (کوپن)
 💰 مبلغ پرداختی: ۰ تومان
 
 ✅ کانفیگ شما در بخش «کانفیگ‌های من» موجود است.
@@ -20920,8 +22020,7 @@ async def pay_balance(callback: CallbackQuery):
 
 {category_display}📦 Volume: {volume_display_text}
 ⏱ Duration: {days} days
-💰 Original price: {original_price:,} Toman
-🏷️ {discount_percent}% discount: -{original_price:,} Toman
+🎁 Payment method: Free (Coupon)
 💰 Amount paid: 0 Toman
 
 ✅ Your config is available in 'My Configs'.
@@ -20977,12 +22076,173 @@ async def pay_balance(callback: CallbackQuery):
             details=f"خرید سرویس {vol}GB/{days} روز (تخفیف {discount_percent}%)"
         )
     
+    # =============== ✅ ایجاد سفارش با ip_limit و inbound_ids ===============
+    order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
+    
+    # =============== ✅ ذخیره inbound_ids در سفارش ===============
+    update_order(order_id, inbound_id=inbound_ids)
+    
+    # =============== اگر تمدید است، parent_order_id را ذخیره کن ===============
+    if is_extend and extend_order_id:
+        update_order(order_id, parent_order_id=extend_order_id, is_extend=True)
+        logger.info(f"🔄 [pay_balance] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} ایجاد شد")
+    
+    # =============== اگر بسته آماده است ===============
+    if is_ready_package:
+        update_order(order_id, 
+                    category_id=category_id,
+                    category_name=category_name,
+                    package_id=package_id,
+                    inbound_id=inbound_ids,
+                    ip_limit=ip_limit,
+                    status='approved' if SENAI_PANEL_ENABLED else 'pending',
+                    payment_method='balance',
+                    payment_label='💰 موجودی حساب')
+    else:
+        update_order(order_id, 
+                    status='approved' if SENAI_PANEL_ENABLED else 'pending',
+                    payment_method='balance',
+                    payment_label='💰 موجودی حساب')
+    
+    logger.info(f"📝 [pay_balance] سفارش #{order_id} ایجاد شد - نوع: {order_type} - حجم: {vol}GB")
+    logger.info(f"💰 [pay_balance] روش پرداخت: موجودی حساب")
+    logger.info(f"📡 [pay_balance] اینباندها: {inbound_ids}")
+    logger.info(f"👤 [pay_balance] محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
+    
     # =============== پنل فعال: ساخت خودکار ===============
     if SENAI_PANEL_ENABLED:
         try:
             # =============== پیام در حال ساخت ===============
             await callback.message.edit_text("⏳ در حال ساخت کانفیگ...")
             
+            # =============== بررسی حالت تمدید ===============
+            if is_extend and extend_order_id:
+                # =============== تمدید سرویس موجود ===============
+                logger.info(f"🔄 [pay_balance] شروع تمدید با پرداخت سفارش #{extend_order_id}")
+                
+                # =============== دریافت اطلاعات سفارش اصلی ===============
+                parent_order = orders.get(str(extend_order_id))
+                if not parent_order:
+                    logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
+                    update_user(user_id, 'balance', balance)
+                    await callback.message.edit_text(
+                        "❌ خطا: سفارش اصلی برای تمدید یافت نشد. موجودی برگشت داده شد." if lang == "fa" else "❌ Error: Original order not found. Balance refunded.",
+                        reply_markup=get_back_only_keyboard(lang)
+                    )
+                    return
+                
+                # ✅ ارسال inbound_ids و ip_limit به extend_service
+                success = await extend_service(
+                    extend_order_id, 
+                    user_id, 
+                    vol, 
+                    days,
+                    inbound_ids,  # ✅ اینباندهای انتخاب شده
+                    ip_limit      # ✅ محدودیت IP
+                )
+                
+                if success:
+                    # ثبت سفارش جدید برای تمدید
+                    order_id = create_order(user_id, vol, days, final_price, "extend", ip_limit=ip_limit)
+                    update_order(order_id, 
+                                status='approved',
+                                approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                payment_method='balance_extend',
+                                payment_label='🔄 موجودی (تمدید)',
+                                parent_order_id=extend_order_id,
+                                is_extend=True,
+                                inbound_id=inbound_ids)
+                    
+                    # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
+                    if is_ready_package:
+                        update_order(order_id, 
+                                    category_id=category_id,
+                                    category_name=category_name,
+                                    package_id=package_id)
+                    
+                    record_purchase(user_id, final_price)
+                    consume_coupon(user_id)
+                    
+                    # پاک کردن وضعیت تمدید
+                    if user_id in user_states:
+                        user_states[user_id].pop('is_extend', None)
+                        user_states[user_id].pop('extend_order_id', None)
+                        user_states[user_id].pop('current_volume', None)
+                        user_states[user_id].pop('current_days', None)
+                    
+                    # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
+                    updated_parent = orders.get(str(extend_order_id))
+                    new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
+                    new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
+                    
+                    # =============== ارسال نوتیفیکیشن به ادمین ===============
+                    await send_admin_notification('extend', {
+                        'user_id': user_id,
+                        'volume': vol,
+                        'days': days,
+                        'price': final_price,
+                        'discount_percent': discount_percent,
+                        'balance_before': balance,
+                        'balance_after': new_balance,
+                        'order_id': order_id,
+                        'payment_type': 'balance_extend',
+                        'payment_label': '🔄 موجودی (تمدید)',
+                        'payment_emoji': '🔄💰',
+                        'is_extend': True,
+                        'parent_order_id': extend_order_id,
+                        'old_volume': current_volume,
+                        'old_days': current_days,
+                        'new_volume': new_volume,
+                        'new_days': new_days,
+                        'category_name': category_name,
+                        'inbound_ids': inbound_ids,
+                        'ip_limit': ip_limit
+                    })
+                    
+                    # =============== حذف پیام "در حال ساخت" ===============
+                    try:
+                        await callback.message.delete()
+                    except:
+                        pass
+                    
+                    # =============== پیام ساده به کاربر ===============
+                    if lang == "fa":
+                        text = f"""
+✅ <b>سرویس با موفقیت تمدید شد!</b>
+
+📦 +{vol}GB به حجم شما اضافه شد
+⏱ +{days} روز به مدت شما اضافه شد
+💰 روش پرداخت: موجودی (تمدید)
+💰 مبلغ پرداختی: {final_price:,} تومان
+"""
+                    else:
+                        text = f"""
+✅ <b>Service extended successfully!</b>
+
+📦 +{vol}GB added to your volume
+⏱ +{days} days added to your duration
+💰 Payment method: Balance (Extended)
+💰 Amount paid: {final_price:,} Toman
+"""
+                    
+                    await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
+                    logger.info(f"✅ [pay_balance] تمدید برای کاربر {user_id} - سفارش #{order_id}")
+                    await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
+                    
+                    # =============== دیباگ نهایی ===============
+                    debug_coupon_state(user_id, "pay_balance_end")
+                    return
+                else:
+                    # برگردوندن موجودی در صورت خطا
+                    update_user(user_id, 'balance', balance)
+                    error_msg = "خطا در تمدید سرویس\nموجودی برگشت داده شد" if lang == "fa" else "Error extending service\nBalance refunded"
+                    await callback.message.edit_text(
+                        f"{premium_emoji('danger', '❌')} {error_msg}",
+                        reply_markup=get_back_only_keyboard(lang)
+                    )
+                    return
+            
+            # =============== ساخت کلاینت جدید (غیر تمدید) ===============
             timestamp = int(datetime.now().timestamp())
             email = f"user{user_id}_{timestamp}"
             user_name = user.get('name', f'کاربر_{user_id}')
@@ -20999,15 +22259,20 @@ async def pay_balance(callback: CallbackQuery):
                     
                     # =============== ایجاد سفارش ===============
                     order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-                    update_order(order_id, status='approved', config_link=sub_link, sub_link=sub_link, 
-                                email=email, payment_method='balance')
+                    update_order(order_id, 
+                                status='approved', 
+                                config_link=sub_link, 
+                                sub_link=sub_link, 
+                                email=email, 
+                                payment_method='balance',
+                                payment_label='💰 موجودی حساب',
+                                inbound_id=inbound_ids)
                     
                     if is_ready_package:
                         update_order(order_id, 
                                     category_id=category_id,
                                     category_name=category_name,
-                                    package_id=package_id,
-                                    inbound_id=inbound_ids)
+                                    package_id=package_id)
                     
                     record_purchase(user_id, final_price)
                     consume_coupon(user_id)
@@ -21020,7 +22285,7 @@ async def pay_balance(callback: CallbackQuery):
                         await log_system.log_config_created(user_id, order_id, email, vol, days)
                         await log_system.log_purchase(user_id, order_id, vol, days, final_price, "موجودی")
                     
-                    # =============== ✅ ارسال نوتیفیکیشن به ادمین ===============
+                    # =============== ارسال نوتیفیکیشن به ادمین ===============
                     await send_admin_notification('balance', {
                         'user_id': user_id,
                         'volume': vol,
@@ -21030,10 +22295,14 @@ async def pay_balance(callback: CallbackQuery):
                         'balance_before': balance,
                         'balance_after': new_balance,
                         'order_id': order_id,
-                        'payment_type': 'balance'
+                        'payment_type': 'balance',
+                        'payment_label': '💰 موجودی حساب',
+                        'payment_emoji': '💰',
+                        'inbound_ids': inbound_ids,
+                        'ip_limit': ip_limit
                     })
                     
-                    # =============== ✅ حذف پیام "در حال ساخت" ===============
+                    # =============== حذف پیام "در حال ساخت" ===============
                     try:
                         await callback.message.delete()
                     except:
@@ -21122,18 +22391,138 @@ async def pay_balance(callback: CallbackQuery):
     try:
         config = await get_config_from_pool_safe(vol, days)
         
+        # =============== بررسی حالت تمدید ===============
+        if is_extend and extend_order_id:
+            # =============== تمدید سرویس موجود (پنل خاموش) ===============
+            logger.info(f"🔄 [pay_balance] شروع تمدید از مخزن برای سفارش #{extend_order_id}")
+            
+            # =============== دریافت اطلاعات سفارش اصلی ===============
+            parent_order = orders.get(str(extend_order_id))
+            if not parent_order:
+                logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
+                update_user(user_id, 'balance', balance)
+                await callback.message.edit_text(
+                    "❌ خطا: سفارش اصلی برای تمدید یافت نشد. موجودی برگشت داده شد." if lang == "fa" else "❌ Error: Original order not found. Balance refunded.",
+                    reply_markup=get_back_only_keyboard(lang)
+                )
+                return
+            
+            # ✅ ارسال inbound_ids و ip_limit به extend_service
+            success = await extend_service(
+                extend_order_id, 
+                user_id, 
+                vol, 
+                days,
+                inbound_ids,  # ✅ اینباندهای انتخاب شده
+                ip_limit      # ✅ محدودیت IP
+            )
+            
+            if success:
+                order_id = create_order(user_id, vol, days, final_price, "extend", ip_limit=ip_limit)
+                update_order(order_id, 
+                            status='approved', 
+                            payment_method='balance_pool_extend',
+                            payment_label='🔄 موجودی (تمدید - مخزن)',
+                            parent_order_id=extend_order_id,
+                            is_extend=True,
+                            inbound_id=inbound_ids)
+                
+                # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
+                if is_ready_package:
+                    update_order(order_id, 
+                                category_id=category_id,
+                                category_name=category_name,
+                                package_id=package_id)
+                
+                record_purchase(user_id, final_price)
+                consume_coupon(user_id)
+                
+                if log_system:
+                    await log_system.log_purchase(user_id, order_id, vol, days, final_price, "تمدید (مخزن)")
+                
+                # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
+                updated_parent = orders.get(str(extend_order_id))
+                new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
+                new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
+                
+                await send_admin_notification('extend', {
+                    'user_id': user_id,
+                    'volume': vol,
+                    'days': days,
+                    'price': final_price,
+                    'discount_percent': discount_percent,
+                    'balance_before': balance,
+                    'balance_after': new_balance,
+                    'order_id': order_id,
+                    'payment_type': 'balance_pool_extend',
+                    'payment_label': '🔄 موجودی (تمدید - مخزن)',
+                    'payment_emoji': '🔄💰',
+                    'is_extend': True,
+                    'parent_order_id': extend_order_id,
+                    'old_volume': current_volume,
+                    'old_days': current_days,
+                    'new_volume': new_volume,
+                    'new_days': new_days,
+                    'category_name': category_name,
+                    'inbound_ids': inbound_ids,
+                    'ip_limit': ip_limit
+                })
+                
+                # =============== حذف پیام "در حال ساخت" ===============
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                
+                if lang == "fa":
+                    text = f"""
+✅ <b>سرویس با موفقیت تمدید شد!</b>
+
+📦 +{vol}GB به حجم شما اضافه شد
+⏱ +{days} روز به مدت شما اضافه شد
+💰 روش پرداخت: موجودی (تمدید)
+💰 مبلغ پرداختی: {final_price:,} تومان
+"""
+                else:
+                    text = f"""
+✅ <b>Service extended successfully!</b>
+
+📦 +{vol}GB added to your volume
+⏱ +{days} days added to your duration💰 Payment method: Balance (Extended)
+💰 Amount paid: {final_price:,} Toman
+"""
+                
+                await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
+                logger.info(f"✅ [pay_balance] تمدید از مخزن برای کاربر {user_id} - سفارش #{order_id}")
+                return
+            else:
+                update_user(user_id, 'balance', balance)
+                error_msg = "خطا در تمدید سرویس\nموجودی برگشت داده شد" if lang == "fa" else "Error extending service\nBalance refunded"
+                await callback.message.edit_text(
+                    f"{premium_emoji('danger', '❌')} {error_msg}",
+                    reply_markup=get_back_only_keyboard(lang)
+                )
+                return
+        
+        # =============== ساخت سرویس جدید (غیر تمدید) ===============
         if config:
             order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-            update_order(order_id, status='approved', config_link=config['link'], config_id=config['id'])
-            record_purchase(user_id, final_price)
-            consume_coupon(user_id)
+            update_order(order_id, 
+                        status='approved', 
+                        config_link=config['link'], 
+                        config_id=config['id'],
+                        payment_method='balance_pool',
+                        payment_label='💰 موجودی حساب (مخزن)',
+                        inbound_id=inbound_ids)
             
             if is_ready_package:
                 update_order(order_id, 
                             category_id=category_id,
                             category_name=category_name,
-                            package_id=package_id,
-                            inbound_id=inbound_ids)
+                            package_id=package_id)
+            
+            record_purchase(user_id, final_price)
+            consume_coupon(user_id)
             
             referral_result = await check_referral_bonus(user_id)
             if referral_result:
@@ -21151,7 +22540,11 @@ async def pay_balance(callback: CallbackQuery):
                 'balance_before': balance,
                 'balance_after': new_balance,
                 'order_id': order_id,
-                'payment_type': 'balance_pool'
+                'payment_type': 'balance_pool',
+                'payment_label': '💰 موجودی حساب (مخزن)',
+                'payment_emoji': '💰',
+                'inbound_ids': inbound_ids,
+                'ip_limit': ip_limit
             })
             
             await callback.message.edit_text("✅ در حال ارسال کانفیگ...")
@@ -21171,14 +22564,17 @@ async def pay_balance(callback: CallbackQuery):
             
         else:
             order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-            update_order(order_id, status='pending')
+            update_order(order_id, 
+                        status='pending',
+                        payment_method='balance_pool',
+                        payment_label='💰 موجودی حساب (مخزن)',
+                        inbound_id=inbound_ids)
             
             if is_ready_package:
                 update_order(order_id, 
                             category_id=category_id,
                             category_name=category_name,
-                            package_id=package_id,
-                            inbound_id=inbound_ids)
+                            package_id=package_id)
             
             if log_system:
                 await log_system.log_user_action(
@@ -21187,7 +22583,12 @@ async def pay_balance(callback: CallbackQuery):
                     f"سفارش #{order_id} | {vol}GB/{days} روز | مبلغ: {final_price:,} تومان"
                 )
             
-            admin_text = f"📝 <b>درخواست کانفیگ</b>\n👤 {user.get('name')} ({user_id})\n📦 {vol}GB/{days} روز\n💰 {final_price:,} تومان"
+            # =============== نمایش وضعیت تمدید در پیام ادمین ===============
+            extend_note = ""
+            if is_extend and extend_order_id:
+                extend_note = f"\n🔄 <b>تمدید سرویس #{extend_order_id}</b>"
+            
+            admin_text = f"📝 <b>درخواست کانفیگ</b>\n👤 {user.get('name')} ({user_id})\n📦 {vol}GB/{days} روز\n💰 {final_price:,} تومان{extend_note}"
             if discount_percent > 0:
                 admin_text += f"\n🏷️ تخفیف {discount_percent}% (قیمت اصلی: {original_price:,})"
             
@@ -21504,7 +22905,7 @@ async def get_user_display_name(user_id: int) -> str:
 # =============== دریافت فیش واریزی (اصلاح نهایی) ===============
 @dp.message(F.photo)
 async def handle_receipt(message: Message):
-    """دریافت فیش واریزی - نسخه اصلاح شده با مدیریت کامل"""
+    """دریافت فیش واریزی - با تشخیص کامل تمدید و نوع پرداخت"""
     user_id = message.from_user.id
     
     user_state = user_states.get(user_id, {})
@@ -21531,7 +22932,7 @@ async def handle_receipt(message: Message):
         await message.reply("❌ خطا در دریافت عکس" if lang=='fa' else "❌ Error")
         return
     
-    # =============== ✅ پیدا کردن جدیدترین سفارش در انتظار پرداخت ===============
+    # =============== پیدا کردن جدیدترین سفارش در انتظار پرداخت ===============
     valid_orders = get_valid_orders()
     pending_orders = []
     for o in valid_orders.values():
@@ -21545,22 +22946,21 @@ async def handle_receipt(message: Message):
             user_states[user_id]['awaiting_receipt'] = False
         return
     
-    # ✅ مرتب‌سازی بر اساس تاریخ (جدیدترین اول)
+    # مرتب‌سازی بر اساس تاریخ (جدیدترین اول)
     pending_orders.sort(key=lambda x: x.get('created_at', x.get('date', '')), reverse=True)
     
-    # ✅ برگرداندن جدیدترین سفارش
+    # برگرداندن جدیدترین سفارش
     pending = pending_orders[0]
     order_id = pending['order_id']
     
-    # ⚠️ اگر بیش از یک سفارش در انتظار وجود دارد، سفارشات قدیمی را لغو کن
+    # اگر بیش از یک سفارش در انتظار وجود دارد، سفارشات قدیمی را لغو کن
     if len(pending_orders) > 1:
-        old_orders = pending_orders[1:]  # سفارشات قدیمی‌تر
+        old_orders = pending_orders[1:]
         for old_o in old_orders:
             old_id = old_o.get('order_id')
             update_order(old_id, status='cancelled')
             logger.info(f"🗑 سفارش قدیمی #{old_id} به دلیل وجود سفارش جدیدتر لغو شد")
         
-        # ارسال پیام به کاربر
         try:
             old_ids = [str(o.get('order_id')) for o in old_orders]
             if lang == "fa":
@@ -21581,6 +22981,10 @@ async def handle_receipt(message: Message):
     # =============== تغییر وضعیت به pending ===============
     order_type = pending.get('type', 'purchase')
     
+    # =============== تشخیص تمدید ===============
+    parent_order_id = pending.get('parent_order_id')
+    is_extend = parent_order_id is not None
+    
     if order_type == 'balance_charge':
         new_status = 'pending_balance_charge'
     else:
@@ -21589,6 +22993,8 @@ async def handle_receipt(message: Message):
     update_order(order_id, receipt_photo_id=photo_id, status=new_status)
     
     logger.info(f"📸 فیش برای سفارش #{order_id} دریافت شد - وضعیت جدید: {new_status}")
+    if is_extend:
+        logger.info(f"🔄 این سفارش برای تمدید سرویس #{parent_order_id} است")
     
     # =============== دریافت اطلاعات کامل سفارش ===============
     order_price = pending.get('price', 0)
@@ -21610,37 +23016,29 @@ async def handle_receipt(message: Message):
     else:
         user_display = f"{user_display_escaped} (ID: {user_id})"
     
-    # ✅ escape کردن تاریخ
+    # escape کردن تاریخ
     date_escaped = html.escape(pending.get('date', 'نامشخص'))
     
-    # =============== ✅ اصلاح: تشخیص دقیق نوع سفارش ===============
-    admin_text = f"💰 <b>فیش جدید</b>\n🆔 #{order_id} | 👤 {user_display}\n📅 {date_escaped}\n"
+    # =============== تشخیص آیکون دسته ===============
+    category_icon = "📦"
+    if category_id:
+        for cat in READY_PACKAGES.get('categories', []):
+            if cat.get('id') == category_id:
+                category_icon = cat.get('icon', '📦')
+                break
     
-    # =============== نمایش اطلاعات بر اساس نوع سفارش ===============
-    if order_type == 'balance_charge':
-        # ✅ اولویت اول: شارژ حساب
-        expected_price = order_amount or order_price
+    # =============== ساخت پیام ادمین با تشخیص تمدید ===============
+    admin_text = f"💰 <b>فیش جدید</b>\n"
+    admin_text += f"🆔 #{order_id} | 👤 {user_display}\n"
+    admin_text += f"📅 {date_escaped}\n"
+    
+    # =============== نمایش نوع سفارش با تشخیص تمدید ===============
+    if is_extend:
+        admin_text += f"🔄 <b>نوع: تمدید سرویس #{parent_order_id}</b>\n"
+    elif order_type == 'balance_charge':
         admin_text += f"💰 <b>نوع: شارژ حساب</b>\n"
-        admin_text += f"💰 مبلغ مورد انتظار: {expected_price:,} تومان"
-    
-    elif order_type == 'purchase':
-        # ✅ خرید معمولی
-        expected_price = order_price
-        admin_text += f"🛒 <b>نوع: خرید سفارشی</b>\n"
-        admin_text += f"📦 {order_volume}GB | ⏱️ {order_days} روز | 💰 مبلغ مورد انتظار: {expected_price:,} تومان"
-    
     elif order_type == 'ready_package' or order_type == 'category_purchase':
-        # ✅ بسته آماده
-        expected_price = order_price
-        
-        icon = "📦"
         category_name_display = category_name or "بسته آماده"
-        if category_id:
-            for cat in READY_PACKAGES.get('categories', []):
-                if cat.get('id') == category_id:
-                    icon = cat.get('icon', '📦')
-                    break
-        
         category_name_escaped = html.escape(category_name_display)
         
         package_info = ""
@@ -21653,23 +23051,25 @@ async def handle_receipt(message: Message):
                             break
                     break
         
-        admin_text += f"{icon} <b>نوع: بسته آماده - {category_name_escaped}</b>{package_info}\n"
-        admin_text += f"📦 {order_volume}GB | ⏱️ {order_days} روز | 💰 مبلغ مورد انتظار: {expected_price:,} تومان"
-    
+        admin_text += f"{category_icon} <b>نوع: بسته آماده - {category_name_escaped}</b>{package_info}\n"
+    elif order_type == 'purchase':
+        admin_text += f"🛒 <b>نوع: خرید سفارشی</b>\n"
     elif order_type == 'test':
-        # ✅ تست رایگان
         admin_text += f"🧪 <b>نوع: تست رایگان</b>\n"
-        admin_text += f"📦 {order_volume}GB | ⏱️ {order_days} روز"
-    
     else:
-        # ✅ نوع نامشخص
-        expected_price = order_price or order_amount
         admin_text += f"⚠️ <b>نوع: {html.escape(order_type)}</b>\n"
-        admin_text += f"💰 مبلغ مورد انتظار: {expected_price:,} تومان"
+    
+    # =============== نمایش مبلغ ===============
+    expected_price = order_price or order_amount
+    admin_text += f"📦 {order_volume}GB | ⏱️ {order_days} روز | 💰 مبلغ مورد انتظار: {expected_price:,} تومان"
+    
+    # =============== نمایش وضعیت تمدید ===============
+    if is_extend:
+        admin_text += f"\n🔄 این سفارش برای <b>تمدید</b> سرویس #{parent_order_id} است."
     
     admin_text += "\n⏳ در انتظار تایید"
     
-    # =============== دکمه‌های ادمین ===============
+    # =============== دکمه‌های ادمین با تشخیص تمدید ===============
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ تایید", callback_data=f"approve_receipt_{order_id}"),
@@ -21691,8 +23091,12 @@ async def handle_receipt(message: Message):
         except Exception as e2:
             logger.error(f"خطا در ارسال فیش به ادمین (تلاش دوم): {e2}")
     
+    # =============== پیام به کاربر ===============
     amount = expected_price
-    success = f"{premium_emoji('success','✅')} <b>فیش دریافت شد</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n{premium_emoji('money','💰')} {amount:,} تومان\n{premium_emoji('time','⏳')} در انتظار تایید" if lang=='fa' else f"{premium_emoji('success','✅')} <b>Receipt received</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n{premium_emoji('money','💰')} {amount:,} Toman\n{premium_emoji('time','⏳')} Pending approval"
+    if is_extend:
+        success = f"{premium_emoji('success','✅')} <b>فیش تمدید دریافت شد</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n🔄 تمدید سرویس #{parent_order_id}\n{premium_emoji('money','💰')} {amount:,} تومان\n{premium_emoji('time','⏳')} در انتظار تایید" if lang=='fa' else f"{premium_emoji('success','✅')} <b>Extension receipt received</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n🔄 Extending service #{parent_order_id}\n{premium_emoji('money','💰')} {amount:,} Toman\n{premium_emoji('time','⏳')} Pending approval"
+    else:
+        success = f"{premium_emoji('success','✅')} <b>فیش دریافت شد</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n{premium_emoji('money','💰')} {amount:,} تومان\n{premium_emoji('time','⏳')} در انتظار تایید" if lang=='fa' else f"{premium_emoji('success','✅')} <b>Receipt received</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n{premium_emoji('money','💰')} {amount:,} Toman\n{premium_emoji('time','⏳')} Pending approval"
     
     await message.reply(success, parse_mode=ParseMode.HTML)
     
@@ -21702,7 +23106,6 @@ async def handle_receipt(message: Message):
     is_admin = (user_id == ADMIN_ID_INT)
     await message.answer("🚀 منوی اصلی" if lang=='fa' else "🚀 Main Menu", 
                         reply_markup=get_main_keyboard(is_admin, lang))
-
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_custom_payment_receipt_amount'))
@@ -22437,7 +23840,7 @@ async def admin_custom_balance(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("approve_receipt_"))
 async def approve_receipt(callback: CallbackQuery):
-    """تایید رسید با امکان انتخاب اینباند"""
+    """تایید رسید با امکان انتخاب اینباند - با تشخیص تمدید"""
     logger.critical(f"🔴 approve_receipt CALLED! data={callback.data}")
     
     # =============== 1. اعتبارسنجی ادمین ===============
@@ -22466,11 +23869,16 @@ async def approve_receipt(callback: CallbackQuery):
         vol = order.get('volume', 0)
         days = order.get('days', 30)
         price = order.get('price', 0)
+        
+        # =============== ✅ بررسی تمدید ===============
+        parent_order_id = order.get('parent_order_id')
+        is_extend = parent_order_id is not None
+        
         user_info = get_user(uid)
-        user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))  # ✅ escape
+        user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
         lang = user_info.get('lang', 'fa')
         
-        logger.info(f"📝 تایید سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان")
+        logger.info(f"📝 تایید سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
         
         # دریافت لیست اینباندها
         inbounds = await xui_get_inbounds()
@@ -22482,7 +23890,7 @@ async def approve_receipt(callback: CallbackQuery):
         
         for inbound in active_inbounds:
             inbound_id = inbound.get('id')
-            remark = html.escape(inbound.get('remark', f'Inbound {inbound_id}'))  # ✅ escape
+            remark = html.escape(inbound.get('remark', f'Inbound {inbound_id}'))
             protocol = html.escape(inbound.get('protocol', 'unknown'))
             port = inbound.get('port')
             
@@ -22510,16 +23918,22 @@ async def approve_receipt(callback: CallbackQuery):
             )])
         
         default_id = configs_pool.get('default_inbound_id')
-        default_text = html.escape(str(default_id)) if default_id else 'تنظیم نشده'  # ✅ escape
+        default_text = html.escape(str(default_id)) if default_id else 'تنظیم نشده'
         buttons.append([InlineKeyboardButton(
             text=f"📌 {'استفاده از اینباند پیش‌فرض' if lang == 'fa' else 'Use Default Inbound'} ({default_text})",
             callback_data=f"select_inbound_{oid}_default",
             style="primary" if default_id and selected_inbound == default_id else None
         )])
         
+        # =============== ✅ دکمه تایید با تشخیص تمدید ===============
+        if is_extend:
+            approve_label = f"🔄 {'تایید و تمدید' if lang == 'fa' else 'Approve & Extend'}"
+        else:
+            approve_label = f"✅ {'تایید نهایی' if lang == 'fa' else 'Final Approve'}"
+        
         buttons.append([
             InlineKeyboardButton(
-                text=f"✅ {'تایید نهایی' if lang == 'fa' else 'Final Approve'}",
+                text=approve_label,
                 callback_data=f"confirm_approve_{oid}",
                 style="success"
             ),
@@ -22547,7 +23961,7 @@ async def approve_receipt(callback: CallbackQuery):
                 if cat.get('id') == category_id:
                     icon = cat.get('icon', '📦')
                     break
-            cat_name_escaped = html.escape(category_name)  # ✅ escape
+            cat_name_escaped = html.escape(category_name)
             order_info = f"{icon} بسته آماده: {cat_name_escaped}"
             if package_id:
                 for cat in READY_PACKAGES.get('categories', []):
@@ -22558,7 +23972,10 @@ async def approve_receipt(callback: CallbackQuery):
                                 break
                         break
         
-        # =============== ساخت متن با escape ===============
+        # =============== ساخت متن با نمایش تمدید ===============
+        extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
+        parent_info = f"\n🆔 سفارش اصلی: #{parent_order_id}" if is_extend else ""
+        
         text = f"""
 ✅ <b>تایید رسید سفارش #{oid}</b>
 
@@ -22569,6 +23986,7 @@ async def approve_receipt(callback: CallbackQuery):
 ⏱ مدت: {days} روز
 💰 قیمت: {price:,} تومان
 📅 تاریخ: {html.escape(order.get('date', 'نامشخص'))}
+📊 نوع سفارش: {extend_status}{parent_info}
 ━━━━━━━━━━━━━━━━━━━━━━
 
 <b>انتخاب اینباند:</b>
@@ -22644,7 +24062,7 @@ async def approve_receipt(callback: CallbackQuery):
         
         return
     
-    # ---------- 4.3 بسته آماده (نسخه اصلاح شده) ----------
+    # ---------- 4.3 بسته آماده (نسخه اصلاح شده با تشخیص تمدید) ----------
     elif order_type == 'ready_package' or order_type == 'category_purchase':
         uid = order['user_id']
         vol = order.get('volume', 0)
@@ -22655,8 +24073,12 @@ async def approve_receipt(callback: CallbackQuery):
         package_id = order.get('package_id')
         category_id = order.get('category_id')
         
+        # =============== ✅ بررسی تمدید ===============
+        parent_order_id = order.get('parent_order_id')
+        is_extend = parent_order_id is not None
+        
         user_info = get_user(uid)
-        user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))  # ✅ escape
+        user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
         lang = user_info.get('lang', 'fa')
         
         # پیدا کردن آیکون دسته
@@ -22666,8 +24088,8 @@ async def approve_receipt(callback: CallbackQuery):
                 icon = cat.get('icon', '📦')
                 break
         
-        cat_name_escaped = html.escape(category_name)  # ✅ escape
-        logger.info(f"📦 تایید بسته آماده #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - دسته: {category_name}")
+        cat_name_escaped = html.escape(category_name)
+        logger.info(f"📦 تایید بسته آماده #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - دسته: {category_name} - تمدید: {is_extend}")
         
         # =============== دریافت لیست اینباندهای انتخاب شده ===============
         user_inbounds = get_user_inbound(uid)
@@ -22687,7 +24109,7 @@ async def approve_receipt(callback: CallbackQuery):
         inbound_names = {}
         for ib in active_inbounds:
             inbound_id_ib = ib.get('id')
-            remark = html.escape(ib.get('remark', f'ID:{inbound_id_ib}'))  # ✅ escape
+            remark = html.escape(ib.get('remark', f'ID:{inbound_id_ib}'))
             protocol = html.escape(ib.get('protocol', '').upper())
             port = ib.get('port', '')
             inbound_names[inbound_id_ib] = f"{remark} - {protocol}:{port}"
@@ -22713,16 +24135,21 @@ async def approve_receipt(callback: CallbackQuery):
         # =============== ساخت دکمه‌ها ===============
         buttons = []
         
-        # دکمه انتخاب اینباند (فقط یک دکمه)
+        # دکمه انتخاب اینباند
         buttons.append([InlineKeyboardButton(
             text="📡 انتخاب اینباند" if lang == "fa" else "📡 Select Inbound",
             callback_data=f"select_user_inbound_{uid}_{oid}"
         )])
         
-        # دکمه‌های تایید و رد
+        # =============== ✅ دکمه تایید با تشخیص تمدید ===============
+        if is_extend:
+            approve_label = f"🔄 {'تایید و تمدید' if lang == 'fa' else 'Approve & Extend'}"
+        else:
+            approve_label = f"✅ {'تایید نهایی' if lang == 'fa' else 'Final Approve'}"
+        
         buttons.append([
             InlineKeyboardButton(
-                text=f"✅ {'تایید نهایی' if lang == 'fa' else 'Final Approve'}",
+                text=approve_label,
                 callback_data=f"confirm_approve_package_{oid}",
                 style="success"
             ),
@@ -22738,7 +24165,10 @@ async def approve_receipt(callback: CallbackQuery):
             callback_data="admin_orders"
         )])
         
-        # =============== ساخت متن با escape ===============
+        # =============== ساخت متن با نمایش تمدید ===============
+        extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
+        parent_info = f"\n🆔 سفارش اصلی: #{parent_order_id}" if is_extend else ""
+        
         text = f"""
 📦 <b>تایید بسته آماده #{oid}</b>
 
@@ -22750,6 +24180,7 @@ async def approve_receipt(callback: CallbackQuery):
 💰 قیمت: {price:,} تومان
 🆔 بسته: #{package_id if package_id else 'نامشخص'}
 📅 تاریخ: {html.escape(order.get('date', 'نامشخص'))}
+📊 نوع سفارش: {extend_status}{parent_info}
 ━━━━━━━━━━━━━━━━━━━━━━
 
 <b>اینباندها:</b>
@@ -22782,8 +24213,7 @@ async def approve_receipt(callback: CallbackQuery):
     # ---------- 4.4 نوع سفارش نامشخص ----------
     else:
         logger.warning(f"⚠️ نوع سفارش نامشخص برای #{oid}: {order_type}")
-        return await callback.answer("❌ نوع سفارش نامشخص", show_alert=True)
-    
+        return await callback.answer("❌ نوع سفارش نامشخص", show_alert=True)    
     
     
 @dp.callback_query(F.data.startswith("select_user_inbound_"))
@@ -23848,7 +25278,7 @@ async def set_package_inbound(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("confirm_approve_package_"))
 async def confirm_approve_package(callback: CallbackQuery):
-    """تایید نهایی بسته آماده"""
+    """تایید نهایی بسته آماده - با تشخیص کامل تمدید و جایگزینی اینباندها"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -23866,65 +25296,328 @@ async def confirm_approve_package(callback: CallbackQuery):
     vol = order.get('volume', 0)
     days = order.get('days', 30)
     price = order.get('price', 0)
+    ip_limit = order.get('ip_limit', 0)
     
-    inbound_ids = get_user_inbound(uid)
+    # =============== بررسی تمدید ===============
+    parent_order_id = order.get('parent_order_id')
+    is_extend = parent_order_id is not None
     
-    if not inbound_ids:
+    # =============== بررسی وضعیت تمدید از user_states نیز ===============
+    user_state = user_states.get(uid, {})
+    if not is_extend:
+        is_extend = user_state.get('is_extend', False)
+        if is_extend:
+            parent_order_id = user_state.get('extend_order_id')
+            logger.info(f"🔄 [confirm_approve_package] تمدید از user_states تشخیص داده شد: order_id={parent_order_id}")
+    
+    # =============== تشخیص دقیق روش پرداخت ===============
+    payment_method = order.get('payment_method', 'unknown')
+    order_type = order.get('type', 'purchase')
+    
+    # =============== نقشه کامل روش‌های پرداخت ===============
+    PAYMENT_METHODS = {
+        'card': {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'},
+        'awaiting_payment': {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'},
+        'receipt': {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'},
+        'balance': {'label': '💰 موجودی حساب', 'emoji': '💰', 'type': 'balance'},
+        'balance_pool': {'label': '💰 موجودی حساب', 'emoji': '💰', 'type': 'balance'},
+        'balance_extend': {'label': '🔄 موجودی (تمدید)', 'emoji': '🔄', 'type': 'balance_extend'},
+        'balance_pool_extend': {'label': '🔄 موجودی (تمدید)', 'emoji': '🔄', 'type': 'balance_extend'},
+        'free_coupon': {'label': '🎁 کوپن تخفیف', 'emoji': '🎁', 'type': 'free'},
+        'free_coupon_extend': {'label': '🎁 کوپن تخفیف (تمدید)', 'emoji': '🎁', 'type': 'free_extend'},
+        'test': {'label': '🧪 تست رایگان', 'emoji': '🧪', 'type': 'test'},
+    }
+    
+    # =============== دریافت اطلاعات پرداخت ===============
+    payment_info = PAYMENT_METHODS.get(payment_method, {'label': '❓ نامشخص', 'emoji': '❓', 'type': 'unknown'})
+    
+    # =============== اگر روش پرداخت از order نیامد، از user_states بگیر ===============
+    if payment_method == 'unknown' or not payment_method:
+        user_state_payment = user_states.get(uid, {})
+        payment_type_from_state = user_state_payment.get('payment_type', '')
+        
+        if payment_type_from_state == 'balance':
+            payment_info = {'label': '💰 موجودی حساب', 'emoji': '💰', 'type': 'balance'}
+        elif payment_type_from_state in ['card', 'awaiting_payment']:
+            payment_info = {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'}
+        elif payment_type_from_state == 'ready_package':
+            payment_info = {'label': '📦 بسته آماده', 'emoji': '📦', 'type': 'ready_package'}
+        elif payment_type_from_state == 'test':
+            payment_info = {'label': '🧪 تست رایگان', 'emoji': '🧪', 'type': 'test'}
+    
+    # =============== تشخیص تمدید برای تنظیم برچسب پرداخت ===============
+    if is_extend:
+        if payment_info['type'] == 'balance':
+            payment_info = {'label': '🔄 موجودی (تمدید)', 'emoji': '🔄', 'type': 'balance_extend'}
+        elif payment_info['type'] == 'card':
+            payment_info = {'label': '💳 کارت (تمدید)', 'emoji': '💳', 'type': 'card_extend'}
+        elif payment_info['type'] == 'free':
+            payment_info = {'label': '🎁 کوپن (تمدید)', 'emoji': '🎁', 'type': 'free_extend'}
+    
+    payment_label = payment_info['label']
+    payment_emoji = payment_info['emoji']
+    payment_type = payment_info['type']
+    
+    logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_method} → {payment_type} ({payment_label})")
+    
+    # =============== دریافت اینباندهای انتخاب شده از user_inbound_selection ===============
+    selected_inbounds = get_user_inbound(uid)
+    
+    if not selected_inbounds:
+        selected_inbounds = order.get('inbound_id', [])
+        logger.info(f"📡 [confirm_approve_package] اینباندها از سفارش: {selected_inbounds}")
+    else:
+        logger.info(f"📡 [confirm_approve_package] اینباندهای انتخاب شده از user_inbound_selection: {selected_inbounds}")
+    
+    # اگر انتخاب نشده بود، از دسته بگیر
+    if not selected_inbounds:
         category_id = order.get('category_id')
         if category_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == category_id:
-                    cat_inbound = cat.get('inbound_id')
-                    if cat_inbound:
-                        inbound_ids = cat_inbound if isinstance(cat_inbound, list) else [cat_inbound]
+                    cat_inbound_ids = cat.get('inbound_ids', [])
+                    if cat_inbound_ids:
+                        selected_inbounds = cat_inbound_ids if isinstance(cat_inbound_ids, list) else [cat_inbound_ids]
+                    else:
+                        cat_inbound = cat.get('inbound_id')
+                        if cat_inbound:
+                            selected_inbounds = cat_inbound if isinstance(cat_inbound, list) else [cat_inbound]
                     break
-        
-        if not inbound_ids:
-            default_ids = configs_pool.get('default_inbound_ids', [])
-            if default_ids:
-                inbound_ids = default_ids
     
-    if isinstance(inbound_ids, list):
-        pass
-    elif inbound_ids:
-        inbound_ids = [inbound_ids]
-    else:
-        inbound_ids = []
+    # اگر هیچکدام نبود، از پیش‌فرض استفاده کن
+    if not selected_inbounds:
+        default_ids = configs_pool.get('default_inbound_ids', [])
+        if default_ids:
+            selected_inbounds = default_ids
+    
+    # اطمینان از لیست بودن
+    if not isinstance(selected_inbounds, list):
+        selected_inbounds = [selected_inbounds] if selected_inbounds else []
+    
+    logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی انتخاب شده توسط ادمین: {selected_inbounds}")
     
     category_name = order.get('category_name', 'بسته آماده')
     user_info = get_user(uid)
     user_name = user_info.get('name', f'کاربر_{uid}')
+    balance = user_info.get('balance', 0)
     
-    # ✅ escape کردن نام کاربر و دسته برای جلوگیری از خطاهای HTML
+    # ✅ escape کردن نام‌ها
     user_name_escaped = html.escape(user_name)
     category_name_escaped = html.escape(category_name)
     
     lang = user_info.get('lang', 'fa')
     
-    await callback.message.edit_text(f"⏳ در حال ساخت کلاینت برای بسته #{oid}...")
+    logger.info(f"📦 [confirm_approve_package] سفارش #{oid} - کاربر: {uid} - تمدید: {is_extend} - parent_order_id: {parent_order_id}")
+    logger.info(f"📦 [confirm_approve_package] حجم: {vol}GB - مدت: {days} روز - قیمت: {price:,} تومان")
+    logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی انتخاب شده: {selected_inbounds}")
+    logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_label}")
     
+    await callback.message.edit_text(f"⏳ در حال پردازش بسته #{oid}...")
+    
+    # =============== بروزرسانی سفارش ===============
     update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     await check_referral_bonus(uid)
     
-    # ✅ مصرف کوپن (اضافه شد)
+    # ✅ مصرف کوپن
     coupon_consumed = consume_coupon(uid)
     if coupon_consumed:
         logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
     else:
         logger.info(f"ℹ️ کوپنی برای سفارش #{oid} وجود نداشت یا قبلاً مصرف شده")
     
+    # =============== اگر تمدید است ===============
+    if is_extend and parent_order_id:
+        logger.info(f"🔄 [confirm_approve_package] شروع تمدید سرویس #{parent_order_id} با بسته #{oid}")
+        
+        # =============== دریافت اطلاعات سفارش اصلی قبل از تمدید ===============
+        parent_order = orders.get(str(parent_order_id))
+        if parent_order:
+            old_volume = parent_order.get('volume', 0)
+            old_days = parent_order.get('days', 0)
+            old_email = parent_order.get('email', '')
+            old_inbound = parent_order.get('inbound_id', [])
+            logger.info(f"📊 [confirm_approve_package] سفارش اصلی: حجم={old_volume}GB, مدت={old_days} روز")
+            logger.info(f"📡 [confirm_approve_package] اینباندهای سفارش اصلی: {old_inbound}")
+        else:
+            logger.warning(f"⚠️ [confirm_approve_package] سفارش اصلی #{parent_order_id} یافت نشد!")
+            old_volume = 0
+            old_days = 0
+            old_email = ''
+            old_inbound = []
+        
+        # =============== دریافت اینباندهای فعلی کاربر از پنل ===============
+        current_inbounds = []
+        if old_email:
+            current_inbounds = await get_client_inbounds(old_email)
+            if not current_inbounds:
+                current_inbounds = old_inbound if isinstance(old_inbound, list) else [old_inbound] if old_inbound else []
+            logger.info(f"📡 [confirm_approve_package] اینباندهای فعلی کاربر: {current_inbounds}")
+        else:
+            current_inbounds = get_user_inbound(uid)
+            if not isinstance(current_inbounds, list):
+                current_inbounds = [current_inbounds] if current_inbounds else []
+            logger.info(f"📡 [confirm_approve_package] اینباندهای فعلی از user_inbound_selection: {current_inbounds}")
+        
+        # =============== ✅ اصلاح: فقط اینباندهای انتخاب شده توسط ادمین ===============
+        # برای تمدید، فقط اینباندهایی که ادمین انتخاب کرده باقی می‌مانند
+        # اینباندهای فعلی که در لیست انتخاب شده نیستند، باید حذف شوند
+        
+        # اینباندهای نهایی = فقط اینباندهای انتخاب شده توسط ادمین
+        final_inbounds = selected_inbounds.copy()
+        
+        # پیدا کردن اینباندهایی که باید حذف شوند (برای لاگ)
+        inbounds_to_detach = []
+        for inbound_id in current_inbounds:
+            if inbound_id and inbound_id not in final_inbounds:
+                inbounds_to_detach.append(inbound_id)
+                logger.info(f"➖ [confirm_approve_package] اینباند {inbound_id} باید حذف شود")
+        
+        logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی (فقط انتخاب شده توسط ادمین): {final_inbounds}")
+        
+        # =============== ذخیره اینباندهای نهایی برای کاربر ===============
+        if final_inbounds:
+            save_user_inbound_selection(uid, final_inbounds)
+            logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی برای کاربر {uid} ذخیره شد: {final_inbounds}")
+        
+        # =============== ارسال به extend_service ===============
+        success = await extend_service(
+            parent_order_id, 
+            uid, 
+            vol, 
+            days,
+            final_inbounds,  # ✅ فقط اینباندهای انتخاب شده
+            ip_limit
+        )
+        
+        if success:
+            # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
+            updated_parent = orders.get(str(parent_order_id))
+            new_volume = updated_parent.get('volume', 0) if updated_parent else old_volume + vol
+            new_days = updated_parent.get('days', 0) if updated_parent else old_days + days
+            
+            # =============== به‌روزرسانی سفارش جدید ===============
+            update_order(oid, 
+                        new_volume=new_volume,
+                        new_days=new_days,
+                        old_volume=old_volume,
+                        old_days=old_days,
+                        parent_volume=old_volume,
+                        parent_days=old_days,
+                        payment_type=payment_type,
+                        payment_label=payment_label,
+                        inbound_id=final_inbounds)
+            
+            # پاک کردن وضعیت تمدید از user_states
+            if uid in user_states:
+                user_states[uid].pop('is_extend', None)
+                user_states[uid].pop('extend_order_id', None)
+                user_states[uid].pop('current_volume', None)
+                user_states[uid].pop('current_days', None)
+            
+            # =============== ارسال نوتیفیکیشن به ادمین ===============
+            await send_admin_notification('extend', {
+                'user_id': uid,
+                'volume': vol,
+                'days': days,
+                'price': price,
+                'order_id': oid,
+                'parent_order_id': parent_order_id,
+                'old_volume': old_volume,
+                'old_days': old_days,
+                'new_volume': new_volume,
+                'new_days': new_days,
+                'payment_type': payment_type,
+                'payment_label': payment_label,
+                'payment_emoji': payment_emoji,
+                'balance_before': balance,
+                'balance_after': balance,
+                'category_name': category_name,
+                'inbound_ids': final_inbounds
+            })
+            
+            # =============== حذف پیام ===============
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            
+            # =============== پیام ساده به کاربر ===============
+            if lang == "fa":
+                success_text = f"""
+✅ <b>سرویس با موفقیت تمدید شد!</b>
+"""
+            else:
+                success_text = f"""
+✅ <b>Service extended successfully!</b>
+"""
+            
+            await bot.send_message(uid, success_text, parse_mode=ParseMode.HTML)
+            
+            # =============== پیام به ادمین ===============
+            await callback.message.answer(
+                f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد!\n{payment_emoji} {payment_label}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
+                        callback_data="admin_orders"
+                    )],
+                    [InlineKeyboardButton(
+                        text="👤 مشاهده کاربر" if lang == "fa" else "👤 View User",
+                        callback_data=f"admin_user_{uid}"
+                    )]
+                ])
+            )
+            
+            logger.info(f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد - سفارش اصلی: #{parent_order_id}")
+            logger.info(f"   📊 حجم: {old_volume}GB → {new_volume}GB (+{vol}GB)")
+            logger.info(f"   ⏱ مدت: {old_days}روز → {new_days}روز (+{days}روز)")
+            logger.info(f"   💳 روش پرداخت: {payment_label}")
+            logger.info(f"   📡 اینباندها: {final_inbounds}")
+            
+            await callback.answer("✅ تمدید انجام شد" if lang == "fa" else "✅ Extended")
+            return
+        else:
+            # =============== خطا در تمدید - برگشت موجودی ===============
+            user = get_user(uid)
+            update_user(uid, 'balance', user['balance'] + price)
+            
+            await callback.message.edit_text(
+                f"❌ خطا در تمدید سرویس. موجودی کاربر برگشت داده شد.\n"
+                f"💰 موجودی جدید: {user['balance'] + price:,} تومان\n"
+                f"{payment_emoji} روش پرداخت: {payment_label}" if lang == "fa" else 
+                f"❌ Error extending service. Balance refunded.\n"
+                f"💰 New balance: {user['balance'] + price:,} Toman\n"
+                f"{payment_emoji} Payment method: {payment_label}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="🔄 تلاش مجدد" if lang == "fa" else "🔄 Retry",
+                        callback_data=f"confirm_approve_package_{oid}"
+                    )],
+                    [InlineKeyboardButton(
+                        text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
+                        callback_data="admin_orders"
+                    )]
+                ])
+            )
+            await callback.answer("❌ خطا در تمدید", show_alert=True)
+            return
+    
+    # =============== ساخت کلاینت جدید (غیر تمدید) ===============
     if SENAI_PANEL_ENABLED:
         email = f"user{uid}_{int(datetime.now().timestamp())}"
-        ip_limit = order.get('ip_limit', 0)
-        sub = await xui_create_client_with_inbound(email, vol, days, user_name, uid, inbound_ids, ip_limit=ip_limit)
+        sub = await xui_create_client_with_inbound(email, vol, days, user_name, uid, selected_inbounds, ip_limit=ip_limit)
         
         if sub:
-            update_order(oid, config_link=sub, email=email, payment_method='card', inbound_id=inbound_ids)
+            update_order(oid, config_link=sub, email=email, payment_method=payment_method, inbound_id=selected_inbounds)
             
             if log_system:
                 await log_system.log_config_created(uid, oid, email, vol, days)
                 await log_system.log_order_approved(oid, uid, vol, days, price)
             
+            try:
+                await callback.message.delete()
+            except:
+                pass
             
             await send_config_with_qr_option(uid, oid, vol, days, price, sub, lang)
             
@@ -23937,32 +25630,36 @@ async def confirm_approve_package(callback: CallbackQuery):
             except Exception as e:
                 logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
             
-            # ✅ استفاده از نام‌های escaped در پیام
-            inbound_info = f"اینباندها: {inbound_ids if inbound_ids else 'پیش‌فرض'}"
+            inbound_info = f"اینباندها: {selected_inbounds if selected_inbounds else 'پیش‌فرض'}"
             
-            # =============== ساخت پیام با escape ===============
             success_text = f"""
 ✅ بسته آماده #{oid} با موفقیت تایید شد!
 👤 کاربر: {user_name_escaped} ({uid})
 📦 {vol}GB / {days} روز
 💰 قیمت: {price:,} تومان
+{payment_emoji} روش پرداخت: {payment_label}
 📡 دسته: {category_name_escaped}
 📡 {inbound_info}
 🔗 لینک: {sub[:40]}...
 """
             
-            await callback.message.edit_text(
+            await callback.message.answer(
                 success_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
                         callback_data="admin_orders"
+                    )],
+                    [InlineKeyboardButton(
+                        text="👤 مشاهده کاربر" if lang == "fa" else "👤 View User",
+                        callback_data=f"admin_user_{uid}"
                     )]
                 ]),
                 parse_mode=ParseMode.HTML
             )
             
-            logger.info(f"✅ بسته آماده #{oid} با موفقیت تایید شد - اینباندها: {inbound_ids}")
+            logger.info(f"✅ بسته آماده #{oid} با موفقیت تایید شد - اینباندها: {selected_inbounds}")
+            logger.info(f"   💳 روش پرداخت: {payment_label}")
             
         else:
             user = get_user(uid)
@@ -23970,7 +25667,13 @@ async def confirm_approve_package(callback: CallbackQuery):
             
             await callback.message.edit_text(
                 f"❌ خطا در ساخت کلاینت برای بسته #{oid}\n"
-                f"💰 موجودی کاربر برگشت داده شد.",
+                f"💰 موجودی کاربر برگشت داده شد.\n"
+                f"💰 موجودی جدید: {user['balance'] + price:,} تومان\n"
+                f"{payment_emoji} روش پرداخت: {payment_label}" if lang == "fa" else
+                f"❌ Error creating client for package #{oid}\n"
+                f"💰 User balance refunded.\n"
+                f"💰 New balance: {user['balance'] + price:,} Toman\n"
+                f"{payment_emoji} Payment method: {payment_label}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تلاش مجدد" if lang == "fa" else "🔄 Retry",
@@ -23986,6 +25689,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             await callback.answer("❌ خطا در ساخت کلاینت", show_alert=True)
             return
     else:
+        # =============== پنل غیرفعال - منتظر کانفیگ از ادمین ===============
         user_states[callback.from_user.id] = {
             'awaiting_config': True,
             'order_id': oid,
@@ -23999,6 +25703,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             f"⏳ منتظر کانفیگ از ادمین برای بسته #{oid}...\n"
             f"👤 کاربر: {user_name_escaped} ({uid})\n"
             f"📦 {vol}GB / {days} روز\n"
+            f"{payment_emoji} روش پرداخت: {payment_label}\n"
             f"📡 دسته: {category_name_escaped}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
@@ -24067,7 +25772,7 @@ async def select_inbound_for_order(callback: CallbackQuery):
 # =============== 6. هندلر تایید نهایی با اینباند انتخاب شده ===============
 @dp.callback_query(F.data.startswith("confirm_approve_"))
 async def confirm_approve_with_inbound(callback: CallbackQuery):
-    """تایید نهایی سفارش با اینباند انتخاب شده"""
+    """تایید نهایی سفارش با اینباند انتخاب شده - با تشخیص تمدید"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -24086,41 +25791,110 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
     vol = order.get('volume', 0)
     days = order.get('days', 30)
     price = order.get('price', 0)
+    
+    # =============== ✅ بررسی تمدید ===============
+    parent_order_id = order.get('parent_order_id')
+    is_extend = parent_order_id is not None
+    
     user_info = get_user(uid)
-    user_name = user_info.get('name', f'کاربر_{uid}')
-    
-    # ✅ escape کردن نام کاربر
-    user_name_escaped = html.escape(user_name)
-    
+    user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
     lang = user_info.get('lang', 'fa')
     
     # استیکر
     await send_sticker(uid, 'order_approved', '✅')
     
-    logger.info(f"📝 تایید نهایی سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان")
+    logger.info(f"📝 تایید نهایی سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
     
     # آپدیت وضعیت سفارش
     update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     
-    # ✅ مصرف کوپن
+    # مصرف کوپن
     coupon_consumed = consume_coupon(uid)
     if coupon_consumed:
         logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
-    else:
-        logger.info(f"ℹ️ کوپنی برای سفارش #{oid} وجود نداشت یا قبلاً مصرف شده")
     
-    # بررسی پاداش رفرال
-    referral_result = await check_referral_bonus(uid)
-    if referral_result:
-        logger.info(f"✅ پاداش رفرال برای کاربر {uid} اعمال شد")
-        if log_system:
-            await log_system.log_user_action(
-                uid,
-                "دریافت پاداش رفرال",
-                f"به دلیل خرید اولین سرویس"
+    # بررسی پاداش رفرال (فقط برای خریدهای جدید)
+    if not is_extend:
+        referral_result = await check_referral_bonus(uid)
+        if referral_result:
+            logger.info(f"✅ پاداش رفرال برای کاربر {uid} اعمال شد")
+            if log_system:
+                await log_system.log_user_action(
+                    uid,
+                    "دریافت پاداش رفرال",
+                    f"به دلیل خرید اولین سرویس"
+                )
+    
+    # =============== ✅ اگر تمدید است ===============
+    if is_extend and parent_order_id:
+        await callback.message.edit_text(f"⏳ در حال تمدید سرویس #{parent_order_id}...")
+        
+        success = await extend_service(parent_order_id, uid, vol, days)
+        
+        if success:
+            # پاک کردن وضعیت تمدید
+            if uid in user_states:
+                user_states[uid].pop('is_extend', None)
+                user_states[uid].pop('extend_order_id', None)
+            
+            # =============== پیام موفقیت تمدید ===============
+            if lang == "fa":
+                success_text = f"""
+✅ <b>سرویس با موفقیت تمدید شد!</b>
+
+👤 کاربر: {user_name} ({uid})
+🆔 سفارش اصلی: #{parent_order_id}
+📦 +{vol}GB به حجم اضافه شد
+⏱ +{days} روز به مدت اضافه شد
+💰 مبلغ پرداختی: {price:,} تومان
+
+✅ سرویس کاربر تمدید شد.
+"""
+            else:
+                success_text = f"""
+✅ <b>Service extended successfully!</b>
+
+👤 User: {user_name} ({uid})
+🆔 Original order: #{parent_order_id}
+📦 +{vol}GB added to volume
+⏱ +{days} days added to duration
+💰 Amount paid: {price:,} Toman
+
+✅ User's service has been extended.
+"""
+            
+            await callback.message.edit_text(
+                success_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
+                        callback_data="admin_orders"
+                    )]
+                ]),
+                parse_mode=ParseMode.HTML
             )
+            
+            logger.info(f"✅ تمدید سفارش #{oid} با موفقیت انجام شد - سفارش اصلی: #{parent_order_id}")
+            await callback.answer("✅ تمدید انجام شد" if lang == "fa" else "✅ Extended")
+            return
+        else:
+            # خطا در تمدید - برگشت موجودی
+            user = get_user(uid)
+            update_user(uid, 'balance', user['balance'] + price)
+            
+            await callback.message.edit_text(
+                f"❌ خطا در تمدید سرویس. موجودی کاربر برگشت داده شد." if lang == "fa" else "❌ Error extending service. Balance refunded.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
+                        callback_data="admin_orders"
+                    )]
+                ])
+            )
+            await callback.answer("❌ خطا در تمدید", show_alert=True)
+            return
     
-    # ساخت کلاینت در پنل
+    # =============== ساخت کلاینت جدید (غیر تمدید) ===============
     if SENAI_PANEL_ENABLED:
         await callback.message.edit_text(f"⏳ در حال ساخت کلاینت برای سفارش #{oid}...")
         
@@ -24141,7 +25915,6 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                 f'سفارش #{oid} تایید شد - {vol}GB/{days} روز - {price:,} تومان - اینباند: {inbound_id or "پیش‌فرض"}', 
                 uid)
             
-            
             await send_config_with_qr_option(uid, oid, vol, days, price, sub, lang)
             
             try:
@@ -24153,12 +25926,11 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             except Exception as e:
                 logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
             
-            # ✅ استفاده از نام escaped در پیام
             inbound_info = f"اینباند: {inbound_id or 'پیش‌فرض'}"
             
             success_text = f"""
 ✅ سفارش #{oid} با موفقیت تایید شد!
-👤 کاربر: {user_name_escaped} ({uid})
+👤 کاربر: {user_name} ({uid})
 📦 {vol}GB / {days} روز
 💰 قیمت: {price:,} تومان
 📡 {inbound_info}
@@ -24219,7 +25991,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
         
         await callback.message.edit_text(
             f"⏳ منتظر کانفیگ از ادمین برای سفارش #{oid}...\n"
-            f"👤 کاربر: {user_name_escaped} ({uid})\n"
+            f"👤 کاربر: {user_name} ({uid})\n"
             f"📦 {vol}GB / {days} روز",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
@@ -24234,8 +26006,6 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
         return
     
     await callback.answer("✅ سفارش تایید شد")
-
-
 
 
 
@@ -24830,7 +26600,11 @@ async def view_single_config(callback: CallbackQuery):
         await callback.answer("❌ کانفیگ یافت نشد" if lang=='fa' else "❌ Config not found", show_alert=True)
         return
     
-    await callback.message.delete()
+    # =============== اصلاح: حذف پیام قبلی ===============
+    try:
+        await callback.message.delete()
+    except:
+        pass
     
     # گرفتن اطلاعات زنده
     email = extract_email_from_sub_link(order.get('config_link', ''))
@@ -24943,9 +26717,6 @@ async def my_account(callback: CallbackQuery):
     # =============== سفارشات در انتظار تایید (فیش ارسال شده) ===============
     pending_orders = [o for o in purchase_orders if o.get('status') == 'pending']
     
-    # =============== سفارشات لغو شده ===============
-    cancelled_orders = [o for o in purchase_orders if o.get('status') == 'cancelled']
-    
     # =============== سفارشات رد شده ===============
     rejected_orders = [o for o in purchase_orders if o.get('status') == 'rejected']
     
@@ -24991,7 +26762,6 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('star', '📊')} <b>وضعیت سفارشات:</b>
 {premium_emoji('success', '✅')} <b>تایید شده:</b> {len(approved_purchases)}
 {premium_emoji('hourglass', '⏳')} <b>در انتظار تایید:</b> {len(pending_orders)}
-{premium_emoji('cancel', '❌')} <b>لغو شده:</b> {len(cancelled_orders)}
 {premium_emoji('fail', '🚫')} <b>رد شده:</b> {len(rejected_orders)}
 {premium_emoji('hourglass', '⏳')} <b>در انتظار پرداخت:</b> {len(awaiting_payment_orders)}
 
@@ -25014,7 +26784,6 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('star', '📊')} <b>Order Status:</b>
 {premium_emoji('success', '✅')} <b>Approved:</b> {len(approved_purchases)}
 {premium_emoji('hourglass', '⏳')} <b>Pending Approval:</b> {len(pending_orders)}
-{premium_emoji('cancel', '❌')} <b>Cancelled:</b> {len(cancelled_orders)}
 {premium_emoji('fail', '🚫')} <b>Rejected:</b> {len(rejected_orders)}
 {premium_emoji('hourglass', '⏳')} <b>Awaiting Payment:</b> {len(awaiting_payment_orders)}
 
