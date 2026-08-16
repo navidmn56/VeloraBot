@@ -12135,7 +12135,7 @@ async def extend_service(
                 "email": email,
                 "totalGB": new_volume_bytes,
                 "expiryTime": new_expiry,
-                "enable": client_info.get('enable', True),
+                "enable": True,
                 "tgId": client_info.get('tgId', 0),
                 "subId": client_info.get('subId', email),
                 "flow": client_info.get('flow', ''),
