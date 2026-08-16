@@ -12281,7 +12281,8 @@ async def extend_service_start(callback: CallbackQuery):
         await callback.answer("❌ سفارش یافت نشد" if lang == "fa" else "❌ Order not found", show_alert=True)
         return
     
-    if order.get('status') != 'approved':
+    # =============== ✅ اصلاح: سرویس‌های غیرفعال هم قابل تمدید هستند ===============
+    if order.get('status') not in ['approved', 'inactive']:
         await callback.answer("❌ این سرویس قابل تمدید نیست" if lang == "fa" else "❌ This service cannot be extended", show_alert=True)
         return
     
