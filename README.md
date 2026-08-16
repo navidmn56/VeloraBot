@@ -1,16 +1,16 @@
-<div align="center">
-
 # VeloraBot
+
+<div align="center">
 
 **Telegram VPN Configuration Management Bot**
 
-Python-based Telegram bot for VPN configuration sales, user management, payments, referrals and automated configuration delivery.
+Python-based Telegram bot for automated VPN configuration sales, user management, payments, referrals, service renewal, and configuration delivery.
 
 <br>
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge\&logo=python\&logoColor=white)](https://www.python.org/)
 [![3X-UI](https://img.shields.io/badge/3X--UI-MHSanaei-181717?style=for-the-badge\&logo=github\&logoColor=white)](https://github.com/MHSanaei/3x-ui)
-[![License](https://img.shields.io/badge/Status-Active-success?style=for-the-badge)](https://github.com/navidmn56/VeloraBot)
+[![Status](https://img.shields.io/badge/Status-Active-success?style=for-the-badge)](https://github.com/navidmn56/VeloraBot)
 
 </div>
 
@@ -24,34 +24,33 @@ Python-based Telegram bot for VPN configuration sales, user management, payments
 
 ---
 
-## Admin Panel
+## Overview
 
-<div align="center">
+VeloraBot is a Python-based Telegram bot designed to automate VPN configuration sales and management through the **MHSanaei 3X-UI** panel.
 
-<img src="docs/screenshot/Screenshot3.jpg" alt="VeloraBot" width="360">
+It provides an automated environment for selling and managing VPN configurations directly through Telegram, including user management, payments, referrals, configuration delivery, service renewal, logging, and optional AI-powered support.
 
-</div>
+The bot is designed to work specifically with **MHSanaei 3X-UI** and its API.
 
 ---
 
-## Overview
-
-VeloraBot is a Python Telegram bot designed to automate VPN configuration sales and management through the MHSanaei 3X-UI panel.
-
-The project includes user management, payments, referrals, configuration delivery, logging and optional AI-powered support.
-
 ## Features
 
-| Feature      | Description                           |
-| ------------ | ------------------------------------- |
-| Telegram Bot | User and admin management             |
-| VPN Sales    | Configuration purchasing and delivery |
-| 3X-UI        | Configuration and client management   |
-| Payments     | Balance, orders and receipt handling  |
-| Referrals    | Referral links and rewards            |
-| AI Support   | Optional Google Gemini integration    |
-| Logging      | Application and Telegram logging      |
-| Data         | Local JSON-based runtime storage      |
+| Feature                    | Description                                              |
+| -------------------------- | -------------------------------------------------------- |
+| **Telegram Bot**           | User and administrator management through Telegram       |
+| **VPN Sales**              | Sell and automatically deliver VPN configurations        |
+| **3X-UI Integration**      | Manage clients and configurations through MHSanaei 3X-UI |
+| **Service Renewal**        | Allow users to renew existing VPN services               |
+| **Payments**               | Balance management, orders and receipt handling          |
+| **Referrals**              | Referral links and reward system                         |
+| **AI Support**             | Optional Google Gemini integration                       |
+| **Logging**                | Application and Telegram logging                         |
+| **Configuration Delivery** | Automated configuration and subscription delivery        |
+| **User Management**        | Manage users and their services                          |
+| **Local Data Storage**     | JSON-based runtime data storage                          |
+
+---
 
 ## 3X-UI
 
@@ -65,7 +64,31 @@ Other VPN management panels are not supported.
 
 Compatibility with future 3X-UI releases is not guaranteed until tested.
 
+---
+
+## Screenshots
+
+### User Bot
+
+<div align="center">
+
+<img src="docs/screenshot/Screenshot.png" alt="VeloraBot User Interface" width="360">
+
+</div>
+
+### Admin Panel
+
+<div align="center">
+
+<img src="docs/screenshot/Screenshot3.jpg" alt="VeloraBot Admin Panel" width="360">
+
+</div>
+
+---
+
 ## Requirements
+
+Before installing VeloraBot, make sure your server has the following:
 
 * Linux server
 * Python 3.10+
@@ -74,7 +97,11 @@ Compatibility with future 3X-UI releases is not guaranteed until tested.
 * MHSanaei 3X-UI
 * 3X-UI API access
 
+---
+
 ## Installation
+
+### 1. Clone the Repository
 
 ```bash
 cd /opt
@@ -82,40 +109,62 @@ git clone https://github.com/navidmn56/VeloraBot.git
 cd VeloraBot
 ```
 
-Create the virtual environment:
+### 2. Create a Virtual Environment
+
+Install the required Python packages:
 
 ```bash
 sudo apt update
 sudo apt install -y python3-venv python3-pip
+```
+
+Create the virtual environment:
+
+```bash
 python3 -m venv .venv
+```
+
+Activate it:
+
+```bash
 source .venv/bin/activate
 ```
 
-Install dependencies:
+### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Configure the bot:
+### 4. Configure the Bot
+
+Open the configuration file:
 
 ```bash
 nano config.py
 ```
 
-Run:
+Configure your Telegram bot, 3X-UI panel and other required settings.
+
+### 5. Run the Bot
 
 ```bash
 python main.py
 ```
 
-## systemd
+---
 
-Create the service:
+## systemd Service
+
+For production environments, it is recommended to run VeloraBot as a systemd service.
+
+Create the service file:
 
 ```bash
 sudo nano /etc/systemd/system/velorabot.service
 ```
+
+Add:
 
 ```ini
 [Unit]
@@ -140,7 +189,7 @@ Environment=PYTHONUNBUFFERED=1
 WantedBy=multi-user.target
 ```
 
-Enable and start:
+### Enable the Service
 
 ```bash
 sudo systemctl daemon-reload
@@ -148,25 +197,83 @@ sudo systemctl enable velorabot
 sudo systemctl start velorabot
 ```
 
-### Service Commands
+---
+
+## Service Commands
+
+Check the current status:
 
 ```bash
 sudo systemctl status velorabot
+```
+
+Restart the bot:
+
+```bash
 sudo systemctl restart velorabot
+```
+
+Stop the bot:
+
+```bash
 sudo systemctl stop velorabot
+```
+
+View live logs:
+
+```bash
 sudo journalctl -u velorabot -f
 ```
 
+---
+
 ## Update
+
+To update an existing installation:
 
 ```bash
 cd /opt/VeloraBot
 sudo systemctl stop velorabot
+
 git pull origin main
+
 source .venv/bin/activate
 pip install -r requirements.txt
+
 sudo systemctl restart velorabot
 ```
+
+---
+
+## Versioning
+
+VeloraBot uses semantic versioning.
+
+Current release:
+
+**v1.1.0**
+
+The `v1.1.0` release introduces the **Service Renewal** functionality.
+
+Version format:
+
+```text
+vMAJOR.MINOR.PATCH
+```
+
+For example:
+
+```text
+v1.0.0
+v1.1.0
+v1.1.1
+```
+
+* **MAJOR** — Breaking changes
+* **MINOR** — New features
+* **PATCH** — Bug fixes and small improvements
+
+---
 
 ## Project Structure
 
@@ -174,6 +281,10 @@ sudo systemctl restart velorabot
 VeloraBot/
 ├── data/
 │   └── .gitkeep
+├── docs/
+│   └── screenshot/
+│       ├── Screenshot.png
+│       └── Screenshot3.jpg
 ├── .gitignore
 ├── config.py
 ├── logger_system.py
@@ -184,21 +295,84 @@ VeloraBot/
 
 Runtime files generated inside `data/` are ignored by Git.
 
-## Screenshots
+---
 
-Additional screenshots can be added to:
+## Data Storage
+
+VeloraBot currently uses local JSON-based runtime storage.
+
+Runtime data is stored inside:
 
 ```text
-docs/screenshots/
+data/
 ```
 
-## Status
+These files are intentionally excluded from Git through `.gitignore`.
 
-This project is actively developed and may contain bugs.
+---
+
+## Configuration
+
+The main configuration file is:
+
+```text
+config.py
+```
+
+Before starting the bot, make sure the required Telegram and 3X-UI settings are correctly configured.
+
+Never commit private credentials, bot tokens, passwords, or other sensitive configuration values to the repository.
+
+---
+
+## Compatibility
+
+VeloraBot is currently designed for:
+
+```text
+MHSanaei 3X-UI
+```
+
+The bot depends on the 3X-UI API and may require changes when future 3X-UI versions introduce API or structural changes.
+
+---
+
+## Development Status
+
+VeloraBot is actively developed.
+
+New features, improvements and bug fixes may be added regularly.
+
+The project may still contain bugs and unexpected behavior.
+
+---
+
+## Contributing
+
+Contributions, bug reports and feature suggestions are welcome.
+
+If you find a bug or have an idea for improving VeloraBot, feel free to open an issue or submit a pull request.
+
+---
 
 ## Author
+
+<div align="center">
 
 **Navid**
 
 GitHub:
+https://github.com/navidmn56
+
+Project:
 https://github.com/navidmn56/VeloraBot
+
+</div>
+
+---
+
+<div align="center">
+
+**VeloraBot — Telegram VPN Configuration Management**
+
+</div>
