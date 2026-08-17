@@ -2520,9 +2520,12 @@ async def admin_test_user_reset_execute(message: Message):
     uid = str(target_id)
     user_info = await get_user_info_from_telegram(target_id)
     
+    # ✅ استفاده از full_name (که قبلاً escaped شده)
+    user_full_name = user_info.get('full_name', f'کاربر_{target_id}')
+    
     if uid not in USER_TEST_USAGE:
         await message.reply(
-            f"❌ کاربر {user_info['full_name']} (ID: {target_id}) هیچ تستی نگرفته است." if lang == "fa" else f"❌ User {user_info['full_name']} (ID: {target_id}) has no tests.",
+            f"❌ کاربر {user_full_name} (ID: {target_id}) هیچ تستی نگرفته است." if lang == "fa" else f"❌ User {user_full_name} (ID: {target_id}) has no tests.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 تلاش مجدد" if lang=="fa" else "🔄 Try Again", callback_data="admin_test_user_reset")],
                 [InlineKeyboardButton(text="🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data="admin_test_users")]
@@ -2540,7 +2543,7 @@ async def admin_test_user_reset_execute(message: Message):
     save_test_usage()
     
     # لاگ عملیات
-    logger.info(f"🗑 تست کاربر {target_id} ({user_info['full_name']}) با {old_count} تست ریست شد")
+    logger.info(f"🗑 تست کاربر {target_id} ({user_info.get('full_name_raw', user_full_name)}) با {old_count} تست ریست شد")
     
     if log_system:
         await log_system.log_admin_action(
@@ -2556,16 +2559,16 @@ async def admin_test_user_reset_execute(message: Message):
 
 ━━━━━━━━━━━━━━━━━━━
 🆔 آیدی: <code>{target_id}</code>
-👤 نام: {user_info['full_name']}
+👤 نام: {user_full_name}
 📊 تعداد تست‌های حذف شده: {old_count}
 ━━━━━━━━━━━━━━━━━━━
 
 🔓 کاربر می‌تواند دوباره تست بگیرد.
 """
         buttons = [
-            [InlineKeyboardButton(text="🔄 ریست کاربر دیگر", callback_data="admin_test_user_reset")],
-            [InlineKeyboardButton(text="📋 لیست کاربران تست", callback_data="admin_test_users_list")],
-            [InlineKeyboardButton(text="🔙 برگشت به مدیریت", callback_data="admin_test_users")]
+            [InlineKeyboardButton(text="🔄 ریست کاربر دیگر" if lang=="fa" else "🔄 Reset Another User", callback_data="admin_test_user_reset")],
+            [InlineKeyboardButton(text="📋 لیست کاربران تست" if lang=="fa" else "📋 Test Users List", callback_data="admin_test_users_list")],
+            [InlineKeyboardButton(text="🔙 برگشت به مدیریت" if lang=="fa" else "🔙 Back to Management", callback_data="admin_test_users")]
         ]
     else:
         text = f"""
@@ -2573,7 +2576,7 @@ async def admin_test_user_reset_execute(message: Message):
 
 ━━━━━━━━━━━━━━━━━━━
 🆔 ID: <code>{target_id}</code>
-👤 Name: {user_info['full_name']}
+👤 Name: {user_full_name}
 📊 Tests removed: {old_count}
 ━━━━━━━━━━━━━━━━━━━
 
@@ -6837,16 +6840,23 @@ Contact support if needed:
 
 # =============== توابع مدیریت لیست سیاه ===============
 
+import html  # ✅ حتماً در بالای فایل import شده باشد
+
 async def get_user_info_from_telegram(user_id: int) -> dict:
-    """دریافت اطلاعات کاربر از تلگرام (نام و یوزرنیم)"""
+    """دریافت اطلاعات کاربر از تلگرام با escape برای استفاده در HTML"""
     try:
         chat = await bot.get_chat(user_id)
+        first_name_raw = chat.first_name or 'نامشخص'
+        last_name_raw = chat.last_name or ''
+        full_name_raw = f"{first_name_raw} {last_name_raw}".strip() or 'کاربر ناشناس'
+        username_raw = chat.username or ''
+        
         return {
             'id': user_id,
-            'first_name': chat.first_name or 'نامشخص',
-            'last_name': chat.last_name or '',
-            'username': chat.username or '',
-            'full_name': f"{chat.first_name or ''} {chat.last_name or ''}".strip() or 'کاربر ناشناس'
+            'first_name': html.escape(first_name_raw),
+            'last_name': html.escape(last_name_raw),
+            'username': html.escape(username_raw),
+            'full_name': html.escape(full_name_raw)
         }
     except Exception as e:
         logger.error(f"خطا در دریافت اطلاعات کاربر {user_id}: {e}")
