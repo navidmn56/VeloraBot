@@ -21629,7 +21629,7 @@ async def admin_coupons_stats(callback: CallbackQuery):
 
 
 async def send_admin_notification(purchase_type: str, data: dict):
-    """ارسال نوتیفیکیشن ساده و مینیمال به ادمین"""
+    """ارسال نوتیفیکیشن ساده و مینیمال به ادمین با حجم هوشمند"""
     
     user_id = data.get('user_id')
     
@@ -21644,16 +21644,19 @@ async def send_admin_notification(purchase_type: str, data: dict):
         user_name_escaped = f"کاربر {user_id}"
         username_display = 'ندارد'
     
-    # =============== تشخیص نوع پرداخت ===============
-    payment_type = data.get('payment_type', 'unknown')
-    payment_label = data.get('payment_label', '')
+    # =============== تشخیص نوع ===============
+    is_test = (purchase_type == 'test')
     is_extend = data.get('is_extend', False)
+    payment_type = data.get('payment_type', '')
+    price = data.get('price', 0)
     
-    # =============== عنوان و ایموجی ===============
-    if is_extend:
-        if 'balance' in payment_type:
+    # =============== عنوان ===============
+    if is_test:
+        title = "🧪 تست رایگان"
+    elif is_extend:
+        if 'balance' in payment_type or 'balance' in str(data.get('payment_label', '')):
             title = "🔄 تمدید با موجودی"
-        elif 'card' in payment_type:
+        elif 'card' in payment_type or 'card' in str(data.get('payment_label', '')):
             title = "🔄 تمدید با کارت"
         elif 'free' in payment_type:
             title = "🔄 تمدید رایگان"
@@ -21666,10 +21669,27 @@ async def send_admin_notification(purchase_type: str, data: dict):
             title = "💳 خرید با کارت"
         elif 'free' in payment_type:
             title = "🎁 خرید رایگان"
-        elif payment_type == 'test':
-            title = "🧪 تست رایگان"
         else:
             title = "🛒 خرید جدید"
+    
+    # =============== تبدیل هوشمند حجم ===============
+    volume = data.get('volume', 'نامشخص')
+    
+    if isinstance(volume, (int, float)):
+        if volume == 0:
+            volume_display = "نامحدود"
+        elif is_test:
+            # تست: volume به مگابایت است
+            volume_display = format_volume(volume, is_test=True)
+        else:
+            # خرید: volume به گیگابایت است
+            volume_display = format_volume(volume, is_test=False)
+    else:
+        volume_display = volume
+    
+    # =============== محدودیت IP ===============
+    ip_limit = data.get('ip_limit', 0)
+    ip_display = "نامحدود" if ip_limit == 0 else str(ip_limit)
     
     # =============== ساخت متن ===============
     text = f"{title}\n\n"
@@ -21677,7 +21697,7 @@ async def send_admin_notification(purchase_type: str, data: dict):
     text += f"🆔 {user_id}\n"
     text += f"📛 {username_display}\n"
     text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-    text += f"📦 {data.get('volume', 0)} GB\n"
+    text += f"📦 {volume_display}\n"
     text += f"⏱️ {data.get('days', 0)} روز\n"
     text += f"💰 {data.get('price', 0):,} تومان\n"
     
@@ -21689,10 +21709,20 @@ async def send_admin_notification(purchase_type: str, data: dict):
         new_days = data.get('new_days', 0)
         parent_order_id = data.get('parent_order_id', 'نامشخص')
         
+        # تبدیل هوشمند حجم برای نمایش
+        old_volume_display = "نامحدود" if old_volume == 0 else f"{old_volume:.1f}GB"
+        new_volume_display = "نامحدود" if new_volume == 0 else f"{new_volume:.1f}GB"
+        
         text += "━━━━━━━━━━━━━━━━━━━━━━\n"
         text += f"🆔 سفارش اصلی: #{parent_order_id}\n"
-        text += f"📦 {old_volume}GB → {new_volume}GB (+{data.get('volume', 0)}GB)\n"
-        text += f"⏱️ {old_days} → {new_days} روز (+{data.get('days', 0)} روز)\n"
+        text += f"📦 {old_volume_display} → {new_volume_display}\n"
+        text += f"⏱️ {old_days} → {new_days} روز\n"
+    
+    # =============== اطلاعات تست ===============
+    if is_test:
+        remaining_tests = data.get('remaining_tests', 'نامشخص')
+        text += f"🧪 تست‌های باقیمانده: {remaining_tests}\n"
+        text += f"👤 محدودیت IP: {ip_display}\n"
     
     # =============== اطلاعات بسته آماده ===============
     if data.get('category_name'):
@@ -21721,7 +21751,16 @@ async def send_admin_notification(purchase_type: str, data: dict):
         await bot.send_message(ADMIN_ID_INT, text, parse_mode=ParseMode.HTML)
         logger.info(f"📨 نوتیفیکیشن {purchase_type} به ادمین ارسال شد - کاربر {user_id}")
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال نوتیفیکیشن به ادمین: {e}")  
+        logger.error(f"❌ خطا در ارسال نوتیفیکیشن به ادمین: {e}")
+        try:
+            await bot.send_message(
+                ADMIN_ID_INT,
+                f"{title}\nکاربر: {user_name_escaped}\nمبلغ: {data.get('price', 0):,} تومان\nنوع: {purchase_type}",
+                parse_mode=None
+            )
+            logger.info(f"📨 نوتیفیکیشن {purchase_type} با متن ساده ارسال شد")
+        except Exception as e2:
+            logger.error(f"❌ خطا در ارسال نوتیفیکیشن ساده: {e2}")
         
         
         
