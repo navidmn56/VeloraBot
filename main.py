@@ -21,13 +21,9 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Dict, Optional
 from urllib import response
-
-
 import aiohttp
 import qrcode
 from yarl import URL
-
-
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -126,7 +122,6 @@ from config import BOT_TOKEN, ADMIN_ID, BANK_CARD_NUMBER, BANK_CARD_HOLDER, BANK
 SENAI_PANEL_ENABLED = True
 TEMP_INBOUND_SELECTION = {}
 INBOUND_BACK_DATA = {}
-# =============== Ready Package ===============
 
 READY_PACKAGES = {
     'enabled': True,
@@ -217,7 +212,6 @@ from config import (
 log_system = None
 
 
-# =============== Login Settings ===============
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s] - %(message)s',
@@ -264,7 +258,6 @@ SHOP_STATUS = {
     'last_updated': datetime.now().isoformat()
 }
 USER_INBOUND_SELECTION = {}
-# =============== ایموجی‌های پریمیوم ===============
 PREMIUM_EMOJI_IDS = {
     'success': 5048892927288280410, 'primary': None, 'danger': 5420323339723881652, 'wallet': 5215420556089776398,
     'config': 5431736674147114227, 'invite': 5251601734253421368, 'language': 4974345716802519903, 'admin': None, 'anime':5382310787505221582,
@@ -278,8 +271,6 @@ PREMIUM_EMOJI_IDS = {
     'upload': 5783105032350076195, 'email': 5253742260054409879, 'loading':5334675996714999970,
 }
 
-# =============== استیکرها ===============
-# دیکشنری آیدی استیکرها (آیدی‌ها را از ربات @stickers بگیرید)
 STICKER_IDS = {
     'welcome': 'CAACAgQAAxkBAAERYvFqLYSw1e7mqt0LreZQ5iAXYLYgwQACmRIAAnZ5WVFtqjwTk98wTTwE',      # استیکر خوش آمدید
     'success': 'CAACAgIAAxkBAAERYvNqLYUtRvn80WovxY4pmS_w0Gl4IAAC_gADVp29CtoEYTAu-df_PAQ',      # استیکر موفقیت
@@ -353,43 +344,35 @@ _db_modified = set()
 _last_save_time = {}
 _save_queue = asyncio.Queue()
 _save_task = None
-# بعد از متغیرهای گلوبال اضافه کنید
-# در بخش تنظیمات تست سرویس (بالای فایل)
-# در بخش تنظیمات تست سرویس
 TEST_SERVICE_STATUS = {
     'enabled': False,
-    'volume': 0,  # 0 = نامحدود
-    'volume_mb': 1024,  # مقدار به مگابایت (پیش‌فرض 1GB)
+    'volume': 0,  
+    'volume_mb': 1024,
     'days': 3,
     'max_tests': 1,
     'inbound_ids': [],
-    'ip_limit': 0,  # 0 = نامحدود
+    'ip_limit': 0,  
     'message': '🎁 یک سرویس تست {volume} / {days} روز برای شما فعال شد!',
     'last_updated': datetime.now().isoformat()
 }
 
-# ذخیره کاربرانی که تست گرفته‌اند
-USER_TEST_USAGE = {}  # user_id -> {'count': 1, 'last_test': timestamp}
-USER_TEST_SETTINGS = {}  # user_id -> {'volume': 5, 'days': 10, 'max_tests': 3}
+USER_TEST_USAGE = {}  
+USER_TEST_SETTINGS = {}  
 
 
 
 def ensure_data_directory():
-    """اطمینان از وجود پوشه data - بدون بازنویسی فایل‌های موجود"""
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
         logger.info(f"✅ پوشه {DATA_DIR} ایجاد شد")
     
-    # ایجاد پوشه backups
     backup_dir = os.path.join(DATA_DIR, "backups")
     if not os.path.exists(backup_dir):
         os.makedirs(backup_dir)
         logger.info(f"✅ پوشه {backup_dir} ایجاد شد")
     
-    # فقط بررسی وجود فایل‌ها - هرگز فایل موجود را بازنویسی نکن!
     for name, file_path in DB_FILES.items():
         if not os.path.exists(file_path):
-            # فایل وجود ندارد، ایجاد کن با داده خالی
             if name == 'configs':
                 default_data = {'configs': [], 'last_id': 0}
             elif name == 'blacklist':
@@ -401,11 +384,9 @@ def ensure_data_directory():
                 json.dump(default_data, f, ensure_ascii=False, indent=2)
             logger.info(f"✅ فایل {name}.json ایجاد شد (جدید)")
         else:
-            # فایل وجود دارد، فقط لاگ کن و هیچ کاری نکن
             size = os.path.getsize(file_path)
             logger.info(f"📁 فایل {name}.json وجود دارد (حجم: {size:,} bytes) - بدون تغییر")
             
-            # بررسی کن فایل خراب نباشد
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read().strip()
@@ -426,7 +407,6 @@ async def get_config_from_pool_safe(volume: int, days: int):
     async with config_lock:
         return get_config_from_pool(volume, days)
 def save_json(file_path: str, data) -> bool:
-    """ذخیره فایل JSON با لاگ کامل"""
     try:
         filename = os.path.basename(file_path)
         file_dir = os.path.dirname(file_path)
@@ -434,24 +414,21 @@ def save_json(file_path: str, data) -> bool:
 
         logger.info(f"💾 ذخیره {filename} در مسیر: {os.path.abspath(file_path)}")
         
-        # ایجاد پوشه اگر وجود نداره
         os.makedirs(file_dir, exist_ok=True)
         
-        # =============== اصلاح: ذخیره با لاگ کامل ===============
         temp_file = file_path + '.tmp'
         
-        # اطمینان از اینکه data دیکشنری است
         if data is None:
             data = {}
         
         with open(temp_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()  # اطمینان از نوشته شدن
-            os.fsync(f.fileno())  # اطمینان از ذخیره فیزیکی
+            f.flush()  
+            os.fsync(f.fileno())  
         
-        # بررسی اینکه فایل موقت ساخته شده و خالی نیست
+        
         if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            # جایگزینی فایل اصلی
+            
             if os.path.exists(file_path):
                 os.replace(temp_file, file_path)
             else:
@@ -460,12 +437,12 @@ def save_json(file_path: str, data) -> bool:
             logger.error(f"❌ فایل موقت {temp_file} ایجاد نشد یا خالی است")
             return False
         
-        # تایید نهایی - دوباره بخون و چک کن
+        
         if os.path.exists(file_path):
             file_size = os.path.getsize(file_path)
             logger.info(f"✅ {filename} با موفقیت ذخیره شد ({file_size:,} bytes)")
             
-            # تایید با خوندن دوباره
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 verify_data = json.load(f)
             logger.info(f"✅ تایید نهایی: {len(verify_data) if isinstance(verify_data, dict) else 'N/A'} رکورد در {filename}")
@@ -473,7 +450,7 @@ def save_json(file_path: str, data) -> bool:
             logger.error(f"❌ {filename} ذخیره نشد!")
             return False
         
-        # به‌روزرسانی کش
+        
         _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
         
         return True
@@ -486,26 +463,26 @@ def save_json(file_path: str, data) -> bool:
         
            
 def load_json(file_path: str, use_cache: bool = True) -> dict:
-    """بارگذاری فایل JSON با دیباگ کامل"""
+    
     filename = os.path.basename(file_path)
     
-    # استفاده از کش اگر موجود باشه
+    
     if use_cache and file_path in _db_cache and file_path not in _db_modified:
         logger.debug(f"📂 {filename} از کش خوانده شد")
         return _db_cache[file_path]
     
     logger.info(f"📂 بارگذاری {filename} از دیسک... مسیر: {os.path.abspath(file_path)}")
     
-    # اگر فایل وجود نداره
+    
     if not os.path.exists(file_path):
         logger.error(f"❌ فایل {filename} وجود ندارد! مسیر: {file_path}")
-        # ایجاد فایل جدید
+        
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump({}, f)
         logger.info(f"✅ فایل {filename} ایجاد شد (خالی)")
         return {}
     
-    # اگر فایل خالیه
+    
     if os.path.getsize(file_path) == 0:
         logger.warning(f"⚠️ فایل {filename} خالی است - حجم: 0 bytes")
         return {}
@@ -520,7 +497,7 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
             
             data = json.loads(content)
             
-            # به‌روزرسانی کش
+            
             if use_cache:
                 _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
             
@@ -540,13 +517,10 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
 
 
 
-# اضافه کردن به دیتابیس
-# data/coupons.json - ذخیره اطلاعات کوپن‌ها
 
 COUPONS_FILE = os.path.join(DATA_DIR, "coupons.json")
 
 def load_coupons():
-    """بارگذاری اطلاعات کوپن‌ها"""
     try:
         if os.path.exists(COUPONS_FILE):
             with open(COUPONS_FILE, 'r', encoding='utf-8') as f:
@@ -557,7 +531,6 @@ def load_coupons():
         return {}
 
 def save_coupons(coupons: dict):
-    """ذخیره اطلاعات کوپن‌ها"""
     try:
         with open(COUPONS_FILE, 'w', encoding='utf-8') as f:
             json.dump(coupons, f, ensure_ascii=False, indent=2)
@@ -566,17 +539,14 @@ def save_coupons(coupons: dict):
         logger.error(f"خطا در ذخیره کوپن‌ها: {e}")
         return False
 
-# متغیر گلوبال
 COUPONS = load_coupons()
 
 
 
 
-# =============== مدیریت تست سرویس ===============
 
 @dp.callback_query(F.data == "admin_test_service")
 async def admin_test_service_settings(callback: CallbackQuery):
-    """تنظیمات تست سرویس در پنل ادمین - نسخه CallbackQuery"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -585,7 +555,6 @@ async def admin_test_service_settings(callback: CallbackQuery):
     
     status_text = "🟢 فعال" if settings.get('enabled') else "🔴 غیرفعال"
     
-    # دریافت اطلاعات اینباند
     inbound_ids = settings.get('inbound_ids', [])
     inbound_info = "❌ پیش‌فرض (همانند کاربر)"
     if inbound_ids:
@@ -601,11 +570,9 @@ async def admin_test_service_settings(callback: CallbackQuery):
         else:
             inbound_info = f"📡 اینباندهای انتخاب شده: {inbound_ids}"
     
-    # دریافت IP Limit
     ip_limit = settings.get('ip_limit', 0)
     ip_display = "♾️ نامحدود" if ip_limit == 0 else f"{ip_limit} دستگاه"
     
-    # دریافت حجم
     volume_mb = settings.get('volume_mb', 1024)
     if volume_mb == 0:
         volume_display = "♾️ نامحدود"
@@ -739,7 +706,6 @@ async def show_inbound_manager(
     
     lang = get_user(admin_id).get('lang', 'fa')
     
-    # دریافت لیست اینباندها
     inbounds = await xui_get_inbounds()
     active_inbounds = [i for i in inbounds if i.get('enable', True)]
     
@@ -747,7 +713,6 @@ async def show_inbound_manager(
         await message.answer("❌ هیچ اینباند فعالی یافت نشد")
         return
     
-    # استفاده از وضعیت موقت یا داده‌های فعلی
     temp_key = f"{callback_data_prefix}_{admin_id}"
     if temp_key in TEMP_INBOUND_SELECTION:
         current_list = TEMP_INBOUND_SELECTION[temp_key]
@@ -755,7 +720,6 @@ async def show_inbound_manager(
         current_list = current_inbound_ids.copy() if current_inbound_ids else []
         TEMP_INBOUND_SELECTION[temp_key] = current_list.copy()
     
-    # ذخیره اطلاعات برگشت
     if back_callback and extra_data:
         back_key = f"{callback_data_prefix}_{admin_id}_back"
         INBOUND_BACK_DATA[back_key] = {
@@ -763,7 +727,6 @@ async def show_inbound_manager(
             'extra_data': extra_data
         }
     
-    # ساخت دیکشنری اسم اینباندها
     inbound_names = {}
     for ib in active_inbounds:
         inbound_id = ib.get('id')
@@ -792,8 +755,6 @@ async def show_inbound_manager(
 """
     
     buttons = []
-    
-    # دکمه‌های اینباندها
     for inbound in active_inbounds:
         inbound_id = inbound.get('id')
         ib_name = inbound_names.get(inbound_id, f"ID: {inbound_id}")
@@ -813,7 +774,6 @@ async def show_inbound_manager(
             style=style
         )])
     
-    # دکمه‌های عملیاتی
     action_buttons = []
     
     if show_default_button:
@@ -839,7 +799,6 @@ async def show_inbound_manager(
     if action_buttons:
         buttons.append(action_buttons)
     
-    # دکمه‌های ذخیره و انصراف
     save_buttons = [
         InlineKeyboardButton(
             text="✅ ذخیره" if lang == "fa" else "✅ Save",
@@ -884,7 +843,6 @@ async def show_inbound_manager(
             await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
             
 
-# =============== هندلرهای عمومی مدیریت اینباندها ===============
 
 @dp.callback_query(F.data.startswith("inbound_toggle_"))
 async def inbound_toggle(callback: CallbackQuery):
@@ -894,9 +852,7 @@ async def inbound_toggle(callback: CallbackQuery):
     
     parts = callback.data.split("_")
     try:
-        # استخراج prefix و inbound_id
-        # فرمت: inbound_toggle_{prefix}_{inbound_id}
-        prefix_parts = parts[2:-1]  # همه چیز بین inbound_toggle_ و inbound_id
+        prefix_parts = parts[2:-1]  
         prefix = "_".join(prefix_parts)
         inbound_id = int(parts[-1])
     except (ValueError, IndexError):
@@ -919,8 +875,6 @@ async def inbound_toggle(callback: CallbackQuery):
     
     TEMP_INBOUND_SELECTION[temp_key] = current_list
     
-    # بازگشت به صفحه مدیریت با رفرش
-    # اطلاعات قبلی را از دیکشنری INBOUND_BACK_DATA بازیابی می‌کنیم
     back_key = f"{prefix}_{callback.from_user.id}_back"
     extra_data = INBOUND_BACK_DATA.get(back_key, {}).get('extra_data', {})
     
@@ -1010,16 +964,13 @@ async def inbound_back(callback: CallbackQuery):
     prefix = callback.data.replace("inbound_back_", "")
     temp_key = f"{prefix}_{callback.from_user.id}"
     
-    # پاک کردن وضعیت موقت
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
     
-    # بازیابی اطلاعات برگشت
     back_key = f"{prefix}_{callback.from_user.id}_back"
     back_info = INBOUND_BACK_DATA.get(back_key, {})
     extra_data = back_info.get('extra_data', {})
     
-    # پاک کردن اطلاعات برگشت
     if back_key in INBOUND_BACK_DATA:
         del INBOUND_BACK_DATA[back_key]
     
@@ -1028,7 +979,6 @@ async def inbound_back(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در ارسال پاسخ: {e}")
     
-    # =============== برگشت بر اساس prefix ===============
     try:
         if "category" in prefix:
             category_id = extra_data.get('category_id')
@@ -1053,7 +1003,6 @@ async def inbound_back(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("inbound_save_"))
 async def inbound_save(callback: CallbackQuery):
-    """ذخیره تنظیمات اینباندها (عمومی)"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -1069,12 +1018,10 @@ async def inbound_save(callback: CallbackQuery):
     
     current_list = TEMP_INBOUND_SELECTION[temp_key]
     
-    # بازیابی اطلاعات برگشت
     back_key = f"{prefix}_{callback.from_user.id}_back"
     back_info = INBOUND_BACK_DATA.get(back_key, {})
     extra_data = back_info.get('extra_data', {})
     
-    # پاک کردن وضعیت موقت و اطلاعات برگشت
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
     if back_key in INBOUND_BACK_DATA:
@@ -1086,12 +1033,10 @@ async def inbound_save(callback: CallbackQuery):
         logger.warning(f"خطا در ارسال پاسخ: {e}")
         
     
-    # =============== ذخیره و برگشت بر اساس prefix ===============
     try:
         if "category" in prefix:
             category_id = extra_data.get('category_id')
             if category_id:
-                # پیدا کردن دسته و ذخیره در آن
                 for cat in READY_PACKAGES.get('categories', []):
                     if cat.get('id') == category_id:
                         cat['inbound_ids'] = current_list
@@ -1101,7 +1046,6 @@ async def inbound_save(callback: CallbackQuery):
                 configs_pool['ready_packages'] = READY_PACKAGES
                 save_all()
                 
-                # برگشت با روش جدید
                 await go_back_to_category_edit(callback, category_id)
             else:
                 await go_back_to_admin_panel(callback)
@@ -1112,7 +1056,6 @@ async def inbound_save(callback: CallbackQuery):
             configs_pool['test_service'] = TEST_SERVICE_STATUS
             save_all()
             
-            # برگشت با روش جدید
             await go_back_to_test_service(callback)
             
         else:
@@ -1153,7 +1096,6 @@ async def admin_test_inbounds(callback: CallbackQuery):
         update_existing=False,
         extra_data={}
     )
-# =============== توابع کمکی برای برگشت ===============
 
 async def go_back_to_category_edit(callback: CallbackQuery, category_id: int):
     """برگشت به صفحه ویرایش دسته با حذف پیام و ارسال جدید"""
@@ -1162,7 +1104,6 @@ async def go_back_to_category_edit(callback: CallbackQuery, category_id: int):
     except Exception as e:
         logger.warning(f"خطا در حذف پیام: {e}")
         try:
-            # اگر نتوانست پیام را حذف کند، فقط ویرایش کن
             await callback.message.edit_text("⏳ در حال بازگشت...")
         except:
             pass
@@ -1182,7 +1123,6 @@ async def go_back_to_category_edit(callback: CallbackQuery, category_id: int):
         )
     except Exception as e:
         logger.error(f"خطا در ارسال پیام برگشت: {e}")
-        # اگر خطا در ارسال پیام بود، مستقیماً صفحه را نمایش بده
         callback.data = f"admin_category_edit_{category_id}"
         await admin_category_edit(callback)
 
@@ -1269,12 +1209,8 @@ async def admin_test_toggle_inbound(callback: CallbackQuery):
     else:
         current_inbound_ids.append(inbound_id)
         await callback.answer(f"✅ اینباند {inbound_id} انتخاب شد", show_alert=False)
-    
-    # ذخیره موقت
     TEST_SERVICE_STATUS['inbound_ids'] = current_inbound_ids
     TEST_SERVICE_STATUS['last_updated'] = datetime.now().isoformat()
-    
-    # بازگشت به صفحه تنظیم اینباندها
     await admin_test_inbounds(callback)
 
 
@@ -1330,21 +1266,13 @@ async def admin_test_inbounds_save(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # دریافت لیست از وضعیت موقت
     prefix = "test_service"
     temp_key = f"{prefix}_{callback.from_user.id}"
     current_list = TEMP_INBOUND_SELECTION.get(temp_key, [])
-    
-    # ذخیره در TEST_SERVICE_STATUS
     TEST_SERVICE_STATUS['inbound_ids'] = current_list
     TEST_SERVICE_STATUS['last_updated'] = datetime.now().isoformat()
-    
-    # =============== ذخیره در configs_pool و دیتابیس ===============
     configs_pool['test_service'] = TEST_SERVICE_STATUS
     save_all()  # این تابع همه چیز را ذخیره می‌کند
-    
-    # پاک کردن وضعیت موقت
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
     
@@ -1352,8 +1280,6 @@ async def admin_test_inbounds_save(callback: CallbackQuery):
         f"✅ {len(current_list)} اینباند تست ذخیره شد!" if lang == "fa" else f"✅ {len(current_list)} test inbounds saved!",
         show_alert=True
     )
-    
-    # بازگشت به صفحه تنظیمات تست
     await admin_test_service_settings(callback)
 
 
@@ -1367,8 +1293,6 @@ async def admin_test_inbound(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # دریافت لیست اینباندها
     await callback.message.edit_text("⏳ در حال دریافت لیست اینباندها...")
     
     inbounds = await xui_get_inbounds()
@@ -1405,8 +1329,6 @@ Please select an inbound for test:
 """
     
     buttons = []
-    
-    # دکمه استفاده از پیش‌فرض
     buttons.append([InlineKeyboardButton(
         text="📌 استفاده از اینباند پیش‌فرض (همانند کاربر)" if lang == "fa" else "📌 Use Default Inbound (same as user)",
         callback_data="admin_test_inbound_set_default"
@@ -1466,8 +1388,6 @@ async def admin_test_inbound_set(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # استخراج inbound_id
     parts = callback.data.split("_")
     if len(parts) >= 5 and parts[4] == 'default':
         inbound_id = None
@@ -1491,8 +1411,6 @@ async def admin_test_inbound_set(callback: CallbackQuery):
     
     configs_pool['test_service'] = TEST_SERVICE_STATUS
     save_all()
-    
-    # بازگشت به صفحه تنظیمات
     await admin_test_service_settings(callback)
     
     
@@ -1631,8 +1549,6 @@ async def admin_test_edit_save(message: Message):
         
         elif setting_type == 'volume':
             new_value_mb = int(message.text.replace(',', '').replace(' ', '').strip())
-            
-            # حداقل 10MB
             if new_value_mb > 0 and new_value_mb < 10:
                 await message.reply(
                     "⚠️ حداقل حجم تست 10 مگابایت است!\n"
@@ -1864,17 +1780,12 @@ async def admin_test_users(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # آمار تست‌ها
     total_users = len(USER_TEST_USAGE)
     total_tests = sum(data.get('count', 0) for data in USER_TEST_USAGE.values())
     total_all_users = len(users)  # تعداد کل کاربران ربات
-    
-    # کاربرانی که بیشترین تست را گرفته‌اند
     top_users = []
     for uid, data in USER_TEST_USAGE.items():
         user_info = get_user(int(uid)) if uid in users else None
-        # ✅ escape کردن نام کاربر
         raw_name = user_info.get('name', f'کاربر_{uid}') if user_info else f'کاربر_{uid}'
         name_escaped = html.escape(raw_name)
         top_users.append({
@@ -1958,8 +1869,6 @@ async def admin_test_all_users_settings(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # آمار کلی
     total_users = len(users)
     users_with_test = len(USER_TEST_USAGE)
     
@@ -2094,8 +2003,6 @@ async def admin_test_user_select_execute(message: Message):
             "❌ لطفاً یک آیدی عددی معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid numeric ID!"
         )
         return
-    
-    # بررسی وجود کاربر
     user_info = await get_user_info_from_telegram(target_id)
     
     if str(target_id) not in users:
@@ -2110,8 +2017,6 @@ async def admin_test_user_select_execute(message: Message):
         return
     
     user_states.pop(admin_id, None)
-    
-    # رفتن به صفحه تنظیمات کاربر
     await admin_test_user_settings(callback=type('obj', (object,), {
         'from_user': message.from_user,
         'message': message,
@@ -2208,8 +2113,6 @@ async def admin_test_set_default_save(message: Message):
         volume = int(parts[0].strip())
         days = int(parts[1].strip())
         max_tests = int(parts[2].strip())
-        
-        # اعتبارسنجی
         if volume < 1 or volume > 100:
             await message.reply(
                 "❌ حجم باید بین 1 تا 100 گیگ باشد!" if lang == "fa" else "❌ Volume must be between 1 and 100 GB!"
@@ -2225,8 +2128,6 @@ async def admin_test_set_default_save(message: Message):
                 "❌ تعداد تست باید بین 1 تا 10 باشد!" if lang == "fa" else "❌ Max tests must be between 1 and 10!"
             )
             return
-        
-        # ذخیره تنظیمات
         TEST_SERVICE_STATUS['volume'] = volume
         TEST_SERVICE_STATUS['days'] = days
         TEST_SERVICE_STATUS['max_tests'] = max_tests
@@ -2431,8 +2332,6 @@ async def admin_test_clear_all_settings_execute(callback: CallbackQuery):
         f"✅ {count} تنظیمات اختصاصی حذف شد!" if lang == "fa" else f"✅ {count} custom settings cleared!",
         show_alert=True
     )
-    
-    # بازگشت به صفحه تنظیمات
     await admin_test_all_users_settings(callback)
     
     
@@ -2445,8 +2344,6 @@ async def admin_test_user_reset_start(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # تنظیم وضعیت برای دریافت آیدی کاربر
     user_states[callback.from_user.id] = {'awaiting_test_user_id': True}
     
     if lang == "fa":
@@ -2479,8 +2376,6 @@ Send /cancel to abort
         buttons = [
             [InlineKeyboardButton(text="🔙 Back", callback_data="admin_test_users")]
         ]
-    
-    # ✅ اصلاح: ساختار صحیح InlineKeyboardMarkup
     await callback.message.edit_text(
         text,
         parse_mode=ParseMode.HTML,
@@ -2496,8 +2391,6 @@ async def admin_test_user_reset_execute(message: Message):
     """اجرای ریست تست یک کاربر"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
-    
-    # لغو عملیات
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply(
@@ -2515,12 +2408,8 @@ async def admin_test_user_reset_execute(message: Message):
             "❌ لطفاً یک آیدی عددی معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid numeric ID!"
         )
         return
-    
-    # بررسی وجود کاربر
     uid = str(target_id)
     user_info = await get_user_info_from_telegram(target_id)
-    
-    # ✅ استفاده از full_name (که قبلاً escaped شده)
     user_full_name = user_info.get('full_name', f'کاربر_{target_id}')
     
     if uid not in USER_TEST_USAGE:
@@ -2533,16 +2422,10 @@ async def admin_test_user_reset_execute(message: Message):
         )
         user_states.pop(admin_id, None)
         return
-    
-    # دریافت اطلاعات قبل از ریست
     old_data = USER_TEST_USAGE[uid].copy()
     old_count = old_data.get('count', 0)
-    
-    # ریست تست کاربر
     del USER_TEST_USAGE[uid]
     save_test_usage()
-    
-    # لاگ عملیات
     logger.info(f"🗑 تست کاربر {target_id} ({user_info.get('full_name_raw', user_full_name)}) با {old_count} تست ریست شد")
     
     if log_system:
@@ -2608,12 +2491,9 @@ async def admin_test_users_list(callback: CallbackQuery):
             show_alert=True
         )
         return
-    
-    # ساخت لیست کاربران با escape
     test_users = []
     for uid, data in USER_TEST_USAGE.items():
         user_info = get_user(int(uid)) if uid in users else None
-        # ✅ escape کردن نام کاربر
         raw_name = user_info.get('name', f'کاربر_{uid}') if user_info else f'کاربر_{uid}'
         name_escaped = html.escape(raw_name)
         test_users.append({
@@ -2623,16 +2503,12 @@ async def admin_test_users_list(callback: CallbackQuery):
             'last_test': data.get('last_test', 'نامشخص'),
             'last_order_id': data.get('last_order_id', 'نامشخص')
         })
-    
-    # مرتب‌سازی بر اساس تعداد تست (بیشترین اول)
     test_users.sort(key=lambda x: x['count'], reverse=True)
     
     if lang == "fa":
         text = f"📋 <b>لیست کامل کاربران تست‌دهنده</b>\n\n📊 تعداد کل: {len(test_users)}\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
     else:
         text = f"📋 <b>Full List of Test Users</b>\n\n📊 Total: {len(test_users)}\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    
-    # نمایش 15 کاربر اول با دکمه تنظیمات
     for i, user in enumerate(test_users[:15], 1):
         text += f"{i}. {user['name']} (ID: {user['id']}) - {user['count']} تست\n"
         if user['last_test']:
@@ -2641,11 +2517,7 @@ async def admin_test_users_list(callback: CallbackQuery):
     
     if len(test_users) > 15:
         text += f"... و {len(test_users) - 15} کاربر دیگر\n"
-    
-    # دکمه‌ها
     buttons = []
-    
-    # دکمه تنظیمات برای هر کاربر (فقط برای 15 کاربر اول)
     for user in test_users[:15]:
         buttons.append([InlineKeyboardButton(
             text=f"⚙️ تنظیمات {user['name']} (ID: {user['id']})",
@@ -2661,8 +2533,6 @@ async def admin_test_users_list(callback: CallbackQuery):
         text="🔙 برگشت" if lang == "fa" else "🔙 Back",
         callback_data="admin_test_users"
     )])
-    
-    # اگر متن خیلی طولانی است، به صورت فایل ارسال کن
     if len(text) > 4000:
         from io import BytesIO
         from aiogram.types import BufferedInputFile
@@ -2905,8 +2775,6 @@ async def admin_test_user_settings_save(message: Message):
     """ذخیره تنظیم اختصاصی تست کاربر"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
-    
-    # لغو عملیات
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply(
@@ -2931,8 +2799,6 @@ async def admin_test_user_settings_save(message: Message):
                 "❌ مقدار باید بزرگتر از صفر باشد!" if lang == "fa" else "❌ Value must be greater than zero!"
             )
             return
-        
-        # اعتبارسنجی
         if setting_type == 'volume' and new_value > 100:
             await message.reply(
                 "⚠️ حجم نمی‌تواند بیشتر از 100 گیگ باشد!" if lang == "fa" else "⚠️ Volume cannot exceed 100 GB!"
@@ -2948,8 +2814,6 @@ async def admin_test_user_settings_save(message: Message):
                 "⚠️ تعداد تست نمی‌تواند بیشتر از 10 باشد!" if lang == "fa" else "⚠️ Max tests cannot exceed 10!"
             )
             return
-        
-        # =============== ذخیره تنظیمات ===============
         uid = str(target_id)
         if uid not in USER_TEST_SETTINGS:
             USER_TEST_SETTINGS[uid] = {
@@ -2962,8 +2826,6 @@ async def admin_test_user_settings_save(message: Message):
         save_user_test_settings()
         
         user_info = await get_user_info_from_telegram(target_id)
-        
-        # پیام موفقیت
         setting_names = {
             'volume': 'حجم' if lang == "fa" else 'Volume',
             'days': 'مدت' if lang == "fa" else 'Duration',
@@ -3063,15 +2925,11 @@ async def admin_test_user_settings_save(message: Message):
                     callback_data="admin_test_users"
                 )]
             ]
-        
-        # =============== ارسال پیام جدید با تنظیمات به‌روز ===============
         await message.answer(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
             parse_mode=ParseMode.HTML
         )
-        
-        # پاک کردن وضعیت
         user_states.pop(admin_id, None)
         
     except ValueError:
@@ -3098,7 +2956,6 @@ async def admin_test_user_settings(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     user_info = await get_user_info_from_telegram(target_id)
-    # ✅ escape کردن نام کاربر
     full_name_escaped = html.escape(user_info['full_name'])
     
     user_test_data = USER_TEST_USAGE.get(str(target_id), {})
@@ -3193,8 +3050,6 @@ async def admin_test_user_settings(callback: CallbackQuery):
                 callback_data="admin_test_users"
             )]
         ]
-    
-    # =============== حذف پیام قبلی و ارسال جدید ===============
     try:
         await callback.message.delete()
     except:
@@ -3287,12 +3142,8 @@ async def admin_test_users_reset_all_execute(callback: CallbackQuery):
     
     total_users = len(USER_TEST_USAGE)
     total_tests = sum(data.get('count', 0) for data in USER_TEST_USAGE.values())
-    
-    # پاک کردن همه تست‌ها
     USER_TEST_USAGE.clear()
     save_test_usage()
-    
-    # لاگ عملیات
     logger.info(f"🗑 تست همه {total_users} کاربر با {total_tests} تست ریست شد")
     
     if log_system:
@@ -3432,8 +3283,6 @@ def _try_recover_from_backup(file_path: str) -> dict:
     if not os.path.exists(backup_dir):
         logger.warning(f"⚠️ پوشه بکاپ وجود ندارد: {backup_dir}")
         return None
-    
-    # پیدا کردن آخرین بکاپ برای این فایل
     backups = []
     for f in os.listdir(backup_dir):
         if f.startswith(filename) and (f.endswith('.backup') or f.endswith('.json')):
@@ -3443,17 +3292,12 @@ def _try_recover_from_backup(file_path: str) -> dict:
     if not backups:
         logger.warning(f"⚠️ هیچ بکاپی برای {filename} یافت نشد")
         return None
-    
-    # جدیدترین بکاپ
     backups.sort(reverse=True)
     latest_backup = backups[0][1]
     
     try:
-        # خوندن بکاپ
         with open(latest_backup, 'r', encoding='utf-8') as f:
             data = json.loads(f.read())
-        
-        # بازیابی فایل اصلی
         save_json(file_path, data)
         
         logger.warning(f"🔄 {filename} از بکاپ بازیابی شد: {os.path.basename(latest_backup)}")
@@ -3473,7 +3317,6 @@ USER_INBOUND_SELECTION = {}  # user_id -> inbound_id
 def save_user_inbound_selection(user_id: int, inbound: Union[int, List[int]]):
     """ذخیره انتخاب اینباند کاربر (تک یا لیست)"""
     USER_INBOUND_SELECTION[str(user_id)] = inbound
-    # ذخیره در فایل برای ماندگاری
     try:
         inbound_file = os.path.join(DATA_DIR, "user_inbounds.json")
         with open(inbound_file, 'w', encoding='utf-8') as f:
@@ -3497,20 +3340,14 @@ def load_user_inbound_selections():
 
 def get_user_inbounds(user_id: int) -> List[int]:
     """دریافت لیست اینباندهای انتخاب شده برای کاربر"""
-    # اگر کاربر اینباند خاصی انتخاب کرده
     user_inbound = USER_INBOUND_SELECTION.get(str(user_id))
     if user_inbound:
-        # اگر کاربر یک اینباند انتخاب کرده، آن را برگردان
         if isinstance(user_inbound, list):
             return user_inbound
         return [user_inbound]
-    
-    # در غیر این صورت، اینباندهای پیش‌فرض را برگردان
     default_ids = configs_pool.get('default_inbound_ids', [])
     if default_ids:
         return default_ids
-    
-    # اگر هیچ اینباندی تنظیم نشده، همه اینباندهای فعال را برگردان
     return []  # یا همه اینباندها را برگردان
 
 def is_shop_open() -> bool:
@@ -3531,8 +3368,6 @@ def set_shop_status(open_status: bool, message: str = None):
     if message:
         SHOP_STATUS['message'] = message
     SHOP_STATUS['last_updated'] = datetime.now().isoformat()
-    
-    # ذخیره در configs_pool برای ماندگاری
     configs_pool['shop_status'] = SHOP_STATUS
     save_all()
     logger.info(f"🛒 وضعیت فروش تغییر کرد: {'باز' if open_status else 'بسته'}")
@@ -3546,8 +3381,6 @@ async def admin_shop_settings(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     is_open = is_shop_open()
-    
-    # =============== دریافت وضعیت تایید دستی ===============
     manual_approval = configs_pool.get('manual_approval_settings', {})
     enabled = manual_approval.get('enabled', False)
     
@@ -3622,8 +3455,6 @@ async def admin_toggle_manual_approval(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== تغییر وضعیت ===============
     manual_approval = configs_pool.get('manual_approval_settings', {})
     manual_approval['enabled'] = not manual_approval.get('enabled', False)
     manual_approval['last_updated'] = datetime.now().isoformat()
@@ -3635,13 +3466,7 @@ async def admin_toggle_manual_approval(callback: CallbackQuery):
         f"✅ تایید دستی کاربران جدید {status} شد!" if lang == "fa" else f"✅ Manual approval {status}d!",
         show_alert=True
     )
-    
-    # بازگشت به صفحه تنظیمات
     await admin_shop_settings(callback)
-    
-    
-# =============== کش کانفیگ‌ها (فقط یک نسخه) ===============
-# =============== غیرفعال کردن کامل کش ===============
 class ConfigCache:
     """کش غیرفعال - همیشه اطلاعات را از دیتابیس می‌خواند"""
     
@@ -3674,13 +3499,7 @@ class ConfigCache:
             'total_configs': 0,
             'cache_duration': 0
         }
-
-# =============== ایجاد نمونه سراسری (فقط یک بار) ===============
 config_cache = ConfigCache()
-
-# ❌ حذف این خطوط (کش اول)
-# CONFIGS_CACHE = {}
-# CONFIGS_CACHE_TIME = {}
 SYNC_IN_PROGRESS = False
 
 
@@ -3691,11 +3510,8 @@ async def admin_pending_users(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== پیدا کردن کاربرانی که درخواست تایید داده‌اند ===============
     pending_users = []
     for uid, user_data in users.items():
-        # =============== فقط کاربرانی که درخواست دادند، تایید نشدند و ادمین نیستند ===============
         if (user_data.get('requested_approval', False) and 
             not user_data.get('approved_by_admin', False) and
             user_data.get('registration_status') == 'requested' and
@@ -3788,13 +3604,9 @@ async def admin_approve_user(callback: CallbackQuery):
     if not target:
         await callback.answer("❌ کاربر یافت نشد!", show_alert=True)
         return
-    
-    # =============== بررسی اینکه کاربر واقعاً درخواست داده ===============
     if not target.get('requested_approval', False) or target.get('registration_status') != 'requested':
         await callback.answer("❌ این کاربر درخواست تایید نداده است!", show_alert=True)
         return
-    
-    # ✅ escape کردن نام کاربر
     name_escaped = html.escape(target.get('name', f'کاربر_{target_id}'))
     username = target.get('username', '')
     username_display = f"@{html.escape(username)}" if username else 'ندارد'
@@ -3897,8 +3709,6 @@ async def admin_reject_user(callback: CallbackQuery):
     if not target:
         await callback.answer("❌ کاربر یافت نشد!", show_alert=True)
         return
-    
-    # =============== نمایش پیام تایید ===============
     target_name_escaped = html.escape(target.get('name', f'کاربر_{target_id}'))
     username = target.get('username', '')
     username_display = f"@{html.escape(username)}" if username else 'ندارد'
@@ -4059,8 +3869,6 @@ async def admin_shop_message_save(message: Message):
     await message.reply(
         f"✅ پیام فروش با موفقیت بروزرسانی شد!" if lang == "fa" else "✅ Shop message updated successfully!"
     )
-    
-    # =============== ساخت یک CallbackQuery تقلبی ===============
     class FakeCallback:
         def __init__(self, message, data):
             self.from_user = message.from_user
@@ -4071,8 +3879,6 @@ async def admin_shop_message_save(message: Message):
             pass
     
     fake_callback = FakeCallback(message, "admin_shop_settings")
-    
-    # برگشت به تنظیمات با استفاده از کالبک تقلبی
     await admin_shop_settings(fake_callback)
 
 @dp.callback_query(F.data.startswith("confirm_approve_user_"))
@@ -4093,8 +3899,6 @@ async def confirm_approve_user(callback: CallbackQuery):
     if not target:
         await callback.answer("❌ کاربر یافت نشد!", show_alert=True)
         return
-    
-    # ✅ فعال‌سازی کاربر
     uid = str(target_id)
     if uid in users:
         users[uid]['approved_by_admin'] = True
@@ -4102,8 +3906,6 @@ async def confirm_approve_user(callback: CallbackQuery):
         users[uid]['registration_status'] = 'approved'
         users[uid]['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
-        
-        # ارسال پیام تایید به کاربر
         try:
             user_lang = target.get('lang', 'fa')
             if user_lang == "fa":
@@ -4122,8 +3924,6 @@ async def confirm_approve_user(callback: CallbackQuery):
                 )
         except Exception as e:
             logger.error(f"خطا در ارسال پیام تایید به کاربر {target_id}: {e}")
-        
-        # لاگ
         if log_system:
             await log_system.log_admin_action(
                 callback.from_user.id,
@@ -4132,8 +3932,6 @@ async def confirm_approve_user(callback: CallbackQuery):
             )
         
         name_escaped = html.escape(target.get('name', f'کاربر_{target_id}'))
-        
-        # =============== حذف پیام قبلی و ارسال پیام نتیجه ===============
         try:
             await callback.message.delete()
         except:
@@ -4198,8 +3996,6 @@ async def confirm_reject_user(callback: CallbackQuery):
         return
     
     target_name_escaped = html.escape(target.get('name', f'کاربر_{target_id}'))
-    
-    # =============== ارسال پیام رد به کاربر ===============
     try:
         user_lang = target.get('lang', 'fa')
         if user_lang == "fa":
@@ -4219,64 +4015,39 @@ async def confirm_reject_user(callback: CallbackQuery):
         logger.info(f"📨 پیام رد به کاربر {target_id} ارسال شد")
     except Exception as e:
         logger.error(f"❌ خطا در ارسال پیام رد به کاربر {target_id}: {e}")
-    
-    # =============== حذف کامل کاربر از دیتابیس ===============
     uid = str(target_id)
-    
-    # حذف از users
     if uid in users:
         del users[uid]
         logger.info(f"🗑 کاربر {target_id} از دیتابیس حذف شد")
-    
-    # حذف سفارشات کاربر
     deleted_orders = 0
     for oid in list(orders.keys()):
         if isinstance(orders[oid], dict) and orders[oid].get('user_id') == target_id:
             del orders[oid]
             deleted_orders += 1
-    
-    # حذف رفرال‌های کاربر
     deleted_refs = 0
     for key in list(referrals.keys()):
         if referrals[key].get('referrer') == target_id or referrals[key].get('referred') == target_id:
             del referrals[key]
             deleted_refs += 1
-    
-    # حذف چت‌های کاربر
     deleted_chats = 0
     for cid in list(chats.keys()):
         if chats[cid].get('user_id') == target_id:
             del chats[cid]
             deleted_chats += 1
-    
-    # حذف از لیست سیاه (اگر بود)
     if target_id in BLACKLIST:
         BLACKLIST.discard(target_id)
-    
-    # حذف از user_states
     if target_id in user_states:
         del user_states[target_id]
-    
-    # =============== ✅ اصلاح: حذف از کش ===============
-    # استفاده از config_cache به جای CONFIGS_CACHE
     config_cache.clear(target_id)
     logger.info(f"🧹 کش کاربر {target_id} به دلیل حذف کاربر پاک شد")
-    
-    # حذف از تست‌ها
     if uid in USER_TEST_USAGE:
         del USER_TEST_USAGE[uid]
-    
-    # حذف از تنظیمات تست
     if uid in USER_TEST_SETTINGS:
         del USER_TEST_SETTINGS[uid]
-    
-    # =============== ذخیره دیتابیس ===============
     save_all()
     save_blacklist()
     save_test_usage()
     save_user_test_settings()
-    
-    # =============== لاگ ===============
     logger.info(f"🗑 کاربر {target_id} ({target_name_escaped}) با {deleted_orders} سفارش و {deleted_refs} رفرال حذف شد")
     
     if log_system:
@@ -4285,8 +4056,6 @@ async def confirm_reject_user(callback: CallbackQuery):
             f"رد و حذف کاربر {target_id}",
             details=f"نام: {target_name_escaped} | سفارشات: {deleted_orders} | رفرال‌ها: {deleted_refs} | چت‌ها: {deleted_chats}"
         )
-    
-    # =============== پیام به ادمین ===============
     if lang == "fa":
         text = f"""
 ✅ <b>کاربر با موفقیت رد و حذف شد!</b>
@@ -4364,8 +4133,6 @@ async def admin_inbounds_list(callback: CallbackQuery):
             ])
         )
         return
-    
-    # ساختن متن و دکمه‌ها
     if lang == "fa":
         text = f"📡 <b>لیست اینباندهای پنل</b>\n\n📊 تعداد: {len(inbounds)}\n"
         text += f"⭐ اینباندهای پیش‌فرض: {default_ids if default_ids else 'تنظیم نشده'}\n\n"
@@ -4374,8 +4141,6 @@ async def admin_inbounds_list(callback: CallbackQuery):
         text += f"⭐ Default inbounds: {default_ids if default_ids else 'Not set'}\n\n"
     
     buttons = []
-    
-    # دکمه برای هر اینباند
     for inbound in inbounds:
         inbound_id = inbound.get('id')
         port = inbound.get('port')
@@ -4391,8 +4156,6 @@ async def admin_inbounds_list(callback: CallbackQuery):
             text=label[:55],
             callback_data=f"admin_inbound_detail_{inbound_id}"
         )])
-    
-    # دکمه تنظیم اینباند پیش‌فرض برای همه کاربران جدید
     buttons.append([InlineKeyboardButton(
         text="⚙️ تنظیم اینباندهای پیش‌فرض" if lang=="fa" else "⚙️ Set Default Inbounds",
         callback_data="admin_inbound_default"
@@ -4428,8 +4191,6 @@ async def admin_inbound_detail(callback: CallbackQuery):
     """نمایش جزئیات یک اینباند و تنظیم آن برای کاربران"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # =============== اصلاح: استخراج صحیح inbound_id ===============
     parts = callback.data.split("_")
     
     try:
@@ -4451,8 +4212,6 @@ async def admin_inbound_detail(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # دریافت لیست اینباندها
     inbounds = await xui_get_inbounds()
     inbound = None
     for i in inbounds:
@@ -4463,26 +4222,18 @@ async def admin_inbound_detail(callback: CallbackQuery):
     if not inbound:
         await callback.answer("❌ اینباند یافت نشد", show_alert=True)
         return
-    
-    # =============== اصلاح: محاسبه تعداد کاربران با پشتیبانی از لیست ===============
     user_count = 0
     for uid, ib_id in USER_INBOUND_SELECTION.items():
         if isinstance(ib_id, list):
-            # اگر لیست است، بررسی کن که inbound_id در لیست باشد
             if inbound_id in ib_id:
                 user_count += 1
         else:
-            # اگر عدد است، مقایسه کن
             if int(ib_id) == inbound_id:
                 user_count += 1
-    
-    # اطلاعات اینباند
     port = inbound.get('port')
     protocol = inbound.get('protocol', 'unknown')
     remark = inbound.get('remark', f'Inbound {inbound_id}')
     enable = inbound.get('enable', True)
-    
-    # دریافت تنظیمات اینباند
     settings = inbound.get('settings', {})
     clients = settings.get('clients', [])
     
@@ -4562,8 +4313,6 @@ async def admin_inbound_clients(callback: CallbackQuery):
     """مشاهده کلاینت‌های یک اینباند"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # =============== استخراج inbound_id ===============
     try:
         inbound_id = int(callback.data.split("_")[3])
     except (ValueError, IndexError):
@@ -4573,8 +4322,6 @@ async def admin_inbound_clients(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     await callback.message.edit_text("⏳ در حال دریافت اطلاعات...")
-    
-    # دریافت لیست اینباندها
     inbounds = await xui_get_inbounds()
     inbound = None
     for i in inbounds:
@@ -4585,8 +4332,6 @@ async def admin_inbound_clients(callback: CallbackQuery):
     if not inbound:
         await callback.answer("❌ اینباند یافت نشد", show_alert=True)
         return
-    
-    # دریافت کلاینت‌ها
     settings = inbound.get('settings', {})
     clients = settings.get('clients', [])
     
@@ -4603,8 +4348,6 @@ async def admin_inbound_clients(callback: CallbackQuery):
         
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         return
-    
-    # ساخت لیست کلاینت‌ها
     if lang == "fa":
         text = f"📋 <b>کلاینت‌های اینباند {inbound_id}</b>\n\n📊 تعداد: {len(clients)}\n\n"
     else:
@@ -4647,8 +4390,6 @@ async def admin_inbound_users(callback: CallbackQuery):
     """مشاهده کاربرانی که این اینباند را انتخاب کرده‌اند"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # =============== استخراج inbound_id ===============
     try:
         inbound_id = int(callback.data.split("_")[3])
     except (ValueError, IndexError):
@@ -4656,11 +4397,8 @@ async def admin_inbound_users(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== پیدا کردن کاربرانی که این اینباند را انتخاب کرده‌اند ===============
     users_with_inbound = []
     for uid, ib_id in USER_INBOUND_SELECTION.items():
-        # بررسی کنید که اینباند در انتخاب کاربر وجود دارد
         is_selected = False
         if isinstance(ib_id, list):
             if inbound_id in ib_id:
@@ -4690,8 +4428,6 @@ async def admin_inbound_users(callback: CallbackQuery):
         
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         return
-    
-    # ساخت لیست کاربران
     if lang == "fa":
         text = f"👥 <b>کاربران با اینباند {inbound_id}</b>\n\n📊 تعداد: {len(users_with_inbound)}\n\n"
     else:
@@ -4728,8 +4464,6 @@ async def admin_inbound_set_default(callback: CallbackQuery):
     """تنظیم اینباند پیش‌فرض"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # استخراج inbound_id
     parts = callback.data.split("_")
     try:
         inbound_id = int(parts[4]) if len(parts) > 4 else None
@@ -4742,8 +4476,6 @@ async def admin_inbound_set_default(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # ذخیره در configs_pool
     configs_pool['default_inbound_id'] = inbound_id
     save_all()
     
@@ -4792,8 +4524,6 @@ async def admin_client_detail(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     await callback.message.edit_text("⏳ در حال دریافت اطلاعات کلاینت...")
-    
-    # دریافت اطلاعات کلاینت
     client = await xui_get_client_info(email)
     
     if not client:
@@ -4809,16 +4539,10 @@ async def admin_client_detail(callback: CallbackQuery):
         
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
         return
-    
-    # دریافت ترافیک
     traffic = await xui_get_client_traffic(email)
-    
-    # محاسبات
     total_gb = client.get('totalGB', 0) / (1024**3) if client.get('totalGB') else 0
     enable = client.get('enable', True)
     expiry_time = client.get('expiryTime', 0)
-    
-    # محاسبه روزهای باقی‌مانده
     days_left = "نامشخص"
     if expiry_time > 0:
         try:
@@ -4827,8 +4551,6 @@ async def admin_client_detail(callback: CallbackQuery):
             days_left = max(0, days_left)
         except:
             days_left = "نامشخص"
-    
-    # ترافیک
     up = (traffic.get('up', 0) if traffic else 0) / (1024**3)
     down = (traffic.get('down', 0) if traffic else 0) / (1024**3)
     used = up + down
@@ -4949,8 +4671,6 @@ async def admin_inbound_default_setting(callback: CallbackQuery):
             callback_data=f"admin_inbound_toggle_default_{inbound_id}",
             style="primary" if is_selected else None
         )])
-    
-    # دکمه‌های عملیاتی
     buttons.append([InlineKeyboardButton(
         text="✅ ذخیره تنظیمات" if lang=="fa" else "✅ Save Settings",
         callback_data="admin_inbound_save_defaults",
@@ -4996,8 +4716,6 @@ async def admin_inbound_toggle_default(callback: CallbackQuery):
     
     configs_pool['default_inbound_ids'] = default_ids
     save_all()
-    
-    # بازگشت به صفحه تنظیمات
     await admin_inbound_default_setting(callback)
 
 
@@ -5021,13 +4739,10 @@ async def admin_inbound_save_defaults(callback: CallbackQuery):
         f"✅ {len(default_ids)} اینباند به عنوان پیش‌فرض ذخیره شد!" if lang == "fa" else f"✅ {len(default_ids)} inbounds saved as default!",
         show_alert=True
     )
-    
-    # =============== اصلاح: استفاده از try-except ===============
     try:
         await admin_inbound_default_setting(callback)
     except Exception as e:
         if "message is not modified" in str(e):
-            # اگر پیام تغییر نکرده، فقط یک پیام جدید بفرست
             await callback.message.answer(
                 "✅ تنظیمات ذخیره شد!" if lang == "fa" else "✅ Settings saved!",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -5056,8 +4771,6 @@ async def admin_inbound_clear_defaults(callback: CallbackQuery):
         "✅ همه اینباندهای پیش‌فرض پاک شدند!" if lang == "fa" else "✅ All default inbounds cleared!",
         show_alert=True
     )
-    
-    # بازگشت به صفحه تنظیمات
     await admin_inbound_default_setting(callback)
         
         
@@ -5069,18 +4782,12 @@ async def auto_save_worker():
     
     while True:
         try:
-            # صبر کن تا یه درخواست ذخیره‌سازی بیاد یا 5 دقیقه بگذره
             try:
                 operation = await asyncio.wait_for(_save_queue.get(), timeout=300)
                 logger.debug(f"📥 درخواست ذخیره‌سازی دریافت شد: {operation}")
             except asyncio.TimeoutError:
-                # هر 5 دقیقه یه بار ذخیره‌سازی کن
                 logger.debug("⏰ ذخیره‌سازی دوره‌ای 5 دقیقه")
-            
-            # ذخیره‌سازی کن
             save_all()
-            
-            # صف رو خالی کن (فقط آخرین درخواست مهمه)
             while not _save_queue.empty():
                 try:
                     _save_queue.get_nowait()
@@ -5101,20 +4808,14 @@ async def cmd_save(message: Message):
         return
     
     logger.info(f"👑 ادمین درخواست ذخیره‌سازی دستی کرد")
-    
-    # =============== پیام در حال انجام ===============
     status_msg = await message.reply("⏳ در حال ذخیره‌سازی و گرفتن بکاپ...")
     
     start = time.time()
-    
-    # =============== 1. ذخیره دیتابیس ===============
     success = save_all()
     
     if not success:
         await status_msg.edit_text("❌ خطا در ذخیره‌سازی دیتابیس! لاگ‌ها را بررسی کنید.")
         return
-    
-    # =============== 2. گرفتن بکاپ ===============
     try:
         backup_database()
         backup_success = True
@@ -5123,9 +4824,6 @@ async def cmd_save(message: Message):
         backup_success = False
     
     elapsed = time.time() - start
-    
-    # =============== 3. دریافت آمار ===============
-    # دریافت حجم فایل‌ها
     total_size = 0
     file_sizes = {}
     for name, file_path in DB_FILES.items():
@@ -5133,17 +4831,11 @@ async def cmd_save(message: Message):
             size = os.path.getsize(file_path)
             total_size += size
             file_sizes[name] = size
-    
-    # دریافت تعداد بکاپ‌ها
     backup_count = len(get_backup_list())
-    
-    # =============== 4. ساخت پیام نتیجه ===============
     if backup_success:
         backup_status = "✅ بکاپ گرفته شد"
     else:
         backup_status = "❌ خطا در گرفتن بکاپ"
-    
-    # حجم‌ها را به فرمت readable تبدیل کن
     def format_size(bytes_val):
         for unit in ['B', 'KB', 'MB', 'GB']:
             if bytes_val < 1024:
@@ -5177,9 +4869,6 @@ async def cmd_save(message: Message):
 """
     
     await status_msg.edit_text(text, parse_mode=ParseMode.HTML)
-
-
-# =============== دستور بررسی وضعیت دیتابیس ===============
 @dp.message(Command("dbstatus"))
 async def cmd_db_status(message: Message):
     """بررسی وضعیت فایل‌های دیتابیس (فقط ادمین)"""
@@ -5213,8 +4902,6 @@ async def cmd_db_status(message: Message):
 def request_save(operation: str = "unknown"):
     """درخواست ذخیره‌سازی (non-blocking)"""
     global _save_task
-    
-    # جلوگیری از ذخیره‌سازی مکرر (حداکثر هر 10 ثانیه)
     current_time = time.time()
     if operation in _last_save_time:
         if current_time - _last_save_time[operation] < 10:
@@ -5240,8 +4927,6 @@ async def cmd_cleanup_backups(message: Message):
     logger.info("🧹 شروع پاکسازی بکاپ‌های قدیمی...")
     
     cleanup_report = []
-    
-    # 1. پاک کردن فایل‌های .backup از پوشه data
     data_dir = DATA_DIR
     if os.path.exists(data_dir):
         for file in os.listdir(data_dir):
@@ -5253,24 +4938,17 @@ async def cmd_cleanup_backups(message: Message):
                     logger.info(f"حذف فایل اضافی: {file}")
                 except Exception as e:
                     cleanup_report.append(f"❌ خطا در حذف {file}: {e}")
-    
-    # 2. انتقال بکاپ‌ها به پوشه backup (اگه وجود دارن)
     backup_dir = os.path.join(data_dir, "backups")
     os.makedirs(backup_dir, exist_ok=True)
-    
-    # 3. بررسی فایل‌های اصلی - اگه .backup هست و اصلی نیست، بازیابی کن
     for name in ['users', 'orders', 'referrals', 'configs', 'feedback', 'chats', 'blacklist']:
         main_file = os.path.join(data_dir, f"{name}.json")
         backup_file = os.path.join(data_dir, f"{name}.json.backup")
         
         if not os.path.exists(main_file) and os.path.exists(backup_file):
-            # فایل اصلی نیست ولی بکاپ هست - بازیابی کن
             import shutil
             shutil.copy2(backup_file, main_file)
             cleanup_report.append(f"🔄 بازیابی شد: {name}.json از بکاپ")
             logger.warning(f"فایل {name}.json از بکاپ بازیابی شد")
-    
-    # 4. نمایش گزارش
     if cleanup_report:
         report_text = "🧹 <b>گزارش پاکسازی:</b>\n\n" + "\n".join(cleanup_report)
     else:
@@ -5297,13 +4975,9 @@ async def cmd_check_packages(message: Message):
         return
     
     text = "📦 <b>بررسی بسته‌های آماده</b>\n\n"
-    
-    # بررسی READY_PACKAGES
     text += f"🔘 وضعیت کلی: {'🟢 فعال' if READY_PACKAGES.get('enabled') else '🔴 غیرفعال'}\n"
     text += f"📊 تعداد دسته‌ها: {len(READY_PACKAGES.get('categories', []))}\n"
     text += f"🕐 آخرین بروزرسانی: {READY_PACKAGES.get('last_updated', 'N/A')}\n\n"
-    
-    # لیست دسته‌ها
     text += "📋 <b>لیست دسته‌ها و بسته‌ها:</b>\n"
     for cat in READY_PACKAGES.get('categories', []):
         active_packages = [p for p in cat.get('packages', []) if p.get('is_active', True)]
@@ -5322,25 +4996,16 @@ def load_ready_packages():
     global READY_PACKAGES
     
     try:
-        # دریافت داده‌های ذخیره شده از configs_pool
         packages_data = configs_pool.get('ready_packages', {})
-        
-        # =============== دیباگ: نمایش داده‌های ذخیره شده ===============
         logger.info(f"📦 داده‌های ذخیره شده در configs_pool: {bool(packages_data)}")
         if packages_data:
             logger.info(f"📦 تعداد دسته‌ها در دیتابیس: {len(packages_data.get('categories', []))}")
             for cat in packages_data.get('categories', []):
                 inbound_ids = cat.get('inbound_ids', [])
                 logger.info(f"  📡 دسته {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
-        
-        # اگر داده‌ای در configs_pool وجود دارد و معتبر است
         if packages_data and packages_data.get('categories') and len(packages_data.get('categories', [])) > 0:
-            # =============== بروزرسانی READY_PACKAGES با داده‌های ذخیره شده ===============
-            # اما حفظ کردن برخی فیلدها مانند last_updated
             READY_PACKAGES.update(packages_data)
             logger.info(f"📦 بسته‌های آماده از دیتابیس بارگذاری شد: {len(READY_PACKAGES.get('categories', []))} دسته")
-            
-            # نمایش اطلاعات برای دیباگ
             total_packages = 0
             for cat in READY_PACKAGES.get('categories', []):
                 total_packages += len(cat.get('packages', []))
@@ -5351,10 +5016,7 @@ def load_ready_packages():
             logger.info(f"🕐 آخرین بروزرسانی: {READY_PACKAGES.get('last_updated', 'N/A')}")
             
         else:
-            # اگر داده‌ای وجود ندارد، از مقادیر پیش‌فرض استفاده کن
             logger.warning("⚠️ هیچ داده‌ای برای بسته‌های آماده در دیتابیس یافت نشد، از مقادیر پیش‌فرض استفاده می‌شود")
-            
-            # تنظیمات پیش‌فرض
             default_categories = [
                 {
                     'id': 1,
@@ -5393,8 +5055,6 @@ def load_ready_packages():
                 'categories': default_categories,
                 'last_updated': datetime.now().isoformat()
             }
-            
-            # ذخیره در configs_pool برای دفعات بعد
             configs_pool['ready_packages'] = READY_PACKAGES
             save_all()
             logger.info("📦 تنظیمات پیش‌فرض بسته‌های آماده ایجاد و در دیتابیس ذخیره شد")
@@ -5403,8 +5063,6 @@ def load_ready_packages():
         logger.error(f"❌ خطا در بارگذاری بسته‌های آماده: {e}")
         import traceback
         traceback.print_exc()
-        
-        # در صورت خطا، از مقادیر پیش‌فرض استفاده کن
         READY_PACKAGES = {
             'enabled': True,
             'categories': [],
@@ -5422,48 +5080,35 @@ def load_all_data():
     
     logger.info("=" * 60)
     logger.info("🔄 شروع بارگذاری دیتابیس...")
-    
-    # نمایش مسیرهای فایل برای دیباگ
     for name, path in DB_FILES.items():
         exists = os.path.exists(path)
         size = os.path.getsize(path) if exists else 0
         logger.info(f"📂 {name}: {path} - {'✅ وجود دارد' if exists else '❌ وجود ندارد'} ({size:,} bytes)")
     
     try:
-        # بارگذاری فایل‌ها
         users_data = load_json(DB_FILES['users'], use_cache=False)
         orders_data = load_json(DB_FILES['orders'], use_cache=False)
         referrals_data = load_json(DB_FILES['referrals'], use_cache=False)
         configs_data = load_json(DB_FILES['configs'], use_cache=False)
         feedbacks_data = load_json(DB_FILES['feedback'], use_cache=False)
         chats_data = load_json(DB_FILES['chats'], use_cache=False)
-        
-        # اختصاص داده‌ها
         users = users_data if users_data and isinstance(users_data, dict) else {}
         orders = orders_data if orders_data and isinstance(orders_data, dict) else {}
         referrals = referrals_data if referrals_data and isinstance(referrals_data, dict) else {}
         feedbacks = feedbacks_data if feedbacks_data and isinstance(feedbacks_data, dict) else {}
         chats = chats_data if chats_data and isinstance(chats_data, dict) else {}
-        
-        # تنظیمات configs_pool
         if configs_data and isinstance(configs_data, dict):
             configs_pool = configs_data
         else:
             configs_pool = {}
-        
-        # بارگذاری لیست سیاه
         blacklist_data = load_json(DB_FILES['blacklist'], use_cache=False)
         if blacklist_data and 'users' in blacklist_data:
             BLACKLIST = set(blacklist_data.get('users', []))
         else:
             BLACKLIST = set()
-        
-        # =============== بارگذاری تنظیمات AI ===============
         ai_settings = configs_pool.get('ai_settings', {})
         AI_FEATURE_ENABLED = ai_settings.get('button_enabled', True)
         logger.info(f"🤖 وضعیت دکمه AI: {'فعال' if AI_FEATURE_ENABLED else 'غیرفعال'}")
-        
-        # =============== بارگذاری وضعیت فروش ===============
         if 'shop_status' in configs_pool:
             SHOP_STATUS = configs_pool['shop_status']
             logger.info(f"🛒 وضعیت فروش: {'باز' if SHOP_STATUS.get('open', True) else 'بسته'}")
@@ -5473,16 +5118,12 @@ def load_all_data():
                 'message': 'فروش به دلیل بروزرسانی موقتاً بسته شده است.', 
                 'last_updated': datetime.now().isoformat()
             }
-        
-        # =============== بارگذاری تنظیمات تست ===============
         test_settings = configs_pool.get('test_service', {})
         if test_settings:
-            # بروزرسانی TEST_SERVICE_STATUS با داده‌های ذخیره شده
             TEST_SERVICE_STATUS.update(test_settings)
             logger.info(f"🧪 تنظیمات تست بارگذاری شد: {'فعال' if TEST_SERVICE_STATUS.get('enabled') else 'غیرفعال'}")
             logger.info(f"🧪 اینباندهای تست: {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
         else:
-            # تنظیمات پیش‌فرض تست
             TEST_SERVICE_STATUS = {
                 'enabled': False,
                 'volume': 5,
@@ -5495,24 +5136,14 @@ def load_all_data():
             }
             configs_pool['test_service'] = TEST_SERVICE_STATUS
             logger.info("🧪 تنظیمات پیش‌فرض تست ایجاد شد")
-        
-        # =============== بارگذاری بسته‌های آماده ===============
         load_ready_packages()
         load_user_test_settings()# این تابع READY_PACKAGES را از configs_pool بارگذاری می‌کند
-        
-        # لاگ اینباندهای دسته‌بندی‌ها
         for cat in READY_PACKAGES.get('categories', []):
             inbound_ids = cat.get('inbound_ids', [])
             if inbound_ids:
                 logger.info(f"📡 دسته {cat.get('name')} - اینباندها: {inbound_ids}")
-        
-        # =============== بارگذاری اطلاعات تست کاربران ===============
         load_test_usage()
-        
-        # =============== بارگذاری انتخاب‌های اینباند کاربران ===============
         load_user_inbound_selections()
-        
-        # =============== لاگ تعداد آیتم‌های بارگذاری شده ===============
         logger.info("=" * 60)
         logger.info(f"📊 نتایج بارگذاری:")
         logger.info(f"  ✅ کاربران: {len(users)}")
@@ -5527,16 +5158,10 @@ def load_all_data():
         logger.info(f"  ✅ اینباندهای تست: {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
         logger.info(f"  ✅ بسته‌های آماده: {len(READY_PACKAGES.get('categories', []))} دسته")
         logger.info("=" * 60)
-        
-        # اگر همه چیز خالی بود، از بکاپ کامل استفاده کن
         if len(users) == 0 and len(orders) == 0:
             logger.warning("⚠️ همه دیتابیس‌ها خالی هستند! تلاش برای بازیابی از بکاپ کامل...")
             try_full_restore_from_backup()
-        
-        # تنظیمات پیش‌فرض - فقط در صورت نیاز
         _init_default_settings_if_needed()
-        
-        # مهاجرت دیتای قدیمی
         migrate_old_data()
         
         logger.info("✅ بارگذاری کامل دیتابیس با موفقیت انجام شد")
@@ -5644,8 +5269,6 @@ def try_restore_from_backup_for_file(file_type: str) -> Optional[dict]:
     backup_dir = os.path.join(DATA_DIR, 'backups')
     if not os.path.exists(backup_dir):
         return None
-    
-    # پیدا کردن جدیدترین بکاپ کامل
     backups = [f for f in os.listdir(backup_dir) if f.startswith('full_backup_') and f.endswith('.json')]
     if not backups:
         return None
@@ -5711,8 +5334,6 @@ def try_full_restore_from_backup():
             chats = data['chats']
         if data.get('blacklist'):
             BLACKLIST = set(data['blacklist'].get('users', []))
-        
-        # ذخیره داده‌های بازیابی شده
         save_all()
         
         logger.info(f"✅ بازیابی کامل از بکاپ با موفقیت انجام شد")
@@ -5725,8 +5346,6 @@ def try_full_restore_from_backup():
 def _init_default_settings_if_needed():
     """تنظیمات پیش‌فرض را فقط در صورت نبودن اضافه کن - بدون ذخیره خودکار"""
     global configs_pool, TEST_SERVICE_STATUS
-    
-    # اطمینان از وجود configs و last_id
     if 'configs' not in configs_pool:
         configs_pool['configs'] = []
         logger.info("📦 آرایه configs به configs_pool اضافه شد")
@@ -5738,16 +5357,12 @@ def _init_default_settings_if_needed():
     if 'default_inbound_id' not in configs_pool:
         configs_pool['default_inbound_id'] = None
         logger.info("⚙️ default_inbound_id به configs_pool اضافه شد")
-    
-    # =============== تنظیمات AI ===============
     if 'ai_settings' not in configs_pool:
         configs_pool['ai_settings'] = {
             'button_enabled': True,
             'last_updated': datetime.now().isoformat()
         }
         logger.info("⚙️ ai_settings به configs_pool اضافه شد (پیش‌فرض: فعال)")
-    
-    # =============== تنظیمات تست ===============
     if 'test_service' not in configs_pool:
         configs_pool['test_service'] = {
             'enabled': False,
@@ -5759,8 +5374,6 @@ def _init_default_settings_if_needed():
         }
         TEST_SERVICE_STATUS = configs_pool['test_service']
         logger.info("🧪 test_service به configs_pool اضافه شد (پیش‌فرض: غیرفعال)")
-    
-    # تنظیمات پیش‌فرض قیمت و غیره
     defaults = {
         'price_settings': {
             'base_price': 20000,
@@ -5785,8 +5398,6 @@ def _init_default_settings_if_needed():
             configs_pool[key] = default_value
             modified = True
             logger.info(f"⚙️ {key} به configs_pool اضافه شد (مقدار پیش‌فرض)")
-    
-    # فقط در صورت تغییر، ذخیره کن
     if modified:
         save_json(DB_FILES['configs'], configs_pool)
         logger.info(f"✅ تنظیمات پیش‌فرض در {DB_FILES['configs']} ذخیره شد")
@@ -5806,8 +5417,6 @@ def try_restore_from_backup():
     if not backups:
         logger.warning("⚠️ هیچ بکاپی یافت نشد")
         return False
-    
-    # جدیدترین بکاپ
     backups.sort(reverse=True)
     latest_backup = os.path.join(backup_dir, backups[0])
     
@@ -5866,8 +5475,6 @@ async def cmd_check_data(message: Message):
                     report.append(f"❌ {name}: {size:,} bytes - خطا در خواندن")
         else:
             report.append(f"❌ {name}: وجود ندارد")
-    
-    # همچنین آمار حافظه
     report.append(f"\n📊 <b>آمار حافظه:</b>")
     report.append(f"👥 کاربران در RAM: {len(users)}")
     report.append(f"📋 سفارشات در RAM: {len(orders)}")
@@ -5960,12 +5567,8 @@ def save_all(save_blacklist: bool = True):
             logger.error(f"❌ خطا در ذخیره {name}: {e}")
             success = False
             failed_files.append(name)
-    
-    # =============== ذخیره بسته‌های آماده در configs_pool ===============
     try:
-        # اطمینان از اینکه READY_PACKAGES در configs_pool ذخیره می‌شود
         configs_pool['ready_packages'] = READY_PACKAGES
-        # دوباره configs رو ذخیره کن
         if save_json(DB_FILES['configs'], configs_pool):
             saved_count += 1
             logger.info("📦 بسته‌های آماده در configs_pool ذخیره شد")
@@ -5976,8 +5579,6 @@ def save_all(save_blacklist: bool = True):
         logger.error(f"❌ خطا در ذخیره بسته‌های آماده: {e}")
         success = False
         failed_files.append('ready_packages')
-    
-    # =============== ذخیره تنظیمات تست سرویس ===============
     try:
         configs_pool['test_service'] = TEST_SERVICE_STATUS
         if save_json(DB_FILES['configs'], configs_pool):
@@ -6007,8 +5608,6 @@ def save_all(save_blacklist: bool = True):
             logger.error(f"❌ خطا در ذخیره blacklist: {e}")
             success = False
             failed_files.append('blacklist')
-    
-    # ذخیره اطلاعات تست
     try:
         save_test_usage()
         saved_count += 1
@@ -6043,8 +5642,6 @@ async def errors_handler(event: types.ErrorEvent):
 📝 آپدیت: {str(update)[:200]}
 """
     logger.error(f"خطا: {exception}", exc_info=True)
-    
-    # ارسال به ادمین
     try:
         await bot.send_message(ADMIN_ID_INT, error_text, parse_mode=ParseMode.HTML)
     except:
@@ -6052,21 +5649,14 @@ async def errors_handler(event: types.ErrorEvent):
     
     return True
 
-
-# =============== هندلر استارت ===============
-
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     """دستور استارت - نسخه نهایی با مدیریت کامل تایید دستی"""
     user_id = message.from_user.id
-    
-    # ⛔ چک لیست سیاه
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id, message)
         logger.warning(f"⛔ کاربر مسدود {user_id} دستور /start را اجرا کرد")
         return
-    
-    # دریافت اطلاعات کاربر
     user_name = message.from_user.first_name or message.from_user.username or "کاربر"
     user_name_escaped = html.escape(user_name)
     
@@ -6079,8 +5669,6 @@ async def cmd_start(message: Message):
     args = message.text.split()
     uid = str(user_id)
     is_new_user = uid not in users
-    
-    # =============== دریافت وضعیت تایید دستی ===============
     manual_approval = configs_pool.get('manual_approval_settings', {})
     approval_enabled = manual_approval.get('enabled', False)
     
@@ -6097,10 +5685,7 @@ async def cmd_start(message: Message):
         
         if log_system:
             asyncio.create_task(log_system.log_user_register(user_id, user_name, user_username))
-        
-        # =============== ایجاد کاربر جدید با توجه به وضعیت تایید ===============
         if not approval_enabled:
-            # تایید دستی غیرفعال - کاربر خودکار تایید می‌شود
             users[uid] = {
                 'id': user_id,
                 'name': user_name,
@@ -6133,7 +5718,6 @@ async def cmd_start(message: Message):
             }
             logger.info(f"👤 کاربر جدید ایجاد شد: {user_name} (ID: {user_id}) - وضعیت: approved (خودکار)")
         else:
-            # تایید دستی فعال - کاربر در وضعیت pending
             users[uid] = {
                 'id': user_id,
                 'name': user_name,
@@ -6169,7 +5753,6 @@ async def cmd_start(message: Message):
         save_json(DB_FILES['users'], users)
         
     else:
-        # =============== بروزرسانی کاربر موجود ===============
         updated = False
         
         if users[uid].get('name') != user_name:
@@ -6180,8 +5763,6 @@ async def cmd_start(message: Message):
             users[uid]['username'] = user_username
             users[uid]['telegram_username'] = user_username
             updated = True
-        
-        # اطمینان از وجود فیلدهای ضروری
         required_fields = {
             'coupon_code': None,
             'coupon_discount': 0,
@@ -6198,8 +5779,6 @@ async def cmd_start(message: Message):
             if field not in users[uid]:
                 users[uid][field] = default
                 updated = True
-        
-        # =============== اگر تایید دستی غیرفعال است، همه کاربران خودکار تایید می‌شوند ===============
         if not approval_enabled and not users[uid].get('approved_by_admin', False):
             users[uid]['approved_by_admin'] = True
             users[uid]['approved_date'] = datetime.now().isoformat()
@@ -6207,8 +5786,6 @@ async def cmd_start(message: Message):
             users[uid]['admin_notified'] = False
             updated = True
             logger.info(f"✅ کاربر {user_id} به دلیل غیرفعال بودن تایید دستی، خودکار تایید شد")
-        
-        # =============== اگر کاربر خرید داشته، خودکار تایید میشه ===============
         if users[uid].get('has_purchased', False) and not users[uid].get('approved_by_admin', False):
             users[uid]['approved_by_admin'] = True
             users[uid]['approved_date'] = datetime.now().isoformat()
@@ -6225,18 +5802,13 @@ async def cmd_start(message: Message):
     user = users[uid]
     lang = user.get('lang', 'fa')
     is_admin = (user_id == ADMIN_ID_INT)
-    
-    # =============== ادمین - دسترسی کامل ===============
     if is_admin:
         await message.answer(
             f"{premium_emoji('rocket', '🚀')} {'به پنل ادمین خوش آمدید!' if lang=='fa' else 'Welcome to Admin Panel!'}",
             reply_markup=get_main_keyboard(True, lang, user_id)
         )
         return
-    
-    # =============== اگر تایید دستی غیرفعال است ===============
     if not approval_enabled:
-        # اطمینان از تایید بودن کاربر
         if not user.get('approved_by_admin', False):
             users[uid]['approved_by_admin'] = True
             users[uid]['registration_status'] = 'approved'
@@ -6245,8 +5817,6 @@ async def cmd_start(message: Message):
             save_json(DB_FILES['users'], users)
             user = users[uid]
             logger.info(f"✅ کاربر {user_id} خودکار تایید شد (تایید دستی غیرفعال)")
-        
-        # نمایش منوی اصلی
         if lang == "fa":
             text = f"{premium_emoji('rocket', '🚀')} سلام {user_name_escaped}! خوش آمدید"
         else:
@@ -6254,10 +5824,7 @@ async def cmd_start(message: Message):
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
-    
-    # =============== کاربران تایید شده یا دارای خرید ===============
     if user.get('approved_by_admin', False) or user.get('has_purchased', False):
-        # بازیابی کوپن از دیتابیس
         coupon_data = load_coupon_from_user_db(user_id)
         coupon_code = coupon_data.get('coupon_code')
         coupon_discount = coupon_data.get('coupon_discount')
@@ -6283,8 +5850,6 @@ async def cmd_start(message: Message):
             user_state = user_states.get(user_id, {})
             if user_state.get('coupon_applied', False) and user_state.get('coupon_code'):
                 save_coupon_to_user_db(user_id)
-        
-        # بررسی عضویت اجباری
         settings = configs_pool.get('force_join_settings', {})
         force_join_enabled = settings.get('enabled', False)
         channels = settings.get('channels', [])
@@ -6292,8 +5857,6 @@ async def cmd_start(message: Message):
         if force_join_enabled and channels and not user.get('verified', False) and not is_admin:
             await show_verification_page(message, user_id, lang)
             return
-        
-        # نمایش منوی اصلی
         if lang == "fa":
             text = f"{premium_emoji('rocket', '🚀')} سلام {user_name_escaped}! خوش آمدید"
         else:
@@ -6301,11 +5864,7 @@ async def cmd_start(message: Message):
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
-    
-    # =============== کاربر جدید - فقط در صورتی که تایید دستی فعال باشد ===============
     status = user.get('registration_status', 'pending')
-    
-    # =============== اگر قبلاً درخواست داده ===============
     if status == 'requested':
         if lang == "fa":
             text = f"""
@@ -6325,8 +5884,6 @@ async def cmd_start(message: Message):
 """
         await message.answer(text, parse_mode=ParseMode.HTML)
         return
-    
-    # =============== اگر لغو کرده - اجازه درخواست مجدد ===============
     if status == 'cancelled':
         users[uid]['registration_status'] = 'pending'
         users[uid]['requested_approval'] = False
@@ -6381,8 +5938,6 @@ If not interested, exit here.
         
         await message.answer(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
         return
-    
-    # =============== اگر رد شده - اجازه درخواست مجدد ===============
     if status == 'rejected':
         users[uid]['registration_status'] = 'pending'
         users[uid]['requested_approval'] = False
@@ -6437,8 +5992,6 @@ If not interested, exit here.
         
         await message.answer(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
         return
-    
-    # =============== صفحه اصلی برای کاربران جدید (pending) ===============
     if lang == "fa":
         text = f"""
 {premium_emoji('loading', '🔹')}  <b>به جمع ما خوش آمدید</b>
@@ -6490,7 +6043,6 @@ def get_pending_users() -> list:
     """دریافت لیست کاربرانی که درخواست تایید داده‌اند"""
     pending = []
     for uid, user_data in users.items():
-        # =============== فقط کاربرانی که درخواست دادند و ادمین نیستند ===============
         if (user_data.get('requested_approval', False) and 
             not user_data.get('approved_by_admin', False) and
             user_data.get('registration_status') == 'requested' and
@@ -6505,8 +6057,6 @@ def get_pending_users() -> list:
                 'requested_date': user_data.get('requested_date', ''),
                 'updated_at': user_data.get('updated_at', '')
             })
-    
-    # مرتب‌سازی بر اساس تاریخ درخواست (جدیدترین اول)
     pending.sort(key=lambda x: x.get('requested_date', ''), reverse=True)
     
     return pending  
@@ -6514,29 +6064,20 @@ def get_pending_users() -> list:
 async def request_approval(callback: CallbackQuery):
     """کاربر درخواست تایید می‌دهد - با جلوگیری از درخواست تکراری"""
     user_id = callback.from_user.id
-    
-    # =============== ادمین نیازی به درخواست نداره ===============
     if user_id == ADMIN_ID_INT:
         await callback.answer("👑 شما ادمین هستید!", show_alert=True)
         return
     
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
-    
-    # =============== بررسی وضعیت فعلی ===============
     status = user.get('registration_status', 'pending')
-    
-    # ✅ اگر قبلاً تایید شده
     if status == 'approved':
         await callback.answer(
             "✅ شما قبلاً تایید شده‌اید!" if lang == "fa" else "✅ You are already approved!",
             show_alert=True
         )
         return
-    
-    # ✅ اگر قبلاً درخواست داده
     if status == 'requested':
-        # بررسی زمان آخرین درخواست
         last_request = user.get('last_request_time')
         if last_request:
             try:
@@ -6553,34 +6094,24 @@ async def request_approval(callback: CallbackQuery):
                     return
             except:
                 pass
-        
-        # اگر زمان گذشته بود، اجازه درخواست مجدد بده
         await callback.answer(
             "⏳ درخواست شما قبلاً ثبت شده است!" if lang == "fa" else "⏳ Your request is already submitted!",
             show_alert=True
         )
         return
-    
-    # ✅ اگر کاربر لغو کرده
     if status == 'cancelled':
         await callback.answer(
             "❌ شما ثبت‌نام را لغو کرده‌اید.\nبرای شروع مجدد /start را بزنید." if lang == "fa" else "❌ You cancelled registration.\nUse /start to try again.",
             show_alert=True
         )
         return
-    
-    # ✅ اگر کاربر رد شده
     if status == 'rejected':
         await callback.answer(
             "❌ درخواست شما قبلاً رد شده است.\nبرای شروع مجدد /start را بزنید." if lang == "fa" else "❌ Your request has been rejected.\nUse /start to try again.",
             show_alert=True
         )
         return
-    
-    # =============== ثبت درخواست ===============
     uid = str(user_id)
-    
-    # ✅ ذخیره در دیتابیس قبل از هر کاری
     users[uid]['requested_approval'] = True
     users[uid]['registration_status'] = 'requested'
     users[uid]['requested_date'] = datetime.now().isoformat()
@@ -6588,8 +6119,6 @@ async def request_approval(callback: CallbackQuery):
     users[uid]['admin_notified'] = False  # هنوز به ادمین اطلاع داده نشده
     users[uid]['updated_at'] = datetime.now().isoformat()
     save_json(DB_FILES['users'], users)
-    
-    # =============== ارسال پیام به کاربر ===============
     if lang == "fa":
         text = f"""
 {premium_emoji('success', '✅')} <b>درخواست شما با موفقیت ثبت شد!</b>
@@ -6606,16 +6135,12 @@ async def request_approval(callback: CallbackQuery):
 
 {premium_emoji('light', '💡')} Please be patient and wait for the approval message.
 """
-    
-    # ✅ حذف پیام قبلی و ارسال پیام جدید
     try:
         await callback.message.delete()
     except:
         pass
     
     await callback.message.answer(text, parse_mode=ParseMode.HTML)
-    
-    # =============== ارسال پیام به ادمین (فقط یک بار) ===============
     user_name = user.get('name', f'کاربر_{user_id}')
     username = user.get('username', '')
     username_display = f"@{username}" if username else 'ندارد'
@@ -6649,8 +6174,6 @@ async def request_approval(callback: CallbackQuery):
     ])
     
     await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
-    
-    # ✅ علامت‌گذاری که پیام به ادمین ارسال شده
     users[uid]['admin_notified'] = True
     save_json(DB_FILES['users'], users)
     
@@ -6670,16 +6193,12 @@ async def cancel_registration(callback: CallbackQuery):
     lang = user.get('lang', 'fa')
     
     uid = str(user_id)
-    
-    # =============== تغییر وضعیت به cancelled ===============
     users[uid]['registration_status'] = 'cancelled'
     users[uid]['requested_approval'] = False
     users[uid]['admin_notified'] = False  # ✅ ریست کردن
     users[uid]['cancelled_date'] = datetime.now().isoformat()
     users[uid]['updated_at'] = datetime.now().isoformat()
     save_json(DB_FILES['users'], users)
-    
-    # =============== پیام خداحافظی ===============
     if lang == "fa":
         text = f"""
 {premium_emoji('cancel', '👋')} <b>خداحافظ!</b>
@@ -6692,8 +6211,6 @@ async def cancel_registration(callback: CallbackQuery):
 
 Use <b>/start</b> again if you wish to try again.
 """
-    
-    # ✅ حذف پیام قبلی و ارسال پیام جدید
     try:
         await callback.message.delete()
     except:
@@ -6705,7 +6222,6 @@ Use <b>/start</b> again if you wish to try again.
         await callback.answer()
     except:
         pass
-# =============== راهنما ===============
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     lang = get_user(message.from_user.id).get('lang', 'fa')
@@ -6744,9 +6260,6 @@ After purchase, view your configs
 Minimum recharge amount is 10,000 Toman
 """
     await message.answer(text)
-    
-    
-# =============== توابع امنیتی ===============
 
 @dp.message(Command("blacklist"))
 async def cmd_blacklist(message: Message):
@@ -6768,17 +6281,11 @@ async def cmd_blacklist(message: Message):
 
 async def block_unauthorized(message: Message, user_id: int) -> bool:
     """بلاک کاربر غیرمجاز - چک لیست سیاه"""
-    
-    # استثنا: کاربر در حال ارسال فیش (فیشش قبلاً ثبت شده)
     user_state = user_states.get(user_id, {})
     if user_state.get('awaiting_receipt'):
         return False
-    
-    # ادمین همیشه مجاز
     if user_id == ADMIN_ID_INT:
         return False
-    
-    # چک لیست سیاه
     if user_id in BLACKLIST:
         logger.warning(f"⛔ کاربر مسدود {user_id} تلاش به استفاده از ربات کرد")
         await notify_blacklisted_user(user_id, message)
@@ -6790,18 +6297,12 @@ async def notify_blacklisted_user(user_id: int, message: Message = None):
     """ارسال پیام به کاربر مسدود شده"""
     try:
         lang = get_user(user_id).get('lang', 'fa')
-        
-        # 🔥 دیباگ: چاپ کن که SUPPORT_USERNAME چه مقداری دارد
         logger.info(f"🔍 SUPPORT_USERNAME from config: '{SUPPORT_USERNAME}'")
-        
-        # اگر SUPPORT_USERNAME خالی یا None بود، از مقدار پیش‌فرض استفاده کن
         if SUPPORT_USERNAME and SUPPORT_USERNAME.strip():
             support_contact = SUPPORT_USERNAME
         else:
             support_contact = "@my_name_is_navid"
             logger.warning(f"⚠️ SUPPORT_USERNAME خالی است، از مقدار پیش‌فرض استفاده شد: {support_contact}")
-        
-        # 🔥 تست: ببین premium_emoji چه چیزی برمی‌گرداند
         emoji_result = premium_emoji('access_denied', '⛔')
         logger.info(f"🔍 premium_emoji('access_denied', '⛔') = '{emoji_result}'")
         
@@ -6823,8 +6324,6 @@ You are blacklisted and cannot use this bot.
 Contact support if needed:
 {support_contact}
 """
-        
-        # 🔥 دیباگ: متن کامل را چاپ کن
         logger.info(f"🔍 متن ارسالی: {text[:200]}...")
         
         if message:
@@ -6837,8 +6336,6 @@ Contact support if needed:
     except Exception as e:
         logger.error(f"❌ خطا در ارسال پیام به کاربر مسدود {user_id}: {e}")
         return False
-
-# =============== توابع مدیریت لیست سیاه ===============
 
 import html  # ✅ حتماً در بالای فایل import شده باشد
 
@@ -6870,11 +6367,6 @@ async def get_user_info_from_telegram(user_id: int) -> dict:
 
 
 
-
-# =============== مدیریت لیست سیاه ===============
-
-
-
 def save_blacklist():
     """ذخیره لیست سیاه در فایل"""
     try:
@@ -6901,20 +6393,15 @@ def load_blacklist():
         if os.path.exists(blacklist_file):
             with open(blacklist_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
-            # تبدیل list به set
             users_list = data.get('users', [])
             BLACKLIST = set(users_list)
             
             logger.info(f"✅ لیست سیاه بارگذاری شد - {len(BLACKLIST)} کاربر")
-            
-            # نمایش کاربران برای دیباگ
             if BLACKLIST:
                 logger.info(f"📋 کاربران مسدود: {BLACKLIST}")
         else:
             BLACKLIST = set()
             logger.info("📭 فایل لیست سیاه وجود ندارد - ایجاد set خالی")
-            # ایجاد فایل جدید
             save_blacklist()
     except Exception as e:
         logger.error(f"❌ خطا در بارگذاری لیست سیاه: {e}")
@@ -6932,8 +6419,6 @@ def add_to_blacklist(user_id: int, notify: bool = True) -> bool:
             'count': len(BLACKLIST)
         })
         logger.info(f"🚫 کاربر {user_id} به لیست سیاه اضافه شد - تعداد: {len(BLACKLIST)}")
-        
-        # ارسال پیام خودکار به کاربر
         if notify:
             asyncio.create_task(notify_blacklisted_user(user_id))
         
@@ -6980,26 +6465,16 @@ def clear_blacklist() -> int:
     })
     logger.info(f"🗑 لیست سیاه پاکسازی شد - {count} کاربر")
     return count
-
-# =============== توابع اصلی ===============
 def get_user(user_id: int, username: str = None) -> dict:
     """دریافت اطلاعات کاربر یا ایجاد کاربر جدید با وضعیت‌های مختلف"""
     uid = str(user_id)
-    
-    # =============== ایجاد کاربر جدید ===============
     if uid not in users:
         user_name = username or f"کاربر_{user_id}"
         
         logger.info(f"👤 ایجاد کاربر جدید: {user_id} - نام: {user_name}")
-        
-        # =============== دریافت وضعیت تایید دستی ===============
         manual_approval = configs_pool.get('manual_approval_settings', {})
         approval_enabled = manual_approval.get('enabled', False)
-        
-        # =============== بررسی اینکه کاربر ادمین است ===============
         is_admin = (user_id == ADMIN_ID_INT)
-        
-        # =============== مقداردهی اولیه ===============
         users[uid] = {
             'id': user_id,
             'name': user_name,
@@ -7023,7 +6498,6 @@ def get_user(user_id: int, username: str = None) -> dict:
             'coupon_code': None,
             'coupon_discount': 0,
             'coupon_applied': False,
-            # =============== وضعیت‌های جدید ===============
             'approved_by_admin': True if is_admin else False,  # ✅ ادمین همیشه تایید شده
             'approved_date': datetime.now().isoformat() if is_admin else None,
             'requested_approval': False,
@@ -7038,18 +6512,12 @@ def get_user(user_id: int, username: str = None) -> dict:
             logger.info(f"✅ کاربر جدید {user_id} ایجاد شد - وضعیت: pending")
         
         return users[uid]
-    
-    # =============== کاربر موجود ===============
     user = users[uid]
     modified = False
-    
-    # =============== بروزرسانی نام کاربری ===============
     if username and user.get('telegram_username') != username:
         user['telegram_username'] = username
         user['username'] = username
         modified = True
-    
-    # =============== اطمینان از وجود فیلدهای جدید ===============
     required_fields = {
         'name': f"کاربر_{user_id}",
         'username': '',
@@ -7082,8 +6550,6 @@ def get_user(user_id: int, username: str = None) -> dict:
         if key not in user:
             user[key] = default_value
             modified = True
-    
-    # =============== اگر کاربر ادمین است، همیشه تایید شده باشد ===============
     if user_id == ADMIN_ID_INT:
         if not user.get('approved_by_admin', False):
             user['approved_by_admin'] = True
@@ -7091,16 +6557,12 @@ def get_user(user_id: int, username: str = None) -> dict:
             user['registration_status'] = 'approved'
             modified = True
             logger.info(f"👑 کاربر ادمین {user_id} تایید شد")
-    
-    # =============== اگر کاربر خرید داشته، خودکار تایید میشه ===============
     if user.get('has_purchased', False) and not user.get('approved_by_admin', False):
         user['approved_by_admin'] = True
         user['approved_date'] = datetime.now().isoformat()
         user['registration_status'] = 'approved'
         modified = True
         logger.info(f"✅ کاربر {user_id} به دلیل داشتن خرید، خودکار تایید شد")
-    
-    # =============== اگر کاربر جدید هست و تایید دستی فعال ===============
     if not user.get('approved_by_admin', False) and user_id != ADMIN_ID_INT:
         manual_approval = configs_pool.get('manual_approval_settings', {})
         if not manual_approval.get('enabled', False):
@@ -7109,8 +6571,6 @@ def get_user(user_id: int, username: str = None) -> dict:
             user['registration_status'] = 'approved'
             modified = True
             logger.info(f"✅ کاربر {user_id} به دلیل غیرفعال بودن تایید دستی، خودکار تایید شد")
-    
-    # =============== ذخیره ===============
     if modified:
         user['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
@@ -7126,24 +6586,15 @@ def can_user_purchase(user_id: int) -> tuple:
     Returns:
         (can_purchase: bool, message: str)
     """
-    # =============== بررسی فعال بودن قابلیت تایید دستی ===============
     manual_approval = configs_pool.get('manual_approval_settings', {})
-    
-    # اگر قابلیت تایید دستی فعال نیست، همه می‌توانند خرید کنند
     if not manual_approval.get('enabled', False):
         return True, None
     
     user = get_user(user_id)
-    
-    # =============== کاربران با سابقه خرید ===============
     if user.get('has_purchased', False):
         return True, None
-    
-    # =============== کاربران تایید شده ===============
     if user.get('approved_by_admin', False):
         return True, None
-    
-    # =============== کاربر جدید و تایید نشده ===============
     lang = user.get('lang', 'fa')
     if lang == "fa":
         msg = "⚠️ حساب کاربری شما در انتظار تایید ادمین است.\nلطفاً پس از تایید، مجدداً تلاش کنید."
@@ -7151,7 +6602,6 @@ def can_user_purchase(user_id: int) -> tuple:
         msg = "⚠️ Your account is pending admin approval.\nPlease try again after approval."
     
     return False, msg
-# =============== توابع ذخیره و بازیابی کوپن در دیتابیس ===============
 
 def save_coupon_to_user_db(user_id: int):
     """ذخیره کوپن در دیتابیس کاربر"""
@@ -7164,8 +6614,6 @@ def save_coupon_to_user_db(user_id: int):
         coupon_code = user_state.get('coupon_code')
         coupon_applied = user_state.get('coupon_applied', False)
         coupon_discount = user_state.get('coupon_discount', 0)
-        
-        # اگر کوپن فعال است و مصرف نشده
         if coupon_applied and coupon_code:
             coupon = COUPONS.get(coupon_code)
             if coupon and coupon.get('status') == 'active':
@@ -7190,8 +6638,6 @@ def save_coupon_to_user_db(user_id: int):
                 users[uid]['coupon_applied'] = False
                 save_json(DB_FILES['users'], users)
                 return
-        
-        # اگر کوپن فعال نیست، پاک کن
         if users[uid].get('coupon_applied', False):
             users[uid]['coupon_code'] = None
             users[uid]['coupon_discount'] = 0
@@ -7221,7 +6667,6 @@ def load_coupon_from_user_db(user_id: int) -> dict:
         coupon_discount = user.get('coupon_discount', 0)
         
         if coupon_applied and coupon_code:
-            # بررسی اعتبار کوپن
             coupon = COUPONS.get(coupon_code)
             if coupon and coupon.get('status') == 'active':
                 if user_id not in coupon.get('used_by', []):
@@ -7233,7 +6678,6 @@ def load_coupon_from_user_db(user_id: int) -> dict:
                     }
                 else:
                     logger.warning(f"⚠️ [load_coupon_from_user_db] کوپن {coupon_code} قبلاً مصرف شده است")
-                    # پاک کردن از دیتابیس
                     users[uid]['coupon_code'] = None
                     users[uid]['coupon_discount'] = 0
                     users[uid]['coupon_applied'] = False
@@ -7262,11 +6706,6 @@ def clear_coupon_from_user_db(user_id: int):
             logger.info(f"🗑️ [clear_coupon_from_user_db] کوپن کاربر {user_id} از دیتابیس پاک شد")
     except Exception as e:
         logger.error(f"❌ [clear_coupon_from_user_db] خطا: {e}")
-        
-        
-        
-
-# =============== هندلرهای لیست سیاه ===============
 @dp.callback_query(F.data == "admin_price_settings")
 async def admin_price_settings(callback: CallbackQuery):
     """نمایش تنظیمات قیمت"""
@@ -7337,15 +6776,8 @@ async def edit_price_start(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # استخراج کلید از callback.data
-    # داده به صورت: edit_price_base, edit_price_per_gb, edit_price_min_charge, edit_price_max_charge
     callback_data = callback.data
-    
-    # روش ساده: حذف "edit_price_" از ابتدای متن
     setting_key = callback_data.replace("edit_price_", "")
-    
-    # نگاشت کلیدهای نمایش به کلیدهای دیکشنری
     key_mapping = {
         'base': 'base_price',
         'per_gb': 'per_gb_price',
@@ -7361,8 +6793,6 @@ async def edit_price_start(callback: CallbackQuery):
         await callback.answer(f"❌ کلید نامعتبر: {setting_key}", show_alert=True)
         logger.error(f"کلید نامعتبر در edit_price_start: {setting_key}")
         return
-    
-    # ذخیره در user_states
     user_states[callback.from_user.id] = {
         'awaiting_price_edit': True,
         'price_setting': setting_key
@@ -7397,8 +6827,6 @@ async def edit_price_start(callback: CallbackQuery):
             f"Send /cancel to abort",
             parse_mode=ParseMode.HTML
         )
-    
-    # حذف این خط - باعث ارسال ⛔ نمی‌شود اگر کاربر روی دکمه کلیک کرده باشد
     try:
         await callback.answer()
     except Exception as e:
@@ -7410,8 +6838,6 @@ async def edit_price_start(callback: CallbackQuery):
 async def save_price_edit(message: Message):
     """ذخیره مقدار جدید تنظیمات قیمت"""
     admin_id = message.from_user.id
-    
-    # دیکشنری نام‌های تنظیمات (داخل تابع یا سراسری)
     setting_names = {
         'base': {'fa': 'قیمت پایه (1GB/30 روز)', 'en': 'Base Price (1GB/30 days)'},
         'per_gb': {'fa': 'قیمت هر گیگ اضافی', 'en': 'Extra GB Price'},
@@ -7420,8 +6846,6 @@ async def save_price_edit(message: Message):
         'min_charge': {'fa': 'حداقل شارژ', 'en': 'Minimum Charge'},
         'max_charge': {'fa': 'حداکثر شارژ', 'en': 'Maximum Charge'}
     }
-    
-    # چک کردن لغو
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply("❌ ویرایش لغو شد")
@@ -7441,8 +6865,6 @@ async def save_price_edit(message: Message):
         if new_value <= 0:
             await message.reply("❌ مقدار باید بزرگتر از صفر باشد!")
             return
-        
-        # نگاشت کلیدهای نمایش به کلیدهای دیکشنری
         key_mapping = {
             'base': 'base_price',
             'per_gb': 'per_gb_price',
@@ -7458,8 +6880,6 @@ async def save_price_edit(message: Message):
             await message.reply(f"❌ خطا: کلید {setting_key} نامعتبر است")
             user_states.pop(admin_id, None)
             return
-        
-        # اعتبارسنجی اضافی
         if db_key == 'min_charge':
             max_charge = configs_pool.get('price_settings', {}).get('max_charge', 5000000)
             if new_value > max_charge:
@@ -7470,8 +6890,6 @@ async def save_price_edit(message: Message):
             if new_value < min_charge:
                 await message.reply(f"❌ حداکثر شارژ نمی‌تواند از حداقل شارژ ({min_charge:,}) کمتر باشد!")
                 return
-        
-        # بروزرسانی تنظیمات
         if 'price_settings' not in configs_pool:
             configs_pool['price_settings'] = {}
         
@@ -7481,11 +6899,7 @@ async def save_price_edit(message: Message):
         save_all()
         
         lang = get_user(admin_id).get('lang', 'fa')
-        
-        # دریافت نام تنظیمات برای نمایش
         setting_display_name = setting_names.get(setting_key, {}).get(lang, setting_key)
-        
-        # لاگ تغییر
         CustomLogger.log_event('PRICE_UPDATE', f'تنظیم {db_key} از {old_value:,} به {new_value:,} تومان تغییر کرد', admin_id)
         if log_system:
             await log_system.log_admin_action(
@@ -7493,17 +6907,11 @@ async def save_price_edit(message: Message):
                 f"تغییر تنظیم قیمت: {db_key}",
                 details=f"مقدار قدیم: {old_value:,} | مقدار جدید: {new_value:,} تومان"
             )
-        
-        # پیام موفقیت
         if lang == "fa":
             await message.reply(f"✅ تنظیمات با موفقیت بروزرسانی شد!\n💰 {setting_display_name}: {old_value:,} → {new_value:,} تومان")
         else:
             await message.reply(f"✅ Settings updated!\n💰 {setting_display_name}: {old_value:,} → {new_value:,} Toman")
-        
-        # پاک کردن وضعیت
         user_states.pop(admin_id, None)
-        
-        # نمایش مجدد صفحه تنظیمات
         settings = configs_pool.get('price_settings', {})
         
         if lang == "fa":
@@ -7624,8 +7032,6 @@ async def blacklist_add_start(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # تنظیم وضعیت انتظار برای دریافت آیدی
     user_states[callback.from_user.id] = {'awaiting_blacklist_add': True}
     
     if lang == "fa":
@@ -7671,8 +7077,6 @@ async def blacklist_add_user(message: Message):
     """دریافت آیدی کاربر و افزودن به لیست سیاه"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
-    
-    # لغو عملیات
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply(
@@ -7682,8 +7086,6 @@ async def blacklist_add_user(message: Message):
             ])
         )
         return
-    
-    # اعتبارسنجی آیدی
     try:
         target_id = int(message.text.strip())
     except ValueError:
@@ -7691,24 +7093,16 @@ async def blacklist_add_user(message: Message):
             "❌ لطفاً یک آیدی عددی معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid numeric ID!"
         )
         return
-    
-    # چک نکنه ادمین رو بلاک کنه
     if target_id == ADMIN_ID_INT:
         await message.reply(
             "❌ نمی‌توانید ادمین را مسدود کنید!" if lang == "fa" else "❌ Cannot block admin!"
         )
         user_states.pop(admin_id, None)
         return
-    
-    # دریافت اطلاعات کاربر
     user_info = await get_user_info_from_telegram(target_id)
-    
-    # ✅ escape کردن نام و یوزرنیم کاربر
     full_name_escaped = html.escape(user_info['full_name'])
     username_escaped = html.escape(user_info['username']) if user_info['username'] else 'ندارد'
     username_display = f"@{username_escaped}" if user_info['username'] else 'ندارد'
-    
-    # چک کن قبلاً توی لیست سیاه نباشه
     if target_id in BLACKLIST:
         await message.reply(
             f"❌ کاربر {full_name_escaped} (ID: {target_id}) قبلاً در لیست سیاه قرار دارد!" if lang == "fa" else f"❌ User {full_name_escaped} (ID: {target_id}) is already blacklisted!",
@@ -7719,12 +7113,8 @@ async def blacklist_add_user(message: Message):
         )
         user_states.pop(admin_id, None)
         return
-    
-    # اضافه کردن به لیست سیاه
     BLACKLIST.add(target_id)
     save_blacklist()
-    
-    # لاگ عملیات
     CustomLogger.log_event('BLACKLIST_ADD', f'کاربر {target_id} توسط ادمین به لیست سیاه اضافه شد', target_id)
     if log_system:
         await log_system.log_admin_action(
@@ -7735,8 +7125,6 @@ async def blacklist_add_user(message: Message):
         )
     
     logger.info(f"🚫 کاربر {target_id} ({full_name_escaped}) توسط ادمین {admin_id} به لیست سیاه اضافه شد")
-    
-    # =============== پیام موفقیت با escape ===============
     if lang == "fa":
         success_text = f"""
 ✅ <b>کاربر با موفقیت به لیست سیاه اضافه شد!</b>
@@ -7771,8 +7159,6 @@ async def blacklist_add_user(message: Message):
             [InlineKeyboardButton(text="🔙 برگشت به پنل" if lang=="fa" else "🔙 Back to Panel", callback_data="admin_panel")]
         ])
     )
-    
-    # پاک کردن وضعیت
     user_states.pop(admin_id, None)
     
 @dp.callback_query(F.data == "blacklist_show")
@@ -7789,19 +7175,14 @@ async def blacklist_show(callback: CallbackQuery):
             show_alert=True
         )
         return
-    
-    # دریافت اطلاعات کاربران
     await callback.message.edit_text("⏳ در حال دریافت اطلاعات کاربران...")
     
     blacklist_users = []
     for uid in BLACKLIST:
         user_info = await get_user_info_from_telegram(uid)
-        # ✅ escape کردن نام
         user_info['full_name_escaped'] = html.escape(user_info['full_name'])
         user_info['username_escaped'] = html.escape(user_info['username']) if user_info['username'] else ''
         blacklist_users.append(user_info)
-    
-    # ساخت متن
     if lang == "fa":
         text = f"🚫 <b>لیست سیاه</b>\n\n"
         text += f"📊 تعداد: {len(blacklist_users)} کاربر\n"
@@ -7810,8 +7191,6 @@ async def blacklist_show(callback: CallbackQuery):
         text = f"🚫 <b>Blacklist</b>\n\n"
         text += f"📊 Count: {len(blacklist_users)} users\n"
         text += f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    
-    # دکمه‌ها برای هر کاربر
     buttons = []
     for user in blacklist_users:
         display_name = user['full_name_escaped'][:25]
@@ -7856,8 +7235,6 @@ async def blacklist_user_detail(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     user_info = await get_user_info_from_telegram(user_id)
-    
-    # ✅ escape کردن نام و یوزرنیم
     full_name_escaped = html.escape(user_info['full_name'])
     username_display = f"@{html.escape(user_info['username'])}" if user_info['username'] else 'ندارد'
     
@@ -7914,7 +7291,6 @@ async def blacklist_remove_user(callback: CallbackQuery):
     full_name_escaped = html.escape(user_info['full_name'])
     
     if remove_from_blacklist(user_id):
-        # لاگ خروج از لیست سیاه
         CustomLogger.log_event('BLACKLIST_REMOVE', f'کاربر {user_id} از لیست سیاه خارج شد', user_id)
         if log_system:
             await log_system.log_admin_action(
@@ -7923,8 +7299,6 @@ async def blacklist_remove_user(callback: CallbackQuery):
                 target_user=user_id,
                 details=f"نام: {full_name_escaped}"
             )
-        
-        # ارسال پیام به کاربر
         try:
             await bot.send_message(
                 user_id,
@@ -8006,13 +7380,9 @@ async def blacklist_confirm_clear_all(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     count = len(BLACKLIST)
-    
-    # پاکسازی
     removed_users = list(BLACKLIST)
     BLACKLIST.clear()
     save_blacklist()
-    
-    # لاگ
     CustomLogger.log_event('BLACKLIST_CLEAR_ALL', f'لیست سیاه پاکسازی شد - {count} کاربر خارج شدند', callback.from_user.id)
     if log_system:
         await log_system.log_admin_action(
@@ -8022,8 +7392,6 @@ async def blacklist_confirm_clear_all(callback: CallbackQuery):
         )
     
     logger.info(f"🗑 لیست سیاه توسط ادمین {callback.from_user.id} پاکسازی شد - {count} کاربر")
-    
-    # اطلاع‌رسانی به کاربران
     for uid in removed_users:
         try:
             await bot.send_message(uid, "✅ شما از لیست سیاه خارج شدید!\nاکنون می‌توانید از ربات استفاده کنید.")
@@ -8097,8 +7465,6 @@ def add_balance(user_id: int, amount: int) -> int:
     save_json(DB_FILES['users'], users)
     logger.info(f"💰 کاربر {user_id}: {old_balance} + {amount} = {user['balance']}")
     return user['balance']
-
-# اصلاح تابع calculate_price برای پشتیبانی از تخفیف
 def calculate_price(volume: int, days: int, user_id: int = None) -> int:
     """محاسبه قیمت با اعمال تخفیف"""
     settings = configs_pool.get('price_settings', {})
@@ -8111,8 +7477,6 @@ def calculate_price(volume: int, days: int, user_id: int = None) -> int:
     extra_price = ((extra_days + 14) // 15) * per_15days
     
     total = base + extra_volume + extra_price
-    
-    # =============== اعمال تخفیف کوپن ===============
     if user_id:
         user_state = user_states.get(user_id, {})
         if user_state.get('coupon_applied'):
@@ -8127,8 +7491,6 @@ def create_order(user_id: int, volume: int, days: int, price: int, order_type: s
     """ایجاد سفارش جدید با پشتیبانی از حجم 0 (نامحدود)"""
     max_id = max([o.get('order_id', 0) for o in orders.values() if isinstance(o, dict)], default=0)
     order_id = max_id + 1
-    
-    # ✅ حجم 0 = نامحدود (برای نمایش در لاگ)
     volume_display = "نامحدود" if volume == 0 else f"{volume}GB"
     
     orders[str(order_id)] = {
@@ -8174,16 +7536,11 @@ def update_order(order_id: int, **kwargs):
     logger.error(f"❌ سفارش #{order_id} یافت نشد")
     return False
 
-
-# =============== توابع مدیریت دیتابیس ===============
-
 def get_user_stats(user_id: int) -> dict:
     """دریافت آمار کاربر با جدا کردن تست‌ها"""
     user = get_user(user_id)
     valid_orders = get_valid_orders()
     user_orders = [o for o in valid_orders.values() if o.get('user_id') == user_id]
-    
-    # =============== جدا کردن تست‌ها ===============
     test_orders = [o for o in user_orders if o.get('type') == 'test']
     real_orders = [o for o in user_orders if o.get('type') != 'test']
     
@@ -8192,11 +7549,7 @@ def get_user_stats(user_id: int) -> dict:
     rejected = [o for o in real_orders if o.get('status') == 'rejected']
     awaiting = [o for o in real_orders if o.get('status') == 'awaiting_payment']
     cancelled = [o for o in real_orders if o.get('status') == 'cancelled']
-    
-    # تست‌های تایید شده (برای نمایش جداگانه)
     approved_tests = [o for o in test_orders if o.get('status') == 'approved']
-    
-    # ✅ محاسبه last_order_date با چک کردن None
     last_order_date = None
     dates = [o.get('date', '') for o in real_orders if o.get('date')]
     if dates:
@@ -8229,15 +7582,11 @@ def get_global_stats() -> dict:
         valid_orders = get_valid_orders()
         approved = [o for o in valid_orders.values() if o.get('status') == 'approved']
         today = datetime.now().strftime('%Y-%m-%d')
-        
-        # محاسبه today_orders با چک کردن None
         today_orders = 0
         for o in valid_orders.values():
             order_date = o.get('date', '')
             if order_date and isinstance(order_date, str) and order_date.startswith(today):
                 today_orders += 1
-        
-        # محاسبه today_revenue با چک کردن None
         today_revenue = 0
         for o in approved:
             approved_date = o.get('approved_date', '')
@@ -8299,8 +7648,6 @@ def migrate_old_data():
     
     updated = 0
     logger.info("🔄 شروع مهاجرت داده‌های قدیمی...")
-    
-    # =============== 1. فیلدهای ضروری کاربران ===============
     user_defaults = {
         'total_purchases': 0,
         'total_spent': 0,
@@ -8338,8 +7685,6 @@ def migrate_old_data():
         
         if changed:
             updated += 1
-    
-    # =============== 2. فیلدهای ضروری سفارشات با IP Limit ===============
     order_defaults = {
         'email': None,
         'sub_link': None,
@@ -8372,8 +7717,6 @@ def migrate_old_data():
         
         if changed:
             updated += 1
-    
-    # =============== 3. فیلدهای ضروری رفرال‌ها ===============
     for key, ref in referrals.items():
         if 'reward_given' not in ref:
             ref['reward_given'] = False
@@ -8381,17 +7724,9 @@ def migrate_old_data():
         if 'date' not in ref:
             ref['date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             updated += 1
-    
-    # =============== 4. مهاجرت اینباندهای دسته‌بندی ===============
     migrate_category_inbound_data()
-    
-    # =============== 5. مهاجرت اینباندهای تست ===============
     migrate_test_inbound_data()
-    
-    # =============== 6. مهاجرت اینباند پیش‌فرض ===============
     migrate_inbound_data()
-    
-    # =============== 7. اطمینان از وجود فیلدهای جدید در configs_pool ===============
     if 'ip_limit' not in configs_pool:
         configs_pool['ip_limit'] = 0
         logger.info("📝 فیلد ip_limit به configs_pool اضافه شد")
@@ -8506,7 +7841,6 @@ def load_coupon_from_user(user_id: int) -> dict:
             coupon_discount = user.get('coupon_discount', 0)
             
             if coupon_applied and coupon_code:
-                # بررسی اعتبار کوپن
                 coupon = COUPONS.get(coupon_code)
                 if coupon and coupon.get('status') == 'active':
                     if user_id not in coupon.get('used_by', []):
@@ -8518,7 +7852,6 @@ def load_coupon_from_user(user_id: int) -> dict:
                         }
                     else:
                         logger.warning(f"⚠️ [load_coupon_from_user] کوپن {coupon_code} قبلاً مصرف شده است")
-                        # پاک کردن از دیتابیس
                         users[uid]['coupon_code'] = None
                         users[uid]['coupon_discount'] = 0
                         users[uid]['coupon_applied'] = False
@@ -8544,22 +7877,14 @@ def backup_database():
     os.makedirs(backup_dir, exist_ok=True)
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    
-    # =============== دیباگ ===============
     force_settings = configs_pool.get('force_join_settings', {})
     logger.info(f"🔍 در حال بکاپ - force_join_settings: {force_settings}")
     logger.info(f"🔍 تعداد کانال‌ها: {len(force_settings.get('channels', []))}")
-    
-    # =============== گرفتن آخرین وضعیت بسته‌های آماده ===============
     configs_pool['ready_packages'] = READY_PACKAGES
     configs_pool['test_service'] = TEST_SERVICE_STATUS
-    
-    # =============== دیباگ اینباندهای دسته‌بندی ===============
     for cat in READY_PACKAGES.get('categories', []):
         inbound_ids = cat.get('inbound_ids', [])
         logger.info(f"📡 بکاپ - دسته {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
-    
-    # =============== اطمینان از وجود ip_limit در سفارشات ===============
     orders_with_ip = {}
     for oid, order in orders.items():
         if isinstance(order, dict):
@@ -8569,8 +7894,6 @@ def backup_database():
             orders_with_ip[oid] = order
         else:
             orders_with_ip[oid] = order
-    
-    # =============== دریافت آمار ===============
     try:
         stats = get_global_stats()
     except Exception as e:
@@ -8586,8 +7909,6 @@ def backup_database():
             'today_orders': 0,
             'today_revenue': 0
         }
-    
-    # =============== بکاپ کامل در یک فایل ===============
     full_backup = {
         'users': users,
         'orders': orders_with_ip,
@@ -8615,8 +7936,6 @@ def backup_database():
     backup_file = os.path.join(backup_dir, f'full_backup_{timestamp}.json')
     if save_json(backup_file, full_backup):
         logger.info(f"✅ بکاپ کامل در {backup_file} ذخیره شد")
-        
-        # بعد از ذخیره، دوباره چک کن
         try:
             with open(backup_file, 'r', encoding='utf-8') as f:
                 saved_data = json.load(f)
@@ -8643,7 +7962,6 @@ def backup_database():
 def _cleanup_old_backups(backup_dir: str, keep: int = 5, filename: str = 'full_backup_'):
     """نگه داشتن فقط N بکاپ آخر برای هر نوع فایل"""
     try:
-        # دسته‌بندی فایل‌های بکاپ بر اساس نوع
         full_backups = []
         before_restore_backups = []
         other_backups = []
@@ -8657,32 +7975,22 @@ def _cleanup_old_backups(backup_dir: str, keep: int = 5, filename: str = 'full_b
                 before_restore_backups.append((os.path.getmtime(file_path), file_path, f))
             elif f.endswith('.json') or f.endswith('.backup'):
                 other_backups.append((os.path.getmtime(file_path), file_path, f))
-        
-        # مرتب‌سازی بر اساس زمان (جدیدترین اول)
         full_backups.sort(reverse=True)
         before_restore_backups.sort(reverse=True)
         other_backups.sort(reverse=True)
-        
-        # حذف بکاپ‌های قدیمی full_backup (فقط keep تا آخرین را نگه دار)
         for _, path, name in full_backups[keep:]:
             os.remove(path)
             logger.debug(f"🗑 بکاپ قدیمی full_backup حذف شد: {name}")
-        
-        # حذف بکاپ‌های before_restore قدیمی‌تر از 7 روز
         cutoff_7days = time.time() - (7 * 24 * 3600)
         for mtime, path, name in before_restore_backups:
             if mtime < cutoff_7days:
                 os.remove(path)
                 logger.debug(f"🗑 بکاپ before_restore قدیمی (>7 روز) حذف شد: {name}")
-        
-        # حذف سایر بکاپ‌های قدیمی‌تر از 30 روز
         cutoff_30days = time.time() - (30 * 24 * 3600)
         for mtime, path, name in other_backups:
             if mtime < cutoff_30days:
                 os.remove(path)
                 logger.debug(f"🗑 بکاپ قدیمی دیگر حذف شد: {name}")
-        
-        # لاگ نهایی
         logger.info(f"🧹 پاکسازی بکاپ‌ها: {len(full_backups)} full, {len(before_restore_backups)} before_restore, {len(other_backups)} other")
         logger.info(f"   نگهداری شده: {min(len(full_backups), keep)} full_backup, before_restoreهای کمتر از 7 روز")
             
@@ -8694,8 +8002,6 @@ def optimize_storage():
     cleaned = 0
     cutoff_date = datetime.now() - timedelta(days=30)
     cutoff_iso = cutoff_date.isoformat()
-    
-    # حذف سفارشات رد شده قدیمی
     old_rejected = []
     for oid, order in list(orders.items()):
         if isinstance(order, dict) and order.get('status') == 'rejected':
@@ -8706,8 +8012,6 @@ def optimize_storage():
     for oid in old_rejected:
         del orders[oid]
         cleaned += 1
-    
-    # حذف سفارشات لغو شده قدیمی
     old_cancelled = []
     for oid, order in list(orders.items()):
         if isinstance(order, dict) and order.get('status') == 'cancelled':
@@ -8718,8 +8022,6 @@ def optimize_storage():
     for oid in old_cancelled:
         del orders[oid]
         cleaned += 1
-    
-    # حذف کاربران غیرفعال خیلی قدیمی (بیش از ۹۰ روز)
     old_inactive = []
     cutoff_90days = (datetime.now() - timedelta(days=90)).isoformat()
     
@@ -8727,7 +8029,6 @@ def optimize_storage():
         if not user.get('is_active', True):
             updated_at = user.get('updated_at', user.get('created_at', ''))
             if updated_at and updated_at < cutoff_90days:
-                # فقط کاربرانی که هیچ خریدی نداشتن
                 if user.get('total_purchases', 0) == 0 and user.get('balance', 0) == 0:
                     old_inactive.append(uid)
     
@@ -8767,8 +8068,6 @@ def restore_backup(backup_file: str) -> bool:
         
         blacklist_data = data.get('blacklist', {})
         BLACKLIST = set(blacklist_data.get('users', []))
-        
-        # ذخیره همه
         save_all()
         
         logger.info(f"✅ بکاپ با موفقیت بازگردانی شد")
@@ -8878,8 +8177,6 @@ def get_valid_orders() -> dict:
 def find_pending_order(user_id: int) -> Optional[dict]:
     """یافتن جدیدترین سفارش در انتظار پرداخت"""
     valid_orders = get_valid_orders()
-    
-    # ✅ فیلتر کردن سفارشات در انتظار پرداخت
     pending_orders = []
     for o in valid_orders.values():
         if o.get('user_id') == user_id and o.get('status') == 'awaiting_payment':
@@ -8887,15 +8184,9 @@ def find_pending_order(user_id: int) -> Optional[dict]:
     
     if not pending_orders:
         return None
-    
-    # ✅ مرتب‌سازی بر اساس تاریخ (جدیدترین اول)
     pending_orders.sort(key=lambda x: x.get('created_at', x.get('date', '')), reverse=True)
-    
-    # ✅ برگرداندن جدیدترین سفارش
     latest_order = pending_orders[0]
     logger.debug(f"🔍 جدیدترین سفارش در انتظار: #{latest_order['order_id']} - نوع: {latest_order.get('type')}")
-    
-    # ⚠️ اگر بیش از یک سفارش در انتظار وجود دارد، به ادمین هشدار بده
     if len(pending_orders) > 1:
         logger.warning(f"⚠️ کاربر {user_id} دارای {len(pending_orders)} سفارش در انتظار پرداخت است!")
     
@@ -8931,8 +8222,6 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
                 inbound_info = f"📡 اینباندها: {len(inbound_id)} عدد"
             else:
                 inbound_info = f"📡 اینباند: {inbound_id}"
-    
-    # ✅ تشخیص خودکار بر اساس نوع سفارش
     volume_display = format_volume(volume, is_test=is_test)
     
     if ip_limit == 0:
@@ -8941,8 +8230,6 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
         ip_display = "👤 تعداد کاربر: ۱ دستگاه"
     else:
         ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه"
-    
-    # =============== ساخت کپشن ===============
     caption = get_config_caption(order_id, volume, days, price, config_link, lang)
     
     if is_test:
@@ -9006,8 +8293,6 @@ async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: U
                 inbound_info = f"📡 اینباندها: {len(inbound_id)} عدد"
             else:
                 inbound_info = f"📡 اینباند: {inbound_id}"
-    
-    # ✅ تبدیل حجم به مگابایت برای format_volume
     if isinstance(volume, float):
         volume_mb = volume * 1024
     else:
@@ -9077,11 +8362,6 @@ async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: U
             parse_mode=ParseMode.HTML,
             reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
         )
-        
-        
-        
-
-# =============== مدیریت مخزن کانفیگ ===============
 def add_config_to_pool(volume: int, days: int, link: str) -> int:
     """افزودن کانفیگ به مخزن"""
     configs_pool['last_id'] = configs_pool.get('last_id', 0) + 1
@@ -9103,8 +8383,6 @@ def add_config_to_pool(volume: int, days: int, link: str) -> int:
 def get_config_from_pool(volume: int, days: int) -> Optional[dict]:
     """دریافت کانفیگ از مخزن"""
     configs = configs_pool.get('configs', [])
-    
-    # جستجوی دقیق
     for i, c in enumerate(configs):
         if c.get('volume') == volume and c.get('days') == days and not c.get('used'):
             config = c.copy()
@@ -9112,8 +8390,6 @@ def get_config_from_pool(volume: int, days: int) -> Optional[dict]:
             save_json(DB_FILES['configs'], configs_pool)
             logger.info(f"📤 کانفیگ #{config['id']} از مخزن خارج شد")
             return config
-    
-    # جستجوی نزدیک
     for i, c in enumerate(configs):
         if c.get('volume') >= volume and c.get('days') >= days and not c.get('used'):
             config = c.copy()
@@ -9196,12 +8472,8 @@ from typing import Optional
 from yarl import URL
 import aiohttp
 from aiohttp import ClientTimeout, CookieJar
-
-# ============ Session سراسری ============
 CONNECTOR = None
 HTTP_SESSION: Optional[aiohttp.ClientSession] = None
-
-# ============ State ============
 SENAI_COOKIE = None
 COOKIE_TIME = 0
 COOKIE_TTL = 3600  # یک ساعت
@@ -9211,8 +8483,6 @@ CSRF_TIME = 0
 CSRF_TTL = 1800  # نیم ساعت
 
 LOGIN_LOCK = asyncio.Lock()
-
-# ============ Cache ============
 INBOUND_CACHE = {
     "data": [],
     "time": 0,
@@ -9220,8 +8490,6 @@ INBOUND_CACHE = {
 }
 INBOUND_CACHE_TTL = 30  # ثانیه
 INBOUND_LOCK = asyncio.Lock()
-
-# Timeout جداگانه
 LOGIN_TIMEOUT = ClientTimeout(total=10, connect=3)
 API_TIMEOUT = ClientTimeout(total=5, connect=3)
 
@@ -9309,8 +8577,6 @@ async def _do_login() -> Optional[str]:
     
     try:
         await _ensure_session()
-        
-        # 1. CSRF token
         async with HTTP_SESSION.get(
             f"{SENAI_PANEL_URL}/csrf-token",
             timeout=LOGIN_TIMEOUT
@@ -9323,8 +8589,6 @@ async def _do_login() -> Optional[str]:
             SENAI_CSRF = data.get("obj")
             CSRF_TIME = time.time()
             logger.debug("CSRF token دریافت شد")
-        
-        # 2. Login
         async with HTTP_SESSION.post(
             f"{SENAI_PANEL_URL}/login",
             data={
@@ -9336,15 +8600,12 @@ async def _do_login() -> Optional[str]:
             timeout=LOGIN_TIMEOUT
         ) as resp:
             if resp.status in (200, 302):
-                # اول CookieJar - منبع اصلی
                 jar_cookie = _get_cookie_from_session()
                 if jar_cookie:
                     SENAI_COOKIE = jar_cookie
                     COOKIE_TIME = time.time()
                     logger.debug("لاگین موفق (از CookieJar)")
                     return SENAI_COOKIE
-                
-                # بعد response.cookies
                 for name in ("3x-ui", "session"):
                     cookie = resp.cookies.get(name)
                     if cookie and cookie.value:
@@ -9370,20 +8631,15 @@ async def xui_login() -> Optional[str]:
         return None
     
     current_time = time.time()
-    
-    # CookieJar منبع اصلی است - اول چک شود
     cookie = _get_cookie_from_session()
     if cookie:
         SENAI_COOKIE = cookie
         COOKIE_TIME = current_time
         return cookie
-    
-    # بعد متغیر SENAI_COOKIE با TTL
     if SENAI_COOKIE and (current_time - COOKIE_TIME) < COOKIE_TTL:
         return SENAI_COOKIE
     
     async with LOGIN_LOCK:
-        # Race condition چک
         current_time = time.time()
         if SENAI_COOKIE and (current_time - COOKIE_TIME) < COOKIE_TTL:
             return SENAI_COOKIE
@@ -9444,14 +8700,11 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
     global SENAI_COOKIE, COOKIE_TIME, SENAI_CSRF, CSRF_TIME
     
     await _ensure_session()
-    
-    # فقط لاگین رو اطمینان می‌دهیم، CookieJar خودش کوکی رو می‌فرسته
     await xui_login()
     if not SENAI_COOKIE:
         return None
     
     headers = kwargs.pop("headers", {})
-    # CSRF فقط برای متدهای غیر GET لازم است
     if method.upper() != "GET" and SENAI_CSRF:
         headers["X-CSRF-Token"] = SENAI_CSRF
     
@@ -9468,17 +8721,14 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
                 logger.warning("401 - لاگین مجدد...")
                 
                 async with LOGIN_LOCK:
-                    # Race condition: دوباره چک کن
                     cookie_check = _get_cookie_from_session()
                     if cookie_check and cookie_check != SENAI_COOKIE:
-                        # یکی دیگه لاگین کرده
                         SENAI_COOKIE = cookie_check
                         COOKIE_TIME = time.time()
                         SENAI_CSRF = None
                         CSRF_TIME = 0
                         logger.debug("لاگین همزمان تشخیص داده شد")
                     else:
-                        # لاگین مجدد - پاک کردن کوکی‌های قدیمی
                         SENAI_COOKIE = None
                         COOKIE_TIME = 0
                         SENAI_CSRF = None
@@ -9488,8 +8738,6 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
                 
                 if not SENAI_COOKIE:
                     return None
-                
-                # تلاش مجدد - CookieJar خودش کوکی جدید رو می‌فرسته
                 headers_retry = {}
                 if method.upper() != "GET" and SENAI_CSRF:
                     headers_retry["X-CSRF-Token"] = SENAI_CSRF
@@ -9503,8 +8751,6 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
                     if retry_resp.status == 200:
                         return await retry_resp.json(content_type=None)
                     return None
-            
-            # باگ اصلاح شد: resp نه retry_resp
             if resp.status == 200:
                 return await resp.json(content_type=None)
             
@@ -9520,15 +8766,10 @@ async def xui_get_inbounds() -> list:
     global INBOUND_CACHE
     
     current_time = time.time()
-    
-    # چک کردن کش بدون Lock
     if INBOUND_CACHE["loaded"] and (current_time - INBOUND_CACHE["time"]) < INBOUND_CACHE_TTL:
         logger.debug(f"کش اینباندها: {len(INBOUND_CACHE['data'])} عدد")
         return INBOUND_CACHE["data"]
-    
-    # برای به‌روزرسانی کش از Lock استفاده کن
     async with INBOUND_LOCK:
-        # دوباره چک کن (ممکنه همزمان آپدیت شده باشه)
         current_time = time.time()
         if INBOUND_CACHE["loaded"] and (current_time - INBOUND_CACHE["time"]) < INBOUND_CACHE_TTL:
             return INBOUND_CACHE["data"]
@@ -9536,28 +8777,18 @@ async def xui_get_inbounds() -> list:
         result = await _api_request("GET", "/panel/api/inbounds/list")
         if result and result.get("success"):
             inbounds = [i for i in result.get("obj", []) if i.get("enable", True)]
-            
-            # به‌روزرسانی کش
             INBOUND_CACHE["data"] = inbounds
             INBOUND_CACHE["time"] = current_time
             INBOUND_CACHE["loaded"] = True
             
             logger.debug(f"{len(inbounds)} اینباند فعال دریافت شد")
             return inbounds
-        
-        # اگر API خطا داد، کش قبلی رو برگردون
         if INBOUND_CACHE["loaded"]:
             logger.warning("خطا در دریافت اینباندها، استفاده از کش قبلی")
             return INBOUND_CACHE["data"]
         
         return []
-
-
-# =============== محدودیت درخواست برای پنل ===============
-# Semaphore برای محدود کردن تعداد درخواست‌های همزمان
 panel_semaphore = asyncio.Semaphore(3)  # حداکثر 3 درخواست همزمان
-
-# Rate limiter برای جلوگیری از درخواست‌های پشت سر هم
 class PanelRateLimiter:
     """محدود کننده نرخ درخواست به پنل"""
     
@@ -9579,8 +8810,6 @@ class PanelRateLimiter:
                 await asyncio.sleep(wait_time)
             
             self.last_request_time = time.time()
-
-# ایجاد نمونه سراسری از rate limiter
 panel_rate_limiter = PanelRateLimiter(requests_per_minute=30)
 async def check_shop_status_and_notify(user_id: int, callback: CallbackQuery = None) -> bool:
     """بررسی وضعیت فروش و ارسال پیام در صورت بسته بودن
@@ -9605,7 +8834,6 @@ async def check_shop_status_and_notify(user_id: int, callback: CallbackQuery = N
         except:
             pass
     else:
-        # اگر callback نداشتیم
         pass
     
     return False
@@ -9620,21 +8848,14 @@ async def xui_create_client_with_inbound(
     ip_limit: int = 0  # ✅ جدید: محدودیت IP (0 = نامحدود)
 ) -> Optional[str]:
     """ساخت کلاینت با اینباند مشخص (یا پیش‌فرض) - پشتیبانی از چندین اینباند و IP Limit"""
-    
-    # =============== دریافت اینباندهای مناسب ===============
     inbound_ids = []
-    
-    # 1. اگر اینباند مشخص شده
     if inbound_id is not None:
-        # اگر لیست است
         if isinstance(inbound_id, list):
             inbound_ids = inbound_id
             logger.info(f"📡 استفاده از لیست اینباندهای مشخص: {inbound_ids}")
         else:
             inbound_ids = [inbound_id]
             logger.info(f"📡 استفاده از اینباند مشخص: {inbound_id}")
-    
-    # 2. اگر کاربر آیدی دارد و اینباندی برایش ذخیره شده
     elif user_id:
         user_inbound = get_user_inbound(user_id)
         if user_inbound:
@@ -9644,15 +8865,11 @@ async def xui_create_client_with_inbound(
             else:
                 inbound_ids = [user_inbound]
                 logger.info(f"👤 استفاده از اینباند کاربر {user_id}: {user_inbound}")
-    
-    # 3. اگر اینباند پیش‌فرض تنظیم شده
     if not inbound_ids:
         default_ids = configs_pool.get('default_inbound_ids', [])
         if default_ids:
             inbound_ids = default_ids
             logger.info(f"📌 استفاده از اینباندهای پیش‌فرض: {default_ids}")
-    
-    # =============== اگر هیچ اینباندی پیدا نشد ===============
     for attempt in range(3):  # 3 تلاش برای دریافت اینباندها
         if attempt > 0:
             logger.info(f"🔄 تلاش مجدد {attempt+1}/3 برای دریافت اینباندها")
@@ -9671,13 +8888,9 @@ async def xui_create_client_with_inbound(
                 if not inbounds:
                     logger.error("❌ هیچ اینباند فعالی یافت نشد")
                     continue
-                
-                # اگر هنوز اینباندی نداریم، از همه اینباندهای فعال استفاده کن
                 if not inbound_ids:
                     inbound_ids = [i.get('id') for i in inbounds if i.get('enable', True)]
                     logger.info(f"📡 استفاده از همه اینباندهای فعال: {inbound_ids}")
-                
-                # =============== اعتبارسنجی اینباندها ===============
                 valid_inbound_ids = []
                 invalid_inbounds = []
                 
@@ -9695,18 +8908,13 @@ async def xui_create_client_with_inbound(
                     logger.warning(f"⚠️ اینباندهای نامعتبر: {invalid_inbounds}")
                 
                 if not valid_inbound_ids:
-                    # اگر هیچ اینباند معتبری نبود، از همه استفاده کن
                     valid_inbound_ids = [i.get('id') for i in inbounds if i.get('enable', True)]
                     logger.info(f"📡 استفاده از همه اینباندهای فعال (به دلیل نامعتبر بودن اینباندهای قبلی): {valid_inbound_ids}")
                 
                 if not valid_inbound_ids:
                     logger.error("❌ هیچ اینباند معتبری یافت نشد")
                     continue
-                
-                # =============== ساخت کلاینت ===============
                 expiry_time = int(datetime.now().timestamp() * 1000) + (days * 24 * 60 * 60 * 1000)
-                
-                # =============== ✅ حجم: اگر 0 باشد یعنی نامحدود ===============
                 if volume_gb == 0:
                     total_bytes = 0  # 0 در پنل به معنی نامحدود است
                     logger.info(f"📦 حجم: نامحدود (0 bytes)")
@@ -9715,8 +8923,6 @@ async def xui_create_client_with_inbound(
                     logger.info(f"📦 حجم: {volume_gb} GB = {total_bytes:,} bytes")
                 
                 logger.info(f"⏱ انقضا: {days} روز = {expiry_time}")
-                
-                # =============== ✅ ساخت کامنت به فرمت قدیمی ===============
                 comment_parts = []
                 if user_name:
                     comment_parts.append(user_name)
@@ -9726,16 +8932,12 @@ async def xui_create_client_with_inbound(
                     comment_parts.append("نامحدود")
                 if ip_limit > 0:
                     comment_parts.append(f"IP:{ip_limit}")
-                
-                # کامنت نهایی: "Navid (ID:796066403)"
                 comment_text = " ".join(comment_parts) if comment_parts else email
                 
                 if len(comment_text) > 100:
                     comment_text = comment_text[:97] + "..."
                 
                 logger.info(f"📝 کامنت: {comment_text}")
-                
-                # =============== ✅ ساخت داده برای ارسال با ip_limit ===============
                 bulk_data = [
                     {
                         "client": {
@@ -9751,14 +8953,10 @@ async def xui_create_client_with_inbound(
                         "inboundIds": valid_inbound_ids  # ✅ لیست اینباندها
                     }
                 ]
-                
-                # دیباگ
                 logger.info(f"📤 ارسال به پنل: {json.dumps(bulk_data, indent=2)[:500]}...")
                 logger.info(f"📡 اینباندهای ارسالی: {valid_inbound_ids}")
                 logger.info(f"👤 محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
                 logger.info(f"📦 حجم: {'نامحدود' if volume_gb == 0 else f'{volume_gb} GB'}")
-                
-                # =============== ارسال درخواست ===============
                 connector = aiohttp.TCPConnector(ssl=False)
                 
                 async with aiohttp.ClientSession(connector=connector) as session:
@@ -9774,8 +8972,6 @@ async def xui_create_client_with_inbound(
                     ) as response:
                         response_text = await response.text()
                         logger.info(f"📥 پاسخ پنل: Status {response.status}")
-                        
-                        # =============== پردازش پاسخ ===============
                         if response.status == 200:
                             try:
                                 data = json.loads(response_text)
@@ -9827,16 +9023,11 @@ def get_user_inbound(user_id: int) -> Optional[Union[int, List[int]]]:
     
     if user_inbound:
         return user_inbound
-    
-    # اگر کاربر اینباندی انتخاب نکرده، از پیش‌فرض استفاده کن
     default_ids = configs_pool.get('default_inbound_ids', [])
     if default_ids:
         return default_ids
     
     return None
-
-
-# =============== توابع کمکی با محدودیت برای سایر درخواست‌ها ===============
 async def xui_safe_request(method: str, endpoint: str, **kwargs) -> Optional[dict]:
     """درخواست امن به پنل با رعایت محدودیت‌ها
     
@@ -9902,17 +9093,12 @@ async def xui_create_client_with_retry(email: str, volume_gb: int, days: int, us
         
         if result:
             return result
-        
-        # افزایش زمان انتظار با هر تلاش (backoff)
         delay = base_delay * (2 ** attempt)  # 2, 4, 8, 16, 32 ثانیه
         logger.warning(f"⚠️ تلاش {attempt + 1}/{max_retries} ناموفق بود، {delay} ثانیه صبر می‌کنم...")
         await asyncio.sleep(min(delay, 60))  # حداکثر 60 ثانیه
     
     logger.error(f"❌ ساخت کلاینت {email} پس از {max_retries} تلاش ناموفق بود")
     return None
-
-
-# =============== آمار محدودیت‌ها ===============
 async def get_panel_rate_stats() -> dict:
     """دریافت آمار درخواست‌های پنل"""
     return {
@@ -9921,35 +9107,21 @@ async def get_panel_rate_stats() -> dict:
         'last_request_time': panel_rate_limiter.last_request_time,
         'is_rate_limited': (time.time() - panel_rate_limiter.last_request_time) < panel_rate_limiter.interval
     }
-
-
-# =============== ریست محدودیت‌ها در صورت نیاز ===============
 async def reset_panel_rate_limits():
     """ریست کردن محدودیت‌های پنل"""
     global panel_semaphore, panel_rate_limiter
-    
-    # ایجاد نمونه جدید
     panel_semaphore = asyncio.Semaphore(3)
     panel_rate_limiter = PanelRateLimiter(requests_per_minute=30)
     
     logger.info("🔄 محدودیت‌های پنل ریست شدند")
     return True
-
-
-# =============== اضافه کردن به ایمپورت‌های بالای فایل ===============
-# بعد از سایر ایمپورت‌ها اضافه کنید:
 from typing import Optional, Dict, List
 import aiohttp
 from datetime import datetime, timedelta
-
-# =============== متغیرهای گلوبال برای AI ===============
 openrouter_client = None
 openrouter_models_status = {}  # ذخیره وضعیت مدل‌ها
 user_ai_requests = {}  # شمارش درخواست‌های روزانه کاربران
 AI_REQUEST_LIMIT = configs_pool.get('openrouter_settings', {}).get('daily_limit', 10) if 'configs_pool' in dir() else 10
-
-# =============== کلاس مدیریت Google Gemini ===============
-# =============== کلاس مدیریت Google Gemini (با API مستقیم HTTP) ===============
 import aiohttp
 import json
 
@@ -9985,11 +9157,7 @@ class GeminiClient:
     
     async def chat(self, user_message: str, user_id: int = None, username: str = None, retry: int = 2) -> str:
         """ارسال پیام به Gemini با مدیریت خودکار توکن"""
-        
-        # محاسبه توکن‌های مصرفی تقریبی (هر 4 کاراکتر ≈ 1 توکن)
         estimated_tokens = len(user_message) // 4 + 100  # 100 توکن برای System Prompt
-        
-        # تنظیم maxOutputTokens بر اساس طول سوال
         if len(user_message) < 50:
             max_tokens = 300  # سوال کوتاه
         elif len(user_message) < 100:
@@ -9998,8 +9166,6 @@ class GeminiClient:
             max_tokens = 800  # سوال بلند
         else:
             max_tokens = 1024  # سوال خیلی بلند
-        
-        # اگر مقدار در config بیشتر است، از همان استفاده کن
         if GEMINI_MAX_TOKENS > max_tokens:
             max_tokens = GEMINI_MAX_TOKENS
         
@@ -10008,15 +9174,12 @@ class GeminiClient:
                 await asyncio.sleep(2 * attempt)
             
             try:
-                # ساخت محتوای پیام کاربر
                 if user_id:
                     user_info = get_user(user_id) if 'get_user' in globals() else {}
                     user_name = user_info.get('name', 'کاربر') if user_info else username or f"کاربر_{user_id}"
                     user_content = f"کاربر: {user_name}\nسوال: {user_message}"
                 else:
                     user_content = user_message
-                
-                # =============== ساخت payload با system_instruction ===============
                 payload = {
                     "system_instruction": {
                         "parts": [{"text": self.system_prompt}]
@@ -10032,8 +9195,6 @@ class GeminiClient:
                         "stopSequences": ["\n\n\n"]  # توقف در صورت 3 خط خالی
                     }
                 }
-                
-                # ارسال درخواست
                 url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
                 
                 async with aiohttp.ClientSession() as session:
@@ -10048,15 +9209,12 @@ class GeminiClient:
                             try:
                                 candidates = data.get('candidates', [])
                                 if candidates:
-                                    # بررسی finishReason
                                     finish_reason = candidates[0].get('finishReason', '')
                                     reply = candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
                                     
                                     if reply:
-                                        # اگر پاسخ با MAX_TOKENS قطع شده، دوباره تلاش کن
                                         if finish_reason == 'MAX_TOKENS' and attempt < retry - 1:
                                             logger.warning(f"⚠️ پاسخ ناقص است (MAX_TOKENS)، تلاش مجدد با توکن بیشتر...")
-                                            # افزایش توکن برای تلاش بعدی
                                             max_tokens = min(max_tokens * 2, 2048)
                                             continue
                                         
@@ -10098,8 +9256,6 @@ class GeminiClient:
                     return f"❌ خطا: {str(e)[:100]}"
         
         return "❌ خطا در پردازش درخواست."
-    
-# بعد از متغیرهای گلوبال اضافه کن
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -10115,8 +9271,6 @@ class ConversationMemory:
     def add_message(self, user_id: int, role: str, content: str):
         """اضافه کردن پیام به حافظه کاربر"""
         self._clean_expired(user_id)
-        
-        # محدود کردن تعداد پیام‌ها
         if len(self.memories[user_id]) >= self.max_history * 2:
             self.memories[user_id] = self.memories[user_id][-self.max_history:]
         
@@ -10137,8 +9291,6 @@ class ConversationMemory:
         history = self.get_history(user_id)
         if not history:
             return ""
-        
-        # فقط چند پیام آخر رو بگیر
         recent = history[-max_messages:]
         
         context = "تاریخچه مکالمه:\n"
@@ -10177,13 +9329,7 @@ class ConversationMemory:
             'active_users': len([uid for uid in self.last_activity 
                                if (datetime.now() - self.last_activity[uid]).total_seconds() < 600])
         }
-
-# ایجاد نمونه سراسری
 conversation_memory = ConversationMemory(max_history=10, expire_minutes=30)
-
-
- 
-# =============== کلاس مدیریت OpenRouter (پشتیبان) ===============
 class OpenRouterClient:
     """کلاینت اتصال به OpenRouter API (بدون تغییر)"""
     
@@ -10275,10 +9421,6 @@ class OpenRouterClient:
                     return f"❌ خطا: {str(e)[:100]}"
         
         return "❌ خطا در پردازش درخواست."
-
-
-
-# =============== توابع کمکی برای AI ===============
 def check_ai_limit(user_id: int) -> tuple:
     """بررسی محدودیت روزانه کاربر برای استفاده از AI
     
@@ -10318,21 +9460,12 @@ def reset_ai_limits():
     global user_ai_requests
     
     today = datetime.now().date().isoformat()
-    
-    # =============== ذخیره آمار قبل از ریست ===============
     before_count = sum(u['count'] for u in user_ai_requests.values() if u.get('date') == today)
     before_users = len([u for u in user_ai_requests.values() if u.get('date') == today])
-    
-    # =============== پاک کردن رکوردهای روزهای قبل ===============
     user_ai_requests = {uid: data for uid, data in user_ai_requests.items() if data['date'] == today}
-    
-    # =============== ریست کردن امروز (صفر کردن) ===============
-    # کاربران امروز را با count=0 تنظیم کن
     for uid in list(user_ai_requests.keys()):
         if user_ai_requests[uid]['date'] == today:
             user_ai_requests[uid]['count'] = 0
-    
-    # =============== ذخیره در دیتابیس ===============
     configs_pool['user_ai_requests'] = user_ai_requests
     save_all()
     
@@ -10353,8 +9486,6 @@ def is_ai_question(text: str) -> bool:
     ]
     
     text_lower = text.lower()
-    
-    # کلمات ساده و رایج
     simple_keywords = ['چطوری', 'چجوری', 'چه جوری', 'نمیشه', 'کار نمیکنه']
     
     for kw in ai_keywords + simple_keywords:
@@ -10362,26 +9493,17 @@ def is_ai_question(text: str) -> bool:
             return True
     
     return False
-
-
-# =============== دستور جدید برای AI ===============
 @dp.message(Command("ai"))
 async def cmd_ai(message: Message):
     """دستور استفاده از هوش مصنوعی"""
     user_id = message.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # ✅ اصلاح: هم OpenRouter و هم Gemini رو چک کن
     ai_available = (OPENROUTER_ENABLED and openrouter_client) or (GEMINI_ENABLED and gemini_client)
     
     if not ai_available:
         text = "❌ هوش مصنوعی در حال حاضر در دسترس نیست." if lang == "fa" else "❌ AI is currently unavailable."
         await message.reply(text)
         return
-    
-    # بقیه کد به همین صورت...
-    
-    # دستور /ai بدون متن - نمایش راهنما
     if not message.text or len(message.text.split()) < 2:
         if lang == "fa":
             text = f"""
@@ -10421,29 +9543,18 @@ Send /cancel to abort.
 """
         await message.reply(text, parse_mode=ParseMode.HTML)
         return
-    
-    # استخراج سوال
     question = message.text.replace("/ai", "").strip()
     if not question:
         return
-    
-    # بررسی محدودیت
     can_use, remaining, limit_msg = check_ai_limit(user_id)
     if not can_use:
         await message.reply(limit_msg)
         return
-    
-    # ارسال پیام در حال پردازش
     processing_msg = await message.reply("🤖 در حال پردازش سوال شما..." if lang == "fa" else "🤖 Processing your question...")
     
     try:
-        # دریافت پاسخ از AI
         answer = await openrouter_client.chat(question, user_id, message.from_user.username)
-        
-        # افزایش شمارش استفاده
         increment_ai_usage(user_id)
-        
-        # فرمت پاسخ
         if lang == "fa":
             response_text = f"""
 {premium_emoji('star', '🤖')} <b>پاسخ هوش مصنوعی:</b>
@@ -10464,8 +9575,6 @@ Send /cancel to abort.
 """
         
         await processing_msg.edit_text(response_text, parse_mode=ParseMode.HTML)
-        
-        # لاگ
         logger.info(f"AI سوال از کاربر {user_id}: {question[:50]}...")
         
     except Exception as e:
@@ -10486,10 +9595,7 @@ async def cmd_memory(message: Message):
     parts = message.text.split()
     
     if len(parts) == 1:
-        # نمایش وضعیت حافظه
         stats = conversation_memory.get_stats()
-        
-        # نمایش تاریخچه خود ادمین
         if conversation_memory.has_history(ADMIN_ID_INT):
             history = conversation_memory.get_history(ADMIN_ID_INT)
             history_text = "\n".join([
@@ -10542,8 +9648,6 @@ async def cmd_memory(message: Message):
                     await message.reply(f"❌ کاربر {target_id} هیچ تاریخی ندارد")
             except:
                 await message.reply("❌ آیدی نامعتبر")
-
-# =============== دستور ادمین برای مدیریت AI ===============
 @dp.callback_query(F.data == "admin_ai_settings")
 async def admin_ai_settings(callback: CallbackQuery):
     """تنظیمات هوش مصنوعی برای ادمین"""
@@ -10551,12 +9655,8 @@ async def admin_ai_settings(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== دریافت وضعیت از دیتابیس ===============
     ai_settings = configs_pool.get('ai_settings', {})
     ai_button_status = ai_settings.get('button_enabled', True)  # پیش‌فرض True
-    
-    # تعیین وضعیت سرویس‌ها
     if gemini_client:
         ai_status = "🟢 Google Gemini"
         model_name = GEMINI_MODEL
@@ -10569,11 +9669,7 @@ async def admin_ai_settings(callback: CallbackQuery):
         ai_status = "🔴 غیرفعال"
         model_name = "هیچ سرویسی فعال نیست"
         daily_limit = 0
-    
-    # وضعیت دکمه AI برای کاربران (از دیتابیس)
     button_status = "🟢 فعال" if ai_button_status else "🔴 غیرفعال"
-    
-    # محاسبه استفاده روزانه
     today = datetime.now().date().isoformat()
     daily_usage = sum(u['count'] for u in user_ai_requests.values() if u.get('date') == today)
     
@@ -10651,11 +9747,7 @@ async def admin_toggle_ai_button(callback: CallbackQuery):
     
     global AI_FEATURE_ENABLED
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # تغییر وضعیت
     AI_FEATURE_ENABLED = not AI_FEATURE_ENABLED
-    
-    # =============== ذخیره در configs_pool برای ماندگاری بعد از ریستارت ===============
     if 'ai_settings' not in configs_pool:
         configs_pool['ai_settings'] = {}
     configs_pool['ai_settings']['button_enabled'] = AI_FEATURE_ENABLED
@@ -10663,8 +9755,6 @@ async def admin_toggle_ai_button(callback: CallbackQuery):
     save_all()  # ذخیره در دیتابیس
     
     status_text = "فعال" if AI_FEATURE_ENABLED else "غیرفعال"
-    
-    # لاگ در سیستم
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
@@ -10673,8 +9763,6 @@ async def admin_toggle_ai_button(callback: CallbackQuery):
         )
     
     await callback.answer(f"✅ دکمه AI {status_text} شد!", show_alert=True)
-    
-    # برگشت به صفحه تنظیمات با وضعیت جدید
     await admin_ai_settings(callback)
 
 @dp.callback_query(F.data == "admin_ai_test")
@@ -10752,21 +9840,12 @@ async def admin_ai_reset_limits(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== دریافت آمار قبل از ریست ===============
     today = datetime.now().date().isoformat()
     before_count = sum(u['count'] for u in user_ai_requests.values() if u.get('date') == today)
     before_users = len([u for u in user_ai_requests.values() if u.get('date') == today])
-    
-    # =============== ریست محدودیت‌ها ===============
     reset_ai_limits()
-    
-    # =============== ذخیره در دیتابیس ===============
-    # user_ai_requests را در configs_pool ذخیره کن
     configs_pool['user_ai_requests'] = user_ai_requests
     save_all()
-    
-    # =============== لاگ عملیات ===============
     logger.info(f"🔄 محدودیت‌های AI توسط ادمین {callback.from_user.id} ریست شد")
     logger.info(f"   تعداد کاربران قبل: {before_users} | تعداد سوالات: {before_count}")
     
@@ -10776,8 +9855,6 @@ async def admin_ai_reset_limits(callback: CallbackQuery):
             "ریست محدودیت‌های AI",
             details=f"کاربران: {before_users} | سوالات: {before_count}"
         )
-    
-    # =============== پیام موفقیت ===============
     if lang == "fa":
         text = f"""
 ✅ <b>محدودیت‌های AI با موفقیت ریست شد!</b>
@@ -10798,8 +9875,6 @@ async def admin_ai_reset_limits(callback: CallbackQuery):
 
 🔓 All users can use AI again.
 """
-    
-    # =============== ارسال پیام ===============
     try:
         await callback.message.edit_text(
             text,
@@ -10812,7 +9887,6 @@ async def admin_ai_reset_limits(callback: CallbackQuery):
             parse_mode=ParseMode.HTML
         )
     except Exception as e:
-        # اگر نتوانست پیام را ویرایش کند، پیام جدید بفرست
         await callback.message.answer(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -10866,29 +9940,22 @@ async def xui_get_client_info(email: str) -> Optional[dict]:
                         
                         return client
                     else:
-                        # اگر success: false باشه، یعنی کلاینت وجود نداره
                         logger.info(f"ℹ️ کلاینت {email} در پنل یافت نشد (success: false)")
                         return None
                 elif response.status == 404:
-                    # کلاینت واقعاً وجود نداره
                     logger.info(f"ℹ️ کلاینت {email} در پنل یافت نشد (404)")
                     return None
                 else:
-                    # خطای دیگه - مثل 500, 403, 429
                     logger.warning(f"⚠️ خطا در دریافت کلاینت {email}: Status {response.status}")
-                    # برای خطاهای 5xx، None برمی‌گردونه (که باعث حذف نمیشه)
                     if response.status >= 500:
                         logger.warning(f"⚠️ خطای سرور {response.status} - کلاینت {email} ممکنه وجود داشته باشه")
-                        # برای خطاهای سرور، یه آبجکت خالی برمی‌گردونیم تا حذف نشه
                         return {}  # آبجکت خالی یعنی "کلاینت وجود داره ولی نتونستیم اطلاعاتش رو بگیریم"
                     return None
     except asyncio.TimeoutError:
         logger.warning(f"⏰ تایم‌اوت در دریافت کلاینت {email}")
-        # برای تایم‌اوت، آبجکت خالی برمی‌گردونیم تا حذف نشه
         return {}
     except aiohttp.ClientError as e:
         logger.warning(f"🌐 خطای شبکه در دریافت کلاینت {email}: {e}")
-        # برای خطای شبکه، آبجکت خالی برمی‌گردونیم تا حذف نشه
         return {}
     except Exception as e:
         logger.error(f"❌ خطا در دریافت اطلاعات کلاینت {email}: {e}")
@@ -10899,7 +9966,6 @@ def extract_email_from_sub_link(sub_link: str) -> Optional[str]:
     """استخراج email از لینک ساب"""
     if not sub_link:
         return None
-    # لینک به صورت: https://.../sub/user796066403_1781029484
     parts = sub_link.rstrip('/').split('/')
     if parts:
         return parts[-1]  # آخرین قسمت = email
@@ -10961,8 +10027,6 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
     status = f"{status_emoji} فعال" if enabled else f"{status_emoji} غیرفعال"
 
     total_bytes = client.get("totalGB", 0)
-
-    # =============== حجم کل ===============
     if total_bytes == 0:
         total_display = "♾️ نامحدود"
     else:
@@ -10986,8 +10050,6 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
 
     if total_bytes > 0:
         total_gb = total_bytes / (1024 ** 3)
-        
-        # =============== دریافت ترافیک ===============
         up = 0
         down = 0
         if traffic:
@@ -11001,13 +10063,9 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
         
         email = client.get("email", "")
         is_test = email.startswith("test_")
-        
-        # =============== نمایش مصرف و باقیمانده ===============
         if is_test:
             used_mb = used * 1024
             remain_mb = remain * 1024
-            
-            # ✅ اگر مصرف 0 هست، "0 MB" نمایش بده
             if used <= 0:
                 used_display = "0 MB"
             else:
@@ -11018,15 +10076,12 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
             else:
                 remain_display = f"{round(remain_mb, 2)} MB"
         else:
-            # نمایش مصرف
             if used <= 0:
                 used_display = "0 MB"
             elif used < 1:
                 used_display = f"{round(used * 1024, 2)} MB"
             else:
                 used_display = f"{round(used, 2)} GB"
-
-            # نمایش باقی‌مانده
             if remain <= 0:
                 remain_display = "0 MB"
             elif remain < 1:
@@ -11075,7 +10130,6 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
 {volume_info}
 {premium_emoji('hourglass','⏳')} اعتبار: {days_left}
 """
-# =============== تولید QR Code ===============
 from aiogram.types import BufferedInputFile
 
 def generate_qr_code(data: str, order_id: int):
@@ -11094,8 +10148,6 @@ def generate_qr_code(data: str, order_id: int):
     bio.name = f'qrcode_{order_id}.png'
     qr_img.save(bio, 'PNG', quality=95)
     bio.seek(0)
-    
-    # برگردوندن BufferedInputFile برای aiogram 3.x
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
 
 def get_config_caption(order_id: int, volume: Union[int, float], days: int, price: int, config_link: str, lang: str = "fa") -> str:
@@ -11108,8 +10160,6 @@ def get_config_caption(order_id: int, volume: Union[int, float], days: int, pric
     if order:
         is_test = order.get('type') == 'test'
         ip_limit = order.get('ip_limit', 0)
-    
-    # =============== تشخیص حجم صفر یا None ===============
     if volume is None or volume == 0 or (isinstance(volume, float) and volume < 0.001):
         volume_display = "نامحدود"
     else:
@@ -11187,24 +10237,15 @@ def get_config_caption(order_id: int, volume: Union[int, float], days: int, pric
 {premium_emoji('qr','📱')} <b>QR Code for scanning</b>
 
 """
-
-# =============== توابع رفرال ===============
 async def process_referral(new_id: int, ref_id: int):
     """پردازش رفرال - فقط برای کاربران جدید"""
-    # چک کن که کاربر قبلاً وجود نداشته باشد
     uid = str(new_id)
-    
-    # اگر کاربر از قبل در دیتابیس وجود دارد، رفرال ثبت نکن
     if uid in users:
         logger.info(f"⚠️ کاربر {new_id} قبلاً ثبت نام کرده، رفرال ثبت نشد")
         return
-    
-    # چک نکن که رفرال دهنده با خودش یکی نباشد
     if str(ref_id) == str(new_id):
         logger.warning(f"⚠️ کاربر {new_id} تلاش کرد خودش را دعوت کند")
         return
-    
-    # ثبت رفرال
     key = f"{ref_id}_{new_id}"
     if key not in referrals:
         referrals[key] = {
@@ -11214,8 +10255,6 @@ async def process_referral(new_id: int, ref_id: int):
             'reward_given': False
         }
         save_all()
-        
-        # فقط پیام به دعوت کننده بده
         try:
             await bot.send_message(
                 ref_id, 
@@ -11232,36 +10271,22 @@ async def check_referral_bonus(user_id: int):
     """بررسی و اعمال پاداش رفرال - فقط برای کاربرانی که با لینک دعوت ثبت نام کرده‌اند"""
     user = get_user(user_id)
     ref_id = user.get('referred_by')
-    
-    # اگر کاربر با لینک دعوت ثبت نام نکرده، پاداشی وجود ندارد
     if not ref_id:
         logger.info(f"کاربر {user_id} بدون لینک دعوت ثبت نام کرده، پاداشی تعلق نمی‌گیرد")
         return False
-    
-    # اگر قبلاً خرید کرده، دیگر پاداش نده
     if user.get('has_purchased'):
         logger.info(f"کاربر {user_id} قبلاً خرید کرده، پاداش قبلاً داده شده")
         return False
-    
-    # پیدا کردن رفرال
     key = f"{ref_id}_{user_id}"
     if key not in referrals:
         logger.warning(f"⚠️ رفرال {key} در دیتابیس یافت نشد")
         return False
-    
-    # اگر پاداش قبلاً داده شده، دوباره نده
     if referrals[key].get('reward_given'):
         logger.info(f"پاداش رفرال {key} قبلاً داده شده")
         return False
-    
-    # دریافت مبلغ پاداش از تنظیمات
     settings = configs_pool.get('price_settings', {})
     bonus = settings.get('referral_bonus', 5000)
-    
-    # ذخیره موجودی قبلی برای لاگ
     old_balance = get_user(ref_id).get('balance', 0)
-    
-    # اعمال پاداش به دعوت‌کننده
     add_balance(ref_id, bonus)
     referrals[key]['reward_given'] = True
     user['has_purchased'] = True
@@ -11270,8 +10295,6 @@ async def check_referral_bonus(user_id: int):
     new_balance = old_balance + bonus
     
     logger.info(f"✅ پاداش رفرال {bonus} تومانی به کاربر {ref_id} داده شد (از طرف {user_id})")
-    
-    # لاگ در سیستم خارجی
     if log_system:
         await log_system.log_balance_change(
             user_id=ref_id,
@@ -11286,8 +10309,6 @@ async def check_referral_bonus(user_id: int):
             action="دریافت پاداش دعوت",
             details=f"مبلغ: {bonus:,} تومان | کاربر دعوت شده: {user_id}"
         )
-    
-    # ارسال پیام به کاربر دعوت‌کننده
     try:
         await bot.send_message(
             ref_id,
@@ -11327,32 +10348,21 @@ async def save_feedback(user_id: int, order_id: int, rating: str, comment: str =
         logger.info(f"بازخورد جدید از کاربر {user_id} برای سفارش #{order_id} ذخیره شد")
     except Exception as e:
         logger.error(f"خطا در ارسال بازخورد به ادمین: {e}")
-
-
-
-# =============== کیبوردها ===============
 def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = None) -> InlineKeyboardMarkup:
     """کیبورد اصلی با پشتیبانی از وضعیت تایید کاربر"""
-    
-    # =============== بررسی وضعیت تایید کاربر ===============
     show_approval_warning = False
     is_approved = True
     
     if user_id and not is_admin:
         user = get_user(user_id)
-        
-        # =============== اگر کاربر لغو کرده یا رد شده ===============
         if user.get('registration_status') in ['cancelled', 'rejected']:
             show_approval_warning = True
             is_approved = False
         else:
-            # =============== بررسی دسترسی خرید ===============
             can_purchase, msg = can_user_purchase(user_id)
             is_approved = can_purchase
             if not is_approved:
                 show_approval_warning = True
-    
-    # ... ادامه کد کیبورد به همین صورت ...
     
     if lang == "fa":
         buttons = [
@@ -11371,8 +10381,6 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 InlineKeyboardButton(text=f"🏷️ اعمال کوپن", callback_data="apply_coupon", style="primary")
             ]
         ]
-        
-        # =============== اگر کاربر تایید نشده، دکمه هشدار اضافه کن ===============
         if show_approval_warning:
             buttons.insert(0, [
                 InlineKeyboardButton(
@@ -11381,8 +10389,6 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                     style="danger"
                 )
             ])
-        
-        # فقط اگه AI فعال باشه دکمه رو نشون بده
         if AI_FEATURE_ENABLED:
             buttons[2].append(InlineKeyboardButton(text=f"🤖 {'چت با AI' if lang=='fa' else 'Chat with AI'}", callback_data="ai_chat", style="primary"))
         if TEST_SERVICE_STATUS.get('enabled', False):
@@ -11410,8 +10416,6 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 InlineKeyboardButton(text=f"🏷️ Apply coupon", callback_data="apply_coupon", style="primary")
             ]
         ]
-        
-        # =============== اگر کاربر تایید نشده، دکمه هشدار اضافه کن ===============
         if show_approval_warning:
             buttons.insert(0, [
                 InlineKeyboardButton(
@@ -11438,26 +10442,18 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# =============== دریافت تست سرویس ===============
-
 @dp.callback_query(F.data == "get_test_service")
 async def get_test_service(callback: CallbackQuery):
     """دریافت تست سرویس توسط کاربر - نسخه کامل اصلاح شده"""
     user_id = callback.from_user.id
-    
-    # =============== چک لیست سیاه ===============
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
-    
-    # =============== بررسی عضویت اجباری ===============
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
         return
-    
-    # =============== بررسی فعال بودن تست سرویس ===============
     if not TEST_SERVICE_STATUS.get('enabled', False):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer(
@@ -11467,37 +10463,26 @@ async def get_test_service(callback: CallbackQuery):
         return
     
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # =============== دریافت تنظیمات تست ===============
-    # تنظیمات پیش‌فرض
     default_volume_mb = TEST_SERVICE_STATUS.get('volume_mb', 1024)
     default_days = TEST_SERVICE_STATUS.get('days', 3)
     default_max_tests = TEST_SERVICE_STATUS.get('max_tests', 1)
     default_ip_limit = TEST_SERVICE_STATUS.get('ip_limit', 0)
-    
-    # تنظیمات اختصاصی کاربر
     user_settings = get_user_test_settings(user_id)
     volume_mb = user_settings.get('volume_mb', default_volume_mb)
     days = user_settings.get('days', default_days)
     max_tests = user_settings.get('max_tests', default_max_tests)
     ip_limit = user_settings.get('ip_limit', default_ip_limit)
-    
-    # =============== تبدیل حجم ===============
     if volume_mb == 0:
         volume_gb = 0  # 0 = نامحدود
         volume_display = "نامحدود"
     else:
         volume_gb = volume_mb / 1024  # تبدیل به گیگابایت برای پنل
         volume_display = format_volume(volume_mb, is_test=True)  # نمایش هوشمند
-    
-    # =============== دیباگ ===============
     logger.info(f"🧪 تست برای کاربر {user_id}:")
     logger.info(f"  📦 حجم: {volume_mb} MB ({volume_gb} GB) - {volume_display}")
     logger.info(f"  ⏱ مدت: {days} روز")
     logger.info(f"  🔢 حداکثر تست: {max_tests}")
     logger.info(f"  👤 محدودیت IP: {ip_limit}")
-    
-    # =============== بررسی تعداد تست‌های کاربر ===============
     uid = str(user_id)
     user_test_data = USER_TEST_USAGE.get(uid, {})
     test_count = user_test_data.get('count', 0)
@@ -11514,8 +10499,6 @@ async def get_test_service(callback: CallbackQuery):
                 show_alert=True
             )
         return
-    
-    # =============== دریافت اینباندهای تست ===============
     test_inbound_ids = TEST_SERVICE_STATUS.get('inbound_ids', [])
     
     if not test_inbound_ids:
@@ -11531,18 +10514,13 @@ async def get_test_service(callback: CallbackQuery):
             if default_ids:
                 test_inbound_ids = default_ids
                 logger.info(f"📌 استفاده از اینباندهای پیش‌فرض برای تست: {test_inbound_ids}")
-    
-    # =============== فرمت پیام تست ===============
     test_message = TEST_SERVICE_STATUS.get('message', '🎁 یک سرویس تست {volume} / {days} روز برای شما فعال شد!')
     test_message = test_message.format(volume=volume_display, days=days)
-    
-    # =============== ارسال پیام در حال ساخت ===============
     await callback.message.edit_text(
         "⏳ در حال ساخت سرویس تست..." if lang == "fa" else "⏳ Creating test service..."
     )
     
     try:
-        # =============== ساخت کلاینت در پنل ===============
         email = f"test_{user_id}_{int(datetime.now().timestamp())}"
         user_info = get_user(user_id)
         user_name = user_info.get('name', f'کاربر_{user_id}')
@@ -11558,7 +10536,6 @@ async def get_test_service(callback: CallbackQuery):
         )
         
         if sub_link:
-            # =============== ثبت در دیتابیس ===============
             order_id = create_order(user_id, volume_gb, days, 0, "test", ip_limit=ip_limit)
             update_order(order_id, 
                         status='approved', 
@@ -11568,8 +10545,6 @@ async def get_test_service(callback: CallbackQuery):
                         payment_method='test',
                         inbound_id=test_inbound_ids,
                         approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            
-            # =============== ذخیره اطلاعات تست کاربر ===============
             USER_TEST_USAGE[uid] = {
                 'count': test_count + 1,
                 'last_test': datetime.now().isoformat(),
@@ -11582,8 +10557,6 @@ async def get_test_service(callback: CallbackQuery):
                     'ip_limit': ip_limit
                 }
             }
-            
-            # =============== ارسال نوتیفیکیشن به ادمین ===============
             await send_admin_notification('test', {
                 'user_id': user_id,
                 'volume': volume_mb,
@@ -11594,24 +10567,16 @@ async def get_test_service(callback: CallbackQuery):
                 'inbound_ids': test_inbound_ids,
                 'ip_limit': ip_limit
             })
-            
-            # =============== ذخیره در فایل ===============
             try:
                 test_file = os.path.join(DATA_DIR, "test_usage.json")
                 with open(test_file, 'w', encoding='utf-8') as f:
                     json.dump(USER_TEST_USAGE, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 logger.error(f"خطا در ذخیره تست یوزر: {e}")
-            
-            # =============== حذف پیام "در حال ساخت" ===============
             try:
                 await callback.message.delete()
             except:
                 pass
-            
-            
-            
-            # =============== ارسال کانفیگ به کاربر ===============
             await send_config_with_qr_option(user_id, order_id, volume_gb, days, 0, sub_link, lang)
             
             
@@ -11683,7 +10648,6 @@ async def get_test_service(callback: CallbackQuery):
             logger.error(f"❌ خطا در ساخت تست برای کاربر {user_id}")
             
     except Exception as e:
-        # =============== خطای غیرمنتظره ===============
         logger.error(f"❌ خطا در دریافت تست: {e}", exc_info=True)
         await callback.message.edit_text(
             "❌ خطا در پردازش درخواست. لطفاً بعداً تلاش کنید." if lang == "fa" else "❌ Error processing request. Please try again later.",
@@ -11712,13 +10676,9 @@ async def xui_update_client(email: str, total_gb: float, expiry_time: int) -> bo
 
             csrf = await xui_get_csrf_token(session)
             headers = {"X-CSRF-Token": csrf} if csrf else {}
-
-            # ابتدا اطلاعات کامل کلاینت را دریافت کن
             client_info = await xui_get_client_info(email)
             if not client_info:
                 return False
-
-            # داده کامل برای به‌روزرسانی (همه فیلدها)
             update_data = {
                 "email": email,
                 "totalGB": int(total_gb * 1024 * 1024 * 1024),
@@ -11814,8 +10774,6 @@ async def _finalize_extension(order_id: int, user_id: int, email: str, new_volum
     if not order:
         logger.error(f"❌ [_finalize_extension] سفارش #{order_id} یافت نشد")
         return False
-    
-    # =============== به‌روزرسانی سفارش در دیتابیس ===============
     new_volume_total = current_volume_gb + extra_volume
     new_days_total = order.get('days', 0) + extra_days
     
@@ -11831,13 +10789,9 @@ async def _finalize_extension(order_id: int, user_id: int, email: str, new_volum
                 updated_at=datetime.now().isoformat())
     
     logger.info(f"✅ [_finalize_extension] سفارش #{order_id} با موفقیت به‌روزرسانی شد")
-    
-    # =============== ذخیره اینباندهای ترکیبی برای کاربر ===============
     if combined_inbounds:
         save_user_inbound_selection(user_id, combined_inbounds)
         logger.info(f"📡 [_finalize_extension] اینباندهای ترکیبی برای کاربر {user_id} ذخیره شد: {combined_inbounds}")
-    
-    # =============== لاگ در سیستم ===============
     if log_system:
         await log_system.log_user_action(
             user_id,
@@ -12034,8 +10988,6 @@ async def extend_service(
     logger.info(f"   📦 حجم اضافی: {extra_volume}GB {'(نامحدود)' if extra_volume == 0 else ''}")
     logger.info(f"   ⏱ روز اضافی: {extra_days} روز")
     logger.info(f"   👤 محدودیت IP جدید: {new_ip_limit if new_ip_limit is not None else 'بدون تغییر'}")
-    
-    # =============== 1. بررسی سفارش ===============
     order = orders.get(str(order_id))
     if not order:
         logger.error(f"❌ سفارش #{order_id} برای تمدید یافت نشد")
@@ -12049,8 +11001,6 @@ async def extend_service(
     if not SENAI_PANEL_ENABLED:
         logger.error("❌ پنل برای تمدید سرویس فعال نیست")
         return False
-    
-    # =============== 2. دریافت اطلاعات کلاینت از پنل ===============
     try:
         logger.info(f"📡 دریافت اطلاعات کلاینت {email} از پنل...")
         client_info = await xui_get_client_info(email)
@@ -12058,15 +11008,11 @@ async def extend_service(
         if not client_info:
             logger.error(f"❌ کلاینت {email} در پنل یافت نشد")
             return False
-        
-        # =============== 3. دریافت اینباندهای فعلی ===============
         current_inbounds = await get_client_inbounds(email)
         if not isinstance(current_inbounds, list):
             current_inbounds = [current_inbounds] if current_inbounds else []
         
         logger.info(f"📡 اینباندهای فعلی: {current_inbounds}")
-        
-        # =============== 4. دریافت اینباندهای جدید ===============
         if new_inbounds is not None:
             selected_inbounds = new_inbounds
         else:
@@ -12078,8 +11024,6 @@ async def extend_service(
             selected_inbounds = [selected_inbounds] if selected_inbounds else []
         
         logger.info(f"📡 اینباندهای جدید (انتخاب شده): {selected_inbounds}")
-        
-        # =============== 5. پیدا کردن اینباندهای حذف و اضافه ===============
         inbounds_to_detach = []
         for inbound_id in current_inbounds:
             if inbound_id and inbound_id not in selected_inbounds:
@@ -12091,8 +11035,6 @@ async def extend_service(
             if inbound_id and inbound_id not in current_inbounds:
                 inbounds_to_attach.append(inbound_id)
                 logger.info(f"➕ اینباند {inbound_id} باید اضافه شود")
-        
-        # =============== 6. محاسبه مقادیر جدید ===============
         current_volume_gb = client_info.get('totalGB', 0) / (1024**3)
         current_expiry = client_info.get('expiryTime', 0)
         current_ip_limit = client_info.get('limitIp', 0)
@@ -12101,8 +11043,6 @@ async def extend_service(
         logger.info(f"   📦 حجم فعلی: {current_volume_gb:.2f} GB")
         logger.info(f"   ⏱ انقضای فعلی: {datetime.fromtimestamp(current_expiry/1000).strftime('%Y-%m-%d %H:%M:%S') if current_expiry > 0 else 'نامحدود'}")
         logger.info(f"   👤 محدودیت IP فعلی: {current_ip_limit if current_ip_limit > 0 else 'نامحدود'}")
-        
-        # حجم جدید
         if extra_volume == 0:
             new_volume_bytes = 0
             new_volume_gb = 0
@@ -12111,8 +11051,6 @@ async def extend_service(
             new_volume_bytes = int((current_volume_gb + extra_volume) * 1024 * 1024 * 1024)
             new_volume_gb = current_volume_gb + extra_volume
             logger.info(f"📦 حجم جدید: {new_volume_gb:.2f} GB")
-        
-        # تاریخ جدید
         if current_expiry > 0:
             current_expiry_date = datetime.fromtimestamp(current_expiry / 1000)
             new_expiry = int((current_expiry_date + timedelta(days=extra_days)).timestamp() * 1000)
@@ -12122,12 +11060,8 @@ async def extend_service(
             new_expiry_date = datetime.now() + timedelta(days=extra_days)
         
         logger.info(f"⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # محدودیت IP
         final_ip_limit = new_ip_limit if new_ip_limit is not None else current_ip_limit
         logger.info(f"👤 محدودیت IP جدید: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
-        
-        # =============== 7. به‌روزرسانی کلاینت (UPDATE) ===============
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
             logger.info(f"🔑 ورود به پنل...")
@@ -12139,8 +11073,6 @@ async def extend_service(
             logger.info(f"🔐 دریافت CSRF token...")
             csrf = await xui_get_csrf_token(session)
             headers = {"X-CSRF-Token": csrf} if csrf else {}
-            
-            # داده UPDATE (بدون inboundIds)
             update_data = {
                 "email": email,
                 "totalGB": new_volume_bytes,
@@ -12183,8 +11115,6 @@ async def extend_service(
                     return False
             
             logger.info(f"✅ UPDATE با موفقیت انجام شد")
-            
-            # =============== 8. حذف اینباندهای اضافی (DETACH) ===============
             if inbounds_to_detach:
                 logger.info(f"📤 حذف اینباندهای {inbounds_to_detach} از کلاینت {email}...")
                 detach_success = await xui_detach_inbounds(email, inbounds_to_detach)
@@ -12192,8 +11122,6 @@ async def extend_service(
                     logger.info(f"✅ اینباندهای {inbounds_to_detach} با موفقیت حذف شدند")
                 else:
                     logger.warning(f"⚠️ خطا در detach اینباندها")
-            
-            # =============== 9. اضافه کردن اینباندهای جدید (ATTACH) ===============
             if inbounds_to_attach:
                 logger.info(f"📤 اضافه کردن اینباندهای {inbounds_to_attach} به کلاینت {email}...")
                 attach_success = await xui_attach_inbounds(email, inbounds_to_attach)
@@ -12201,8 +11129,6 @@ async def extend_service(
                     logger.info(f"✅ اینباندهای {inbounds_to_attach} با موفقیت اضافه شدند")
                 else:
                     logger.warning(f"⚠️ خطا در attach اینباندها")
-        
-        # =============== 10. نهایی‌سازی ===============
         new_volume_total = 0 if extra_volume == 0 else (current_volume_gb + extra_volume)
         new_days_total = order.get('days', 0) + extra_days
         
@@ -12284,19 +11210,13 @@ async def extend_service_start(callback: CallbackQuery):
     user_id = callback.from_user.id
     order_id = int(callback.data.split("_")[2])
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # بررسی دسترسی کاربر
     order = orders.get(str(order_id))
     if not order or order.get('user_id') != user_id:
         await callback.answer("❌ سفارش یافت نشد" if lang == "fa" else "❌ Order not found", show_alert=True)
         return
-    
-    # =============== ✅ اصلاح: سرویس‌های غیرفعال هم قابل تمدید هستند ===============
     if order.get('status') not in ['approved', 'inactive']:
         await callback.answer("❌ این سرویس قابل تمدید نیست" if lang == "fa" else "❌ This service cannot be extended", show_alert=True)
         return
-    
-    # ذخیره اطلاعات در user_states برای پردازش بعدی
     user_states[user_id] = {
         'extend_order_id': order_id,
         'current_volume': order.get('volume', 0),
@@ -12305,19 +11225,11 @@ async def extend_service_start(callback: CallbackQuery):
         'is_extend': True,
         'timestamp': datetime.now().isoformat()
     }
-    
-    # تنظیم حجم و روز پیش‌فرض برای خرید
     update_user(user_id, 'volume', 1)
     update_user(user_id, 'days', 30)
-    
-    # =============== فراخوانی buy_service برای نمایش کیبورد ===============
     await buy_service(callback)
-    
-    # =============== بعد از buy_service، پیام رو به روز می‌کنیم ===============
     try:
         await asyncio.sleep(0.5)  # کمی صبر تا buy_service کامل اجرا بشه
-        
-        # دریافت وضعیت جدید
         user = get_user(user_id)
         vol = user.get('volume', 1)
         days = user.get('days', 30)
@@ -12350,8 +11262,6 @@ Select the volume and duration to <b>add</b> to your current service.
 
 {premium_emoji('wallet', '💰')} Your balance: {balance:,} Toman
 """
-        
-        # ویرایش پیام با متن جدید (کیبورد قبلی حفظ میشه)
         await callback.message.edit_text(
             new_text,
             reply_markup=callback.message.reply_markup,
@@ -12418,15 +11328,11 @@ async def emergency_backup_from_panel():
         
         
         user_names_from_panel = {}
-        
-        # =============== تابع extract_user_info ===============
         def extract_user_info(email: str, comment: str) -> tuple:
             """استخراج user_id, user_name و order_type از ایمیل و کامنت"""
             user_id = None
             user_name = None
             order_type = None
-            
-            # =============== 1. از ایمیل: user_id + order_type ===============
             if email.startswith('test_'):
                 order_type = 'test'
                 parts = email.split('_')
@@ -12982,8 +11888,6 @@ async def admin_test_user_reset_single(callback: CallbackQuery):
             f"✅ User {user_info['full_name']} test reset with {old_count} tests!",
             show_alert=True
         )
-    
-    # بازگشت به صفحه تنظیمات کاربر
     await admin_test_user_settings(callback)
     
     
@@ -13004,21 +11908,14 @@ def migrate_test_inbound_data():
 async def verify_membership(callback: CallbackQuery):
     """بررسی عضویت کاربر و تایید آن"""
     user_id = callback.from_user.id
-    
-    # ادمین نیازی به بررسی ندارد
     if user_id == ADMIN_ID_INT:
-        # آپدیت وضعیت verified برای ادمین
         user = get_user(user_id)
         user['verified'] = True
         save_all()
-        
-        # حذف پیام تایید عضویت
         try:
             await callback.message.delete()
         except:
             pass
-        
-        # نمایش منوی اصلی
         lang = get_user(user_id).get('lang', 'fa')
         await bot.send_message(
             user_id,
@@ -13035,12 +11932,10 @@ async def verify_membership(callback: CallbackQuery):
     
     if not settings.get('enabled', False):
         await callback.answer("✅ قابلیت عضویت اجباری غیرفعال است", show_alert=True)
-        # حذف پیام تایید
         try:
             await callback.message.delete()
         except:
             pass
-        # نمایش منوی اصلی
         lang = get_user(user_id).get('lang', 'fa')
         await bot.send_message(
             user_id,
@@ -13072,8 +11967,6 @@ async def verify_membership(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"خطا در callback.answer: {e}")
         return
-    
-    # نمایش پیام در حال بررسی
     await callback.message.edit_text(
         "⏳ در حال بررسی عضویت شما..." if get_user(user_id).get('lang', 'fa') == "fa" else "⏳ Checking your membership...",
         reply_markup=None
@@ -13098,13 +11991,10 @@ async def verify_membership(callback: CallbackQuery):
     lang = get_user(user_id).get('lang', 'fa')
     
     if not_joined:
-        # هنوز عضو نشده، دوباره صفحه تایید را نمایش بده
         text = "❌ <b>شما در کانال‌های زیر عضو نیستید:</b>\n\n" if lang == "fa" else "❌ <b>You are not a member of:</b>\n\n"
         for ch in not_joined:
             text += f"• {ch.get('name', ch.get('id'))}\n"
         text += f"\nلطفاً ابتدا عضو شوید سپس دوباره تلاش کنید." if lang == "fa" else f"\nPlease join first then try again."
-        
-        # بازسازی دکمه‌های لینک برای کانال‌های عضو نشده
         buttons = []
         for ch in not_joined:
             channel_id = ch.get('id')
@@ -13133,18 +12023,13 @@ async def verify_membership(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"خطا در callback.answer: {e}")
     else:
-        # عضویت تایید شد
         user = get_user(user_id)
         user['verified'] = True
         save_all()
-        
-        # پاک کردن پیام تایید عضویت
         try:
             await callback.message.delete()
         except:
             pass
-        
-        # ارسال پیام خوش آمدگویی و منوی اصلی
         welcome_text = "✅ <b>عضویت شما تأیید شد!</b>\n\nاکنون می‌توانید از تمام امکانات ربات استفاده کنید." if lang == "fa" else "✅ <b>Your membership has been verified!</b>\n\nYou can now use all bot features."
         
         await bot.send_message(
@@ -13153,8 +12038,6 @@ async def verify_membership(callback: CallbackQuery):
             parse_mode=ParseMode.HTML,
             reply_markup=get_main_keyboard(False, lang)
         )
-        
-        # لاگ تایید عضویت
         if log_system:
             await log_system.log_user_action(
                 user_id,
@@ -13168,22 +12051,16 @@ async def ai_chat_start(callback: CallbackQuery):
     """شروع چت با هوش مصنوعی - با حفظ کوپن"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [ai_chat_start] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    
-    # بررسی AI available...
     ai_available = (OPENROUTER_ENABLED and openrouter_client) or (GEMINI_ENABLED and gemini_client)
     if not ai_available:
         await callback.answer("❌ هوش مصنوعی در حال حاضر در دسترس نیست.", show_alert=True)
         return
-    
-    # تنظیم وضعیت کاربر (با حفظ کوپن)
     if user_id in user_states:
         user_states.pop(user_id, None)
     
@@ -13191,16 +12068,11 @@ async def ai_chat_start(callback: CallbackQuery):
         'ai_chat_mode': True,
         'timestamp': datetime.now().isoformat()
     }
-    
-    # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount
         logger.info(f"🏷️ [ai_chat_start] کوپن {coupon_code} حفظ شد")
-    
-    # ... ادامه کد ...
-    # اگر کاربر قبلاً تاریخچه داره، ادامه مکالمه
     if conversation_memory.has_history(user_id):
         history = conversation_memory.get_history(user_id)
         last_message = history[-1] if history else None
@@ -13222,7 +12094,6 @@ async def ai_chat_start(callback: CallbackQuery):
                 "Ask your question."
             )
     else:
-        # کاربر جدید - خوش‌آمدگویی کامل
         if lang == "fa":
             await send_sticker(user_id, 'robot', '🤖')
             welcome_text = f"""
@@ -13278,8 +12149,6 @@ async def clear_ai_memory(callback: CallbackQuery):
     """پاک کردن حافظه مکالمه کاربر - با حفظ کوپن"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
@@ -13292,15 +12161,11 @@ async def clear_ai_memory(callback: CallbackQuery):
         "🧹 حافظه مکالمه پاک شد!" if lang == "fa" else "🧹 Memory cleared!",
         show_alert=True
     )
-    
-    # =============== اگر کوپن فعال بود، دوباره ذخیره کن ===============
     if coupon_applied and coupon_code:
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount
         logger.info(f"🏷️ [clear_ai_memory] کوپن {coupon_code} حفظ شد")
-    
-    # برگشت به صفحه چت
     await callback.message.delete()
     await ai_chat_start(callback)
         
@@ -13310,20 +12175,14 @@ async def exit_ai_chat(callback: CallbackQuery):
     user_id = callback.from_user.id
     save_coupon_to_user_db(user_id)
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [exit_ai_chat] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    
-    # پاک کردن وضعیت AI (به جز کوپن)
     if user_id in user_states:
         user_states.pop(user_id, None)
-    
-    # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id] = {
             'coupon_code': coupon_code,
@@ -13333,8 +12192,6 @@ async def exit_ai_chat(callback: CallbackQuery):
         logger.info(f"🏷️ [exit_ai_chat] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
     else:
         logger.warning(f"⚠️ [exit_ai_chat] کوپنی برای کاربر {user_id} یافت نشد")
-    
-    # برگشت به منوی اصلی
     is_admin = (user_id == ADMIN_ID_INT)
     
     coupon_message = ""
@@ -13358,9 +12215,6 @@ async def exit_ai_chat(callback: CallbackQuery):
         
         
 
-        
-        
-        
 @dp.callback_query(F.data.startswith("admin_reset_verification_"))
 async def admin_reset_verification(callback: CallbackQuery):
     """ادمین می‌تواند وضعیت verified کاربر را ریست کند"""
@@ -13376,8 +12230,6 @@ async def admin_reset_verification(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     await callback.answer(f"✅ وضعیت عضویت کاربر {user.get('name')} ریست شد" if lang == "fa" else f"✅ User {user.get('name')} verification reset", show_alert=True)
-    
-    # ارسال پیام به کاربر
     try:
         await bot.send_message(
             target_id,
@@ -13393,7 +12245,6 @@ async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_mar
         if text and reply_markup:
             await callback.message.edit_text(text, reply_markup=reply_markup)
         elif reply_markup:
-            # فقط کیبورد را آپدیت کن
             await callback.message.edit_reply_markup(reply_markup=reply_markup)
         elif text:
             await callback.message.edit_text(text)
@@ -13407,14 +12258,9 @@ async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_mar
         
 def get_purchase_keyboard(volume: int, days: int, lang: str = "fa") -> InlineKeyboardMarkup:
     buttons = []
-    
-    # =============== دکمه بسته‌های آماده (در بالای کیبورد) ===============
     try:
-        # بررسی اینکه آیا بسته‌های آماده فعال هستند
         ready_enabled = READY_PACKAGES.get('enabled', True)
         categories = READY_PACKAGES.get('categories', [])
-        
-        # فیلتر دسته‌های فعال و بررسی بسته‌های فعال
         has_packages = False
         if ready_enabled and categories:
             for cat in categories:
@@ -13423,8 +12269,6 @@ def get_purchase_keyboard(volume: int, days: int, lang: str = "fa") -> InlineKey
                     if active_packages:
                         has_packages = True
                         break
-        
-        # اگر بسته‌های آماده فعال هستند و حداقل یک بسته فعال وجود دارد
         if ready_enabled and has_packages:
             buttons.append([
                 InlineKeyboardButton(
@@ -13439,8 +12283,6 @@ def get_purchase_keyboard(volume: int, days: int, lang: str = "fa") -> InlineKey
             
     except Exception as e:
         logger.error(f"❌ خطا در بررسی بسته‌های آماده: {e}", exc_info=True)
-    
-    # =============== دکمه‌های تنظیم حجم و مدت ===============
     buttons.extend([
         [
             InlineKeyboardButton(text="➖", callback_data="vol_down"),
@@ -13625,8 +12467,6 @@ async def admin_emergency_backup(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== نمایش پیام تایید ===============
     if lang == "fa":
         text = """
 🚨 <b>بکاپ اضطراری از پنل</b>
@@ -13679,7 +12519,6 @@ Are you sure you want to proceed?
     ])
     
     try:
-        # حذف پیام قبلی و ارسال پیام جدید
         await callback.message.delete()
     except:
         pass
@@ -13695,16 +12534,12 @@ Are you sure you want to proceed?
 @dp.callback_query(F.data == "admin_emergency_backup")
 async def admin_emergency_backup_callback(callback: CallbackQuery):
     """دکمه بکاپ اضطراری در پنل ادمین - نسخه CallbackQuery"""
-    
-    # =============== ✅ لاگ اولیه ===============
     logger.critical(f"🔴 admin_emergency_backup CALLED! data={callback.data}")
     
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== ✅ ارسال پیام تاییدیه ===============
     if lang == "fa":
         text = """
 🚨 <b>بکاپ اضطراری از پنل</b>
@@ -13755,8 +12590,6 @@ Are you sure you want to proceed?
             )
         ]
     ])
-    
-    # =============== ✅ حذف پیام قبلی و ارسال جدید ===============
     try:
         await callback.message.delete()
         logger.info("✅ پیام قبلی حذف شد")
@@ -13774,7 +12607,6 @@ Are you sure you want to proceed?
         logger.info("✅ callback.answer انجام شد")
     except Exception as e:
         logger.warning(f"⚠️ خطا در callback.answer: {e}")
-# =============== تست گزارش سلامت ===============
 @dp.callback_query(F.data == "test_health_report")
 async def test_health_report(callback: CallbackQuery):
     """تست دستی گزارش سلامت"""
@@ -13782,13 +12614,9 @@ async def test_health_report(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     await callback.answer("⏳ در حال تولید گزارش...")
-    
-    # اجرای دستی تابع health_monitor
     await send_health_report(callback.message.chat.id)
     
     await callback.message.answer("✅ گزارش سلامت ارسال شد!")
-
-# =============== تست هشدار دیسک ===============
 @dp.callback_query(F.data == "test_disk_warning")
 async def test_disk_warning(callback: CallbackQuery):
     """تست دستی هشدار فضای دیسک"""
@@ -13796,13 +12624,9 @@ async def test_disk_warning(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     await callback.answer("⏳ در حال بررسی...")
-    
-    # شبیه‌سازی فضای کم دیسک
     import shutil
     total, used, free = shutil.disk_usage(".")
     free_gb = free / (1024**3)
-    
-    # این پیام را حتی اگر فضا کم نباشد ارسال کن (برای تست)
     warning_msg = f"""
 🧪 <b>تست هشدار فضای دیسک</b>
 
@@ -13814,7 +12638,6 @@ async def test_disk_warning(callback: CallbackQuery):
 
 📁 <b>فایل‌های بزرگ:</b>
 """
-    # پیدا کردن فایل‌های بزرگ
     large_files = []
     for file in ['bot_debug.log', 'events.log', 'bot_error.log']:
         if os.path.exists(file):
@@ -13923,7 +12746,6 @@ async def admin_coupon_create_process(message: Message):
     
     try:
         if step == 'code':
-            # ✅ حذف .upper() - کد را همان‌طور که وارد شده ذخیره کن
             code = message.text.strip().replace(' ', '')
             
             if len(code) < 3:
@@ -13933,8 +12755,6 @@ async def admin_coupon_create_process(message: Message):
             if not code.isalnum():
                 await message.reply("❌ کد کوپن باید فقط شامل حروف و اعداد انگلیسی باشد!" if lang == "fa" else "❌ Coupon code must contain only English letters and numbers!")
                 return
-            
-            # ✅ بررسی دقیق (حساس به حروف)
             if code in COUPONS:
                 await message.reply(f"❌ کد {code} قبلاً استفاده شده است!" if lang == "fa" else f"❌ Code {code} already exists!")
                 return
@@ -14051,26 +12871,18 @@ async def admin_coupon_create_process(message: Message):
             coupon_data['status'] = 'active'
             coupon_data['used_count'] = 0
             coupon_data['used_by'] = []
-            
-            # محاسبه تاریخ انقضا
             if expiry_days > 0:
                 expiry_date = datetime.now() + timedelta(days=expiry_days)
                 coupon_data['expiry_date'] = expiry_date.isoformat()
             else:
                 coupon_data['expiry_date'] = None
-            
-            # =============== دریافت کد (بدون تغییر) ===============
             code = coupon_data.get('code', '')
             discount = coupon_data.get('discount', 0)
             usage_limit = coupon_data.get('usage_limit', 0)
-            
-            # ✅ ذخیره کوپن با کد اصلی (بدون تغییر)
             COUPONS[code] = coupon_data
             save_coupons(COUPONS)
             
             user_states.pop(admin_id, None)
-            
-            # نمایش نتیجه
             expiry_text = f"{expiry_days} روز" if expiry_days > 0 else "نامحدود"
             limit_text = f"{usage_limit} بار" if usage_limit > 0 else "نامحدود"
             
@@ -14371,8 +13183,6 @@ async def admin_coupons_list(callback: CallbackQuery):
         ]
         await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
         return
-    
-    # مرتب‌سازی بر اساس تاریخ
     sorted_coupons = sorted(COUPONS.items(), key=lambda x: x[1].get('created_at', ''), reverse=True)
     
     if lang == "fa":
@@ -14448,13 +13258,8 @@ async def use_coupon(message: Message):
             parse_mode=ParseMode.HTML
         )
         return
-    
-    # ✅ کد را بدون تغییر نگه دار
     code = parts[1].strip()
-    
-    # =============== بررسی وجود کوپن (حساس به حروف) ===============
     if code not in COUPONS:
-        # برای دیباگ، بررسی کن که اگر با حالت دیگر وجود داره
         code_upper = code.upper()
         code_lower = code.lower()
         code_title = code.title()
@@ -14490,11 +13295,6 @@ async def use_coupon(message: Message):
     
     coupon = COUPONS[code]
     logger.info(f"🔍 [use_coupon] کوپن {code} پیدا شد - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
-    
-    # =============== بقیه کد به همین صورت ===============
-    # بررسی مصرف قبلی، وضعیت، تاریخ انقضا، تعداد استفاده و اعمال کوپن
-    # ...
-    # =============== بررسی اینکه کاربر قبلاً این کوپن را مصرف کرده است ===============
     if user_id in coupon.get('used_by', []):
         clear_coupon_from_user_db(user_id)
         await message.reply(
@@ -14503,8 +13303,6 @@ async def use_coupon(message: Message):
         )
         fully_remove_coupon_from_user(user_id)
         return
-    
-    # =============== بررسی وضعیت کوپن ===============
     if coupon.get('status') != 'active':
         status_text = {
             'used': '❌ این کوپن به پایان رسیده است!',
@@ -14513,8 +13311,6 @@ async def use_coupon(message: Message):
         
         await message.reply(status_text if lang == "fa" else "❌ This coupon is not active!")
         return
-    
-    # =============== بررسی تاریخ انقضا ===============
     expiry_date = coupon.get('expiry_date')
     if expiry_date:
         try:
@@ -14526,8 +13322,6 @@ async def use_coupon(message: Message):
                 return
         except:
             pass
-    
-    # =============== بررسی تعداد استفاده ===============
     usage_limit = coupon.get('usage_limit', 0)
     used_count = coupon.get('used_count', 0)
     
@@ -14536,12 +13330,8 @@ async def use_coupon(message: Message):
         save_coupons(COUPONS)
         await message.reply("❌ این کوپن به حداکثر تعداد استفاده رسیده است!" if lang == "fa" else "❌ This coupon has reached its usage limit!")
         return
-    
-    # =============== اعمال کوپن ===============
     discount = coupon.get('discount', 0)
     remaining = usage_limit - used_count if usage_limit > 0 else 'نامحدود'
-    
-    # ✅ ذخیره در user_states با کد اصلی (همان کد وارد شده)
     user_states[user_id] = {
         'coupon_code': code,  # ✅ کد اصلی بدون تغییر
         'coupon_discount': discount,
@@ -14550,11 +13340,7 @@ async def use_coupon(message: Message):
     
     logger.info(f"✅ [use_coupon] کوپن {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد")
     logger.info(f"🔍 [use_coupon] user_states[{user_id}] = {user_states[user_id]}")
-    
-    # ✅ دیباگ - بررسی اینکه کوپن ذخیره شده
     debug_coupon_state(user_id, "use_coupon_end")
-    
-    # پیام موفقیت
     if lang == "fa":
         await message.reply(
             f"{premium_emoji('success','✅')} <b>کوپن با موفقیت اعمال شد!</b>\n\n"
@@ -14580,9 +13366,6 @@ async def use_coupon(message: Message):
             parse_mode=ParseMode.HTML
         )
     save_coupon_to_user_db(user_id)
-
-
-# =============== تست گزارش هفتگی ===============
 @dp.callback_query(F.data == "test_weekly_report")
 async def test_weekly_report(callback: CallbackQuery):
     """تست دستی گزارش هفتگی با جزئیات کامل"""
@@ -14590,23 +13373,15 @@ async def test_weekly_report(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     await callback.answer("⏳ در حال تولید گزارش کامل...")
-    
-    # اجرای دستی تابع گزارش هفتگی
     await send_weekly_detailed_report(callback.message.chat.id)
     
     await callback.message.answer("✅ گزارش هفتگی ارسال شد!")
-    
-# =============== توابع گزارش‌دهی ===============
 
 async def send_health_report(chat_id: int):
     """ارسال گزارش سلامت با نمایش هوشمند حجم"""
-    
-    # =============== محاسبه حجم ===============
     db_size = get_database_size()
     total_bytes = db_size.get('total', 0)
     total_formatted = format_size(total_bytes)
-    
-    # =============== اطلاعات پایه ===============
     valid_orders = get_valid_orders()
     pending = len([o for o in valid_orders.values() if o.get('status') in ['pending', 'awaiting_payment']])
     
@@ -14618,22 +13393,14 @@ async def send_health_report(chat_id: int):
         cookie = await xui_login()
         if cookie:
             panel_status = "🟢 فعال"
-    
-    # =============== فضای دیسک ===============
     import shutil
     total, used, free = shutil.disk_usage(".")
     free_gb = free / (1024**3)
     used_gb = used / (1024**3)
     total_gb = total / (1024**3)
-    
-    # =============== اطلاعات مالی ===============
     total_balance = sum(u.get('balance', 0) for u in users.values())
     total_revenue = sum(o.get('price', 0) for o in valid_orders.values() if o.get('status') == 'approved')
-    
-    # =============== تعداد بکاپ‌ها ===============
     backup_count = len(get_backup_list())
-    
-    # =============== ساخت گزارش ===============
     report = f"""
 📊 <b>گزارش سلامت ربات</b>
 
@@ -14642,8 +13409,6 @@ async def send_health_report(chat_id: int):
 📁 <b>دیتابیس:</b>
 • حجم کل: {total_formatted}
 """
-    
-    # نمایش حجم هر فایل به صورت جداگانه
     for name, size in db_size.items():
         if name != 'total' and name != 'total_formatted':
             report += f"  • {name}: {format_size(size)}\n"
@@ -14669,8 +13434,6 @@ async def send_health_report(chat_id: int):
 • پنل: {panel_status}
 • آخرین بکاپ: {datetime.now().strftime('%Y-%m-%d')}
 """
-    
-    # هشدار فضای دیسک
     if free_gb < 1.0:
         report += f"""
 
@@ -14688,8 +13451,6 @@ async def send_disk_warning(chat_id: int):
     free_gb = free / (1024**3)
     used_gb = used / (1024**3)
     total_gb = total / (1024**3)
-    
-    # پیدا کردن فایل‌های بزرگ
     large_files = []
     for file in ['bot_debug.log', 'events.log', 'bot_error.log']:
         if os.path.exists(file):
@@ -14718,10 +13479,6 @@ async def send_disk_warning(chat_id: int):
 
 async def send_weekly_detailed_report(chat_id: int):
     """ارسال گزارش هفتگی با جزئیات کامل"""
-    
-    # =============== جمع‌آوری اطلاعات کامل ===============
-    
-    # 1. اطلاعات دیتابیس
     db_size = get_database_size()
     total_mb = db_size.get('total', 0) / (1024 * 1024)
     
@@ -14729,18 +13486,12 @@ async def send_weekly_detailed_report(chat_id: int):
     approved_orders = len([o for o in valid_orders.values() if o.get('status') == 'approved'])
     pending_orders = len([o for o in valid_orders.values() if o.get('status') in ['pending', 'awaiting_payment']])
     rejected_orders = len([o for o in valid_orders.values() if o.get('status') == 'rejected'])
-    
-    # 2. اطلاعات کاربران
     total_users = len(users)
     active_users = len([u for u in users.values() if u.get('is_active', True)])
     verified_users = len([u for u in users.values() if u.get('verified', False)])
     blacklist_count = len(BLACKLIST)
-    
-    # 3. اطلاعات مالی
     total_balance = sum(u.get('balance', 0) for u in users.values())
     total_revenue = sum(o.get('price', 0) for o in valid_orders.values() if o.get('status') == 'approved')
-    
-    # 4. اطلاعات پنل
     panel_status = "🔴 غیرفعال"
     inbounds_count = 0
     panel_clients = 0
@@ -14751,13 +13502,9 @@ async def send_weekly_detailed_report(chat_id: int):
             panel_status = "🟢 فعال"
             inbounds = await xui_get_inbounds()
             inbounds_count = len(inbounds)
-            
-            # آمار کلاینت‌ها
             for o in valid_orders.values():
                 if o.get('status') == 'approved' and o.get('config_link'):
                     panel_clients += 1
-    
-    # 5. اطلاعات سیستم
     memory_info = get_memory_usage()
     
     import shutil
@@ -14765,22 +13512,14 @@ async def send_weekly_detailed_report(chat_id: int):
     free_gb = free / (1024**3)
     used_gb = used / (1024**3)
     total_gb = total / (1024**3)
-    
-    # 6. اطلاعات رفرال
     total_referrals = len(referrals)
     paid_referrals = len([r for r in referrals.values() if r.get('reward_given', False)])
-    
-    # 7. اطلاعات بکاپ
     backups = get_backup_list()
     backup_count = len(backups)
     backup_total_mb = sum(b['size_mb'] for b in backups) if backups else 0
-    
-    # 8. اطلاعات چت و فیدبک
     active_chats = len(get_active_chats())
     total_chats = len(chats)
     total_feedbacks = len(feedbacks)
-    
-    # 9. اطلاعات کانفیگ
     available_configs = get_available_configs_count()
     
     report = f"""
@@ -14864,9 +13603,6 @@ def get_admin_configs_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=f"📋 Available Configs", callback_data="admin_list_configs")],
             [InlineKeyboardButton(text=f"🔙 Back", callback_data="admin_panel", style="danger")]
         ])
-        
-        
-# =============== بسته‌های آماده - مدیریت کامل ===============
 
 async def get_ready_packages_text(lang: str = "fa") -> tuple:
     """دریافت متن و دکمه‌های منوی بسته‌های آماده"""
@@ -15073,20 +13809,13 @@ async def show_ready_categories(callback: CallbackQuery):
         return
     
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # =============== بررسی و ذخیره کوپن ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
-    
-    # ✅ اگر کوپن در user_states نیست ولی در جای دیگری هست، آن را ذخیره کن
     if not coupon_applied or not coupon_code:
-        # بررسی کوپن‌های فعال در دیتابیس برای این کاربر
         for code, coupon in COUPONS.items():
             if coupon.get('status') == 'active' and user_id not in coupon.get('used_by', []):
-                # این کوپن قبلاً اعمال نشده، اما ممکن است کاربر آن را اعمال کرده باشد
-                # از user_states برای ذخیره استفاده می‌کنیم
                 pass
     
     logger.info(f"🔍 [show_ready_categories] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
@@ -15111,8 +13840,6 @@ async def show_ready_categories(callback: CallbackQuery):
             text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
             callback_data="back_to_main"
         )]]
-        
-        # =============== اصلاح: مدیریت خطای message to edit not found ===============
         try:
             await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
         except Exception as e:
@@ -15129,12 +13856,9 @@ async def show_ready_categories(callback: CallbackQuery):
         return
     
     categories.sort(key=lambda x: x.get('order', 999))
-    
-    # =============== نمایش وضعیت کوپن اگر فعال باشد ===============
     coupon_text = ""
     if coupon_applied and coupon_code:
         coupon_text = f"\n\n🏷️ <b>کوپن فعال:</b> {coupon_code} ({coupon_discount}%)"
-        # ✅ مطمئن شو کوپن در user_states هست
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount
@@ -15174,8 +13898,6 @@ Please select a package:{coupon_text}
         callback_data="back_to_main",
         style="danger"
     )])
-    
-    # =============== اصلاح: مدیریت خطای message to edit not found ===============
     try:
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -15197,8 +13919,6 @@ async def cmd_test_keyboard(message: Message):
         return
     
     lang = get_user(message.from_user.id).get('lang', 'fa')
-    
-    # نمایش وضعیت بسته‌ها
     text = "🧪 <b>تست کیبورد خرید</b>\n\n"
     
     text += f"🔘 READY_PACKAGES.enabled: {READY_PACKAGES.get('enabled')}\n"
@@ -15211,11 +13931,7 @@ async def cmd_test_keyboard(message: Message):
             text += f"  • {pkg.get('volume')}GB - {pkg.get('price'):,} تومان\n"
     
     text += "\n🔄 کیبورد ساخته شده:\n"
-    
-    # ساخت کیبورد و نمایش
     keyboard = get_purchase_keyboard(1, 30, lang)
-    
-    # بررسی دکمه‌ها
     has_packages_button = False
     for row in keyboard.inline_keyboard:
         for btn in row:
@@ -15227,8 +13943,6 @@ async def cmd_test_keyboard(message: Message):
         text += "❌ دکمه بسته‌های آماده پیدا نشد!\n"
     
     await message.reply(text, parse_mode=ParseMode.HTML)
-    
-    # ارسال کیبورد واقعی
     await message.answer(
         "🛒 <b>کیبورد خرید</b>",
         reply_markup=keyboard,
@@ -15423,17 +14137,11 @@ async def buy_specific_package(callback: CallbackQuery):
     
     lang = get_user(user_id).get('lang', 'fa')
     user = get_user(user_id)
-    
-    # =============== دریافت وضعیت کامل کاربر (برای تشخیص تمدید) ===============
     full_state = user_states.get(user_id, {})
-    
-    # =============== بررسی وضعیت تمدید ===============
     is_extend = full_state.get('is_extend', False)
     extend_order_id = full_state.get('extend_order_id')
     current_volume = full_state.get('current_volume', 0)
     current_days = full_state.get('current_days', 0)
-    
-    # =============== لاگ وضعیت تمدید ===============
     if is_extend and extend_order_id:
         logger.info(f"🔄 [buy_specific_package] کاربر {user_id} در حالت تمدید است - سفارش اصلی: #{extend_order_id}")
         logger.info(f"   📦 حجم فعلی: {current_volume}GB - ⏱ مدت فعلی: {current_days} روز")
@@ -15451,8 +14159,6 @@ async def buy_specific_package(callback: CallbackQuery):
         ip_display = "👤 تعداد کاربر: ۱ دستگاه"
     else:
         ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه"
-    
-    # =============== اعمال تخفیف کوپن ===============
     user_state = user_states.get(user_id, {})
     discount_percent = 0
     final_price = original_price
@@ -15484,8 +14190,6 @@ async def buy_specific_package(callback: CallbackQuery):
                 user_states[user_id].pop('coupon_applied', None)
             discount_percent = 0
             final_price = original_price
-    
-    # =============== دریافت اینباندهای دسته ===============
     category_inbound_ids = category.get('inbound_ids', [])
     
     if not category_inbound_ids:
@@ -15511,16 +14215,12 @@ async def buy_specific_package(callback: CallbackQuery):
     logger.info(f"📦 کاربر {user_id} بسته {package_id} از دسته {category.get('name')} را انتخاب کرد - {volume_display}/{days} روز - قیمت اصلی: {original_price:,} - قیمت نهایی: {final_price:,}")
     logger.info(f"📡 اینباندهای دسته {category.get('name')}: {category_inbound_ids}")
     logger.info(f"👤 تعداد کاربر: {ip_limit if ip_limit > 0 else 'نامحدود'}")
-    
-    # =============== تنظیم حجم و روز کاربر ===============
     update_user(user_id, 'volume', volume if volume > 0 else 1)
     update_user(user_id, 'days', days)
     
     if category_inbound_ids:
         save_user_inbound_selection(user_id, category_inbound_ids)
         logger.info(f"📡 اینباندهای {category_inbound_ids} برای کاربر {user_id} تنظیم شد (بسته آماده)")
-    
-    # =============== ذخیره اطلاعات بسته با وضعیت تمدید ===============
     user_states[user_id] = {
         'payment_type': 'ready_package',
         'category_id': category_id,
@@ -15536,7 +14236,6 @@ async def buy_specific_package(callback: CallbackQuery):
         'category_icon': category.get('icon', '📦'),
         'current_page': 'package_payment',
         'ip_limit': ip_limit,
-        # =============== اضافه کردن وضعیت تمدید ===============
         'is_extend': is_extend,
         'extend_order_id': extend_order_id,
         'current_volume': current_volume,
@@ -15553,8 +14252,6 @@ async def buy_specific_package(callback: CallbackQuery):
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = discount_percent
         logger.info(f"🏷️ کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
-    
-    # =============== نمایش صفحه پرداخت با وضعیت تمدید ===============
     category_icon = category.get('icon', '📦')
     category_name = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
     balance = user.get('balance', 0)
@@ -15562,8 +14259,6 @@ async def buy_specific_package(callback: CallbackQuery):
     discount_text = ""
     if discount_percent > 0 and final_price != original_price:
         discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
-    
-    # =============== نمایش وضعیت تمدید در پیام ===============
     extend_text = ""
     if is_extend and extend_order_id:
         extend_text = f"""
@@ -15642,11 +14337,6 @@ async def buy_specific_package(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-        
-        
-        
-        
-# =============== توابع مدیریت کوپن ===============
 
 def fully_remove_coupon_from_user(user_id: int):
     """حذف کامل کوپن از وضعیت کاربر (زمانی که کاربر خودش کوپن را لغو می‌کند)"""
@@ -15668,8 +14358,6 @@ def release_coupon(user_id: int) -> bool:
         return False
     
     coupon = COUPONS[code]
-    
-    # اگر کوپن قبلاً مصرف شده بود، قابل آزادسازی نیست
     if user_id in coupon.get('used_by', []):
         clear_coupon_from_user_db(user_id)
         logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
@@ -15693,22 +14381,16 @@ def consume_coupon(user_id: int) -> bool:
     
     coupon = COUPONS[code]
     logger.info(f"🔍 [consume_coupon] کوپن {code} - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
-    
-    # =============== جلوگیری از مصرف دوباره ===============
     if user_id in coupon.get('used_by', []):
         logger.info(f"🏷️ [consume_coupon] کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده است")
         fully_remove_coupon_from_user(user_id)
         clear_coupon_from_user_db(user_id)
         return False
-    
-    # =============== بررسی اینکه کوپن هنوز فعال است ===============
     if coupon.get('status') != 'active':
         logger.warning(f"⚠️ [consume_coupon] کوپن {code} دیگر فعال نیست (وضعیت: {coupon.get('status')})")
         fully_remove_coupon_from_user(user_id)
         clear_coupon_from_user_db(user_id)
         return False
-    
-    # =============== بررسی تاریخ انقضا ===============
     expiry_date = coupon.get('expiry_date')
     if expiry_date:
         try:
@@ -15722,23 +14404,15 @@ def consume_coupon(user_id: int) -> bool:
                 return False
         except:
             pass
-    
-    # =============== افزایش تعداد استفاده ===============
     coupon['used_count'] = coupon.get('used_count', 0) + 1
-    
-    # اضافه کردن کاربر به لیست استفاده‌کنندگان
     if user_id not in coupon.get('used_by', []):
         coupon['used_by'].append(user_id)
-    
-    # =============== بررسی رسیدن به حد مجاز ===============
     usage_limit = coupon.get('usage_limit', 0)
     if usage_limit > 0 and coupon['used_count'] >= usage_limit:
         coupon['status'] = 'used'
         logger.info(f"🏷️ [consume_coupon] کوپن {code} به حداکثر مصرف ({usage_limit} بار) رسید و غیرفعال شد")
     
     save_coupons(COUPONS)
-    
-    # =============== پاک کردن کوپن از user_states و دیتابیس ===============
     fully_remove_coupon_from_user(user_id)
     clear_coupon_from_user_db(user_id)
     
@@ -15761,20 +14435,13 @@ def release_coupon_on_cancel(user_id: int) -> bool:
         return False
     
     coupon = COUPONS[code]
-    
-    # اگر کوپن قبلاً مصرف شده بود، قابل آزادسازی نیست
     if user_id in coupon.get('used_by', []):
         clear_coupon_from_user_db(user_id)
         logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
         return False
-    
-    # بررسی اینکه کوپن هنوز فعال است
     if coupon.get('status') != 'active':
         logger.info(f"🏷️ کوپن {code} دیگر فعال نیست (وضعیت: {coupon.get('status')})")
         return False
-    
-    # کوپن را در user_states نگه دار (حذف نکن!)
-    # فقط اطمینان حاصل کن که still اعمال شده است
     user_states[user_id]['coupon_applied'] = True
     user_states[user_id]['coupon_code'] = code
     user_states[user_id]['coupon_discount'] = coupon.get('discount', 0)
@@ -15839,16 +14506,11 @@ def apply_coupon_discount(user_id: int, price: int) -> tuple:
 async def show_ready_categories_keep_coupon(callback: CallbackQuery):
     """نمایش دسته‌بندی بسته‌ها - با حفظ کوپن"""
     user_id = callback.from_user.id
-    
-    # =============== کوپن را نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied')
-    
-    # =============== پاک کردن وضعیت بسته آماده (نه کوپن) ===============
     if user_id in user_states:
-        # فقط فلگ‌های بسته آماده را پاک کن
         user_states[user_id].pop('is_ready_package', None)
         user_states[user_id].pop('price', None)
         user_states[user_id].pop('inbound_id', None)
@@ -15856,15 +14518,11 @@ async def show_ready_categories_keep_coupon(callback: CallbackQuery):
         user_states[user_id].pop('package_id', None)
         user_states[user_id].pop('category_name', None)
         user_states[user_id].pop('current_page', None)
-        
-        # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
         if coupon_applied and coupon_code:
             user_states[user_id]['coupon_code'] = coupon_code
             user_states[user_id]['coupon_discount'] = coupon_discount
             user_states[user_id]['coupon_applied'] = True
             logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} در بازگشت به بسته‌ها حفظ شد")
-    
-    # =============== فراخوانی صفحه دسته‌بندی ===============
     await show_ready_categories(callback)
     
     
@@ -16192,29 +14850,19 @@ def get_admin_users_keyboard(page: int = 0, lang: str = "fa") -> InlineKeyboardM
     start = page * per_page
     end = start + per_page
     total_pages = (len(user_list) + per_page - 1) // per_page
-    
-    # =============== دریافت سفارشات تایید شده برای محاسبه تعداد ===============
     valid_orders = get_valid_orders()
     
     buttons = []
-    
-    # =============== کاربران این صفحه ===============
     for u in user_list[start:end]:
         user_id = u.get('id')
         name = u.get('name', 'کاربر' if lang == 'fa' else 'User')[:20]
         balance = u.get('balance', 0)
-        
-        # =============== محاسبه تعداد سفارشات تایید شده کاربر ===============
         orders_count = len([o for o in valid_orders.values() 
                            if o.get('user_id') == user_id and o.get('status') == 'approved'])
-        
-        # ✅ فرمت: 👤 نام - موجودی T (تعداد سفارش)
         buttons.append([InlineKeyboardButton(
             text=f"👤 {name} - {balance:,} T ({orders_count})",
             callback_data=f"admin_user_{user_id}_0"
         )])
-    
-    # =============== دکمه‌های ناوبری (فقط اگر بیشتر از ۱ صفحه باشد) ===============
     if total_pages > 1:
         nav = []
         if page > 0:
@@ -16236,8 +14884,6 @@ def get_admin_users_keyboard(page: int = 0, lang: str = "fa") -> InlineKeyboardM
         
         if nav:
             buttons.append(nav)
-    
-    # =============== دکمه برگشت ===============
     buttons.append([InlineKeyboardButton(
         text=f"🔙 {'برگشت' if lang=='fa' else 'Back'}",
         callback_data="admin_panel",
@@ -16261,18 +14907,10 @@ def get_cancel_reply_keyboard(lang: str = "fa") -> ReplyKeyboardMarkup:
         resize_keyboard=True
     )
 
-
-
-
-# دکمه مدیریت بسته‌ها به get_admin_keyboard اضافه شد
-# حالا هندلرهای مدیریت بسته‌ها رو اضافه می‌کنیم:
-
 @dp.callback_query(F.data == "admin_ready_packages")
 async def admin_ready_packages_menu(callback: CallbackQuery):
     """منوی مدیریت بسته‌های آماده"""
     await show_ready_packages_menu(callback)
-
-# =============== توابع مورد نیاز برای مدیریت بسته‌ها ===============
 
 @dp.callback_query(F.data == "admin_packages_toggle")
 async def admin_packages_toggle(callback: CallbackQuery):
@@ -16284,8 +14922,6 @@ async def admin_packages_toggle(callback: CallbackQuery):
     
     READY_PACKAGES['enabled'] = not READY_PACKAGES.get('enabled', True)
     READY_PACKAGES['last_updated'] = datetime.now().isoformat()
-    
-    # =============== ذخیره در دیتابیس ===============
     configs_pool['ready_packages'] = READY_PACKAGES
     save_all()
     
@@ -16352,12 +14988,8 @@ def format_volume(value: Union[int, float], is_test: bool = False) -> str:
         اگر کمتر از 1024MB باشد با MB نمایش می‌دهد.
         اگر بیشتر باشد با GB نمایش می‌دهد.
     """
-    
-    # =============== 0 = نامحدود ===============
     if value is None or value <= 0:
         return "نامحدود"
-    
-    # ---------------- تست ----------------
     if is_test:
         mb = value
         
@@ -16376,8 +15008,6 @@ def format_volume(value: Union[int, float], is_test: bool = False) -> str:
             return f"{mb:.1f} MB"
         else:
             return f"{mb:.2f} MB"
-    
-    # ---------------- عادی ----------------
     gb = value
     
     if gb < 0.001:  # کمتر از 1 مگابایت
@@ -16404,8 +15034,6 @@ async def admin_category_add_process(message: Message):
     """پردازش مراحل افزودن دسته"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
-    
-    # لغو عملیات
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply("❌ افزودن دسته لغو شد" if lang == "fa" else "❌ Cancelled")
@@ -16421,7 +15049,6 @@ async def admin_category_add_process(message: Message):
         return
     
     try:
-        # =============== مرحله ۱: نام فارسی ===============
         if step == 'name':
             category_data['name'] = message.text.strip()
             
@@ -16451,8 +15078,6 @@ async def admin_category_add_process(message: Message):
                     "Send /cancel to abort",
                     parse_mode=ParseMode.HTML
                 )
-        
-        # =============== مرحله ۲: نام انگلیسی ===============
         elif step == 'name_en':
             category_data['name_en'] = message.text.strip()
             
@@ -16482,8 +15107,6 @@ async def admin_category_add_process(message: Message):
                     "Send /cancel to abort",
                     parse_mode=ParseMode.HTML
                 )
-        
-        # =============== مرحله ۳: آیکون ===============
         elif step == 'icon':
             category_data['icon'] = message.text.strip() or '📦'
             
@@ -16509,8 +15132,6 @@ async def admin_category_add_process(message: Message):
                     "Send /cancel to abort",
                     parse_mode=ParseMode.HTML
                 )
-        
-        # =============== مرحله ۴: توضیحات فارسی ===============
         elif step == 'description':
             category_data['description'] = message.text.strip()
             
@@ -16536,31 +15157,19 @@ async def admin_category_add_process(message: Message):
                     "Send /cancel to abort",
                     parse_mode=ParseMode.HTML
                 )
-        
-        # =============== مرحله ۵: توضیحات انگلیسی (ذخیره نهایی) ===============
         elif step == 'description_en':
             category_data['description_en'] = message.text.strip()
-            
-            # =============== تکمیل داده‌های دسته ===============
             category_data['is_active'] = True
             category_data['inbound_id'] = None
             category_data['packages'] = []
-            
-            # دریافت ID جدید
             existing_ids = [c.get('id', 0) for c in READY_PACKAGES.get('categories', [])]
             new_id = max(existing_ids) + 1 if existing_ids else 1
             category_data['id'] = new_id
             category_data['order'] = len(READY_PACKAGES.get('categories', [])) + 1
-            
-            # اضافه کردن دسته
             READY_PACKAGES['categories'].append(category_data)
             READY_PACKAGES['last_updated'] = datetime.now().isoformat()
-            
-            # ذخیره در configs_pool
             configs_pool['ready_packages'] = READY_PACKAGES
             save_all()
-            
-            # =============== پیام موفقیت ===============
             if lang == "fa":
                 await message.reply(
                     f"✅ <b>دسته با موفقیت اضافه شد!</b>\n\n"
@@ -16581,11 +15190,7 @@ async def admin_category_add_process(message: Message):
                     f"💡 You can now add packages using '📦 Add Package to Category'.",
                     parse_mode=ParseMode.HTML
                 )
-            
-            # پاک کردن وضعیت
             user_states.pop(admin_id, None)
-            
-            # بازگشت به منوی مدیریت بسته‌ها
             await show_ready_packages_menu(message)
     
     except Exception as e:
@@ -16630,11 +15235,6 @@ async def admin_category_edit_select(callback: CallbackQuery):
     except:
         pass
 
-
-# =============== اصلاح تابع admin_category_edit برای نمایش تنظیم اینباند ===============
-
-# =============== ابتدا هندلرهای دقیق‌تر (با prefix طولانی‌تر) ===============
-
 @dp.callback_query(F.data.startswith("admin_category_inbound_set_"))
 async def admin_category_inbound_set(callback: CallbackQuery):
     """تنظیم اینباند برای دسته"""
@@ -16642,13 +15242,9 @@ async def admin_category_inbound_set(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     logger.info(f"🔴 admin_category_inbound_set CALLED: {callback.data}")
-    
-    # استخراج داده‌ها از کالبک
-    # فرمت: admin_category_inbound_set_1_default یا admin_category_inbound_set_1_2
     parts = callback.data.split("_")
     
     try:
-        # parts = ['admin', 'category', 'inbound', 'set', '1', 'default']
         category_id = int(parts[4])  # ایندکس 4 = category_id
         inbound_value = parts[5] if len(parts) > 5 else None  # ایندکس 5 = inbound_id یا 'default'
         
@@ -16664,8 +15260,6 @@ async def admin_category_inbound_set(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -16676,8 +15270,6 @@ async def admin_category_inbound_set(callback: CallbackQuery):
         logger.error(f"❌ دسته با ID {category_id} یافت نشد!")
         await callback.answer("❌ دسته یافت نشد!" if lang == "fa" else "❌ Category not found!", show_alert=True)
         return
-    
-    # تنظیم اینباند
     if inbound_value == 'default':
         category['inbound_id'] = None
         await callback.answer(
@@ -16695,17 +15287,12 @@ async def admin_category_inbound_set(callback: CallbackQuery):
         except ValueError:
             await callback.answer("❌ اینباند نامعتبر!", show_alert=True)
             return
-    
-    # ذخیره در دیتابیس
     READY_PACKAGES['last_updated'] = datetime.now().isoformat()
     configs_pool['ready_packages'] = READY_PACKAGES
     save_all()
     
     logger.info(f"✅ تغییرات ذخیره شد - اینباند {inbound_value} برای {category.get('name')}")
-    
-    # بازگشت به صفحه ویرایش دسته
     try:
-        # ساخت یک کالبک جدید برای ویرایش دسته
         callback.data = f"admin_category_edit_{category_id}"
         await admin_category_edit(callback)
     except Exception as e:
@@ -16729,21 +15316,13 @@ async def admin_category_inbound(callback: CallbackQuery):
     
     logger.info(f"🔍 admin_category_inbound CALLED: {callback.data}")
     
-    # =============== بررسی فرمت کالبک ===============
-    # فقط کالبک‌های با فرمت admin_category_inbound_XXX را پردازش کن
-    # کالبک‌های admin_category_inbound_set_XXX نباید اینجا بیایند
-    
     parts = callback.data.split("_")
-    
-    # اگر کالبک شامل 'set' باشد، یعنی باید به تابع دیگر برود
     if len(parts) > 3 and parts[3] == 'set':
         logger.warning(f"⚠️ کالبک {callback.data} باید به admin_category_inbound_set برود")
-        # هدایت به تابع صحیح
         await admin_category_inbound_set(callback)
         return
     
     try:
-        # فرمت: admin_category_inbound_1
         category_id = int(parts[3])  # ایندکس 3 = category_id
         logger.info(f"✅ category_id: {category_id}")
     except (ValueError, IndexError) as e:
@@ -16752,8 +15331,6 @@ async def admin_category_inbound(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -16763,8 +15340,6 @@ async def admin_category_inbound(callback: CallbackQuery):
     if not category:
         await callback.answer("❌ دسته یافت نشد!" if lang == "fa" else "❌ Category not found!", show_alert=True)
         return
-    
-    # دریافت لیست اینباندها
     await callback.message.edit_text("⏳ در حال دریافت لیست اینباندها...")
     
     inbounds = await xui_get_inbounds()
@@ -16801,8 +15376,6 @@ Please select an inbound:
 """
     
     buttons = []
-    
-    # دکمه برای حذف اینباند اختصاصی (استفاده از پیش‌فرض)
     buttons.append([InlineKeyboardButton(
         text="📌 استفاده از اینباند پیش‌فرض" if lang == "fa" else "📌 Use Default Inbound",
         callback_data=f"admin_category_inbound_set_{category_id}_default"
@@ -16859,8 +15432,6 @@ async def admin_category_edit_field_start(callback: CallbackQuery):
     """شروع ویرایش یک فیلد از دسته"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # 🔥 استفاده از Regex برای استخراج دقیق
     pattern = r"admin_category_edit_field_(\d+)_(.+)"
     match = re.match(pattern, callback.data)
     
@@ -16871,8 +15442,6 @@ async def admin_category_edit_field_start(callback: CallbackQuery):
     
     category_id = int(match.group(1))
     field = match.group(2)  # description, name, name_en, icon, description_en
-    
-    # 🔥 لاگ کامل
     logger.info(f"🔍 [start] CALLBACK DATA: {callback.data}")
     logger.info(f"🔍 [start] category_id: {category_id}, field: {field}")
     
@@ -16947,8 +15516,6 @@ async def admin_category_edit(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -16960,18 +15527,13 @@ async def admin_category_edit(callback: CallbackQuery):
         return
     
     status_text = "🟢 فعال" if category.get('is_active', True) else "🔴 غیرفعال"
-    
-    # =============== دریافت لیست اینباندهای اختصاصی دسته ===============
     inbound_ids = category.get('inbound_ids', [])
     if not inbound_ids:
-        # اگر داده قدیمی است و inbound_id دارد
         old_inbound = category.get('inbound_id')
         if old_inbound:
             inbound_ids = [old_inbound]
             category['inbound_ids'] = inbound_ids
             category['inbound_id'] = None  # حذف کلید قدیمی
-    
-    # دریافت اطلاعات اینباندها
     inbound_info = "❌ پیش‌فرض (همانند کاربر)"
     if inbound_ids:
         inbounds = await xui_get_inbounds()
@@ -17386,8 +15948,6 @@ async def save_package_edit(message: Message):
     """ذخیره ویرایش فیلد بسته با پشتیبانی از IP Limit و حجم نامحدود"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
-    
-    # لغو عملیات
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply("❌ ویرایش لغو شد" if lang == "fa" else "❌ Cancelled")
@@ -17405,8 +15965,6 @@ async def save_package_edit(message: Message):
     
     try:
         new_value = int(message.text.replace(',', '').replace(' ', '').strip())
-        
-        # اعتبارسنجی
         if edit_field == 'volume' and (new_value < 0 or new_value > 1000):
             await message.reply("❌ حجم باید بین ۰ تا ۱۰۰۰ گیگ باشد! (۰ = نامحدود)" if lang == "fa" else "❌ Volume must be between 0 and 1000 GB! (0 = Unlimited)")
             return
@@ -17422,8 +15980,6 @@ async def save_package_edit(message: Message):
         if edit_field == 'ip_limit' and new_value < 0:
             await message.reply("❌ محدودیت IP نمی‌تواند منفی باشد! (۰ = نامحدود)" if lang == "fa" else "❌ IP limit cannot be negative! (0 = Unlimited)")
             return
-        
-        # پیدا کردن و ویرایش بسته
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
                 for pkg in cat.get('packages', []):
@@ -17453,8 +16009,6 @@ async def save_package_edit(message: Message):
                         )
                         
                         user_states.pop(admin_id, None)
-                        
-                        # بازگشت به صفحه ویرایش بسته
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[
                             [InlineKeyboardButton(
                                 text="🔙 بازگشت به ویرایش بسته" if lang == "fa" else "🔙 Back to Package Edit",
@@ -17504,8 +16058,6 @@ async def package_toggle(callback: CallbackQuery):
                         f"✅ بسته {status} شد!" if lang == "fa" else f"✅ Package {status}d!",
                         show_alert=True
                     )
-                    
-                    # بازگشت به صفحه ویرایش بسته
                     await admin_package_edit(callback)
                     return
     
@@ -17526,8 +16078,6 @@ async def package_delete(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # تایید حذف
     if lang == "fa":
         text = f"""
 ⚠️ <b>تأیید حذف بسته</b>
@@ -17596,8 +16146,6 @@ async def package_confirm_delete(callback: CallbackQuery):
                         "✅ بسته با موفقیت حذف شد!" if lang == "fa" else "✅ Package deleted successfully!",
                         show_alert=True
                     )
-                    
-                    # بازگشت به لیست بسته‌ها
                     await admin_category_packages(callback)
                     return
     
@@ -17616,8 +16164,6 @@ async def admin_category_packages(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -17663,8 +16209,6 @@ Click on a package to edit or delete:
             text=label[:55],
             callback_data=f"admin_package_edit_{category_id}_{pkg_id}"
         )])
-    
-    # دکمه افزودن بسته جدید
     buttons.append([InlineKeyboardButton(
         text="➕ افزودن بسته جدید به این دسته" if lang == "fa" else "➕ Add New Package to this Category",
         callback_data=f"admin_package_add_category_{category_id}",
@@ -17697,8 +16241,6 @@ async def admin_category_inbounds(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -17716,8 +16258,6 @@ async def admin_category_inbounds(callback: CallbackQuery):
             current_inbound_ids = [old_inbound]
     
     prefix = f"category_{category_id}"
-    
-    # ذخیره اطلاعات برگشت
     back_key = f"{prefix}_{callback.from_user.id}_back"
     INBOUND_BACK_DATA[back_key] = {
         'back_callback': f"admin_category_edit_{category_id}",
@@ -17754,8 +16294,6 @@ async def inbound_save_category(callback: CallbackQuery):
         return
     
     current_list = TEMP_INBOUND_SELECTION[temp_key]
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -17765,21 +16303,15 @@ async def inbound_save_category(callback: CallbackQuery):
     if not category:
         await callback.answer("❌ دسته یافت نشد!", show_alert=True)
         return
-    
-    # ذخیره در دسته
     category['inbound_ids'] = current_list
     category['inbound_id'] = None
     READY_PACKAGES['last_updated'] = datetime.now().isoformat()
     configs_pool['ready_packages'] = READY_PACKAGES
     save_all()
-    
-    # پاک کردن وضعیت موقت
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
     
     await callback.answer(f"✅ {len(current_list)} اینباند ذخیره شد", show_alert=True)
-    
-    # بازگشت به صفحه ویرایش دسته
     callback.data = f"admin_category_edit_{category_id}"
     await admin_category_edit(callback)
     
@@ -17798,8 +16330,6 @@ async def admin_category_toggle_inbound(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -17809,12 +16339,9 @@ async def admin_category_toggle_inbound(callback: CallbackQuery):
     if not category:
         await callback.answer("❌ دسته یافت نشد!", show_alert=True)
         return
-    
-    # دریافت وضعیت موقت
     prefix = f"category_{category_id}"
     temp_key = f"{prefix}_{callback.from_user.id}"
     if temp_key not in TEMP_INBOUND_SELECTION:
-        # اگر وضعیت موقت وجود ندارد، از داده‌های فعلی استفاده کن
         current_inbound_ids = category.get('inbound_ids', [])
         if not current_inbound_ids:
             old_inbound = category.get('inbound_id')
@@ -17825,8 +16352,6 @@ async def admin_category_toggle_inbound(callback: CallbackQuery):
         TEMP_INBOUND_SELECTION[temp_key] = current_inbound_ids.copy()
     
     current_list = TEMP_INBOUND_SELECTION[temp_key]
-    
-    # تغییر وضعیت
     if inbound_id in current_list:
         current_list.remove(inbound_id)
         await callback.answer(f"❌ لغو شد", show_alert=False)
@@ -17835,8 +16360,6 @@ async def admin_category_toggle_inbound(callback: CallbackQuery):
         await callback.answer(f"✅ انتخاب شد", show_alert=False)
     
     TEMP_INBOUND_SELECTION[temp_key] = current_list
-    
-    # =============== بازگشت به صفحه تنظیم اینباندها با رفرش ===============
     await admin_category_inbounds(callback)
 
 @dp.message(Command("check_storage"))
@@ -17846,16 +16369,12 @@ async def cmd_check_storage(message: Message):
         return
     
     text = "📊 <b>بررسی وضعیت ذخیره‌سازی</b>\n\n"
-    
-    # بررسی READY_PACKAGES در حافظه
     text += "📦 <b>داده‌های در حافظه (READY_PACKAGES):</b>\n"
     text += f"  • وضعیت: {'فعال' if READY_PACKAGES.get('enabled') else 'غیرفعال'}\n"
     text += f"  • تعداد دسته‌ها: {len(READY_PACKAGES.get('categories', []))}\n"
     for cat in READY_PACKAGES.get('categories', []):
         inbound_ids = cat.get('inbound_ids', [])
         text += f"  • {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}\n"
-    
-    # بررسی configs_pool
     packages_data = configs_pool.get('ready_packages', {})
     text += f"\n📁 <b>داده‌های ذخیره شده در دیتابیس (configs_pool):</b>\n"
     text += f"  • وجود دارد: {'✅' if packages_data else '❌'}\n"
@@ -17864,8 +16383,6 @@ async def cmd_check_storage(message: Message):
         for cat in packages_data.get('categories', []):
             inbound_ids = cat.get('inbound_ids', [])
             text += f"  • {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}\n"
-    
-    # بررسی تنظیمات تست
     test_settings = configs_pool.get('test_service', {})
     text += f"\n🧪 <b>تنظیمات تست:</b>\n"
     text += f"  • اینباندها: {test_settings.get('inbound_ids', [])}\n"
@@ -17890,8 +16407,6 @@ async def admin_category_inbounds_default(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -17920,8 +16435,6 @@ async def admin_category_inbounds_default(callback: CallbackQuery):
             show_alert=True
         )
         return
-    
-    # =============== بازگشت به صفحه تنظیم اینباندها ===============
     await admin_category_inbounds(callback)
 
 
@@ -17939,8 +16452,6 @@ async def admin_category_inbounds_clear(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -17961,8 +16472,6 @@ async def admin_category_inbounds_clear(callback: CallbackQuery):
         "🗑 همه اینباندها پاک شدند" if lang == "fa" else "🗑 All inbounds cleared",
         show_alert=True
     )
-    
-    # =============== بازگشت به صفحه تنظیم اینباندها ===============
     await admin_category_inbounds(callback)
 
 
@@ -17980,8 +16489,6 @@ async def admin_category_inbounds_save(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پیدا کردن دسته
     category = None
     for cat in READY_PACKAGES.get('categories', []):
         if cat.get('id') == category_id:
@@ -17991,29 +16498,17 @@ async def admin_category_inbounds_save(callback: CallbackQuery):
     if not category:
         await callback.answer("❌ دسته یافت نشد!", show_alert=True)
         return
-    
-    # دریافت لیست از وضعیت موقت
     prefix = f"category_{category_id}"
     temp_key = f"{prefix}_{callback.from_user.id}"
     current_list = TEMP_INBOUND_SELECTION.get(temp_key, [])
-    
-    # =============== ذخیره در دسته ===============
     category['inbound_ids'] = current_list
     category['inbound_id'] = None  # حذف کلید قدیمی
-    
-    # =============== ذخیره در READY_PACKAGES و دیتابیس ===============
     READY_PACKAGES['last_updated'] = datetime.now().isoformat()
     configs_pool['ready_packages'] = READY_PACKAGES
     save_all()  # ذخیره در دیتابیس
-    
-    # =============== دیباگ ===============
     logger.info(f"✅ اینباندهای دسته {category.get('name')} ذخیره شد: {current_list}")
-    
-    # پاک کردن وضعیت موقت
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
-    
-    # پاک کردن اطلاعات برگشت
     back_key = f"{prefix}_{callback.from_user.id}_back"
     if back_key in INBOUND_BACK_DATA:
         del INBOUND_BACK_DATA[back_key]
@@ -18022,13 +16517,10 @@ async def admin_category_inbounds_save(callback: CallbackQuery):
         f"✅ {len(current_list)} اینباند ذخیره شد" if lang == "fa" else f"✅ {len(current_list)} inbounds saved",
         show_alert=True
     )
-    
-    # =============== بازگشت به صفحه ویرایش دسته ===============
     await go_back_to_category_edit(callback, category_id)
 
 async def refresh_category_edit(callback: CallbackQuery, category_id: int):
     """رفرش سریع صفحه ویرایش دسته"""
-    # ساخت کالبک جدید با داده مناسب
     callback.data = f"admin_category_edit_{category_id}"
     await admin_category_edit(callback)
     
@@ -18044,7 +16536,6 @@ def migrate_category_inbound_data():
     READY_PACKAGES['last_updated'] = datetime.now().isoformat()
     configs_pool['ready_packages'] = READY_PACKAGES
     save_all()
-# =============== ابتدا هندلرهای دقیق‌تر (با prefix طولانی‌تر) ===============
 
 
     
@@ -18105,8 +16596,6 @@ async def admin_category_edit_field_save(message: Message):
                 )
             
             user_states.pop(admin_id, None)
-            
-            # بازگشت به صفحه ویرایش دسته
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="🔙 بازگشت به ویرایش دسته" if lang == "fa" else "🔙 Back to Edit Category",
@@ -18491,10 +16980,8 @@ async def admin_package_add_process(message: Message):
 def save_ready_packages():
     """ذخیره تنظیمات بسته‌های آماده در دیتابیس"""
     try:
-        # اطمینان از وجود inbound_ids در همه دسته‌ها
         for cat in READY_PACKAGES.get('categories', []):
             if 'inbound_ids' not in cat:
-                # اگر داده قدیمی است و inbound_id دارد
                 old_inbound = cat.get('inbound_id')
                 if old_inbound:
                     cat['inbound_ids'] = [old_inbound]
@@ -18506,7 +16993,6 @@ def save_ready_packages():
         save_all()
         logger.info("📦 بسته‌های آماده با موفقیت ذخیره شدند")
         
-        # دیباگ: نمایش داده‌های ذخیره شده
         for cat in READY_PACKAGES.get('categories', []):
             inbound_ids = cat.get('inbound_ids', [])
             logger.info(f"  📡 {cat.get('name')}: اینباندهای ذخیره شده = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
@@ -18594,35 +17080,25 @@ async def show_verification_page(message: Message, user_id: int, lang: str = "fa
     """نمایش صفحه تایید عضویت با لینک کانال‌ها"""
     settings = configs_pool.get('force_join_settings', {})
     channels = settings.get('channels', [])
-    
-    # ساخت دکمه‌های لینک کانال‌ها
     buttons = []
     for ch in channels:
         channel_id = ch.get('id')
         channel_name = ch.get('name', 'کانال')
         channel_username = ch.get('username')  # یوزرنیم ذخیره شده
-        
-        # =============== اصلاح: ساخت لینک صحیح ===============
         if channel_username and channel_username.startswith('@'):
-            # اگر یوزرنیم داریم، از آن استفاده کن
             channel_link = f"https://t.me/{channel_username[1:]}"
         elif isinstance(channel_id, int) and channel_id < 0:
-            # برای آیدی عددی منفی (کانال‌های سوپرگروه)
-            # فرمت صحیح: https://t.me/c/1234567890 (بدون -100)
             channel_id_str = str(channel_id).replace('-100', '')
             channel_link = f"https://t.me/c/{channel_id_str}"
         elif isinstance(channel_id, str) and channel_id.startswith('@'):
             channel_link = f"https://t.me/{channel_id[1:]}"
         else:
-            # fallback: استفاده از آیدی به عنوان متن
             channel_link = f"https://t.me/{channel_id}"
         
         buttons.append([InlineKeyboardButton(
             text=f"📢 عضویت در {channel_name}",
             url=channel_link
         )])
-    
-    # دکمه تایید عضویت
     buttons.append([InlineKeyboardButton(
         text="✅ تایید عضویت",
         callback_data="verify_membership",
@@ -18664,7 +17140,6 @@ async def show_verification_page(message: Message, user_id: int, lang: str = "fa
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
-    # ارسال پیام جدید
     await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     
     
@@ -18755,15 +17230,11 @@ async def force_join_add_channel(message: Message):
             except:
                 channel_name = str(channel_id)
                 channel_username = None
-        
-        # تست ادمین بودن ربات
         bot_member = await bot.get_chat_member(channel_id, bot.id)
         if bot_member.status not in ['administrator', 'creator']:
             await message.reply("❌ ربات در این کانال ادمین نیست!" if lang=="fa" else "❌ Bot is not admin!")
             user_states.pop(admin_id, None)
             return
-        
-        # ذخیره کانال
         settings = configs_pool.get('force_join_settings', {})
         channels = settings.get('channels', [])
         
@@ -18797,8 +17268,6 @@ async def force_join_add_channel(message: Message):
         await message.reply(f"❌ خطا: {str(e)[:100]}" if lang=="fa" else f"❌ Error: {str(e)[:100]}")
     
     user_states.pop(admin_id, None)
-    
-    # بازگشت به منوی تنظیمات با یک دکمه
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 بازگشت به تنظیمات" if lang=="fa" else "🔙 Back to Settings", callback_data="admin_force_join")]
     ])
@@ -18882,8 +17351,6 @@ async def force_join_remove_channel(callback: CallbackQuery):
 async def force_join_check_membership(callback: CallbackQuery):
     """بررسی عضویت کاربر فعلی"""
     user_id = callback.from_user.id
-    
-    # ادمین نیاز به بررسی ندارد
     if user_id == ADMIN_ID_INT:
         await callback.answer("👑 شما ادمین هستید!", show_alert=True)
         return
@@ -18939,16 +17406,11 @@ async def check_membership(user_id: int) -> bool:
     
     if not channels:
         return True
-    
-    # بررسی وضعیت verified در دیتابیس
     user = get_user(user_id)
     if user.get('verified', False):
         return True
     
     return False
-
-    
-# =============== هندلر دریافت کانفیگ از ادمین (اولویت بالا) ===============
 @dp.message(lambda message: message.from_user.id == ADMIN_ID_INT and user_states.get(message.from_user.id, {}).get('awaiting_config', False))
 async def catch_admin_messages(message: Message):
     """هندلر مخصوص ادمین - تایید خودکار از طریق پنل"""
@@ -18965,31 +17427,19 @@ async def catch_admin_messages(message: Message):
     lang = user_info.get('lang', 'fa')
     
     logger.info(f"🔴 تایید خودکار سفارش #{order_id} - ساخت کلاینت در پنل...")
-    
-    # به‌روزرسانی سفارش
     update_order(order_id, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     await check_referral_bonus(user_id)
-    
-    # ساخت کلاینت در پنل
     if SENAI_PANEL_ENABLED:
         await message.reply(f"⏳ در حال ساخت کلاینت در پنل برای سفارش #{order_id}...")
         
         timestamp = int(datetime.now().timestamp())
         email = f"user{user_id}_{timestamp}"
         ip_limit = state.get('ip_limit', 0)
-        
-        # ساخت کلاینت
         sub_link = await create_client_in_panel(user_id, email, volume, days, user_name, ip_limit=ip_limit)
         
         if sub_link:
-            # ذخیره لینک توی سفارش
             update_order(order_id, config_link=sub_link, email=email)
-            
-            
-            # ارسال کانفیگ به کاربر
             await send_config_with_qr_option(user_id, order_id, volume, days, price, sub_link, lang)
-            
-            # درخواست بازخورد
             try:
                 await bot.send_message(user_id, 
                     f"{premium_emoji('star', '⭐')} {'لطفا به سرویس ما امتیاز دهید:' if lang=='fa' else 'Please rate our service:'}",
@@ -19005,10 +17455,7 @@ async def catch_admin_messages(message: Message):
                 f"🔗 لینک ساب: {sub_link[:50]}..."
             )
         else:
-            # خطا در ساخت کلاینت
             await message.reply(f"❌ خطا در ساخت کلاینت برای سفارش #{order_id}")
-            
-            # برگردوندن موجودی کاربر
             user = get_user(user_id)
             update_user(user_id, 'balance', user['balance'] + price)
             
@@ -19019,7 +17466,6 @@ async def catch_admin_messages(message: Message):
             except:
                 pass
     else:
-        # روش قدیمی: منتظر لینک از ادمین
         config_link = message.text.strip()
         
         update_order(order_id, config_link=config_link)
@@ -19034,12 +17480,8 @@ async def catch_admin_messages(message: Message):
             logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
         
         await message.reply(f"✅ کانفیگ سفارش #{order_id} با موفقیت ارسال شد!")
-    
-    # پاک کردن وضعیت
     user_states.pop(admin_id, None)
     logger.info(f"وضعیت ادمین پاک شد")
-
-# =============== هندلر برگشت به منوی اصلی ===============
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -19048,23 +17490,15 @@ async def back_to_main(callback: CallbackQuery):
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
     is_admin = (user_id == ADMIN_ID_INT)
-    
-    # =============== بررسی وضعیت قبل از هر کاری ===============
     before_state = user_states.get(user_id, {})
     logger.debug(f"کاربر {user_id} به منوی اصلی برگشت - وضعیت قبلی: {before_state}")
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     coupon_code = before_state.get('coupon_code')
     coupon_discount = before_state.get('coupon_discount')
     coupon_applied = before_state.get('coupon_applied')
     
     logger.info(f"🔍 کوپن در back_to_main - code: {coupon_code}, applied: {coupon_applied}, discount: {coupon_discount}")
-    
-    # =============== پاک کردن وضعیت‌ها (به جز کوپن) ===============
     if user_id in user_states:
         user_states.pop(user_id, None)
-    
-    # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id] = {
             'coupon_code': coupon_code,
@@ -19074,8 +17508,6 @@ async def back_to_main(callback: CallbackQuery):
         logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} در back_to_main حفظ شد")
     else:
         logger.warning(f"⚠️ کوپنی برای کاربر {user_id} در back_to_main یافت نشد - coupon_applied: {coupon_applied}, coupon_code: {coupon_code}")
-    
-    # =============== بررسی نهایی ===============
     after_state = user_states.get(user_id, {})
     logger.info(f"🔍 وضعیت نهایی user_states در back_to_main: {after_state}")
     
@@ -19083,8 +17515,6 @@ async def back_to_main(callback: CallbackQuery):
         text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
     else:
         text = f"{premium_emoji('rocket', '🚀')} Main Menu"
-    
-    # ارسال منوی اصلی
     if callback.message.content_type == 'text':
         await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang))
     else:
@@ -19111,14 +17541,9 @@ def preserve_coupon_in_state(user_id: int) -> bool:
     اگر کوپن در جای دیگری ذخیره شده باشد، آن را به user_states اضافه می‌کند
     """
     user_state = user_states.get(user_id, {})
-    
-    # اگر کوپن وجود دارد، هیچ کاری نکن
     if user_state.get('coupon_applied') and user_state.get('coupon_code'):
         logger.info(f"🏷️ کوپن {user_state.get('coupon_code')} قبلاً در user_states وجود دارد")
         return True
-    
-    # اگر کوپن در COUPONS وجود دارد ولی در user_states نیست
-    # (این حالت نباید پیش بیاید، اما برای اطمینان)
     return False
 
 def debug_coupon_state(user_id: int, location: str):
@@ -19128,8 +17553,6 @@ def debug_coupon_state(user_id: int, location: str):
     coupon_applied = user_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [{location}] کوپن: code={coupon_code}, applied={coupon_applied}, state={user_state}")
-    
-    # اگر کوپن باید باشد ولی نیست، هشدار بده
     if location not in ['back_to_main', 'cancel_order_direct', 'cancel_payment']:
         if not coupon_applied or not coupon_code:
             logger.warning(f"⚠️ [{location}] کوپن وجود ندارد!")      
@@ -19197,8 +17620,6 @@ async def broadcast_type_selected(callback: CallbackQuery):
     
     broadcast_type = callback.data.replace("broadcast_type_", "")
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # ذخیره نوع در user_states
     user_states[callback.from_user.id] = {
         'awaiting_broadcast': True,
         'broadcast_type': broadcast_type,
@@ -19257,7 +17678,6 @@ async def test_panel_connection() -> dict:
         host = parsed.hostname
 
         if host:
-            # =============== پینگ هوشمند ===============
             ping_result = await smart_ping(host)
             if ping_result is not None:
                 result['ping'] = round(ping_result, 1)  # گرد کردن به ۱ رقم اعشار
@@ -19266,8 +17686,6 @@ async def test_panel_connection() -> dict:
                 logger.warning(f"⚠️ پینگ به {host} ناموفق بود")
         else:
             result['ping'] = None
-
-        # =============== تست HTTP پنل ===============
         start = time.time()
         connector = aiohttp.TCPConnector(ssl=False)
         
@@ -19285,8 +17703,6 @@ async def test_panel_connection() -> dict:
             except Exception as e:
                 result['http_ping'] = None
                 logger.warning(f"⚠️ خطای HTTP: {e}")
-
-        # =============== لاگین به پنل ===============
         cookie = await xui_login()
         if cookie:
             result['login'] = True
@@ -19308,8 +17724,6 @@ async def admin_broadcast_send(message: Message):
     """ارسال پیام همگانی با پشتیبانی از انواع مختلف فایل"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
-    
-    # لغو
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply("❌ ارسال لغو شد" if lang=="fa" else "❌ Cancelled")
@@ -19317,8 +17731,6 @@ async def admin_broadcast_send(message: Message):
     
     state = user_states.get(admin_id, {})
     broadcast_type = state.get('broadcast_type', 'text')
-    
-    # =============== جمع‌آوری محتوای پیام ===============
     media_content = None
     caption = None
     parse_mode = None
@@ -19376,8 +17788,6 @@ async def admin_broadcast_send(message: Message):
     else:
         await message.reply("❌ نوع پیام نامشخص است" if lang=="fa" else "❌ Unknown message type")
         return
-    
-    # =============== هشدار طول کپشن ===============
     MAX_CAPTION_LENGTH = 1000
     if len(caption) > MAX_CAPTION_LENGTH and broadcast_type != 'text':
         warning_msg = f"""
@@ -19390,8 +17800,6 @@ async def admin_broadcast_send(message: Message):
 📄 کپشن کامل به عنوان فایل جداگانه ارسال خواهد شد.
 """
         await message.reply(warning_msg, parse_mode=ParseMode.HTML)
-    
-    # =============== تأیید نهایی ===============
     preview_text = ""
     if broadcast_type == 'text':
         preview_text = caption[:200] + ("..." if len(caption) > 200 else "")
@@ -19428,8 +17836,6 @@ async def admin_broadcast_send(message: Message):
 
 ⚠️ Are you sure you want to send this to all users?
 """
-    
-    # ذخیره محتوا برای ارسال
     broadcast_data = {
         'type': broadcast_type,
         'media': media_content,
@@ -19458,8 +17864,6 @@ async def admin_broadcast_send(message: Message):
             )
         ]
     ]
-    
-    # ارسال پیام تأیید
     try:
         if broadcast_type == 'text':
             await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
@@ -19488,9 +17892,6 @@ async def retry_broadcast_failed(callback: CallbackQuery):
     await callback.message.edit_text(
         "⏳ در حال ارسال مجدد به کاربران ناموفق..." if lang=="fa" else "⏳ Retrying failed users..."
     )
-    
-    # اینجا می‌توانید لیست کاربران ناموفق را از لاگ بگیرید و دوباره ارسال کنید
-    # برای سادگی، فعلاً پیام می‌دهیم که این قابلیت در حال توسعه است
     
     await callback.message.edit_text(
         "🔄 قابلیت ارسال مجدد به کاربران ناموفق در حال توسعه است.\n"
@@ -19522,23 +17923,16 @@ async def confirm_broadcast(callback: CallbackQuery):
     if not broadcast_data:
         await callback.answer("❌ داده‌ای برای ارسال وجود ندارد" if lang=="fa" else "❌ No data to send", show_alert=True)
         return
-    
-    # =============== دیباگ ===============
     logger.info(f"📢 شروع ارسال پیام همگانی:")
     logger.info(f"  - نوع: {broadcast_data.get('type')}")
     logger.info(f"  - media: {broadcast_data.get('media')}")
     logger.info(f"  - caption: {broadcast_data.get('caption', '')[:50]}...")
     logger.info(f"  - parse_mode: {broadcast_data.get('parse_mode')}")
     logger.info(f"  - تعداد کاربران: {len(users)}")
-    
-    # =============== ارسال پیام وضعیت ===============
-    # همیشه یک پیام جدید برای وضعیت ارسال می‌کنیم
     status_msg = await callback.message.answer(
         "⏳ در حال ارسال پیام همگانی..." if lang=="fa" else "⏳ Sending broadcast..."
     )
     logger.info(f"✅ پیام وضعیت با message_id={status_msg.message_id} ارسال شد")
-    
-    # =============== ارسال به همه کاربران ===============
     sent_count = 0
     failed_count = 0
     failed_users = []
@@ -19549,8 +17943,6 @@ async def confirm_broadcast(callback: CallbackQuery):
     media = broadcast_data.get('media')
     caption = broadcast_data.get('caption', '')
     parse_mode = broadcast_data.get('parse_mode', None)
-    
-    # =============== محدود کردن طول کپشن ===============
     MAX_CAPTION_LENGTH = 1000
     original_caption = caption
     
@@ -19583,8 +17975,6 @@ async def confirm_broadcast(callback: CallbackQuery):
     if parse_mode == ParseMode.HTML and clean_caption != caption:
         parse_mode = None
         logger.warning(f"⚠️ متن حاوی کاراکترهای غیرمجاز بود، HTML غیرفعال شد")
-    
-    # =============== ارسال به کاربران ===============
     for i, uid in enumerate(users_list):
         try:
             user_id = int(uid)
@@ -19613,8 +18003,6 @@ async def confirm_broadcast(callback: CallbackQuery):
                 await bot.send_audio(user_id, media, caption=clean_caption, parse_mode=parse_mode)
             
             sent_count += 1
-            
-            # بروزرسانی پیام وضعیت هر 10 پیام
             if (i + 1) % 10 == 0:
                 progress_text = f"⏳ در حال ارسال... {i+1}/{total_users}" if lang=="fa" else f"⏳ Sending... {i+1}/{total_users}"
                 try:
@@ -19622,7 +18010,6 @@ async def confirm_broadcast(callback: CallbackQuery):
                     logger.debug(f"✅ پیام وضعیت بروزرسانی شد: {i+1}/{total_users}")
                 except Exception as e:
                     logger.warning(f"⚠️ خطا در بروزرسانی پیام وضعیت: {e}")
-                    # اگر پیام وضعیت قابل ویرایش نبود، پیام جدید بفرست
                     try:
                         await status_msg.delete()
                     except:
@@ -19635,8 +18022,6 @@ async def confirm_broadcast(callback: CallbackQuery):
         except Exception as e:
             error_str = str(e)
             logger.error(f"❌ خطا در ارسال به کاربر {uid}: {error_str}")
-            
-            # تلاش مجدد برای خطاهای خاص
             if "can't parse entities" in error_str and parse_mode == ParseMode.HTML:
                 try:
                     if broadcast_type == 'text':
@@ -19669,11 +18054,7 @@ async def confirm_broadcast(callback: CallbackQuery):
             
             failed_count += 1
             failed_users.append(uid)
-    
-    # =============== پاکسازی ===============
     user_states.pop(callback.from_user.id, None)
-    
-    # =============== حذف پیام وضعیت ===============
     try:
         if status_msg:
             await status_msg.delete()
@@ -19683,15 +18064,12 @@ async def confirm_broadcast(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"⚠️ خطا در حذف پیام وضعیت: {e}")
         try:
-            # اگر پیام قبلاً حذف شده بود، این خطا را نادیده بگیر
             if "message to delete not found" in str(e):
                 logger.info("ℹ️ پیام وضعیت قبلاً حذف شده بود")
             else:
                 logger.error(f"❌ خطا در حذف پیام وضعیت: {e}")
         except:
             pass
-    
-    # =============== گزارش نهایی ===============
     result_text = f"""
 ✅ <b>پیام همگانی ارسال شد!</b>
 
@@ -19706,8 +18084,6 @@ async def confirm_broadcast(callback: CallbackQuery):
 {f"❌ کاربران ناموفق: {', '.join(failed_users[:10])}" if failed_users else ""}
 {f"⚠️ {len(failed_users) - 10} کاربر دیگر..." if len(failed_users) > 10 else ""}
 """
-    
-    # =============== ساخت کیبورد ===============
     keyboard_rows = []
     
     if failed_users:
@@ -19735,21 +18111,15 @@ async def confirm_broadcast(callback: CallbackQuery):
     ])
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
-    
-    # =============== ارسال گزارش ===============
     try:
-        # حذف پیام قبلی (اگر وجود داشت)
         try:
             await callback.message.delete()
         except:
             pass
-        
-        # ارسال گزارش جدید
         await callback.message.answer(result_text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
         logger.info("✅ گزارش ارسال شد")
     except Exception as e:
         logger.error(f"❌ خطا در ارسال گزارش: {e}")
-        # آخرین راه حل: ارسال ساده
         await callback.message.answer(result_text, parse_mode=ParseMode.HTML)
     
     try:
@@ -19768,17 +18138,13 @@ async def safe_edit_callback(
 ):
     """ویرایش امن پیام با مدیریت خطاهای مختلف"""
     try:
-        # بررسی اینکه پیام قابل ویرایش با متن است یا خیر
         if callback.message.content_type != 'text' and text:
-            # اگر پیام عکس یا فایل است، پیام جدید بفرست
             try:
                 await callback.message.delete()
             except:
                 pass
             await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
             return True
-        
-        # ویرایش پیام متنی
         if text and reply_markup:
             await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
         elif reply_markup:
@@ -19793,7 +18159,6 @@ async def safe_edit_callback(
             logger.debug(f"Message not modified for user {callback.from_user.id}")
             return True
         elif "there is no text in the message to edit" in error_str:
-            # اگر پیام متن ندارد، پیام جدید بفرست
             try:
                 await callback.message.delete()
             except:
@@ -19802,18 +18167,15 @@ async def safe_edit_callback(
                 await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
             return True
         elif "can't parse entities" in error_str:
-            # اگر خطای HTML داشت، بدون HTML بفرست
             logger.warning(f"HTML parse error, sending without HTML: {error_str}")
             try:
                 if text:
-                    # حذف تگ‌های HTML
                     import re
                     clean_text = re.sub(r'<[^>]+>', '', text)
                     await callback.message.edit_text(clean_text, reply_markup=reply_markup, parse_mode=None)
                 return True
             except:
                 pass
-            # اگر باز هم خطا خورد، پیام جدید بفرست
             try:
                 await callback.message.delete()
             except:
@@ -19833,9 +18195,6 @@ def sanitize_text_for_broadcast(text: str) -> str:
     """پاکسازی متن برای ارسال به کاربران"""
     if not text:
         return ""
-    
-    # =============== حذف کاراکترهای خطرناک ===============
-    # کاراکترهایی که باعث خطای HTML می‌شوند
     dangerous_patterns = [
         r'؟<؟',  # الگوی خاص
         r'<[^a-zA-Z/]',  # تگ‌های ناقص
@@ -19845,18 +18204,11 @@ def sanitize_text_for_broadcast(text: str) -> str:
     import re
     for pattern in dangerous_patterns:
         text = re.sub(pattern, '', text)
-    
-    # =============== بررسی و اصلاح تگ‌های HTML ===============
-    # اطمینان از اینکه همه تگ‌ها بسته شده‌اند
     tags = re.findall(r'<([a-zA-Z][a-zA-Z0-9]*)[^>]*>', text)
     for tag in tags:
         if tag not in ['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-emoji']:
-            # تگ غیرمجاز - حذف
             text = text.replace(f'<{tag}', f'&lt;{tag}')
             text = text.replace(f'</{tag}', f'&lt;/{tag}')
-    
-    # =============== حذف کاراکترهای کنترل ===============
-    # حذف کاراکترهای غیرقابل چاپ
     text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\r\t')
     
     return text  
@@ -19869,8 +18221,6 @@ async def admin_broadcast_test(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     await callback.message.edit_text("⏳ در حال ارسال تست...")
-    
-    # ارسال فقط به ادمین
     try:
         await bot.send_message(
             ADMIN_ID_INT,
@@ -19896,8 +18246,6 @@ def detect_safe_parse_mode(text: str) -> Optional[ParseMode]:
     """تشخیص اینکه متن حاوی HTML معتبر است یا خیر"""
     if not text:
         return None
-    
-    # لیست تگ‌های مجاز HTML در تلگرام
     valid_tags = [
         '<b>', '</b>',
         '<i>', '</i>',
@@ -19908,8 +18256,6 @@ def detect_safe_parse_mode(text: str) -> Optional[ParseMode]:
         '<a href=', '</a>',
         '<tg-emoji', '</tg-emoji>'
     ]
-    
-    # بررسی وجود تگ‌های HTML
     has_html = False
     for tag in valid_tags:
         if tag in text:
@@ -19918,89 +18264,53 @@ def detect_safe_parse_mode(text: str) -> Optional[ParseMode]:
     
     if not has_html:
         return None
-    
-    # =============== بررسی اعتبار HTML ===============
-    # حذف کاراکترهای خطرناک
     dangerous_chars = ['<', '>']
     text_copy = text
-    
-    # بررسی اینکه آیا کاراکترهای < و > به درستی استفاده شده‌اند
-    # ساده‌ترین روش: اگر تعداد < و > برابر نباشد، HTML نامعتبر است
     if text.count('<') != text.count('>'):
         return None
-    
-    # بررسی تگ‌های ناقص
     import re
-    # الگوی تگ‌های ناقص مانند "؟<؟"
     invalid_pattern = r'[^\w\s<>/="\']<[^\w\s<>/="\']'
     if re.search(invalid_pattern, text):
-        # اگر تگ ناقص پیدا شد، از HTML استفاده نکن
         return None
-    
-    # بررسی تگ‌های بسته نشده (ساده)
     open_tags = re.findall(r'<([a-zA-Z][a-zA-Z0-9]*)', text)
     close_tags = re.findall(r'</([a-zA-Z][a-zA-Z0-9]*)>', text)
-    
-    # اگر تعداد تگ‌های باز و بسته برابر نباشد، HTML نامعتبر است
     if len(open_tags) != len(close_tags):
         return None
-    
-    # اگر همه چیز درست بود، از HTML استفاده کن
     return ParseMode.HTML  
-# =============== هندلر خرید سرویس ===============
 
 @dp.callback_query(F.data == "buy_service")
 async def buy_service(callback: CallbackQuery):
     """خرید سرویس - نسخه نهایی با حفظ کوپن و پشتیبانی از تمدید"""
     user_id = callback.from_user.id
-    
-    # =============== چک لیست سیاه ===============
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
-    
-    # =============== بررسی دسترسی ===============
     can_purchase, msg = can_user_purchase(user_id)
     if not can_purchase:
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer(msg if lang == "fa" else "⚠️ Your account is pending admin approval.", show_alert=True)
         return
-    
-    # =============== بررسی عضویت اجباری ===============
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
         return
-    
-    # =============== بررسی وضعیت فروش ===============
     if not await check_shop_status_and_notify(user_id, callback):
         return
-    
-    # =============== دریافت اطلاعات کاربر ===============
     user = get_user(user_id)
     vol = user.get('volume', 1)
     days = user.get('days', 30)
     original_price = calculate_price(vol, days)
     lang = user.get('lang', 'fa')
-    
-    # =============== دریافت وضعیت کامل ===============
     full_state = user_states.get(user_id, {})
     logger.info(f"🔍 [buy_service] وضعیت کامل: {full_state}")
-    
-    # =============== استخراج کوپن ===============
     coupon_code = full_state.get('coupon_code')
     coupon_discount = full_state.get('coupon_discount')
     coupon_applied = full_state.get('coupon_applied', False)
-    
-    # =============== بررسی حالت تمدید ===============
     is_extend = full_state.get('is_extend', False)
     extend_order_id = full_state.get('extend_order_id')
-    
-    # =============== اگر کوپن در user_states نیست، از دیتابیس چک کن ===============
     if not coupon_applied or not coupon_code:
         logger.info(f"🔍 [buy_service] کوپن در user_states نیست، بررسی دیتابیس...")
-        # بررسی کوپن‌های فعال برای این کاربر
         for code, coupon in COUPONS.items():
             if coupon.get('status') == 'active':
                 if user_id not in coupon.get('used_by', []):
@@ -20008,8 +18318,6 @@ async def buy_service(callback: CallbackQuery):
     
     logger.info(f"🔍 [buy_service] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
     logger.info(f"🔍 [buy_service] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
-    
-    # =============== اعمال تخفیف کوپن ===============
     discount_percent = 0
     final_price = original_price
     
@@ -20037,8 +18345,6 @@ async def buy_service(callback: CallbackQuery):
                 user_states[user_id].pop('coupon_discount', None)
                 user_states[user_id].pop('coupon_applied', None)
             coupon_applied = False
-    
-    # =============== اگر کوپن فعال است، در user_states نگه دار ===============
     if coupon_applied and coupon_code and discount_percent > 0:
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
@@ -20046,8 +18352,6 @@ async def buy_service(callback: CallbackQuery):
         logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
     
     balance = user.get('balance', 0)
-    
-    # =============== بررسی بسته‌های آماده ===============
     ready_enabled = READY_PACKAGES.get('enabled', True)
     has_active_packages = False
     
@@ -20058,8 +18362,6 @@ async def buy_service(callback: CallbackQuery):
                 if active_packages:
                     has_active_packages = True
                     break
-    
-    # =============== بررسی آیا کاربر از بسته آماده آمده ===============
     is_ready_package = full_state.get('is_ready_package', False)
     package_price = full_state.get('price', 0)
     category_name = full_state.get('category_name', 'بسته آماده')
@@ -20067,8 +18369,6 @@ async def buy_service(callback: CallbackQuery):
     category_id = full_state.get('category_id')
     package_id = full_state.get('package_id')
     inbound_ids = full_state.get('inbound_ids', [])
-    
-    # =============== اگر کاربر از صفحه بسته آماده آمده ===============
     if is_ready_package and package_price > 0:
         final_price = package_price
         logger.info(f"📦 [buy_service] بسته آماده: {category_name} - قیمت ثابت: {final_price:,} تومان")
@@ -20076,8 +18376,6 @@ async def buy_service(callback: CallbackQuery):
         discount_text = ""
         if discount_percent > 0 and final_price != original_price:
             discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
-        
-        # ذخیره اطلاعات بسته آماده در user_states
         user_states[user_id] = {
             'payment_type': 'ready_package',
             'category_id': category_id,
@@ -20099,8 +18397,6 @@ async def buy_service(callback: CallbackQuery):
             user_states[user_id]['coupon_applied'] = True
             user_states[user_id]['coupon_discount'] = discount_percent
             logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
-        
-        # =============== ✅ اگر حالت تمدید است، به user_states اضافه کن ===============
         if is_extend and extend_order_id:
             user_states[user_id]['is_extend'] = True
             user_states[user_id]['extend_order_id'] = extend_order_id
@@ -20182,8 +18478,6 @@ async def buy_service(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"خطا در callback.answer: {e}")
         return
-    
-    # =============== اگر بسته‌های آماده فعال هستند ===============
     if ready_enabled and has_active_packages:
         logger.info(f"📦 بسته‌های آماده فعال هستند - کاربر {user_id} به صفحه دسته‌بندی هدایت شد")
         
@@ -20203,8 +18497,6 @@ async def buy_service(callback: CallbackQuery):
             user_states[user_id]['coupon_applied'] = True
             user_states[user_id]['coupon_discount'] = discount_percent
             logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
-        
-        # =============== ✅ اگر حالت تمدید است، به user_states اضافه کن ===============
         if is_extend and extend_order_id:
             user_states[user_id]['is_extend'] = True
             user_states[user_id]['extend_order_id'] = extend_order_id
@@ -20214,11 +18506,7 @@ async def buy_service(callback: CallbackQuery):
         
         await show_ready_categories(callback)
         return
-    
-    # =============== خرید سفارشی ===============
     logger.info(f"🛒 [buy_service] خرید سفارشی: {vol}GB/{days} روز - قیمت: {final_price:,} تومان")
-    
-    # =============== ذخیره اطلاعات خرید سفارشی ===============
     user_states[user_id] = {
         'payment_type': 'purchase',
         'volume': vol,
@@ -20235,16 +18523,12 @@ async def buy_service(callback: CallbackQuery):
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = discount_percent
         logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
-    
-    # =============== ✅ اگر حالت تمدید است، به user_states اضافه کن ===============
     if is_extend and extend_order_id:
         user_states[user_id]['is_extend'] = True
         user_states[user_id]['extend_order_id'] = extend_order_id
         user_states[user_id]['current_volume'] = full_state.get('current_volume', 0)
         user_states[user_id]['current_days'] = full_state.get('current_days', 0)
         logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
-    
-    # =============== ساخت کیبورد خرید سفارشی ===============
     discount_text = ""
     if discount_percent > 0 and final_price != original_price:
         discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
@@ -20298,8 +18582,6 @@ async def buy_service(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-
-# =============== تغییر حجم ===============
 @dp.callback_query(F.data == "vol_down")
 async def vol_down(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -20325,8 +18607,6 @@ async def show_qr_code(callback: CallbackQuery):
         await log_system.log_config_view(user_id, order_id, "QR Code")
     
     logger.info(f"=== کاربر {user_id} درخواست QR Code برای سفارش #{order_id} ===")
-    
-    # گرفتن اطلاعات از دیتابیس
     order = orders.get(str(order_id))
     if not order or not order.get('config_link'):
         logger.error(f"سفارش #{order_id} در دیتابیس یافت نشد")
@@ -20336,20 +18616,17 @@ async def show_qr_code(callback: CallbackQuery):
     logger.info(f"اطلاعات سفارش: volume={order.get('volume')}, days={order.get('days')}, link={order.get('config_link')[:30]}...")
     
     try:
-        # گرفتن email و لینک‌ها
         email = extract_email_from_sub_link(order.get('config_link', ''))
         
         if email and SENAI_PANEL_ENABLED:
             links = await xui_get_client_links(email)
             if links:
-                # فیلتر کردن لینک‌های VLESS و سایر
                 all_links = []
                 for link in links:
                     if isinstance(link, str) and (link.startswith('vless://') or link.startswith('vmess://') or link.startswith('trojan://') or link.startswith('ss://')):
                         all_links.append(link)
                 
                 if len(all_links) > 1:
-                    # چندین لینک - همه را با دکمه‌های جداگانه نمایش بده
                     await callback.message.delete()
                     
                     if lang == "fa":
@@ -20358,8 +18635,6 @@ async def show_qr_code(callback: CallbackQuery):
                     else:
                         caption = f"📱 <b>{len(all_links)} QR codes for your configs</b>\n\n"
                         caption += "Each QR code corresponds to one inbound:\n"
-                    
-                    # ارسال QR برای هر لینک (حداکثر 5 تا)
                     for idx, link in enumerate(all_links[:5], 1):
                         qr_img = generate_qr_code(link, order_id)
                         qr_caption = f"📱 <b>QR Code #{idx}</b>"
@@ -20370,8 +18645,6 @@ async def show_qr_code(callback: CallbackQuery):
                             caption=qr_caption,
                             parse_mode=ParseMode.HTML
                         )
-                    
-                    # دکمه بازگشت
                     keyboard = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(
                             text="📝 مشاهده متن کانفیگ" if lang == "fa" else "📝 View Config Text",
@@ -20396,25 +18669,18 @@ async def show_qr_code(callback: CallbackQuery):
                     await callback.answer("✅ ارسال QR Code ها انجام شد" if lang == 'fa' else "✅ QR Codes sent")
                     return
                 else:
-                    # یک لینک
                     qr_link = all_links[0] if all_links else order['config_link']
             else:
                 qr_link = order['config_link']
         else:
             qr_link = order['config_link']
-        
-        # تولید QR Code برای یک لینک
         qr_img = generate_qr_code(qr_link, order_id)
         logger.info("QR Code تولید شد")
-        
-        # حذف پیام قبلی
         try:
             await bot.delete_message(callback.message.chat.id, callback.message.message_id)
             logger.info("پیام قبلی حذف شد")
         except Exception as del_err:
             logger.warning(f"نتوانست پیام قبلی را حذف کند: {del_err}")
-        
-        # ارسال QR Code جدید
         if lang == "fa":
             caption = f"📱 <b>QR Code سفارش #{order_id}</b>\n\nبرای مشاهده متن کانفیگ از دکمه زیر استفاده کنید:"
         else:
@@ -20433,8 +18699,6 @@ async def show_qr_code(callback: CallbackQuery):
         
     except Exception as e:
         logger.error(f"خطا در show_qr_code: {e}", exc_info=True)
-        
-        # ارسال پیام خطا به کاربر
         try:
             if lang == "fa":
                 await bot.send_message(
@@ -20495,7 +18759,7 @@ def extract_vless_link(links: list) -> Optional[str]:
             return link
     return None
 
-from urllib.parse import quote # در بالای فایل خود این را اضافه کنید (اگر ندارید)
+from urllib.parse import quote 
 
 @dp.callback_query(F.data.startswith("show_text_"))
 async def show_config_text(callback: CallbackQuery):
@@ -20514,7 +18778,6 @@ async def show_config_text(callback: CallbackQuery):
     if email and SENAI_PANEL_ENABLED:
         links = await xui_get_client_links(email)
         if links:
-            # ✅ همه لینک‌ها را با همان ترتیب نگه دار
             all_links = []
             for link in links:
                 if isinstance(link, str) and (
@@ -20531,9 +18794,7 @@ async def show_config_text(callback: CallbackQuery):
                 else:
                     config_text = f"📡 {len(all_links)} config links found:\n\n"
                 
-                # نمایش همه لینک‌ها
                 for idx, link in enumerate(all_links, 1):
-                    # مشخص کردن پروتکل
                     if link.startswith('vless://'):
                         protocol = "VLESS"
                     elif link.startswith('vmess://'):
@@ -20543,17 +18804,14 @@ async def show_config_text(callback: CallbackQuery):
                     else:
                         protocol = "SS"
                     
-                    # فقط به لینک‌های بدون اسم، اسم اضافه کن (به جز vmess)
                     display_link = link
                     if '#' not in link and not link.startswith('vmess://'):
                         display_link = f"{link}#{email}"
                     
                     config_text += f"{idx}. [{protocol}]:\n <code>{display_link}</code>\n\n"
                 
-                # ✅ دکمه‌های QR با ایندکس واقعی
                 buttons = []
                 for idx, link in enumerate(all_links, 1):
-                    # برای vmess هم دکمه بساز (با اخطار)
                     if link.startswith('vmess://'):
                         label = f"📱 QR VMESS #{idx}" if lang == "fa" else f"📱 VMESS QR #{idx}"
                     else:
@@ -20564,12 +18822,6 @@ async def show_config_text(callback: CallbackQuery):
                         callback_data=f"show_single_qr_{order_id}_{idx}"  # ایندکس واقعی
                     )])
                 
-                # دکمه تمدید
-                buttons.append([InlineKeyboardButton(
-                    text="🔄 تمدید سرویس" if lang == "fa" else "🔄 Extend Service",
-                    callback_data=f"extend_service_{order_id}",
-                    style="success"
-                )])
                 
                 buttons.append([InlineKeyboardButton(
                     text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
@@ -20579,7 +18831,6 @@ async def show_config_text(callback: CallbackQuery):
                 
                 keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
                 
-                # =============== اصلاح: بررسی نوع پیام ===============
                 try:
                     if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
                         try:
@@ -20625,18 +18876,13 @@ async def show_config_text(callback: CallbackQuery):
     else:
         config_text = order['config_link']
     
-    # ... ادامه کد برای یک لینک ...
     
-    # اگر فقط یک لینک داریم
     display_email = email if email else ("نامشخص" if lang == "fa" else "Unknown")
     
-    # ✅ فقط در صورتی که اسم نداشته باشد، اضافه کن
     if display_email and config_text and '#' not in config_text:
-        # فقط برای لینک‌های غیر vmess
         if not config_text.startswith('vmess://'):
             config_text = f"{config_text}#{display_email}"
     
-    # ادیت پیام برای یک لینک
     if lang == "fa":
         text = (f"{premium_emoji('link','🔗')} <b>کانفیگ #{order_id}</b>\n"
                 f"{premium_emoji('anime','👤')} <b>نام کانفیگ:</b> <code>{display_email}</code>\n\n"
@@ -20657,7 +18903,6 @@ async def show_config_text(callback: CallbackQuery):
         [back_btn]
     ])
     
-    # =============== اصلاح: بررسی نوع پیام ===============
     try:
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
             try:
@@ -20686,7 +18931,7 @@ async def show_single_qr(callback: CallbackQuery):
     
     try:
         order_id = int(parts[3])
-        link_index = int(parts[4]) - 1  # تبدیل به 0-based
+        link_index = int(parts[4]) - 1  
         logger.info(f"📱 درخواست QR برای سفارش #{order_id}، لینک شماره {link_index + 1}")
     except (ValueError, IndexError) as e:
         logger.error(f"❌ خطا در استخراج داده‌ها: {e}")
@@ -20706,13 +18951,11 @@ async def show_single_qr(callback: CallbackQuery):
         await callback.answer("❌ اطلاعات در دسترس نیست" if lang == 'fa' else "❌ Info unavailable", show_alert=True)
         return
     
-    # ✅ دریافت لیست کامل لینک‌ها (بدون فیلتر)
     links = await xui_get_client_links(email)
     if not links:
         await callback.answer("❌ لینکی یافت نشد" if lang == 'fa' else "❌ No links found", show_alert=True)
         return
     
-    # ✅ همه لینک‌های معتبر را با همان ترتیب بگیر
     valid_links = []
     for link in links:
         if isinstance(link, str) and (
@@ -20727,7 +18970,6 @@ async def show_single_qr(callback: CallbackQuery):
         await callback.answer("❌ لینک معتبری یافت نشد" if lang == 'fa' else "❌ No valid links found", show_alert=True)
         return
     
-    # ✅ بررسی اینکه ایندکس معتبر است
     if link_index >= len(valid_links):
         await callback.answer(
             f"❌ لینک شماره {link_index + 1} یافت نشد. {len(valid_links)} لینک موجود است." if lang == 'fa' 
@@ -20736,14 +18978,10 @@ async def show_single_qr(callback: CallbackQuery):
         )
         return
     
-    # ✅ گرفتن لینک مورد نظر (با همان ایندکس)
     target_link = valid_links[link_index]
     logger.info(f"✅ لینک انتخاب شده ({link_index + 1}): {target_link[:50]}...")
     
-    # ✅ اگر vmess است، اخطار بده
     is_vmess = target_link.startswith('vmess://')
-    
-    # تولید QR Code
     try:
         qr_img = generate_qr_code(target_link, order_id)
         
@@ -20757,8 +18995,6 @@ async def show_single_qr(callback: CallbackQuery):
                 caption = f"📱 <b>QR Code #{link_index + 1} - سفارش #{order_id}</b>"
             else:
                 caption = f"📱 <b>QR Code #{link_index + 1} - Order #{order_id}</b>"
-        
-        # حذف پیام قبلی
         try:
             await callback.message.delete()
         except:
@@ -20804,8 +19040,6 @@ async def vol_up(callback: CallbackQuery):
             await callback.answer("⚠️ حداکثر حجم 100 گیگ است!", show_alert=True)
         else:
             await callback.answer("⚠️ Maximum volume is 100 GB!", show_alert=True)
-
-# =============== تغییر روز ===============
 @dp.callback_query(F.data == "day_down")
 async def day_down(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -20837,42 +19071,26 @@ async def day_up(callback: CallbackQuery):
             await callback.answer("⚠️ حداکثر مدت 365 روز است!", show_alert=True)
         else:
             await callback.answer("⚠️ Maximum duration is 365 days!", show_alert=True)
-
-# =============== پرداخت از کارت (اصلاح شده با تمدید) ===============
 @dp.callback_query(F.data == "pay_card")
 async def pay_card(callback: CallbackQuery):
     """پرداخت با کارت بانکی - نسخه کامل با پشتیبانی از تمدید"""
     user_id = callback.from_user.id
     save_coupon_to_user_db(user_id)
-    
-    # =============== دیباگ اولیه ===============
     logger.info(f"🔍 [pay_card] شروع برای کاربر {user_id}")
     debug_coupon_state(user_id, "pay_card_start")
-    
-    # =============== چک لیست سیاه ===============
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
-    
-    # =============== بررسی عضویت اجباری ===============
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
         return
-    
-    # =============== بررسی وضعیت فروش ===============
     if not await check_shop_status_and_notify(user_id, callback):
         return
-    
-    # =============== دریافت اطلاعات کاربر ===============
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
-    
-    # =============== دریافت وضعیت کامل از user_states ===============
     full_state = user_states.get(user_id, {})
-    
-    # =============== بررسی حالت تمدید (از هر دو منبع) ===============
     is_extend = full_state.get('is_extend', False)
     extend_order_id = full_state.get('extend_order_id')
     current_volume = full_state.get('current_volume', 0)
@@ -20881,20 +19099,13 @@ async def pay_card(callback: CallbackQuery):
     logger.info(f"🔍 [pay_card] وضعیت کامل قبل: {full_state}")
     logger.info(f"🔍 [pay_card] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
     logger.info(f"🔍 [pay_card] current_volume={current_volume}GB, current_days={current_days}روز")
-    
-    # =============== استخراج کوپن ===============
     coupon_code = full_state.get('coupon_code')
     coupon_discount = full_state.get('coupon_discount')
     coupon_applied = full_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [pay_card] کوپن استخراج شده: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
-    
-    # =============== بررسی بسته آماده ===============
     is_ready_package = full_state.get('is_ready_package', False)
-    
-    # =============== تعیین نوع سفارش و حجم ===============
     if is_ready_package:
-        # ✅ بسته آماده - استفاده از مقادیر ذخیره شده در state
         vol = full_state.get('volume', 1)
         days = full_state.get('days', 30)
         final_price = full_state.get('price', 0)
@@ -20910,7 +19121,6 @@ async def pay_card(callback: CallbackQuery):
         volume_display = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
         logger.info(f"📦 [pay_card] بسته آماده: {category_name} - حجم: {volume_display} - قیمت: {final_price:,} تومان")
     else:
-        # ✅ خرید سفارشی - از دیتابیس کاربر
         vol = user.get('volume', 1)
         days = user.get('days', 30)
         original_price = calculate_price(vol, days)
@@ -20922,8 +19132,6 @@ async def pay_card(callback: CallbackQuery):
         category_id = None
         package_id = None
         ip_limit = 0
-        
-        # اعمال تخفیف کوپن برای خرید سفارشی
         if coupon_applied and coupon_code:
             coupon = COUPONS.get(coupon_code)
             if coupon and coupon.get('status') == 'active':
@@ -20935,18 +19143,11 @@ async def pay_card(callback: CallbackQuery):
         
         volume_display = f"{vol} GB"
         logger.info(f"🛒 [pay_card] خرید سفارشی: {vol}GB/{days} روز - قیمت: {final_price:,} تومان")
-    
-    # =============== پرداخت رایگان (تخفیف ۱۰۰٪) ===============
     if final_price == 0:
         logger.info(f"💰 [pay_card] پرداخت رایگان برای کاربر {user_id}")
         await callback.message.edit_text("⏳ در حال فعال‌سازی سرویس رایگان...")
-        
-        # =============== بررسی حالت تمدید ===============
         if is_extend and extend_order_id:
-            # =============== تمدید سرویس موجود ===============
             logger.info(f"🔄 [pay_card] شروع تمدید رایگان سفارش #{extend_order_id}")
-            
-            # =============== دریافت اطلاعات سفارش اصلی ===============
             parent_order = orders.get(str(extend_order_id))
             if not parent_order:
                 logger.error(f"❌ [pay_card] سفارش اصلی #{extend_order_id} یافت نشد")
@@ -20958,7 +19159,6 @@ async def pay_card(callback: CallbackQuery):
             
             success = await extend_service(extend_order_id, user_id, vol, days)
             if success:
-                # ثبت سفارش جدید برای تمدید
                 order_id = create_order(user_id, vol, days, 0, "extend", ip_limit=ip_limit)
                 update_order(order_id, 
                             status='approved',
@@ -20967,8 +19167,6 @@ async def pay_card(callback: CallbackQuery):
                             payment_label='🎁 رایگان (تمدید)',
                             parent_order_id=extend_order_id,
                             is_extend=True)
-                
-                # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
                 if is_ready_package:
                     update_order(order_id, 
                                 category_id=category_id,
@@ -20977,20 +19175,14 @@ async def pay_card(callback: CallbackQuery):
                                 inbound_id=inbound_ids)
                 
                 consume_coupon(user_id)
-                
-                # پاک کردن وضعیت تمدید
                 if user_id in user_states:
                     user_states[user_id].pop('is_extend', None)
                     user_states[user_id].pop('extend_order_id', None)
                     user_states[user_id].pop('current_volume', None)
                     user_states[user_id].pop('current_days', None)
-                
-                # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
                 updated_parent = orders.get(str(extend_order_id))
                 new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
                 new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
-                
-                # ارسال نوتیفیکیشن به ادمین
                 await send_admin_notification('extend', {
                     'user_id': user_id,
                     'volume': vol,
@@ -21011,8 +19203,6 @@ async def pay_card(callback: CallbackQuery):
                     'new_days': new_days,
                     'category_name': category_name
                 })
-                
-                # =============== حذف پیام "در حال فعال‌سازی" ===============
                 try:
                     await callback.message.delete()
                 except:
@@ -21047,8 +19237,6 @@ async def pay_card(callback: CallbackQuery):
                     reply_markup=get_back_only_keyboard(lang)
                 )
                 return
-        
-        # =============== ساخت سرویس جدید (غیر تمدید) ===============
         order_id = create_order(user_id, vol, days, 0, order_type, ip_limit=ip_limit)
         update_order(order_id, 
                     status='approved',
@@ -21117,8 +19305,6 @@ async def pay_card(callback: CallbackQuery):
                 reply_markup=get_back_only_keyboard(lang)
             )
             return
-    
-    # =============== پرداخت عادی ===============
     logger.info(f"💰 [pay_card] کاربر {user_id} شروع پرداخت با کارت - قیمت: {final_price:,} تومان")
     
     if log_system:
@@ -21127,11 +19313,7 @@ async def pay_card(callback: CallbackQuery):
             "شروع پرداخت با کارت", 
             f"قیمت: {final_price:,} تومان | حجم: {vol}GB | مدت: {days} روز"
         )
-    
-    # =============== ایجاد سفارش ===============
     order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-    
-    # =============== ✅ تنظیم payment_method ===============
     if is_ready_package:
         update_order(order_id, 
                     category_id=category_id,
@@ -21146,10 +19328,7 @@ async def pay_card(callback: CallbackQuery):
                     status='awaiting_payment',
                     payment_method='card',  # ✅ تنظیم روش پرداخت
                     payment_label='💳 کارت به کارت')  # ✅ برچسب نمایشی
-    
-    # =============== اگر حالت تمدید است، parent_order_id رو ذخیره کن ===============
     if is_extend and extend_order_id:
-        # =============== بررسی وجود سفارش اصلی ===============
         parent_order = orders.get(str(extend_order_id))
         if parent_order:
             update_order(order_id, 
@@ -21158,32 +19337,21 @@ async def pay_card(callback: CallbackQuery):
             logger.info(f"🔄 [pay_card] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} ایجاد شد")
         else:
             logger.warning(f"⚠️ [pay_card] سفارش اصلی #{extend_order_id} یافت نشد، تمدید لغو شد")
-            # اگر سفارش اصلی وجود نداشت، تمدید را غیرفعال کن
             is_extend = False
             extend_order_id = None
     
     logger.info(f"📝 [pay_card] سفارش #{order_id} ایجاد شد - نوع: {order_type} - حجم: {vol}GB")
     logger.info(f"💳 [pay_card] روش پرداخت: کارت به کارت")
-    
-    # =============== ارسال استیکر ===============
     try:
         await send_sticker(user_id, 'payment', '💳')
     except Exception as e:
         logger.warning(f"خطا در ارسال استیکر: {e}")
         await callback.message.answer(premium_emoji('card', '💳'))
-    
-    # =============== ساخت شماره کارت ===============
     card_num = ' '.join([BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)])
-    
-    # =============== نمایش قیمت با تخفیف ===============
     price_display = f"{final_price:,} تومان"
     if discount_percent > 0 and final_price != original_price:
         price_display = f"<s>{original_price:,}</s> → {final_price:,} تومان (تخفیف {discount_percent}%)"
-    
-    # =============== حجم نمایشی ===============
     volume_display_text = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
-    
-    # =============== ساخت متن پرداخت با نمایش تمدید ===============
     if is_ready_package and category_name:
         icon = "📦"
         if category_id:
@@ -21191,8 +19359,6 @@ async def pay_card(callback: CallbackQuery):
                 if cat.get('id') == category_id:
                     icon = cat.get('icon', '📦')
                     break
-        
-        # =============== ✅ نمایش ساده تمدید ===============
         extend_display = ""
         if is_extend and extend_order_id:
             extend_display = f"""
@@ -21237,7 +19403,6 @@ async def pay_card(callback: CallbackQuery):
 {premium_emoji('receipt', '📸')} <b>Please send the receipt photo</b>
 """
     else:
-        # =============== پیام تمدید یا خرید عادی ===============
         if is_extend and extend_order_id:
             extend_display = f"""
 🔄 <b>تمدید سرویس #{extend_order_id}</b>
@@ -21282,8 +19447,6 @@ async def pay_card(callback: CallbackQuery):
 
 {premium_emoji('receipt', '📸')} <b>Please send the receipt photo</b>
 """
-    
-    # =============== کیبورد ===============
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -21305,8 +19468,6 @@ async def pay_card(callback: CallbackQuery):
         await callback.message.delete()
     except:
         pass
-    
-    # =============== تنظیم user_states با حفظ کامل کوپن و تمدید ===============
     new_state = {
         'awaiting_receipt': True, 
         'current_order_id': order_id, 
@@ -21318,23 +19479,17 @@ async def pay_card(callback: CallbackQuery):
         'payment_method': 'card',  # ✅ ذخیره در state
         'payment_label': '💳 کارت به کارت'  # ✅ ذخیره در state
     }
-    
-    # ✅ انتقال کوپن به state جدید
     if coupon_applied and coupon_code:
         new_state['coupon_code'] = coupon_code
         new_state['coupon_applied'] = True
         new_state['coupon_discount'] = coupon_discount if coupon_discount else 0
         logger.info(f"🏷️ [pay_card] کوپن {coupon_code} به state جدید منتقل شد")
-    
-    # ✅ انتقال اطلاعات بسته آماده
     if is_ready_package:
         new_state['is_ready_package'] = True
         new_state['category_id'] = category_id
         new_state['package_id'] = package_id
         new_state['inbound_id'] = inbound_ids
         new_state['category_name'] = category_name
-    
-    # ✅ انتقال اطلاعات تمدید
     if is_extend and extend_order_id:
         new_state['is_extend'] = True
         new_state['extend_order_id'] = extend_order_id
@@ -21348,14 +19503,10 @@ async def pay_card(callback: CallbackQuery):
             new_state['current_volume'] = full_state.get('current_volume', 0)
             new_state['current_days'] = full_state.get('current_days', 0)
             logger.info(f"🔄 [pay_card] اطلاعات تمدید از full_state به new_state منتقل شد: order_id={full_state.get('extend_order_id')}")
-    
-    # ذخیره state جدید
     user_states[user_id] = new_state
     
     logger.info(f"✅ [pay_card] وضعیت کاربر {user_id} تنظیم شد: awaiting_receipt برای سفارش #{order_id}")
     logger.info(f"🔍 [pay_card] new_state: {new_state}")
-    
-    # =============== دیباگ نهایی ===============
     debug_coupon_state(user_id, "pay_card_end")
     
     try:
@@ -21369,42 +19520,30 @@ async def send_receipt_reminder(callback: CallbackQuery):
     user_id = callback.from_user.id
     order_id = int(callback.data.split("_")[2])
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     full_state = user_states.get(user_id, {})
     coupon_code = full_state.get('coupon_code')
     coupon_discount = full_state.get('coupon_discount')
     coupon_applied = full_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [send_receipt_reminder] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    
-    # چک کن سفارش هنوز معتبره
     order = orders.get(str(order_id))
     if not order or order.get('status') != 'awaiting_payment':
         await callback.answer("❌ سفارش نامعتبر است", show_alert=True)
         return
-    
-    # آپدیت وضعیت کاربر (با حفظ کوپن)
     user_states[user_id] = {
         'awaiting_receipt': True, 
         'current_order_id': order_id, 
         'timestamp': datetime.now().isoformat()
     }
-    
-    # ✅ اگر کوپن وجود داشت، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount if coupon_discount else 0
         logger.info(f"🏷️ [send_receipt_reminder] کوپن {coupon_code} حفظ شد")
-    
-    # پاک کردن پیام قبلی
     try:
         await callback.message.delete()
     except:
         pass
-    
-    # ارسال پیام جدید
     if lang == "fa":
         await bot.send_message(
             user_id,
@@ -21432,23 +19571,15 @@ async def send_receipt_reminder(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-
-#دکمه کنسل در پرداخت
 @dp.callback_query(F.data.startswith("cancel_order_"))
 async def cancel_order_direct(callback: CallbackQuery):
     """انصراف مستقیم از سفارش توسط کاربر - کوپن باقی می‌ماند"""
-    
-    # =============== اگر کالبک برای ادمین است، به هندلر مناسب هدایت کن ===============
     if callback.data.startswith("cancel_order_admin_"):
         logger.debug(f"⏩ کالبک cancel_order_admin به هندلر ادمین هدایت شد: {callback.data}")
         await cancel_order_admin(callback)
         return
-    
-    # =============== ادامه کد قبلی برای کاربران عادی ===============
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # فرمت: cancel_order_123
     parts = callback.data.split("_")
     if len(parts) < 3:
         await callback.answer("❌ فرمت کالبک نامعتبر", show_alert=True)
@@ -21459,8 +19590,6 @@ async def cancel_order_direct(callback: CallbackQuery):
     except ValueError:
         await callback.answer("❌ خطا در پردازش سفارش", show_alert=True)
         return
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
@@ -21498,12 +19627,8 @@ async def cancel_order_direct(callback: CallbackQuery):
             else:
                 await callback.answer("❌ This order cannot be cancelled", show_alert=True)
             return
-    
-    # =============== پاک کردن وضعیت receipt (نه کوپن) ===============
     if user_id in user_states:
         user_states.pop(user_id, None)
-    
-    # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id] = {
             'coupon_code': coupon_code,
@@ -21512,8 +19637,6 @@ async def cancel_order_direct(callback: CallbackQuery):
         }
         logger.info(f"🏷️ [cancel_order_direct] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
         save_coupon_to_user_db(user_id)
-    
-    # برگشت به منوی اصلی
     is_admin = (user_id == ADMIN_ID_INT)
     
     coupon_message = ""
@@ -21552,8 +19675,6 @@ async def create_client_in_panel(user_id: int, email: str, volume_gb: int, days:
     if not user_name:
         user_info = get_user(user_id)
         user_name = user_info.get('name', f'user_{user_id}')
-    
-    # دریافت اینباند انتخاب شده کاربر
     inbound_id = get_user_inbound(user_id)
     
     return await xui_create_client_with_inbound(email, volume_gb, days, user_name, user_id, inbound_id, ip_limit=ip_limit)
@@ -21569,8 +19690,6 @@ async def admin_coupons_stats(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     total = len(COUPONS)
-    
-    # =============== آمار دقیق‌تر ===============
     active = 0
     used = 0
     expired = 0
@@ -21579,7 +19698,6 @@ async def admin_coupons_stats(callback: CallbackQuery):
     for coupon in COUPONS.values():
         status = coupon.get('status', 'unknown')
         if status == 'active':
-            # اگر محدودیت دارد و تا حدی مصرف شده
             usage_limit = coupon.get('usage_limit', 0)
             used_count = coupon.get('used_count', 0)
             if usage_limit > 0 and 0 < used_count < usage_limit:
@@ -21591,8 +19709,6 @@ async def admin_coupons_stats(callback: CallbackQuery):
             expired += 1
     
     total_usage = sum(c.get('used_count', 0) for c in COUPONS.values())
-    
-    # بیشترین کوپن استفاده شده
     most_used = None
     max_usage = 0
     for code, data in COUPONS.items():
@@ -21653,14 +19769,10 @@ async def send_admin_notification(purchase_type: str, data: dict):
         logger.error(f"خطا در دریافت اطلاعات کاربر {user_id}: {e}")
         user_name_escaped = f"کاربر {user_id}"
         username_display = 'ندارد'
-    
-    # =============== تشخیص نوع ===============
     is_test = (purchase_type == 'test')
     is_extend = data.get('is_extend', False)
     payment_type = data.get('payment_type', '')
     price = data.get('price', 0)
-    
-    # =============== عنوان ===============
     if is_test:
         title = "🧪 تست رایگان"
     elif is_extend:
@@ -21681,27 +19793,19 @@ async def send_admin_notification(purchase_type: str, data: dict):
             title = "🎁 خرید رایگان"
         else:
             title = "🛒 خرید جدید"
-    
-    # =============== تبدیل هوشمند حجم ===============
     volume = data.get('volume', 'نامشخص')
     
     if isinstance(volume, (int, float)):
         if volume == 0:
             volume_display = "نامحدود"
         elif is_test:
-            # تست: volume به مگابایت است
             volume_display = format_volume(volume, is_test=True)
         else:
-            # خرید: volume به گیگابایت است
             volume_display = format_volume(volume, is_test=False)
     else:
         volume_display = volume
-    
-    # =============== محدودیت IP ===============
     ip_limit = data.get('ip_limit', 0)
     ip_display = "نامحدود" if ip_limit == 0 else str(ip_limit)
-    
-    # =============== ساخت متن ===============
     text = f"{title}\n\n"
     text += f"👤 {user_name_escaped}\n"
     text += f"🆔 {user_id}\n"
@@ -21710,16 +19814,12 @@ async def send_admin_notification(purchase_type: str, data: dict):
     text += f"📦 {volume_display}\n"
     text += f"⏱️ {data.get('days', 0)} روز\n"
     text += f"💰 {data.get('price', 0):,} تومان\n"
-    
-    # =============== اطلاعات تمدید ===============
     if is_extend:
         old_volume = data.get('old_volume', 0)
         old_days = data.get('old_days', 0)
         new_volume = data.get('new_volume', 0)
         new_days = data.get('new_days', 0)
         parent_order_id = data.get('parent_order_id', 'نامشخص')
-        
-        # تبدیل هوشمند حجم برای نمایش
         old_volume_display = "نامحدود" if old_volume == 0 else f"{old_volume:.1f}GB"
         new_volume_display = "نامحدود" if new_volume == 0 else f"{new_volume:.1f}GB"
         
@@ -21727,27 +19827,19 @@ async def send_admin_notification(purchase_type: str, data: dict):
         text += f"🆔 سفارش اصلی: #{parent_order_id}\n"
         text += f"📦 {old_volume_display} → {new_volume_display}\n"
         text += f"⏱️ {old_days} → {new_days} روز\n"
-    
-    # =============== اطلاعات تست ===============
     if is_test:
         remaining_tests = data.get('remaining_tests', 'نامشخص')
         text += f"🧪 تست‌های باقیمانده: {remaining_tests}\n"
         text += f"👤 محدودیت IP: {ip_display}\n"
-    
-    # =============== اطلاعات بسته آماده ===============
     if data.get('category_name'):
         text += f"📦 بسته: {data.get('category_name')}\n"
     
     if data.get('order_id'):
         text += f"🆔 سفارش: #{data.get('order_id')}\n"
-    
-    # =============== اطلاعات موجودی ===============
     if data.get('balance_before') is not None:
         text += f"💰 موجودی قبلی: {data.get('balance_before'):,} تومان\n"
     if data.get('balance_after') is not None:
         text += f"💰 موجودی جدید: {data.get('balance_after'):,} تومان\n"
-    
-    # =============== اینباندها ===============
     inbound_ids = data.get('inbound_ids')
     if inbound_ids:
         if isinstance(inbound_ids, list):
@@ -21771,51 +19863,31 @@ async def send_admin_notification(purchase_type: str, data: dict):
             logger.info(f"📨 نوتیفیکیشن {purchase_type} با متن ساده ارسال شد")
         except Exception as e2:
             logger.error(f"❌ خطا در ارسال نوتیفیکیشن ساده: {e2}")
-        
-        
-        
-# =============== پرداخت از موجودی (اصلاح شده با تمدید) ===============
 @dp.callback_query(F.data == "pay_balance")
 async def pay_balance(callback: CallbackQuery):
     """پرداخت از موجودی - نسخه کامل با پشتیبانی از تمدید و ترکیب اینباندها"""
     user_id = callback.from_user.id
-    
-    # =============== دیباگ اولیه ===============
     logger.info(f"🔍 [pay_balance] شروع برای کاربر {user_id}")
     debug_coupon_state(user_id, "pay_balance_start")
-    
-    # =============== چک لیست سیاه ===============
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
-    
-    # =============== بررسی عضویت اجباری ===============
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
         return
-    
-    # =============== بررسی وضعیت فروش ===============
     if not await check_shop_status_and_notify(user_id, callback):
         return
-    
-    # =============== دریافت اطلاعات کاربر ===============
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
-    
-    # =============== دریافت وضعیت کامل از user_states ===============
     full_state = user_states.get(user_id, {})
-    
-    # =============== بررسی حالت تمدید ===============
     is_extend = full_state.get('is_extend', False)
     extend_order_id = full_state.get('extend_order_id')
     current_volume = full_state.get('current_volume', 0)
     current_days = full_state.get('current_days', 0)
     
     is_ready_package = full_state.get('is_ready_package', False)
-    
-    # =============== ✅ دریافت ip_limit و inbound_ids ===============
     ip_limit = full_state.get('ip_limit', 0)
     inbound_ids = full_state.get('inbound_ids', [])
     
@@ -21826,10 +19898,7 @@ async def pay_balance(callback: CallbackQuery):
     logger.info(f"🔍 [pay_balance] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
     logger.info(f"🔍 [pay_balance] current_volume={current_volume}GB, current_days={current_days}روز")
     logger.info(f"🔍 [pay_balance] ip_limit={ip_limit}, inbound_ids={inbound_ids}")
-    
-    # =============== تعیین نوع سفارش و حجم ===============
     if is_ready_package:
-        # ✅ بسته آماده - استفاده از مقادیر ذخیره شده در state
         vol = full_state.get('volume', 1)
         days = full_state.get('days', 30)
         final_price = full_state.get('price', 0)
@@ -21843,7 +19912,6 @@ async def pay_balance(callback: CallbackQuery):
         volume_display = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
         logger.info(f"📦 [pay_balance] بسته آماده: {category_name} - حجم: {volume_display} - قیمت نهایی: {final_price:,} تومان")
     else:
-        # ✅ خرید سفارشی - از دیتابیس کاربر
         vol = user.get('volume', 1)
         days = user.get('days', 30)
         original_price = calculate_price(vol, days)
@@ -21853,8 +19921,6 @@ async def pay_balance(callback: CallbackQuery):
         category_name = None
         category_id = None
         package_id = None
-        
-        # اعمال تخفیف کوپن برای خرید سفارشی
         coupon_code = full_state.get('coupon_code')
         coupon_applied = full_state.get('coupon_applied', False)
         
@@ -21874,18 +19940,11 @@ async def pay_balance(callback: CallbackQuery):
     
     logger.info(f"💰 [pay_balance] موجودی کاربر: {balance:,} تومان")
     logger.info(f"💰 [pay_balance] قیمت نهایی: {final_price:,} تومان")
-    
-    # =============== پرداخت رایگان (تخفیف ۱۰۰٪) ===============
     if final_price == 0:
         logger.info(f"💰 [pay_balance] پرداخت رایگان برای کاربر {user_id}")
         await callback.message.edit_text("⏳ در حال فعال‌سازی سرویس رایگان...")
-        
-        # =============== بررسی حالت تمدید ===============
         if is_extend and extend_order_id:
-            # =============== تمدید سرویس موجود ===============
             logger.info(f"🔄 [pay_balance] شروع تمدید رایگان سفارش #{extend_order_id}")
-            
-            # =============== دریافت اطلاعات سفارش اصلی ===============
             parent_order = orders.get(str(extend_order_id))
             if not parent_order:
                 logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
@@ -21894,8 +19953,6 @@ async def pay_balance(callback: CallbackQuery):
                     reply_markup=get_back_only_keyboard(lang)
                 )
                 return
-            
-            # ✅ ارسال inbound_ids و ip_limit به extend_service
             success = await extend_service(
                 extend_order_id, 
                 user_id, 
@@ -21906,7 +19963,6 @@ async def pay_balance(callback: CallbackQuery):
             )
             
             if success:
-                # ثبت سفارش جدید برای تمدید
                 order_id = create_order(user_id, vol, days, 0, "extend", ip_limit=ip_limit)
                 update_order(order_id, 
                             status='approved',
@@ -21916,8 +19972,6 @@ async def pay_balance(callback: CallbackQuery):
                             parent_order_id=extend_order_id,
                             is_extend=True,
                             inbound_id=inbound_ids)
-                
-                # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
                 if is_ready_package:
                     update_order(order_id, 
                                 category_id=category_id,
@@ -21925,20 +19979,14 @@ async def pay_balance(callback: CallbackQuery):
                                 package_id=package_id)
                 
                 consume_coupon(user_id)
-                
-                # پاک کردن وضعیت تمدید
                 if user_id in user_states:
                     user_states[user_id].pop('is_extend', None)
                     user_states[user_id].pop('extend_order_id', None)
                     user_states[user_id].pop('current_volume', None)
                     user_states[user_id].pop('current_days', None)
-                
-                # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
                 updated_parent = orders.get(str(extend_order_id))
                 new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
                 new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
-                
-                # =============== ارسال نوتیفیکیشن به ادمین ===============
                 await send_admin_notification('extend', {
                     'user_id': user_id,
                     'volume': vol,
@@ -21961,14 +20009,10 @@ async def pay_balance(callback: CallbackQuery):
                     'inbound_ids': inbound_ids,
                     'ip_limit': ip_limit
                 })
-                
-                # =============== حذف پیام "در حال فعال‌سازی" ===============
                 try:
                     await callback.message.delete()
                 except:
                     pass
-                
-                # =============== پیام ساده به کاربر ===============
                 if lang == "fa":
                     text = f"""
 ✅ <b>سرویس با موفقیت تمدید شد!</b>
@@ -21998,8 +20042,6 @@ async def pay_balance(callback: CallbackQuery):
                     reply_markup=get_back_only_keyboard(lang)
                 )
                 return
-        
-        # =============== ساخت سرویس جدید (غیر تمدید) ===============
         order_id = create_order(user_id, vol, days, 0, order_type, ip_limit=ip_limit)
         update_order(order_id, 
                     status='approved',
@@ -22013,8 +20055,6 @@ async def pay_balance(callback: CallbackQuery):
                         category_id=category_id,
                         category_name=category_name,
                         package_id=package_id)
-        
-        # =============== ارسال نوتیفیکیشن به ادمین ===============
         await send_admin_notification('balance', {
             'user_id': user_id,
             'volume': vol,
@@ -22030,8 +20070,6 @@ async def pay_balance(callback: CallbackQuery):
             'inbound_ids': inbound_ids,
             'ip_limit': ip_limit
         })
-        
-        # =============== ساخت کلاینت ===============
         timestamp = int(datetime.now().timestamp())
         email = f"user{user_id}_{timestamp}"
         user_name = user.get('name', f'کاربر_{user_id}')
@@ -22086,8 +20124,6 @@ async def pay_balance(callback: CallbackQuery):
                 reply_markup=get_back_only_keyboard(lang)
             )
             return
-    
-    # =============== بررسی موجودی ===============
     if balance < final_price:
         try:
             insufficient_sticker = "CAACAgIAAxkBAAERYtdqLYNgjzOUQi8uRFj-ZxHiOhEZvwACRh4AAvyUOEnTIzZfgD7FIDwE"
@@ -22110,12 +20146,8 @@ async def pay_balance(callback: CallbackQuery):
         
         await callback.answer(msg, show_alert=True)
         return
-    
-    # =============== کم کردن موجودی ===============
     new_balance = balance - final_price
     update_user(user_id, 'balance', new_balance)
-    
-    # =============== لاگ کاهش موجودی ===============
     if log_system:
         await log_system.log_balance_change(
             user_id=user_id,
@@ -22125,19 +20157,11 @@ async def pay_balance(callback: CallbackQuery):
             admin_id=None,
             details=f"خرید سرویس {vol}GB/{days} روز (تخفیف {discount_percent}%)"
         )
-    
-    # =============== ✅ ایجاد سفارش با ip_limit و inbound_ids ===============
     order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-    
-    # =============== ✅ ذخیره inbound_ids در سفارش ===============
     update_order(order_id, inbound_id=inbound_ids)
-    
-    # =============== اگر تمدید است، parent_order_id را ذخیره کن ===============
     if is_extend and extend_order_id:
         update_order(order_id, parent_order_id=extend_order_id, is_extend=True)
         logger.info(f"🔄 [pay_balance] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} ایجاد شد")
-    
-    # =============== اگر بسته آماده است ===============
     if is_ready_package:
         update_order(order_id, 
                     category_id=category_id,
@@ -22158,19 +20182,11 @@ async def pay_balance(callback: CallbackQuery):
     logger.info(f"💰 [pay_balance] روش پرداخت: موجودی حساب")
     logger.info(f"📡 [pay_balance] اینباندها: {inbound_ids}")
     logger.info(f"👤 [pay_balance] محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
-    
-    # =============== پنل فعال: ساخت خودکار ===============
     if SENAI_PANEL_ENABLED:
         try:
-            # =============== پیام در حال ساخت ===============
             await callback.message.edit_text("⏳ در حال ساخت کانفیگ...")
-            
-            # =============== بررسی حالت تمدید ===============
             if is_extend and extend_order_id:
-                # =============== تمدید سرویس موجود ===============
                 logger.info(f"🔄 [pay_balance] شروع تمدید با پرداخت سفارش #{extend_order_id}")
-                
-                # =============== دریافت اطلاعات سفارش اصلی ===============
                 parent_order = orders.get(str(extend_order_id))
                 if not parent_order:
                     logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
@@ -22180,8 +20196,6 @@ async def pay_balance(callback: CallbackQuery):
                         reply_markup=get_back_only_keyboard(lang)
                     )
                     return
-                
-                # ✅ ارسال inbound_ids و ip_limit به extend_service
                 success = await extend_service(
                     extend_order_id, 
                     user_id, 
@@ -22192,7 +20206,6 @@ async def pay_balance(callback: CallbackQuery):
                 )
                 
                 if success:
-                    # ثبت سفارش جدید برای تمدید
                     order_id = create_order(user_id, vol, days, final_price, "extend", ip_limit=ip_limit)
                     update_order(order_id, 
                                 status='approved',
@@ -22202,8 +20215,6 @@ async def pay_balance(callback: CallbackQuery):
                                 parent_order_id=extend_order_id,
                                 is_extend=True,
                                 inbound_id=inbound_ids)
-                    
-                    # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
                     if is_ready_package:
                         update_order(order_id, 
                                     category_id=category_id,
@@ -22212,20 +20223,14 @@ async def pay_balance(callback: CallbackQuery):
                     
                     record_purchase(user_id, final_price)
                     consume_coupon(user_id)
-                    
-                    # پاک کردن وضعیت تمدید
                     if user_id in user_states:
                         user_states[user_id].pop('is_extend', None)
                         user_states[user_id].pop('extend_order_id', None)
                         user_states[user_id].pop('current_volume', None)
                         user_states[user_id].pop('current_days', None)
-                    
-                    # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
                     updated_parent = orders.get(str(extend_order_id))
                     new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
                     new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
-                    
-                    # =============== ارسال نوتیفیکیشن به ادمین ===============
                     await send_admin_notification('extend', {
                         'user_id': user_id,
                         'volume': vol,
@@ -22248,14 +20253,10 @@ async def pay_balance(callback: CallbackQuery):
                         'inbound_ids': inbound_ids,
                         'ip_limit': ip_limit
                     })
-                    
-                    # =============== حذف پیام "در حال ساخت" ===============
                     try:
                         await callback.message.delete()
                     except:
                         pass
-                    
-                    # =============== پیام ساده به کاربر ===============
                     if lang == "fa":
                         text = f"""
 ✅ <b>سرویس با موفقیت تمدید شد!</b>
@@ -22278,12 +20279,9 @@ async def pay_balance(callback: CallbackQuery):
                     await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
                     logger.info(f"✅ [pay_balance] تمدید برای کاربر {user_id} - سفارش #{order_id}")
                     await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
-                    
-                    # =============== دیباگ نهایی ===============
                     debug_coupon_state(user_id, "pay_balance_end")
                     return
                 else:
-                    # برگردوندن موجودی در صورت خطا
                     update_user(user_id, 'balance', balance)
                     error_msg = "خطا در تمدید سرویس\nموجودی برگشت داده شد" if lang == "fa" else "Error extending service\nBalance refunded"
                     await callback.message.edit_text(
@@ -22291,8 +20289,6 @@ async def pay_balance(callback: CallbackQuery):
                         reply_markup=get_back_only_keyboard(lang)
                     )
                     return
-            
-            # =============== ساخت کلاینت جدید (غیر تمدید) ===============
             timestamp = int(datetime.now().timestamp())
             email = f"user{user_id}_{timestamp}"
             user_name = user.get('name', f'کاربر_{user_id}')
@@ -22306,8 +20302,6 @@ async def pay_balance(callback: CallbackQuery):
             if sub_link:
                 try:
                     await send_sticker(user_id, 'success', '✅')
-                    
-                    # =============== ایجاد سفارش ===============
                     order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
                     update_order(order_id, 
                                 status='approved', 
@@ -22334,8 +20328,6 @@ async def pay_balance(callback: CallbackQuery):
                     if log_system:
                         await log_system.log_config_created(user_id, order_id, email, vol, days)
                         await log_system.log_purchase(user_id, order_id, vol, days, final_price, "موجودی")
-                    
-                    # =============== ارسال نوتیفیکیشن به ادمین ===============
                     await send_admin_notification('balance', {
                         'user_id': user_id,
                         'volume': vol,
@@ -22351,23 +20343,15 @@ async def pay_balance(callback: CallbackQuery):
                         'inbound_ids': inbound_ids,
                         'ip_limit': ip_limit
                     })
-                    
-                    # =============== حذف پیام "در حال ساخت" ===============
                     try:
                         await callback.message.delete()
                     except:
                         pass
-                    
-                    # =============== ارسال کانفیگ به کاربر ===============
                     await send_config_with_qr_option(user_id, order_id, vol, days, final_price, sub_link, lang)
-                    
-                    # =============== درخواست بازخورد ===============
                     await callback.message.answer(
                         f"{premium_emoji('star', '⭐')} {'لطفا امتیاز دهید' if lang=='fa' else 'Please rate'}",
                         reply_markup=get_feedback_keyboard(order_id, lang)
                     )
-                    
-                    # =============== پاک کردن وضعیت بسته آماده ===============
                     if is_ready_package and user_id in user_states:
                         user_states[user_id].pop('is_ready_package', None)
                         user_states[user_id].pop('price', None)
@@ -22389,7 +20373,6 @@ async def pay_balance(callback: CallbackQuery):
                         reply_markup=get_back_only_keyboard(lang)
                     )
             else:
-                # برگردوندن موجودی در صورت خطا
                 update_user(user_id, 'balance', balance)
                 error_msg = "خطا در ساخت کانفیگ\nموجودی برگشت داده شد" if lang == "fa" else "Error creating config\nBalance refunded"
                 
@@ -22427,8 +20410,6 @@ async def pay_balance(callback: CallbackQuery):
                 f"{premium_emoji('danger', '❌')} {error_msg}",
                 reply_markup=get_back_only_keyboard(lang)
             )
-        
-        # =============== دیباگ نهایی ===============
         debug_coupon_state(user_id, "pay_balance_end")
         
         try:
@@ -22436,17 +20417,10 @@ async def pay_balance(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"خطا در callback.answer: {e}")
         return
-    
-    # =============== پنل خاموش ===============
     try:
         config = await get_config_from_pool_safe(vol, days)
-        
-        # =============== بررسی حالت تمدید ===============
         if is_extend and extend_order_id:
-            # =============== تمدید سرویس موجود (پنل خاموش) ===============
             logger.info(f"🔄 [pay_balance] شروع تمدید از مخزن برای سفارش #{extend_order_id}")
-            
-            # =============== دریافت اطلاعات سفارش اصلی ===============
             parent_order = orders.get(str(extend_order_id))
             if not parent_order:
                 logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
@@ -22456,8 +20430,6 @@ async def pay_balance(callback: CallbackQuery):
                     reply_markup=get_back_only_keyboard(lang)
                 )
                 return
-            
-            # ✅ ارسال inbound_ids و ip_limit به extend_service
             success = await extend_service(
                 extend_order_id, 
                 user_id, 
@@ -22476,8 +20448,6 @@ async def pay_balance(callback: CallbackQuery):
                             parent_order_id=extend_order_id,
                             is_extend=True,
                             inbound_id=inbound_ids)
-                
-                # =============== اگر بسته آماده بود، اطلاعات آن را ذخیره کن ===============
                 if is_ready_package:
                     update_order(order_id, 
                                 category_id=category_id,
@@ -22489,8 +20459,6 @@ async def pay_balance(callback: CallbackQuery):
                 
                 if log_system:
                     await log_system.log_purchase(user_id, order_id, vol, days, final_price, "تمدید (مخزن)")
-                
-                # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
                 updated_parent = orders.get(str(extend_order_id))
                 new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
                 new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
@@ -22517,8 +20485,6 @@ async def pay_balance(callback: CallbackQuery):
                     'inbound_ids': inbound_ids,
                     'ip_limit': ip_limit
                 })
-                
-                # =============== حذف پیام "در حال ساخت" ===============
                 try:
                     await callback.message.delete()
                 except:
@@ -22553,8 +20519,6 @@ async def pay_balance(callback: CallbackQuery):
                     reply_markup=get_back_only_keyboard(lang)
                 )
                 return
-        
-        # =============== ساخت سرویس جدید (غیر تمدید) ===============
         if config:
             order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
             update_order(order_id, 
@@ -22632,8 +20596,6 @@ async def pay_balance(callback: CallbackQuery):
                     "درخواست کانفیگ (موجودی کافی ولی کانفیگ موجود نیست)", 
                     f"سفارش #{order_id} | {vol}GB/{days} روز | مبلغ: {final_price:,} تومان"
                 )
-            
-            # =============== نمایش وضعیت تمدید در پیام ادمین ===============
             extend_note = ""
             if is_extend and extend_order_id:
                 extend_note = f"\n🔄 <b>تمدید سرویس #{extend_order_id}</b>"
@@ -22686,8 +20648,6 @@ async def pay_balance(callback: CallbackQuery):
             f"{premium_emoji('danger', '❌')} {error_msg}",
             reply_markup=get_back_only_keyboard(lang)
         )
-    
-    # =============== دیباگ نهایی ===============
     debug_coupon_state(user_id, "pay_balance_end")
     
     try:
@@ -22772,8 +20732,6 @@ async def admin_get_config(message: Message):
     
     await message.reply(f"✅ کانفیگ سفارش #{order_id} ارسال شد!")
     user_states.pop(message.from_user.id, None)
-
-# =============== انصراف از پرداخت ===============
 @dp.callback_query(F.data == "cancel_payment")
 async def cancel_payment(callback: CallbackQuery):
     """لغو پرداخت - کوپن باقی می‌ماند"""
@@ -22784,8 +20742,6 @@ async def cancel_payment(callback: CallbackQuery):
     is_admin = (user_id == ADMIN_ID_INT)
     
     logger.info(f"کاربر {user_id} پرداخت را لغو کرد - وضعیت قبلی: {user_states.get(user_id, 'No state')}")
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
@@ -22815,12 +20771,8 @@ async def cancel_payment(callback: CallbackQuery):
                 await callback.answer("✅ پرداخت لغو شد", show_alert=True)
             else:
                 await callback.answer("✅ Payment cancelled", show_alert=True)
-    
-    # =============== پاک کردن وضعیت receipt (نه کوپن) ===============
     if user_id in user_states:
         user_states.pop(user_id, None)
-    
-    # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id] = {
             'coupon_code': coupon_code,
@@ -22849,16 +20801,12 @@ async def retry_receipt(callback: CallbackQuery):
     user_id = callback.from_user.id
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     full_state = user_states.get(user_id, {})
     coupon_code = full_state.get('coupon_code')
     coupon_discount = full_state.get('coupon_discount')
     coupon_applied = full_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [retry_receipt] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    
-    # پیدا کردن سفارش در انتظار
     pending_order = find_pending_order(user_id)
     if pending_order:
         user_states[user_id] = {
@@ -22866,8 +20814,6 @@ async def retry_receipt(callback: CallbackQuery):
             'current_order_id': pending_order['order_id'], 
             'timestamp': datetime.now().isoformat()
         }
-        
-        # ✅ اگر کوپن وجود داشت، دوباره ذخیره کن
         if coupon_applied and coupon_code:
             user_states[user_id]['coupon_code'] = coupon_code
             user_states[user_id]['coupon_applied'] = True
@@ -22922,22 +20868,16 @@ async def get_user_display_name(user_id: int) -> str:
         نام نمایشی کاربر (یوزرنیم یا نام + آیدی)
     """
     try:
-        # ابتدا از دیتابیس بررسی کن
         user = get_user(user_id)
         username = user.get('username') or user.get('telegram_username')
         
         if username:
             return f"@{html.escape(username)}"
-        
-        # اگر یوزرنیم در دیتابیس نبود، از تلگرام بگیر
         chat = await bot.get_chat(user_id)
         if chat.username:
-            # ذخیره یوزرنیم در دیتابیس برای دفعات بعد
             update_user(user_id, 'username', chat.username)
             update_user(user_id, 'telegram_username', chat.username)
             return f"@{html.escape(chat.username)}"
-        
-        # اگر یوزرنیم نداشت، نام + آیدی
         name = chat.first_name or chat.last_name or f"کاربر_{user_id}"
         if chat.last_name:
             name = f"{chat.first_name} {chat.last_name}"
@@ -22950,9 +20890,6 @@ async def get_user_display_name(user_id: int) -> str:
         name = user.get('name', f"کاربر_{user_id}")
         name_escaped = html.escape(name)
         return f"{name_escaped} (ID: {user_id})"
-    
-    
-# =============== دریافت فیش واریزی (اصلاح نهایی) ===============
 @dp.message(F.photo)
 async def handle_receipt(message: Message):
     """دریافت فیش واریزی - با تشخیص کامل تمدید و نوع پرداخت"""
@@ -22981,8 +20918,6 @@ async def handle_receipt(message: Message):
     except:
         await message.reply("❌ خطا در دریافت عکس" if lang=='fa' else "❌ Error")
         return
-    
-    # =============== پیدا کردن جدیدترین سفارش در انتظار پرداخت ===============
     valid_orders = get_valid_orders()
     pending_orders = []
     for o in valid_orders.values():
@@ -22995,15 +20930,9 @@ async def handle_receipt(message: Message):
         if user_id in user_states:
             user_states[user_id]['awaiting_receipt'] = False
         return
-    
-    # مرتب‌سازی بر اساس تاریخ (جدیدترین اول)
     pending_orders.sort(key=lambda x: x.get('created_at', x.get('date', '')), reverse=True)
-    
-    # برگرداندن جدیدترین سفارش
     pending = pending_orders[0]
     order_id = pending['order_id']
-    
-    # اگر بیش از یک سفارش در انتظار وجود دارد، سفارشات قدیمی را لغو کن
     if len(pending_orders) > 1:
         old_orders = pending_orders[1:]
         for old_o in old_orders:
@@ -23027,11 +20956,7 @@ async def handle_receipt(message: Message):
                 )
         except:
             pass
-    
-    # =============== تغییر وضعیت به pending ===============
     order_type = pending.get('type', 'purchase')
-    
-    # =============== تشخیص تمدید ===============
     parent_order_id = pending.get('parent_order_id')
     is_extend = parent_order_id is not None
     
@@ -23045,8 +20970,6 @@ async def handle_receipt(message: Message):
     logger.info(f"📸 فیش برای سفارش #{order_id} دریافت شد - وضعیت جدید: {new_status}")
     if is_extend:
         logger.info(f"🔄 این سفارش برای تمدید سرویس #{parent_order_id} است")
-    
-    # =============== دریافت اطلاعات کامل سفارش ===============
     order_price = pending.get('price', 0)
     order_amount = pending.get('amount', 0)
     order_volume = pending.get('volume', 0)
@@ -23055,8 +20978,6 @@ async def handle_receipt(message: Message):
     category_name = pending.get('category_name')
     category_id = pending.get('category_id')
     package_id = pending.get('package_id')
-    
-    # =============== دریافت نام کاربر با اولویت یوزرنیم و escape ===============
     user_display_name = message.from_user.first_name or "کاربر"
     user_username = message.from_user.username
     
@@ -23065,24 +20986,16 @@ async def handle_receipt(message: Message):
         user_display = f"@{html.escape(user_username)}"
     else:
         user_display = f"{user_display_escaped} (ID: {user_id})"
-    
-    # escape کردن تاریخ
     date_escaped = html.escape(pending.get('date', 'نامشخص'))
-    
-    # =============== تشخیص آیکون دسته ===============
     category_icon = "📦"
     if category_id:
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
                 category_icon = cat.get('icon', '📦')
                 break
-    
-    # =============== ساخت پیام ادمین با تشخیص تمدید ===============
     admin_text = f"💰 <b>فیش جدید</b>\n"
     admin_text += f"🆔 #{order_id} | 👤 {user_display}\n"
     admin_text += f"📅 {date_escaped}\n"
-    
-    # =============== نمایش نوع سفارش با تشخیص تمدید ===============
     if is_extend:
         admin_text += f"🔄 <b>نوع: تمدید سرویس #{parent_order_id}</b>\n"
     elif order_type == 'balance_charge':
@@ -23108,18 +21021,12 @@ async def handle_receipt(message: Message):
         admin_text += f"🧪 <b>نوع: تست رایگان</b>\n"
     else:
         admin_text += f"⚠️ <b>نوع: {html.escape(order_type)}</b>\n"
-    
-    # =============== نمایش مبلغ ===============
     expected_price = order_price or order_amount
     admin_text += f"📦 {order_volume}GB | ⏱️ {order_days} روز | 💰 مبلغ مورد انتظار: {expected_price:,} تومان"
-    
-    # =============== نمایش وضعیت تمدید ===============
     if is_extend:
         admin_text += f"\n🔄 این سفارش برای <b>تمدید</b> سرویس #{parent_order_id} است."
     
     admin_text += "\n⏳ در انتظار تایید"
-    
-    # =============== دکمه‌های ادمین با تشخیص تمدید ===============
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ تایید", callback_data=f"approve_receipt_{order_id}"),
@@ -23140,8 +21047,6 @@ async def handle_receipt(message: Message):
             await bot.send_photo(ADMIN_ID_INT, photo_id)
         except Exception as e2:
             logger.error(f"خطا در ارسال فیش به ادمین (تلاش دوم): {e2}")
-    
-    # =============== پیام به کاربر ===============
     amount = expected_price
     if is_extend:
         success = f"{premium_emoji('success','✅')} <b>فیش تمدید دریافت شد</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n🔄 تمدید سرویس #{parent_order_id}\n{premium_emoji('money','💰')} {amount:,} تومان\n{premium_emoji('time','⏳')} در انتظار تایید" if lang=='fa' else f"{premium_emoji('success','✅')} <b>Extension receipt received</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n🔄 Extending service #{parent_order_id}\n{premium_emoji('money','💰')} {amount:,} Toman\n{premium_emoji('time','⏳')} Pending approval"
@@ -23190,8 +21095,6 @@ async def custom_payment_receipt_amount(message: Message):
         if amount <= 0:
             await message.reply("❌ مبلغ باید بزرگتر از صفر باشد!" if lang == "fa" else "❌ Amount must be greater than zero!")
             return
-        
-        # =============== دریافت مبلغ واقعی سفارش ===============
         order_type = order.get('type', 'purchase')
         expected_amount = 0
         
@@ -23212,8 +21115,6 @@ async def custom_payment_receipt_amount(message: Message):
                             break
         else:
             expected_amount = order.get('price', 0)
-        
-        # =============== ذخیره مبلغ و رفتن به مرحله تایید ===============
         user_states[admin_id] = {
             'awaiting_custom_payment_receipt_confirm': True,
             'custom_payment_receipt_order_id': oid,
@@ -23226,8 +21127,6 @@ async def custom_payment_receipt_amount(message: Message):
         current_balance = target_user.get('balance', 0)
         new_balance = current_balance + amount
         user_name = html.escape(str(target_user.get('name', 'کاربر')))
-        
-        # =============== بررسی کم بودن مبلغ ===============
         warning_text = ""
         if expected_amount > 0 and amount < expected_amount:
             diff = expected_amount - amount
@@ -23293,8 +21192,6 @@ Add this amount to user's balance?
                 [InlineKeyboardButton(text="✏️ Edit amount", callback_data=f"custom_payment_receipt_{oid}")],
                 [InlineKeyboardButton(text="❌ Cancel", callback_data="admin_close_msg", style="danger")]
             ]
-        
-        # حذف پیام قبلی و ارسال جدید
         try:
             await message.delete()
         except:
@@ -23334,15 +21231,11 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
     if not order:
         await callback.answer("❌ سفارش یافت نشد" if lang == "fa" else "❌ Order not found", show_alert=True)
         return
-    
-    # =============== دریافت اطلاعات سفارش ===============
     order_type = order.get('type', 'purchase')
     volume = order.get('volume', 0)
     days = order.get('days', 0)
     price = order.get('price', 0)
     category_name = order.get('category_name', '')
-    
-    # اگر بسته آماده بود و قیمت صفر، از بسته بخون
     if order_type in ['ready_package', 'category_purchase'] and price == 0:
         category_id = order.get('category_id')
         package_id = order.get('package_id')
@@ -23356,23 +21249,15 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
                             days = pkg.get('days', 0)
                             break
                     break
-    
-    # =============== شارژ حساب کاربر ===============
     target_user = get_user(user_id)
     old_balance = target_user.get('balance', 0)
     new_balance = old_balance + amount
-    
-    # آپدیت سفارش
     update_order(oid, 
                 status='approved', 
                 payment_method='custom_payment_receipt',
                 amount=amount,
                 approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    
-    # افزایش موجودی
     add_balance(user_id, amount)
-    
-    # =============== لاگ ===============
     if log_system:
         await log_system.log_balance_change(
             user_id=user_id,
@@ -23382,8 +21267,6 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
             admin_id=callback.from_user.id,
             details=f"شارژ حساب از طریق پرداخت دلخواه (سفارش #{oid})"
         )
-    
-    # =============== تشخیص نوع سفارش برای توضیح ===============
     if order_type in ['ready_package', 'category_purchase'] and category_name:
         order_desc = f"بسته آماده '{category_name}'"
     elif order_type == 'purchase':
@@ -23392,8 +21275,6 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
         order_desc = "شارژ حساب"
     else:
         order_desc = f"سفارش #{oid}"
-    
-    # =============== محاسبه اختلاف مبلغ ===============
     diff = 0
     diff_text = ""
     if expected_amount > 0:
@@ -23404,8 +21285,6 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
             diff_text = f"\n {abs(diff):,} تومان کمتر از مبلغ درخواستی پرداخت کرده‌اید"
         else:
             diff_text = f"\n مبلغ پرداختی دقیقاً برابر مبلغ درخواستی است"
-    
-    # =============== ✅ پیام ساده و شفاف به کاربر ===============
     user_lang = target_user.get('lang', 'fa')
     
     if user_lang == "fa":
@@ -23440,8 +21319,6 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
         logger.info(f"پیام شارژ موجودی به کاربر {user_id} ارسال شد")
     except Exception as e:
         logger.error(f"خطا در ارسال پیام به کاربر {user_id}: {e}")
-    
-    # =============== پیام به ادمین ===============
     user_name = html.escape(str(target_user.get('name', 'کاربر')))
     
     if lang == "fa":
@@ -23478,8 +21355,6 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
 
 ✅ Message sent to user.
 """
-    
-    # حذف پیام قبلی و ارسال جدید
     try:
         await callback.message.delete()
     except:
@@ -23499,8 +21374,6 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
         ]),
         parse_mode=ParseMode.HTML
     )
-    
-    # پاک کردن وضعیت
     user_states.pop(callback.from_user.id, None)
     
     logger.info(f"✅ شارژ موجودی برای کاربر {user_id} - سفارش #{oid} - مبلغ: {amount:,} تومان")
@@ -23519,12 +21392,8 @@ async def custom_payment_receipt_manual(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # دریافت اطلاعات از user_states فعلی
     current_state = user_states.get(callback.from_user.id, {})
     oid = current_state.get('custom_payment_receipt_order_id')
-    
-    # ✅ بررسی نوع سفارش قبل از ادامه
     if oid:
         order = orders.get(str(oid))
         if order and order.get('type') != 'purchase':
@@ -23534,8 +21403,6 @@ async def custom_payment_receipt_manual(callback: CallbackQuery):
     if not current_state.get('custom_payment_receipt_order_id') or not current_state.get('custom_payment_receipt_user_id'):
         await callback.answer("❌ اطلاعات نامعتبر! لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Invalid data! Please try again.", show_alert=True)
         return
-    
-    # ذخیره وضعیت جدید برای تنظیم دستی
     user_states[callback.from_user.id] = {
         'awaiting_custom_payment_receipt_manual_volume': True,
         'custom_payment_receipt_order_id': current_state.get('custom_payment_receipt_order_id'),
@@ -23584,8 +21451,6 @@ async def custom_payment_receipt(callback: CallbackQuery):
     
     user_id = order['user_id']
     order_type = order.get('type', 'purchase')
-    
-    # =============== دریافت مبلغ درخواستی ===============
     expected_amount = 0
     
     if order_type == 'balance_charge':
@@ -23601,14 +21466,11 @@ async def custom_payment_receipt(callback: CallbackQuery):
                         for pkg in cat.get('packages', []):
                             if pkg.get('id') == package_id:
                                 expected_amount = pkg.get('price', 0)
-                                # آپدیت سفارش با قیمت صحیح
                                 update_order(oid, price=expected_amount)
                                 break
                         break
     else:
         expected_amount = order.get('price', 0)
-    
-    # ذخیره در user_states
     user_states[callback.from_user.id] = {
         'awaiting_custom_payment_receipt_amount': True,
         'custom_payment_receipt_order_id': oid,
@@ -23617,8 +21479,6 @@ async def custom_payment_receipt(callback: CallbackQuery):
     }
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== ساخت متن ===============
     if lang == "fa":
         if expected_amount > 0:
             text = f"""
@@ -23675,8 +21535,6 @@ Send /cancel to abort
         callback_data="admin_close_msg",
         style="danger"
     )]]
-    
-    # حذف پیام قبلی
     try:
         await callback.message.delete()
     except:
@@ -23710,8 +21568,6 @@ async def custom_payment_receipt_manual_volume(message: Message):
         if volume < 1 or volume > 100:
             await message.reply("❌ حجم باید بین 1 تا 100 گیگ باشد!" if lang == "fa" else "❌ Volume must be between 1 and 100 GB!")
             return
-        
-        # ذخیره حجم و رفتن به مرحله بعد
         state = user_states.get(admin_id, {})
         user_states[admin_id] = {
             'awaiting_custom_payment_receipt_manual_days': True,
@@ -23759,8 +21615,6 @@ async def custom_payment_receipt_manual_days(message: Message):
         user_states.pop(admin_id, None)
         await message.reply("❌ خطا: اطلاعات نامعتبر" if lang == "fa" else "❌ Error: Invalid data")
         return
-    
-    # ✅ بررسی کنیم که سفارش از نوع purchase باشد
     order = orders.get(str(oid))
     if not order or order.get('type') != 'purchase':
         user_states.pop(admin_id, None)
@@ -23779,8 +21633,6 @@ async def custom_payment_receipt_manual_days(message: Message):
         if remaining_balance < 0:
             await message.reply(f"❌ قیمت سرویس ({final_price:,} تومان) از مبلغ واریز شده ({amount:,} تومان) بیشتر است!\nلطفاً حجم یا مدت کمتری انتخاب کنید." if lang == "fa" else f"❌ Service price ({final_price:,} Toman) exceeds paid amount ({amount:,} Toman)!\nPlease choose lower volume or duration.")
             return
-        
-        # ذخیره برای تأیید نهایی
         user_states[admin_id] = {
             'awaiting_custom_payment_receipt_confirm': True,
             'custom_payment_receipt_order_id': oid,
@@ -23849,9 +21701,6 @@ Activate this service for the user?
         await message.reply("❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid number!")
 
 
-# ===== هندلرهای تایید/رد مستقیم =====
-
-
 @dp.callback_query(F.data == "admin_custom_balance")
 async def admin_custom_balance(callback: CallbackQuery):
     """پرداخت دلخواه برای شارژ حساب (بدون ساخت کانفیگ)"""
@@ -23882,45 +21731,28 @@ async def admin_custom_balance(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-    
-    
-    
-    
-# =============== اصلاح تابع approve_receipt ===============
 
 @dp.callback_query(F.data.startswith("approve_receipt_"))
 async def approve_receipt(callback: CallbackQuery):
     """تایید رسید با امکان انتخاب اینباند - با تشخیص تمدید"""
     logger.critical(f"🔴 approve_receipt CALLED! data={callback.data}")
-    
-    # =============== 1. اعتبارسنجی ادمین ===============
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # =============== 2. استخراج order_id ===============
     try:
         oid = int(callback.data.split("_")[2])
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش سفارش", show_alert=True)
         return
-    
-    # =============== 3. دریافت سفارش ===============
     order = orders.get(str(oid))
     if not order:
         return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
     
     order_type = order.get('type', 'purchase')
-    
-    # =============== 4. پردازش بر اساس نوع سفارش ===============
-    
-    # ---------- 4.1 سفارش خرید سرویس معمولی ----------
     if order_type == 'purchase':
         uid = order['user_id']
         vol = order.get('volume', 0)
         days = order.get('days', 30)
         price = order.get('price', 0)
-        
-        # =============== ✅ بررسی تمدید ===============
         parent_order_id = order.get('parent_order_id')
         is_extend = parent_order_id is not None
         
@@ -23929,12 +21761,8 @@ async def approve_receipt(callback: CallbackQuery):
         lang = user_info.get('lang', 'fa')
         
         logger.info(f"📝 تایید سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
-        
-        # دریافت لیست اینباندها
         inbounds = await xui_get_inbounds()
         active_inbounds = [i for i in inbounds if i.get('enable', True)]
-        
-        # ساخت دکمه‌های انتخاب اینباند
         inbound_buttons = []
         selected_inbound = get_user_inbound(uid)
         
@@ -23954,8 +21782,6 @@ async def approve_receipt(callback: CallbackQuery):
                 callback_data=f"select_inbound_{oid}_{inbound_id}",
                 style="primary" if is_selected else None
             )])
-        
-        # ساخت دکمه‌های اصلی
         buttons = []
         
         if inbound_buttons:
@@ -23974,8 +21800,6 @@ async def approve_receipt(callback: CallbackQuery):
             callback_data=f"select_inbound_{oid}_default",
             style="primary" if default_id and selected_inbound == default_id else None
         )])
-        
-        # =============== ✅ دکمه تایید با تشخیص تمدید ===============
         if is_extend:
             approve_label = f"🔄 {'تایید و تمدید' if lang == 'fa' else 'Approve & Extend'}"
         else:
@@ -23998,8 +21822,6 @@ async def approve_receipt(callback: CallbackQuery):
             text=f"🔙 {'برگشت به لیست سفارشات' if lang == 'fa' else 'Back to Orders'}",
             callback_data="admin_orders"
         )])
-        
-        # =============== نمایش نوع کانفیگ در پیام ===============
         category_name = order.get('category_name')
         package_id = order.get('package_id')
         category_id = order.get('category_id')
@@ -24021,8 +21843,6 @@ async def approve_receipt(callback: CallbackQuery):
                                 order_info += f" ({pkg.get('volume')}GB)"
                                 break
                         break
-        
-        # =============== ساخت متن با نمایش تمدید ===============
         extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
         parent_info = f"\n🆔 سفارش اصلی: #{parent_order_id}" if is_extend else ""
         
@@ -24065,8 +21885,6 @@ async def approve_receipt(callback: CallbackQuery):
         
         await callback.answer("✅ لطفاً اینباند مورد نظر را انتخاب کنید")
         return
-    
-    # ---------- 4.2 سفارش شارژ حساب ----------
     elif order_type == 'balance_charge':
         uid = order['user_id']
         amount = order.get('amount', 0)
@@ -24111,8 +21929,6 @@ async def approve_receipt(callback: CallbackQuery):
             await callback.answer("❌ خطا در تایید شارژ", show_alert=True)
         
         return
-    
-    # ---------- 4.3 بسته آماده (نسخه اصلاح شده با تشخیص تمدید) ----------
     elif order_type == 'ready_package' or order_type == 'category_purchase':
         uid = order['user_id']
         vol = order.get('volume', 0)
@@ -24122,16 +21938,12 @@ async def approve_receipt(callback: CallbackQuery):
         category_name = order.get('category_name', 'بسته آماده')
         package_id = order.get('package_id')
         category_id = order.get('category_id')
-        
-        # =============== ✅ بررسی تمدید ===============
         parent_order_id = order.get('parent_order_id')
         is_extend = parent_order_id is not None
         
         user_info = get_user(uid)
         user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
         lang = user_info.get('lang', 'fa')
-        
-        # پیدا کردن آیکون دسته
         icon = "📦"
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
@@ -24140,8 +21952,6 @@ async def approve_receipt(callback: CallbackQuery):
         
         cat_name_escaped = html.escape(category_name)
         logger.info(f"📦 تایید بسته آماده #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - دسته: {category_name} - تمدید: {is_extend}")
-        
-        # =============== دریافت لیست اینباندهای انتخاب شده ===============
         user_inbounds = get_user_inbound(uid)
         if user_inbounds:
             if isinstance(user_inbounds, list):
@@ -24150,12 +21960,8 @@ async def approve_receipt(callback: CallbackQuery):
                 selected_inbounds = [user_inbounds]
         else:
             selected_inbounds = []
-        
-        # =============== دریافت لیست اینباندهای فعال از پنل ===============
         inbounds = await xui_get_inbounds()
         active_inbounds = [i for i in inbounds if i.get('enable', True)]
-        
-        # =============== ساخت دیکشنری اسم اینباندها ===============
         inbound_names = {}
         for ib in active_inbounds:
             inbound_id_ib = ib.get('id')
@@ -24163,8 +21969,6 @@ async def approve_receipt(callback: CallbackQuery):
             protocol = html.escape(ib.get('protocol', '').upper())
             port = ib.get('port', '')
             inbound_names[inbound_id_ib] = f"{remark} - {protocol}:{port}"
-        
-        # =============== ساخت متن اینباندهای انتخاب شده با اسم کامل ===============
         inbound_display_text = ""
         if selected_inbounds:
             inbound_display_text = "✅ اینباندهای انتخاب شده:\n"
@@ -24172,7 +21976,6 @@ async def approve_receipt(callback: CallbackQuery):
                 ib_name = inbound_names.get(ib_id, f"ID: {ib_id}")
                 inbound_display_text += f"  • {ib_name}\n"
         else:
-            # اگر کاربر اینباندی انتخاب نکرده، از پیش‌فرض استفاده کن
             default_ids = configs_pool.get('default_inbound_ids', [])
             if default_ids:
                 inbound_display_text = "📌 اینباندهای پیش‌فرض:\n"
@@ -24181,17 +21984,11 @@ async def approve_receipt(callback: CallbackQuery):
                     inbound_display_text += f"  • {ib_name}\n"
             else:
                 inbound_display_text = "❌ هیچ اینباندی انتخاب نشده - از پیش‌فرض استفاده می‌شود"
-        
-        # =============== ساخت دکمه‌ها ===============
         buttons = []
-        
-        # دکمه انتخاب اینباند
         buttons.append([InlineKeyboardButton(
             text="📡 انتخاب اینباند" if lang == "fa" else "📡 Select Inbound",
             callback_data=f"select_user_inbound_{uid}_{oid}"
         )])
-        
-        # =============== ✅ دکمه تایید با تشخیص تمدید ===============
         if is_extend:
             approve_label = f"🔄 {'تایید و تمدید' if lang == 'fa' else 'Approve & Extend'}"
         else:
@@ -24214,8 +22011,6 @@ async def approve_receipt(callback: CallbackQuery):
             text=f"🔙 {'برگشت به لیست سفارشات' if lang == 'fa' else 'Back to Orders'}",
             callback_data="admin_orders"
         )])
-        
-        # =============== ساخت متن با نمایش تمدید ===============
         extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
         parent_info = f"\n🆔 سفارش اصلی: #{parent_order_id}" if is_extend else ""
         
@@ -24246,7 +22041,6 @@ async def approve_receipt(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
-            # اگر خطا خورد، پیام را حذف و جدید بفرست
             try:
                 await callback.message.delete()
             except:
@@ -24259,8 +22053,6 @@ async def approve_receipt(callback: CallbackQuery):
         
         await callback.answer("✅ لطفاً عملیات مورد نظر را انتخاب کنید")
         return
-    
-    # ---------- 4.4 نوع سفارش نامشخص ----------
     else:
         logger.warning(f"⚠️ نوع سفارش نامشخص برای #{oid}: {order_type}")
         return await callback.answer("❌ نوع سفارش نامشخص", show_alert=True)    
@@ -24279,8 +22071,6 @@ async def select_user_inbound(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
-    
-    # پاک کردن وضعیت موقت قبلی
     temp_key = f"{uid}_{oid}"
     TEMP_INBOUND_SELECTION[temp_key] = []
     
@@ -24319,8 +22109,6 @@ async def set_user_inbound_default(callback: CallbackQuery):
             "❌ هیچ اینباند پیش‌فرضی تنظیم نشده است!" if lang == "fa" else "❌ No default inbounds set!",
             show_alert=True
         )
-    
-    # بازگشت به صفحه انتخاب
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id)
     
     
@@ -24331,8 +22119,6 @@ async def set_user_inbound(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     parts = callback.data.split("_")
-    
-    # بررسی اینکه دکمه پیش‌فرض است یا نه
     if parts[3] == 'default':
         try:
             uid = int(parts[4])
@@ -24342,8 +22128,6 @@ async def set_user_inbound(callback: CallbackQuery):
             return
         
         lang = get_user(callback.from_user.id).get('lang', 'fa')
-        
-        # استفاده از اینباندهای پیش‌فرض
         default_ids = configs_pool.get('default_inbound_ids', [])
         if default_ids:
             save_user_inbound_selection(uid, default_ids)
@@ -24356,8 +22140,6 @@ async def set_user_inbound(callback: CallbackQuery):
                 "❌ هیچ اینباند پیش‌فرضی تنظیم نشده است!" if lang == "fa" else "❌ No default inbounds set!",
                 show_alert=True
             )
-        
-        # رفرش صفحه
         await approve_receipt(callback)
         return
     
@@ -24370,16 +22152,12 @@ async def set_user_inbound(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # تنظیم اینباند برای کاربر (به صورت لیست تک آیتمی)
     save_user_inbound_selection(uid, [inbound_id])
     
     await callback.answer(
         f"✅ اینباند انتخاب شد!" if lang == "fa" else f"✅ Inbound selected!",
         show_alert=True
     )
-    
-    # =============== بازگشت به صفحه تایید برای رفرش کامل ===============
     await approve_receipt(callback)
     
     
@@ -24399,8 +22177,6 @@ async def remove_user_inbound(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # دریافت لیست فعلی
     current_inbounds = get_user_inbound(uid)
     if isinstance(current_inbounds, list):
         current_list = current_inbounds.copy()
@@ -24408,15 +22184,12 @@ async def remove_user_inbound(callback: CallbackQuery):
         current_list = [current_inbounds]
     else:
         current_list = []
-    
-    # حذف اینباند
     if inbound_id in current_list:
         current_list.remove(inbound_id)
         
         if current_list:
             save_user_inbound_selection(uid, current_list)
         else:
-            # اگر لیست خالی شد، از پیش‌فرض استفاده کن
             default_ids = configs_pool.get('default_inbound_ids', [])
             if default_ids:
                 save_user_inbound_selection(uid, default_ids)
@@ -24432,9 +22205,6 @@ async def remove_user_inbound(callback: CallbackQuery):
             f"❌ اینباند در لیست وجود ندارد!" if lang == "fa" else f"❌ Inbound not in list!",
             show_alert=True
         )
-    
-    # =============== بازگشت به صفحه تایید برای رفرش کامل ===============
-    # با این کار دکمه حذف شده ناپدید می‌شود و صفحه به‌روز می‌شود
     await approve_receipt(callback)
     
     
@@ -24453,8 +22223,6 @@ async def select_multiple_inbounds(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # دریافت لیست اینباندها
     inbounds = await xui_get_inbounds()
     active_inbounds = [i for i in inbounds if i.get('enable', True)]
     
@@ -24469,8 +22237,6 @@ async def select_multiple_inbounds(callback: CallbackQuery):
         current_list = [current_inbounds]
     else:
         current_list = []
-    
-    # ساخت دیکشنری اسم اینباندها
     inbound_names = {}
     for ib in active_inbounds:
         inbound_id = ib.get('id')
@@ -24478,8 +22244,6 @@ async def select_multiple_inbounds(callback: CallbackQuery):
         protocol = ib.get('protocol', '').upper()
         port = ib.get('port', '')
         inbound_names[inbound_id] = f"{remark} - {protocol}:{port}"
-    
-    # ساخت متن برای نمایش
     current_names = [inbound_names.get(ib_id, f"ID: {ib_id}") for ib_id in current_list]
     
     if lang == "fa":
@@ -24565,8 +22329,6 @@ async def toggle_user_inbound(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
-    
-    # دریافت لیست فعلی
     current_inbounds = get_user_inbound(uid)
     if isinstance(current_inbounds, list):
         current_list = current_inbounds.copy()
@@ -24574,22 +22336,16 @@ async def toggle_user_inbound(callback: CallbackQuery):
         current_list = [current_inbounds]
     else:
         current_list = []
-    
-    # تغییر وضعیت
     if inbound_id in current_list:
         current_list.remove(inbound_id)
         await callback.answer(f"❌ لغو شد")
     else:
         current_list.append(inbound_id)
         await callback.answer(f"✅ انتخاب شد")
-    
-    # ذخیره موقت
     if current_list:
         save_user_inbound_selection(uid, current_list)
     else:
         save_user_inbound_selection(uid, None)
-    
-    # =============== بازگشت به صفحه انتخاب با استفاده از تابع کمکی ===============
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id)
     
     
@@ -24600,16 +22356,12 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
         return
     
     lang = get_user(admin_id).get('lang', 'fa')
-    
-    # دریافت لیست اینباندها
     inbounds = await xui_get_inbounds()
     active_inbounds = [i for i in inbounds if i.get('enable', True)]
     
     if not active_inbounds:
         await message.answer("❌ هیچ اینباند فعالی یافت نشد")
         return
-    
-    # دریافت وضعیت موقت یا وضعیت ذخیره شده
     temp_key = f"{uid}_{oid}"
     if temp_key in TEMP_INBOUND_SELECTION:
         current_list = TEMP_INBOUND_SELECTION[temp_key]
@@ -24622,8 +22374,6 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
         else:
             current_list = []
         TEMP_INBOUND_SELECTION[temp_key] = current_list.copy()
-    
-    # ساخت دیکشنری اسم اینباندها
     inbound_names = {}
     for ib in active_inbounds:
         inbound_id = ib.get('id')
@@ -24652,14 +22402,11 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
 """
     
     buttons = []
-    # در تابع show_inbound_selection
     for inbound in active_inbounds:
         inbound_id = inbound.get('id')
         ib_name = inbound_names.get(inbound_id, f"ID: {inbound_id}")
         
         is_selected = inbound_id in current_list
-        
-        # ✅ استفاده از html.escape
         label = f"{'✅' if is_selected else '⬜'} {html.escape(ib_name)}"
         
         buttons.append([InlineKeyboardButton(
@@ -24667,8 +22414,6 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
             callback_data=f"toggle_inbound_{uid}_{inbound_id}_{oid}",
             style="success" if is_selected else None
         )])
-    
-    # دکمه‌های عملیاتی
     buttons.append([
         InlineKeyboardButton(
             text="📌 انتخاب پیش‌فرض" if lang == "fa" else "📌 Select Default",
@@ -24703,11 +22448,9 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
                 await message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
             except Exception as e:
                 if "message is not modified" in str(e):
-                    # اگر متن تغییر نکرده، فقط کیبورد را آپدیت کن
                     try:
                         await message.edit_reply_markup(reply_markup=keyboard)
                     except Exception as e2:
-                        # اگر کیبورد هم تغییر نکرده، هیچ کاری نکن
                         if "message is not modified" not in str(e2):
                             logger.error(f"خطا در ویرایش کیبورد: {e2}")
                 else:
@@ -24716,10 +22459,8 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
             await message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     except Exception as e:
         if "message is not modified" in str(e):
-            # اگر پیام تغییر نکرده، فقط ignore کن
             logger.debug("پیام تغییر نکرده")
         else:
-            # در صورت خطای دیگر، پیام را حذف و جدید بفرست
             try:
                 await message.delete()
             except:
@@ -24743,8 +22484,6 @@ async def toggle_inbound(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
-    
-    # دریافت وضعیت موقت
     temp_key = f"{uid}_{oid}"
     if temp_key not in TEMP_INBOUND_SELECTION:
         current_inbounds = get_user_inbound(uid)
@@ -24756,19 +22495,13 @@ async def toggle_inbound(callback: CallbackQuery):
             TEMP_INBOUND_SELECTION[temp_key] = []
     
     current_list = TEMP_INBOUND_SELECTION[temp_key]
-    
-    # تغییر وضعیت
     if inbound_id in current_list:
         current_list.remove(inbound_id)
         await callback.answer(f"❌ لغو شد", show_alert=False)
     else:
         current_list.append(inbound_id)
         await callback.answer(f"✅ انتخاب شد", show_alert=False)
-    
-    # ذخیره موقت
     TEMP_INBOUND_SELECTION[temp_key] = current_list
-    
-    # به‌روزرسانی صفحه با رفرش کامل دکمه‌ها
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id, update_existing=True)
     
     
@@ -24807,8 +22540,6 @@ async def apply_coupon_page(callback: CallbackQuery):
     lang = get_user(user_id).get('lang', 'fa')
     
     user_state = user_states.get(user_id, {})
-    
-    # اگر کوپن فعال دارد
     if user_state.get('coupon_applied'):
         coupon_code = user_state.get('coupon_code', '')
         coupon_discount = user_state.get('coupon_discount', 0)
@@ -24876,8 +22607,6 @@ You have an active coupon:
         except:
             pass
         return
-    
-    # اگر کوپن فعالی ندارد
     if lang == "fa":
         text = f"""
 {premium_emoji('gift', '🏷️')} <b>اعمال کوپن تخفیف</b>
@@ -24931,16 +22660,12 @@ async def cancel_coupon(callback: CallbackQuery):
     if not user_state.get('coupon_applied'):
         await callback.answer("❌ شما کوپن فعالی ندارید!" if lang == "fa" else "❌ You have no active coupon!", show_alert=True)
         return
-    
-    # حذف کامل کوپن از وضعیت کاربر
     if user_id in user_states:
         user_states[user_id].pop('coupon_code', None)
         user_states[user_id].pop('coupon_discount', None)
         user_states[user_id].pop('coupon_applied', None)
     
     await callback.answer("✅ کوپن با موفقیت لغو شد!" if lang == "fa" else "✅ Coupon cancelled successfully!", show_alert=True)
-    
-    # بازگشت به منوی اصلی
     await back_to_main(callback)
     
     
@@ -24982,20 +22707,14 @@ async def save_inbounds(callback: CallbackQuery):
     
     temp_key = f"{uid}_{oid}"
     current_list = TEMP_INBOUND_SELECTION.get(temp_key, [])
-    
-    # ذخیره نهایی
     if current_list:
         save_user_inbound_selection(uid, current_list)
     else:
         save_user_inbound_selection(uid, None)
-    
-    # پاک کردن وضعیت موقت
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
     
     await callback.answer(f"✅ {len(current_list)} اینباند ذخیره شد", show_alert=True)
-    
-    # =============== حذف پیام و ارسال مجدد ===============
     try:
         await callback.message.delete()
     except:
@@ -25045,15 +22764,11 @@ async def cancel_inbounds(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
-    
-    # پاک کردن وضعیت موقت
     temp_key = f"{uid}_{oid}"
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
     
     await callback.answer("❌ انصراف", show_alert=True)
-    
-    # =============== حذف پیام و ارسال مجدد ===============
     try:
         await callback.message.delete()
     except:
@@ -25104,8 +22819,6 @@ async def select_user_inbound(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
-    
-    # پاک کردن وضعیت موقت قبلی
     temp_key = f"{uid}_{oid}"
     TEMP_INBOUND_SELECTION[temp_key] = []
     
@@ -25132,16 +22845,12 @@ async def clear_user_inbounds(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # پاک کردن همه
     save_user_inbound_selection(uid, None)
     
     await callback.answer(
         f"🗑 همه اینباندها پاک شدند!" if lang == "fa" else f"🗑 All inbounds cleared!",
         show_alert=True
     )
-    
-    # بازگشت به صفحه انتخاب
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id)
     
     
@@ -25169,10 +22878,7 @@ async def save_user_inbounds(callback: CallbackQuery):
         f"✅ {count} اینباند انتخاب و ذخیره شد!" if lang == "fa" else f"✅ {count} inbounds saved!",
         show_alert=True
     )
-    
-    # =============== بازگشت به صفحه تایید ===============
     await approve_receipt(callback)
-# =============== اصلاح هندلر تغییر اینباند برای بسته‌های آماده ===============
 
 @dp.callback_query(F.data.startswith("change_package_inbound_"))
 async def change_package_inbound(callback: CallbackQuery):
@@ -25191,8 +22897,6 @@ async def change_package_inbound(callback: CallbackQuery):
         return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # دریافت لیست اینباندها
     await callback.message.edit_text("⏳ در حال دریافت لیست اینباندها...")
     
     inbounds = await xui_get_inbounds()
@@ -25231,8 +22935,6 @@ Please select a new inbound:
 """
     
     buttons = []
-    
-    # دکمه استفاده از اینباند پیش‌فرض
     buttons.append([InlineKeyboardButton(
         text="📌 استفاده از اینباند پیش‌فرض" if lang == "fa" else "📌 Use Default Inbound",
         callback_data=f"set_package_inbound_{oid}_default"  # فرمت صحیح
@@ -25276,15 +22978,9 @@ async def set_package_inbound(callback: CallbackQuery):
     """تنظیم اینباند جدید برای بسته آماده"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # =============== دیباگ ===============
     logger.info(f"🔍 set_package_inbound CALLED: {callback.data}")
-    
-    # استخراج داده‌ها
     try:
         parts = callback.data.split("_")
-        # فرمت: set_package_inbound_5_2
-        # یا: set_package_inbound_5_default
         
         oid = int(parts[3])              # ایندکس 3 = order_id
         inbound_value = parts[4]          # ایندکس 4 = inbound_id یا 'default'
@@ -25319,8 +23015,6 @@ async def set_package_inbound(callback: CallbackQuery):
         except ValueError:
             await callback.answer("❌ اینباند نامعتبر!", show_alert=True)
             return
-    
-    # بازگشت به صفحه تایید رسید
     await approve_receipt(callback)
     
     
@@ -25347,24 +23041,16 @@ async def confirm_approve_package(callback: CallbackQuery):
     days = order.get('days', 30)
     price = order.get('price', 0)
     ip_limit = order.get('ip_limit', 0)
-    
-    # =============== بررسی تمدید ===============
     parent_order_id = order.get('parent_order_id')
     is_extend = parent_order_id is not None
-    
-    # =============== بررسی وضعیت تمدید از user_states نیز ===============
     user_state = user_states.get(uid, {})
     if not is_extend:
         is_extend = user_state.get('is_extend', False)
         if is_extend:
             parent_order_id = user_state.get('extend_order_id')
             logger.info(f"🔄 [confirm_approve_package] تمدید از user_states تشخیص داده شد: order_id={parent_order_id}")
-    
-    # =============== تشخیص دقیق روش پرداخت ===============
     payment_method = order.get('payment_method', 'unknown')
     order_type = order.get('type', 'purchase')
-    
-    # =============== نقشه کامل روش‌های پرداخت ===============
     PAYMENT_METHODS = {
         'card': {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'},
         'awaiting_payment': {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'},
@@ -25377,11 +23063,7 @@ async def confirm_approve_package(callback: CallbackQuery):
         'free_coupon_extend': {'label': '🎁 کوپن تخفیف (تمدید)', 'emoji': '🎁', 'type': 'free_extend'},
         'test': {'label': '🧪 تست رایگان', 'emoji': '🧪', 'type': 'test'},
     }
-    
-    # =============== دریافت اطلاعات پرداخت ===============
     payment_info = PAYMENT_METHODS.get(payment_method, {'label': '❓ نامشخص', 'emoji': '❓', 'type': 'unknown'})
-    
-    # =============== اگر روش پرداخت از order نیامد، از user_states بگیر ===============
     if payment_method == 'unknown' or not payment_method:
         user_state_payment = user_states.get(uid, {})
         payment_type_from_state = user_state_payment.get('payment_type', '')
@@ -25394,8 +23076,6 @@ async def confirm_approve_package(callback: CallbackQuery):
             payment_info = {'label': '📦 بسته آماده', 'emoji': '📦', 'type': 'ready_package'}
         elif payment_type_from_state == 'test':
             payment_info = {'label': '🧪 تست رایگان', 'emoji': '🧪', 'type': 'test'}
-    
-    # =============== تشخیص تمدید برای تنظیم برچسب پرداخت ===============
     if is_extend:
         if payment_info['type'] == 'balance':
             payment_info = {'label': '🔄 موجودی (تمدید)', 'emoji': '🔄', 'type': 'balance_extend'}
@@ -25409,8 +23089,6 @@ async def confirm_approve_package(callback: CallbackQuery):
     payment_type = payment_info['type']
     
     logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_method} → {payment_type} ({payment_label})")
-    
-    # =============== دریافت اینباندهای انتخاب شده از user_inbound_selection ===============
     selected_inbounds = get_user_inbound(uid)
     
     if not selected_inbounds:
@@ -25418,8 +23096,6 @@ async def confirm_approve_package(callback: CallbackQuery):
         logger.info(f"📡 [confirm_approve_package] اینباندها از سفارش: {selected_inbounds}")
     else:
         logger.info(f"📡 [confirm_approve_package] اینباندهای انتخاب شده از user_inbound_selection: {selected_inbounds}")
-    
-    # اگر انتخاب نشده بود، از دسته بگیر
     if not selected_inbounds:
         category_id = order.get('category_id')
         if category_id:
@@ -25433,14 +23109,10 @@ async def confirm_approve_package(callback: CallbackQuery):
                         if cat_inbound:
                             selected_inbounds = cat_inbound if isinstance(cat_inbound, list) else [cat_inbound]
                     break
-    
-    # اگر هیچکدام نبود، از پیش‌فرض استفاده کن
     if not selected_inbounds:
         default_ids = configs_pool.get('default_inbound_ids', [])
         if default_ids:
             selected_inbounds = default_ids
-    
-    # اطمینان از لیست بودن
     if not isinstance(selected_inbounds, list):
         selected_inbounds = [selected_inbounds] if selected_inbounds else []
     
@@ -25450,8 +23122,6 @@ async def confirm_approve_package(callback: CallbackQuery):
     user_info = get_user(uid)
     user_name = user_info.get('name', f'کاربر_{uid}')
     balance = user_info.get('balance', 0)
-    
-    # ✅ escape کردن نام‌ها
     user_name_escaped = html.escape(user_name)
     category_name_escaped = html.escape(category_name)
     
@@ -25463,23 +23133,15 @@ async def confirm_approve_package(callback: CallbackQuery):
     logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_label}")
     
     await callback.message.edit_text(f"⏳ در حال پردازش بسته #{oid}...")
-    
-    # =============== بروزرسانی سفارش ===============
     update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     await check_referral_bonus(uid)
-    
-    # ✅ مصرف کوپن
     coupon_consumed = consume_coupon(uid)
     if coupon_consumed:
         logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
     else:
         logger.info(f"ℹ️ کوپنی برای سفارش #{oid} وجود نداشت یا قبلاً مصرف شده")
-    
-    # =============== اگر تمدید است ===============
     if is_extend and parent_order_id:
         logger.info(f"🔄 [confirm_approve_package] شروع تمدید سرویس #{parent_order_id} با بسته #{oid}")
-        
-        # =============== دریافت اطلاعات سفارش اصلی قبل از تمدید ===============
         parent_order = orders.get(str(parent_order_id))
         if parent_order:
             old_volume = parent_order.get('volume', 0)
@@ -25494,8 +23156,6 @@ async def confirm_approve_package(callback: CallbackQuery):
             old_days = 0
             old_email = ''
             old_inbound = []
-        
-        # =============== دریافت اینباندهای فعلی کاربر از پنل ===============
         current_inbounds = []
         if old_email:
             current_inbounds = await get_client_inbounds(old_email)
@@ -25507,15 +23167,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             if not isinstance(current_inbounds, list):
                 current_inbounds = [current_inbounds] if current_inbounds else []
             logger.info(f"📡 [confirm_approve_package] اینباندهای فعلی از user_inbound_selection: {current_inbounds}")
-        
-        # =============== ✅ اصلاح: فقط اینباندهای انتخاب شده توسط ادمین ===============
-        # برای تمدید، فقط اینباندهایی که ادمین انتخاب کرده باقی می‌مانند
-        # اینباندهای فعلی که در لیست انتخاب شده نیستند، باید حذف شوند
-        
-        # اینباندهای نهایی = فقط اینباندهای انتخاب شده توسط ادمین
         final_inbounds = selected_inbounds.copy()
-        
-        # پیدا کردن اینباندهایی که باید حذف شوند (برای لاگ)
         inbounds_to_detach = []
         for inbound_id in current_inbounds:
             if inbound_id and inbound_id not in final_inbounds:
@@ -25523,13 +23175,9 @@ async def confirm_approve_package(callback: CallbackQuery):
                 logger.info(f"➖ [confirm_approve_package] اینباند {inbound_id} باید حذف شود")
         
         logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی (فقط انتخاب شده توسط ادمین): {final_inbounds}")
-        
-        # =============== ذخیره اینباندهای نهایی برای کاربر ===============
         if final_inbounds:
             save_user_inbound_selection(uid, final_inbounds)
             logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی برای کاربر {uid} ذخیره شد: {final_inbounds}")
-        
-        # =============== ارسال به extend_service ===============
         success = await extend_service(
             parent_order_id, 
             uid, 
@@ -25540,12 +23188,9 @@ async def confirm_approve_package(callback: CallbackQuery):
         )
         
         if success:
-            # =============== دریافت اطلاعات به‌روز شده سفارش اصلی ===============
             updated_parent = orders.get(str(parent_order_id))
             new_volume = updated_parent.get('volume', 0) if updated_parent else old_volume + vol
             new_days = updated_parent.get('days', 0) if updated_parent else old_days + days
-            
-            # =============== به‌روزرسانی سفارش جدید ===============
             update_order(oid, 
                         new_volume=new_volume,
                         new_days=new_days,
@@ -25556,15 +23201,11 @@ async def confirm_approve_package(callback: CallbackQuery):
                         payment_type=payment_type,
                         payment_label=payment_label,
                         inbound_id=final_inbounds)
-            
-            # پاک کردن وضعیت تمدید از user_states
             if uid in user_states:
                 user_states[uid].pop('is_extend', None)
                 user_states[uid].pop('extend_order_id', None)
                 user_states[uid].pop('current_volume', None)
                 user_states[uid].pop('current_days', None)
-            
-            # =============== ارسال نوتیفیکیشن به ادمین ===============
             await send_admin_notification('extend', {
                 'user_id': uid,
                 'volume': vol,
@@ -25584,14 +23225,10 @@ async def confirm_approve_package(callback: CallbackQuery):
                 'category_name': category_name,
                 'inbound_ids': final_inbounds
             })
-            
-            # =============== حذف پیام ===============
             try:
                 await callback.message.delete()
             except:
                 pass
-            
-            # =============== پیام ساده به کاربر ===============
             if lang == "fa":
                 success_text = f"""
 ✅ <b>سرویس با موفقیت تمدید شد!</b>
@@ -25602,8 +23239,6 @@ async def confirm_approve_package(callback: CallbackQuery):
 """
             
             await bot.send_message(uid, success_text, parse_mode=ParseMode.HTML)
-            
-            # =============== پیام به ادمین ===============
             await callback.message.answer(
                 f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد!\n{payment_emoji} {payment_label}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -25627,7 +23262,6 @@ async def confirm_approve_package(callback: CallbackQuery):
             await callback.answer("✅ تمدید انجام شد" if lang == "fa" else "✅ Extended")
             return
         else:
-            # =============== خطا در تمدید - برگشت موجودی ===============
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
             
@@ -25651,8 +23285,6 @@ async def confirm_approve_package(callback: CallbackQuery):
             )
             await callback.answer("❌ خطا در تمدید", show_alert=True)
             return
-    
-    # =============== ساخت کلاینت جدید (غیر تمدید) ===============
     if SENAI_PANEL_ENABLED:
         email = f"user{uid}_{int(datetime.now().timestamp())}"
         sub = await xui_create_client_with_inbound(email, vol, days, user_name, uid, selected_inbounds, ip_limit=ip_limit)
@@ -25739,7 +23371,6 @@ async def confirm_approve_package(callback: CallbackQuery):
             await callback.answer("❌ خطا در ساخت کلاینت", show_alert=True)
             return
     else:
-        # =============== پنل غیرفعال - منتظر کانفیگ از ادمین ===============
         user_states[callback.from_user.id] = {
             'awaiting_config': True,
             'order_id': oid,
@@ -25768,7 +23399,6 @@ async def confirm_approve_package(callback: CallbackQuery):
         return
     
     await callback.answer("✅ بسته آماده تایید شد")
-# =============== 5. هندلر انتخاب اینباند ===============
 @dp.callback_query(F.data.startswith("select_inbound_"))
 async def select_inbound_for_order(callback: CallbackQuery):
     """انتخاب اینباند برای یک سفارش خاص"""
@@ -25776,7 +23406,6 @@ async def select_inbound_for_order(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     parts = callback.data.split("_")
-    # format: select_inbound_123_456  یا select_inbound_123_default
     
     try:
         oid = int(parts[2])
@@ -25798,7 +23427,6 @@ async def select_inbound_for_order(callback: CallbackQuery):
     uid = order['user_id']
     
     if inbound_value == "default":
-        # استفاده از اینباند پیش‌فرض
         default_id = configs_pool.get('default_inbound_id')
         if default_id:
             save_user_inbound_selection(uid, default_id)
@@ -25807,7 +23435,6 @@ async def select_inbound_for_order(callback: CallbackQuery):
             await callback.answer("❌ اینباند پیش‌فرض تنظیم نشده است", show_alert=True)
             return
     else:
-        # استفاده از اینباند مشخص
         try:
             inbound_id = int(inbound_value)
             save_user_inbound_selection(uid, inbound_id)
@@ -25815,18 +23442,12 @@ async def select_inbound_for_order(callback: CallbackQuery):
         except ValueError:
             await callback.answer("❌ اینباند نامعتبر", show_alert=True)
             return
-    
-    # بازگشت به صفحه تایید رسید
     await approve_receipt(callback)
-
-# =============== 6. هندلر تایید نهایی با اینباند انتخاب شده ===============
 @dp.callback_query(F.data.startswith("confirm_approve_"))
 async def confirm_approve_with_inbound(callback: CallbackQuery):
     """تایید نهایی سفارش با اینباند انتخاب شده - با تشخیص تمدید"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
-    
-    # استخراج order_id
     try:
         oid = int(callback.data.split("_")[2])
     except (ValueError, IndexError):
@@ -25841,29 +23462,19 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
     vol = order.get('volume', 0)
     days = order.get('days', 30)
     price = order.get('price', 0)
-    
-    # =============== ✅ بررسی تمدید ===============
     parent_order_id = order.get('parent_order_id')
     is_extend = parent_order_id is not None
     
     user_info = get_user(uid)
     user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
     lang = user_info.get('lang', 'fa')
-    
-    # استیکر
     await send_sticker(uid, 'order_approved', '✅')
     
     logger.info(f"📝 تایید نهایی سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
-    
-    # آپدیت وضعیت سفارش
     update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    
-    # مصرف کوپن
     coupon_consumed = consume_coupon(uid)
     if coupon_consumed:
         logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
-    
-    # بررسی پاداش رفرال (فقط برای خریدهای جدید)
     if not is_extend:
         referral_result = await check_referral_bonus(uid)
         if referral_result:
@@ -25874,20 +23485,15 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                     "دریافت پاداش رفرال",
                     f"به دلیل خرید اولین سرویس"
                 )
-    
-    # =============== ✅ اگر تمدید است ===============
     if is_extend and parent_order_id:
         await callback.message.edit_text(f"⏳ در حال تمدید سرویس #{parent_order_id}...")
         
         success = await extend_service(parent_order_id, uid, vol, days)
         
         if success:
-            # پاک کردن وضعیت تمدید
             if uid in user_states:
                 user_states[uid].pop('is_extend', None)
                 user_states[uid].pop('extend_order_id', None)
-            
-            # =============== پیام موفقیت تمدید ===============
             if lang == "fa":
                 success_text = f"""
 ✅ <b>سرویس با موفقیت تمدید شد!</b>
@@ -25928,7 +23534,6 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             await callback.answer("✅ تمدید انجام شد" if lang == "fa" else "✅ Extended")
             return
         else:
-            # خطا در تمدید - برگشت موجودی
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
             
@@ -25943,8 +23548,6 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             )
             await callback.answer("❌ خطا در تمدید", show_alert=True)
             return
-    
-    # =============== ساخت کلاینت جدید (غیر تمدید) ===============
     if SENAI_PANEL_ENABLED:
         await callback.message.edit_text(f"⏳ در حال ساخت کلاینت برای سفارش #{oid}...")
         
@@ -26066,10 +23669,7 @@ async def reject_balance(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== استخراج صحیح order_id ===============
     try:
-        # reject_balance_43
         parts = callback.data.split("_")
         if len(parts) >= 3:
             order_id = int(parts[2])
@@ -26086,11 +23686,7 @@ async def reject_balance(callback: CallbackQuery):
         logger.warning(f"سفارش #{order_id} برای رد یافت نشد")
         await callback.answer("❌ سفارش یافت نشد", show_alert=True)
         return
-    
-    # =============== رد سفارش ===============
     update_order(order_id, status='rejected')
-    
-    # ارسال پیام به کاربر
     try:
         user_lang = get_user(order['user_id']).get('lang', 'fa')
         amount = order.get('amount', 0)
@@ -26112,8 +23708,6 @@ async def reject_balance(callback: CallbackQuery):
         logger.info(f"پیام رد شارژ به کاربر {order['user_id']} ارسال شد")
     except Exception as e:
         logger.error(f"خطا در ارسال پیام رد شارژ به کاربر {order['user_id']}: {e}")
-    
-    # =============== لاگ ===============
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
@@ -26127,11 +23721,7 @@ async def reject_balance(callback: CallbackQuery):
         order['user_id'])
     
     logger.info(f"درخواست شارژ #{order_id} توسط ادمین {callback.from_user.id} رد شد")
-    
-    # =============== پاسخ به ادمین ===============
     await callback.answer("✅ درخواست شارژ رد شد" if lang == 'fa' else "✅ Balance request rejected", show_alert=True)
-    
-    # =============== بازگشت به لیست ===============
     await admin_balance(callback)
     
     
@@ -26141,18 +23731,14 @@ async def reject_balance(callback: CallbackQuery):
 async def reject_receipt(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔ محدود!", show_alert=True)
-    
-    # بررسی فرمت داده
     parts = callback.data.split("_")
     if len(parts) < 2:
         await callback.answer("❌ فرمت داده نامعتبر", show_alert=True)
         return
     
     try:
-        # اگر data به شکل reject_receipt_123 باشد
         if parts[1] == 'receipt' and len(parts) > 2:
             order_id = int(parts[2])
-        # اگر data به شکل reject_123 باشد
         elif len(parts) >= 2 and parts[1].isdigit():
             order_id = int(parts[1])
         else:
@@ -26168,13 +23754,9 @@ async def reject_receipt(callback: CallbackQuery):
         return
     
     update_order(order_id, status='rejected')
-    
-    # لاگ رد سفارش
     if log_system:
         await log_system.log_order_rejected(order_id, order['user_id'], "فیش نامعتبر")
     CustomLogger.log_event('ORDER_REJECTED', f'سفارش #{order_id} توسط ادمین رد شد', order['user_id'])
-    
-    # ارسال پیام به کاربر
     try:
         user_lang = get_user(order['user_id']).get('lang', 'fa')
         if user_lang == 'fa':
@@ -26185,8 +23767,6 @@ async def reject_receipt(callback: CallbackQuery):
             await bot.send_message(order['user_id'], f"{premium_emoji('fail','❌')} Your order #{order_id} has been rejected")
     except:
         pass
-    
-    # ویرایش پیام ادمین
     try:
         await callback.message.edit_caption(
             caption=f"{callback.message.caption}\n\n❌ <b>رد شد</b>",
@@ -26239,14 +23819,10 @@ async def approve_direct(callback: CallbackQuery):
     user_name = user_info.get('name', f'کاربر_{user_id}')
     
     await callback.answer("⏳ در حال پردازش...")
-    
-    # آپدیت سفارش
     update_order(order_id, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     if log_system:
         await log_system.log_order_approved(order_id, user_id)
     await check_referral_bonus(user_id)
-    
-    # ساخت کلاینت در پنل
     if SENAI_PANEL_ENABLED:
         timestamp = int(datetime.now().timestamp())
         email = f"user{user_id}_{timestamp}"
@@ -26265,8 +23841,6 @@ async def approve_direct(callback: CallbackQuery):
                 )
             except:
                 pass
-            
-            # آپدیت پیام ادمین
             new_text = callback.message.caption + f"\n\n✅ <b>تایید شد!</b>\n👤 {user_name}\n🔗 لینک: {sub_link[:40]}..."
             try:
                 await callback.message.edit_caption(caption=new_text, parse_mode=ParseMode.HTML)
@@ -26301,8 +23875,6 @@ async def reject_direct(callback: CallbackQuery):
         )
     except:
         pass
-    
-    # آپدیت پیام ادمین
     new_text = callback.message.caption + "\n\n❌ <b>رد شد!</b>"
     try:
         await callback.message.edit_caption(caption=new_text, parse_mode=ParseMode.HTML)
@@ -26310,12 +23882,6 @@ async def reject_direct(callback: CallbackQuery):
         pass
     
     await callback.answer("✅ سفارش رد شد", show_alert=True)
-    
-    
-    
-            
-            
-# =============== رسید بجز عکس  ===============
 @dp.message(F.document)
 @dp.message(F.video)
 @dp.message(F.audio)
@@ -26325,8 +23891,6 @@ async def reject_direct(callback: CallbackQuery):
 @dp.message(F.animation)
 async def handle_wrong_file_type(message: Message):
     user_id = message.from_user.id
-    
-    # فقط اگه در حالت انتظار فیش باشه
     user_state = user_states.get(user_id, {})
     if user_state.get('awaiting_receipt', False):
         lang = get_user(user_id).get('lang', 'fa')
@@ -26348,35 +23912,16 @@ async def handle_wrong_file_type(message: Message):
                 "PDF, video and other formats are not accepted.",
                 parse_mode=ParseMode.HTML
             )
-
-
-
-
-
-
-
-
-
-
-
-        
-        
-# =============== کانفیگ‌های من ===============
 @dp.callback_query(F.data == "my_configs")
 async def my_configs(callback: CallbackQuery):
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # ⛔ چک لیست سیاه
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
     
-    # همگام‌سازی قبل از نمایش
-    
     await sync_deleted_configs()
-    # دریافت کانفیگ‌های فعال کاربر
     valid_orders = get_valid_orders()
     configs_list = [
         o for o in valid_orders.values()
@@ -26384,14 +23929,10 @@ async def my_configs(callback: CallbackQuery):
         and o.get('status') in ("approved", "inactive")
         and o.get('config_link')
 ]
-    
-    # لاگ
     if log_system:
         asyncio.create_task(log_system.log_user_action(user_id, "مشاهده کانفیگ‌ها", f"تعداد: {len(configs_list)}"))
     
     logger.info(f"📁 کاربر {user_id} کانفیگ‌های خود را مشاهده می‌کند - تعداد: {len(configs_list)}")
-    
-    # اگر کانفیگی نداره
     if not configs_list:
         if lang == "fa":
             await send_sticker(user_id, 'order_rejected', '😭')
@@ -26428,23 +23969,14 @@ async def my_configs(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"خطا در callback.answer: {e}")
         return
-    
-    # مرتب‌سازی بر اساس تاریخ (جدیدترین اول)
     configs_list.sort(key=lambda x: x.get('date', ''), reverse=True)
-    
-    # =============== ساخت دکمه‌ها ===============
     buttons = []
-    
-    # دکمه مشاهده همه کانفیگ‌ها
     buttons.append([InlineKeyboardButton(
         text="نمایش همه کانفیگ‌ها" if lang == "fa" else "Show All Configs",
         callback_data="show_all_my_configs",
         style="primary"
         
     )])
-    
-    
-    # دکمه‌های جداگانه برای هر کانفیگ
     for c in configs_list:
         email = extract_email_from_sub_link(c.get("config_link", ""))
         is_test = c.get("type") == "test"
@@ -26463,8 +23995,6 @@ async def my_configs(callback: CallbackQuery):
                 style=style
             )
         ])
-
-    # دکمه بازگشت
     buttons.append([
         InlineKeyboardButton(
             text="🔙 بازگشت" if lang == "fa" else "Back 🔙",
@@ -26506,8 +24036,6 @@ async def show_all_my_configs(callback: CallbackQuery):
     """نمایش همه کانفیگ‌های کاربر به صورت یکجا"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # دریافت کانفیگ‌های فعال کاربر
     valid_orders = get_valid_orders()
     configs_list = [
         o for o in valid_orders.values()
@@ -26522,11 +24050,7 @@ async def show_all_my_configs(callback: CallbackQuery):
             show_alert=True
         )
         return
-    
-    # مرتب‌سازی بر اساس تاریخ (جدیدترین اول)
     configs_list.sort(key=lambda x: x.get('date', ''), reverse=True)
-    
-    # =============== ساخت متن ساده ===============
     if lang == "fa":
         text = f"""
 📋 <b>همه کانفیگ‌های شما</b>
@@ -26545,8 +24069,6 @@ async def show_all_my_configs(callback: CallbackQuery):
 ━━━━━━━━━━━━━━━━━━━━━━
 
 """
-    
-    # دریافت اطلاعات برای هر کانفیگ
     for i, c in enumerate(configs_list, 1):
         order_id = c.get('order_id', '?')
         volume = c.get('volume', '?')
@@ -26554,8 +24076,6 @@ async def show_all_my_configs(callback: CallbackQuery):
         price = c.get('price', 0)
         config_link = c.get('config_link', '')
         is_test = c.get('type') == 'test'
-        
-        # استفاده از sub_link به جای ایمیل
         sub_link = c.get('sub_link', '')
         if sub_link:
             label = sub_link.split('/')[-1]
@@ -26564,12 +24084,8 @@ async def show_all_my_configs(callback: CallbackQuery):
         else:
             email = c.get('email', '')
             label = email if email else f"کانفیگ-{order_id}"
-        
-        # نمایش نوع
         type_label = "🧪 تست" if is_test else "💰 خرید"
         price_display = "رایگان" if is_test else f"{price:,} تومان"
-        
-        # نمایش کانفیگ
         if lang == "fa":
             text += f"""
 🔹 <b>#{i} - {label}</b> [{type_label}]
@@ -26584,8 +24100,6 @@ async def show_all_my_configs(callback: CallbackQuery):
 <code>{config_link}</code>
 ━━━━━━━━━━━━━━━━━━━━━━
 """
-    
-    # =============== دکمه برگشت ===============
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📁 بازگشت به لیست کانفیگ‌ها" if lang == "fa" else "📁 Back to Configs List",
@@ -26593,8 +24107,6 @@ async def show_all_my_configs(callback: CallbackQuery):
             style="primary"
         )]
     ])
-    
-    # اگر متن خیلی طولانی است، به صورت فایل ارسال کن
     if len(text) > 4000:
         from io import BytesIO
         from aiogram.types import BufferedInputFile
@@ -26649,14 +24161,10 @@ async def view_single_config(callback: CallbackQuery):
         await send_sticker(user_id, 'balance_insufficient', '⚠️💰')
         await callback.answer("❌ کانفیگ یافت نشد" if lang=='fa' else "❌ Config not found", show_alert=True)
         return
-    
-    # =============== اصلاح: حذف پیام قبلی ===============
     try:
         await callback.message.delete()
     except:
         pass
-    
-    # گرفتن اطلاعات زنده
     email = extract_email_from_sub_link(order.get('config_link', ''))
     caption = get_config_caption(order_id, order['volume'], order['days'], order['price'], order['config_link'], lang)
     
@@ -26665,8 +24173,6 @@ async def view_single_config(callback: CallbackQuery):
         if client_info:
             traffic_data = await xui_get_client_traffic(email)
             caption += "\n\n" + format_traffic_info(client_info, traffic_data)
-    
-    # ارسال QR code
     try:
         qr_img = generate_qr_code(order['config_link'], order_id)
         await bot.send_photo(
@@ -26719,8 +24225,6 @@ async def refresh_config_info(callback: CallbackQuery):
     else:
         await callback.message.answer("❌ خطا در دریافت اطلاعات" if lang=='fa' else "❌ Error fetching info")
 
-# =============== حساب کاربری ===============
-
 @dp.callback_query(F.data == "my_account")
 async def my_account(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -26738,64 +24242,37 @@ async def my_account(callback: CallbackQuery):
     ref_count = len([r for r in referrals.values() if r.get('referrer') == user_id])
     valid_orders = get_valid_orders()
     user_orders = [o for o in valid_orders.values() if o.get('user_id') == user_id]
-    
-    # =============== جدا کردن تست‌ها ===============
     test_orders = [o for o in user_orders if o.get('type') == 'test']
     real_orders = [o for o in user_orders if o.get('type') != 'test']
-    
-    # =============== خریدهای واقعی (با کارت یا موجودی) ===============
     purchase_orders = [o for o in real_orders if o.get('type') in ['purchase', 'ready_package', 'category_purchase']]
-    
-    # =============== ✅ کل خریدها = فقط سفارشاتی که تایید شدن ===============
-    # حتی اگه کانفیگشون تموم شده باشه یا منقضی شده باشه، بازم حساب میشن
     approved_purchases = [o for o in purchase_orders if o.get('status') == 'approved']
     total_purchases = len(approved_purchases)
-    
-    # =============== کانفیگ‌های فعال (تایید شده و لینک دارن) ===============
     active_configs = [
         o for o in approved_purchases 
         if o.get('config_link') is not None
         and o.get('config_link') != ''
     ]
-    
-    # =============== کانفیگ‌های منقضی یا تمام شده ===============
     expired_configs = [
         o for o in approved_purchases 
         if o.get('config_link') is None or o.get('config_link') == ''
     ]
-    
-    # =============== سفارشات در انتظار تایید (فیش ارسال شده) ===============
     pending_orders = [o for o in purchase_orders if o.get('status') == 'pending']
-    
-    # =============== سفارشات رد شده ===============
     rejected_orders = [o for o in purchase_orders if o.get('status') == 'rejected']
-    
-    # =============== سفارشات در انتظار پرداخت ===============
     awaiting_payment_orders = [o for o in purchase_orders if o.get('status') == 'awaiting_payment']
-    
-    # =============== تست‌های فعال ===============
     active_tests = [o for o in test_orders if o.get('status') == 'approved' and o.get('config_link')]
-    
-    # =============== تعداد کل تست‌ها ===============
     total_tests = len(test_orders)
-    
-    # =============== بررسی کوپن فعال ===============
     coupon_info = ""
     user_state = user_states.get(user_id, {})
     if user_state.get('coupon_applied'):
         coupon_code = user_state.get('coupon_code', '')
         coupon_discount = user_state.get('coupon_discount', 0)
         coupon_info = f"\n{premium_emoji('gift', '🏷️')} کوپن فعال: <code>{html.escape(coupon_code)}</code> ({coupon_discount}%)"
-    
-    # ✅ escape کردن نام کاربر
     user_name_raw = user.get('name', f'کاربر_{user_id}')
     user_name_escaped = html.escape(user_name_raw)
     
     join_date_escaped = html.escape(user.get('join_date', 'نامشخص'))
     
     logger.debug(f"کاربر {user_id} حساب کاربری خود را مشاهده می‌کند - کل خریدها: {total_purchases}, کانفیگ فعال: {len(active_configs)}")
-    
-    # =============== ساخت متن ===============
     if lang == "fa":
         text = f"""
 {premium_emoji('user1', '👤')} <b>حساب کاربری</b>
@@ -26814,10 +24291,6 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('hourglass', '⏳')} <b>در انتظار تایید:</b> {len(pending_orders)}
 {premium_emoji('fail', '🚫')} <b>رد شده:</b> {len(rejected_orders)}
 {premium_emoji('hourglass', '⏳')} <b>در انتظار پرداخت:</b> {len(awaiting_payment_orders)}
-
-{premium_emoji('test', '🧪')} <b>تست‌های شما:</b>
-{premium_emoji('success', '✅')} <b>تست فعال:</b> {len(active_tests)}
-{premium_emoji('star', '📊')} <b>کل تست‌ها:</b> {total_tests}
 """
     else:
         text = f"""
@@ -26836,13 +24309,7 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('hourglass', '⏳')} <b>Pending Approval:</b> {len(pending_orders)}
 {premium_emoji('fail', '🚫')} <b>Rejected:</b> {len(rejected_orders)}
 {premium_emoji('hourglass', '⏳')} <b>Awaiting Payment:</b> {len(awaiting_payment_orders)}
-
-{premium_emoji('test', '🧪')} <b>Your Tests:</b>
-{premium_emoji('success', '✅')} <b>Active Tests:</b> {len(active_tests)}
-{premium_emoji('star', '📊')} <b>Total Tests:</b> {total_tests}
 """
-    
-    # =============== دکمه‌ها ===============
     buttons = [
         [InlineKeyboardButton(
             text=f"🏷️ {'اعمال کوپن' if lang == 'fa' else 'Apply Coupon'}",
@@ -26924,16 +24391,12 @@ async def coupon_status(callback: CallbackQuery):
         )
         await callback.answer()
         return
-    
-    # بررسی کوپن در دیتابیس
     coupon = COUPONS.get(coupon_code)
     if not coupon:
         if lang == "fa":
             text = "❌ کوپن شما معتبر نیست. لطفاً دوباره اعمال کنید."
         else:
             text = "❌ Your coupon is invalid. Please apply again."
-        
-        # پاک کردن کوپن از user_states
         if user_id in user_states:
             user_states[user_id].pop('coupon_code', None)
             user_states[user_id].pop('coupon_discount', None)
@@ -26947,13 +24410,9 @@ async def coupon_status(callback: CallbackQuery):
         )
         await callback.answer()
         return
-    
-    # محاسبه تعداد دفعات باقیمانده
     used_count = coupon.get('used_count', 0)
     usage_limit = coupon.get('usage_limit', 0)
     remaining = usage_limit - used_count if usage_limit > 0 else "نامحدود"
-    
-    # بررسی اینکه کاربر قبلاً مصرف کرده یا نه
     is_used = user_id in coupon.get('used_by', [])
     
     if lang == "fa":
@@ -26998,7 +24457,6 @@ async def coupon_status(callback: CallbackQuery):
         await callback.answer()
     except:
         pass
-# =============== دعوت از دوستان ===============
 @dp.callback_query(F.data == "invite_friends")
 async def invite_friends(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -27012,8 +24470,6 @@ async def invite_friends(callback: CallbackQuery):
     bot_info = await bot.get_me()
     link = f"https://t.me/{bot_info.username}?start={user_id}"
     ref_count = len([r for r in referrals.values() if r.get('referrer') == user_id])
-    
-    # دریافت پاداش رفرال از تنظیمات
     settings = configs_pool.get('price_settings', {})
     referral_bonus = settings.get('referral_bonus', 5000)
     if log_system:
@@ -27041,22 +24497,16 @@ async def invite_friends(callback: CallbackQuery):
 <tg-emoji emoji-id="5199749070830197566">🎁</tg-emoji> Bonus: {referral_bonus:,} Toman per friend purchase
 <tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> Successful referrals: {ref_count}
 """
-    
-    # =============== حذف پیام قبلی ===============
     try:
         await callback.message.delete()
     except Exception as e:
         logger.debug(f"نتوانست پیام قبلی را حذف کند: {e}")
-    
-    # =============== ارسال پیام جدید ===============
     await callback.message.answer(text, reply_markup=get_back_only_keyboard(lang), parse_mode=ParseMode.HTML)
     
     try:
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-
-# =============== تغییر زبان ===============
 @dp.callback_query(F.data == "change_language")
 async def change_language(callback: CallbackQuery):
     logger.debug(f"کاربر {callback.from_user.id} در حال تغییر زبان")
@@ -27081,9 +24531,6 @@ async def set_lang_en(callback: CallbackQuery):
     logger.info(f"زبان کاربر {user_id} به انگلیسی تغییر کرد")
     await callback.answer("✅ Language changed to English", show_alert=True)
     await back_to_main(callback)
-
-
-#هندل صحبت با پشتیبانی
 def create_chat(user_id: int, feedback_id: int) -> int:
     """ایجاد چت جدید"""
     chat_id = len(chats) + 1
@@ -27120,19 +24567,13 @@ def close_chat(chat_id: int, closed_by: str = "user"):
     chat = chats.get(cid)
     if chat:
         user_id = chat.get('user_id')
-        
-        # لاگ بسته شدن چت
         if log_system and user_id:
             asyncio.create_task(log_system.log_chat_closed(chat_id, user_id, closed_by))
-        
-        # بستن چت
         chat['status'] = 'closed'
         chat['closed_by'] = closed_by
         chat['closed_at'] = datetime.now().isoformat()
         chat['updated_at'] = datetime.now().isoformat()
         save_all()
-        
-        # =============== ✅ اطلاع به ادمین ===============
         if closed_by == "user":
             asyncio.create_task(
                 bot.send_message(
@@ -27185,8 +24626,6 @@ async def handle_chat_message(message: Message):
             await message.reply("❌ This conversation is closed.\nTo start again, use the feedback section.")
         user_states.pop(user_id, None)
         return
-    
-    # دستور پایان چت
     if message.text and message.text.strip() == '/end':
         close_chat(chat_id, closed_by="user")
         user_states.pop(user_id, None)
@@ -27195,8 +24634,6 @@ async def handle_chat_message(message: Message):
         else:
             await message.reply("✅ Conversation ended. Thank you!", reply_markup=get_back_only_keyboard(lang))
         return
-    
-    # =============== ✅ تشخیص نوع پیام ===============
     text_content = ""
     file_info = None
     file_type = None
@@ -27240,11 +24677,7 @@ async def handle_chat_message(message: Message):
     else:
         await message.reply("❌ نوع فایل پشتیبانی نمی‌شود.")
         return
-    
-    # ذخیره پیام
     add_message(chat_id, 'user', text_content)
-    
-    # =============== ✅ ارسال به ادمین با فایل ===============
     admin_text = f"💬 <b>پیام جدید از کاربر {user_id}</b>\n🆔 چت: #{chat_id}\n\n{text_content}"
     
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -27252,7 +24685,6 @@ async def handle_chat_message(message: Message):
     ])
     
     try:
-        # اگر فایل وجود دارد، همراه با توضیحات بفرست
         if file_type and message.document:
             await bot.send_document(
                 ADMIN_ID_INT,
@@ -27299,10 +24731,8 @@ async def handle_chat_message(message: Message):
                 message.video_note.file_id,
                 reply_markup=admin_kb
             )
-            # توضیحات جداگانه بفرست
             await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML)
         else:
-            # فقط متن
             await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
     except Exception as e:
         logger.error(f"خطا در ارسال پیام به ادمین: {e}")
@@ -27312,8 +24742,6 @@ async def handle_chat_message(message: Message):
         await message.reply("✅ پیام شما ارسال شد. منتظر پاسخ باشید.")
     else:
         await message.reply("✅ Message sent. Wait for reply.")
-
-# =============== بازخورد ===============
 @dp.callback_query(F.data.startswith("feedback_"))
 async def handle_feedback(callback: CallbackQuery):
     parts = callback.data.split("_")
@@ -27343,7 +24771,6 @@ async def handle_feedback(callback: CallbackQuery):
     rating_text = rating_map_fa.get(rating, "بدون نظر") if lang == 'fa' else rating_map_en.get(rating, "No comment")
     if log_system:
         await log_system.log_feedback(user_id, order_id, rating_text)
-    # ذخیره بازخورد
     fid = len(feedbacks) + 1
     feedbacks[str(fid)] = {
         'id': fid,
@@ -27354,11 +24781,7 @@ async def handle_feedback(callback: CallbackQuery):
         'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     save_all()
-    
-    # 🔥 ایجاد چت جدید
     chat_id = create_chat(user_id, fid)
-    
-    # اطلاع به ادمین
     try:
         user = get_user(user_id)
         user_name_escaped = html.escape(user.get('name', 'کاربر'))
@@ -27390,8 +24813,6 @@ async def handle_feedback(callback: CallbackQuery):
             f"Use /end to finish the conversation.",
             reply_markup=get_back_only_keyboard(lang)
         )
-    
-    # تنظیم وضعیت کاربر برای چت
     user_states[user_id] = {'awaiting_chat': True, 'chat_id': chat_id,'timestamp': datetime.now().isoformat()}
     try:
         await callback.answer()
@@ -27421,8 +24842,6 @@ async def handle_feedback_comment(message: Message):
     else:
         await message.reply(f"{premium_emoji('success', '✅')} Thank you for your feedback!", reply_markup=get_back_only_keyboard(lang))
     user_states.pop(user_id, None)
-
-# =============== افزایش موجودی ===============
 @dp.callback_query(F.data == "increase_balance")
 async def increase_balance(callback: CallbackQuery):
     """افزایش موجودی - با حفظ کوپن"""
@@ -27437,13 +24856,10 @@ async def increase_balance(callback: CallbackQuery):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer(msg if lang == "fa" else "⚠️ Your account is pending admin approval.", show_alert=True)
         return
-    # بررسی عضویت اجباری
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
         return
-    
-    # =============== کوپن را نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
@@ -27454,8 +24870,6 @@ async def increase_balance(callback: CallbackQuery):
     await send_sticker(user_id, 'money', '💰')
     
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # دریافت تنظیمات قیمت
     settings = configs_pool.get('price_settings', {})
     min_charge = settings.get('min_charge', 10000)
     max_charge = settings.get('max_charge', 5000000)
@@ -27466,22 +24880,14 @@ async def increase_balance(callback: CallbackQuery):
         text = f"{premium_emoji('wallet', '💰')} <b>افزایش موجودی</b>\n\n<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> لطفاً مبلغ را به تومان وارد کنید:\n\n<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> حداقل: {min_charge:,} | حداکثر: {max_charge:,}"
     else:
         text = f"{premium_emoji('wallet', '💰')} <b>Increase Balance</b>\n\n<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> Please enter amount in Toman:\n\n<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> Min: {min_charge:,} | Max: {max_charge:,}"
-    
-    # اینلاین کیبورد
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"❌ {'انصراف' if lang=='fa' else 'Cancel'}", callback_data="cancel_increase_balance", style="danger")]
     ])
-    
-    # =============== حذف پیام قبلی ===============
     try:
         await callback.message.delete()
     except Exception as e:
         logger.debug(f"نتوانست پیام قبلی را حذف کند: {e}")
-    
-    # =============== ارسال پیام جدید ===============
     await callback.message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
-    
-    # ✅ کوپن را در user_states نگه دار
     if coupon_applied and coupon_code:
         user_states[user_id] = {
             'awaiting_amount': True,
@@ -27504,20 +24910,14 @@ async def cancel_increase_balance(callback: CallbackQuery):
     """انصراف از افزایش موجودی - کوپن باقی می‌ماند"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # =============== کوپن را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [cancel_increase_balance] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    
-    # پاک کردن وضعیت (به جز کوپن)
     if user_id in user_states:
         user_states.pop(user_id, None)
-    
-    # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id] = {
             'coupon_code': coupon_code,
@@ -27527,18 +24927,12 @@ async def cancel_increase_balance(callback: CallbackQuery):
         logger.info(f"🏷️ [cancel_increase_balance] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
     else:
         logger.warning(f"⚠️ [cancel_increase_balance] کوپنی برای کاربر {user_id} یافت نشد")
-    
-    # حذف پیام خطا
     try:
         await callback.message.delete()
     except:
         pass
-    
-    # =============== بررسی نهایی ===============
     after_state = user_states.get(user_id, {})
     logger.info(f"🔍 [cancel_increase_balance] وضعیت نهایی: {after_state}")
-    
-    # برگشت به منوی اصلی
     is_admin = (user_id == ADMIN_ID_INT)
     
     coupon_message = ""
@@ -27565,12 +24959,8 @@ def preserve_coupon(user_id: int, callback_func):
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied')
-    
-    # پاک کردن وضعیت
     if user_id in user_states:
         user_states.pop(user_id, None)
-    
-    # اگر کوپن فعال بود، دوباره ذخیره کن
     if coupon_applied and coupon_code:
         user_states[user_id] = {
             'coupon_code': coupon_code,
@@ -27612,8 +25002,6 @@ async def admin_reduce_balance_cmd(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     target_id = int(callback.data.split("_")[3])
     target = get_user(target_id)
-    
-    # ✅ escape کردن نام کاربر
     target_name_raw = target.get('name', f'کاربر_{target_id}')
     target_name_escaped = html.escape(target_name_raw)
     
@@ -27649,12 +25037,8 @@ async def admin_reset_balance_cmd(callback: CallbackQuery):
     target_id = int(callback.data.split("_")[3])
     target = get_user(target_id)
     old_balance = target.get('balance', 0)
-    
-    # ✅ escape کردن نام کاربر
     target_name_raw = target.get('name', f'کاربر_{target_id}')
     target_name_escaped = html.escape(target_name_raw)
-    
-    # =============== تایید نهایی ===============
     if lang == "fa":
         text = f"""
 ⚠️ <b>تایید حذف موجودی</b>
@@ -27756,15 +25140,9 @@ async def confirm_reset_balance(callback: CallbackQuery):
     target_id = int(callback.data.split("_")[3])
     target = get_user(target_id)
     old_balance = target.get('balance', 0)
-    
-    # ✅ escape کردن نام کاربر
     target_name_raw = target.get('name', f'کاربر_{target_id}')
     target_name_escaped = html.escape(target_name_raw)
-    
-    # =============== فقط صفر کردن موجودی ===============
     new_balance = reset_balance(target_id)
-    
-    # =============== ارسال پیام به کاربر ===============
     target_lang = get_user(target_id).get('lang', 'fa')
     try:
         if target_lang == "fa":
@@ -27854,8 +25232,6 @@ async def admin_chat_view(callback: CallbackQuery):
     if not chat:
         await callback.answer("❌ چت یافت نشد", show_alert=True)
         return
-    
-    # =============== ✅ بررسی بسته بودن چت ===============
     if chat.get('status') == 'closed':
         if lang == "fa":
             await callback.message.edit_text(
@@ -27879,8 +25255,6 @@ async def admin_chat_view(callback: CallbackQuery):
             )
         await callback.answer()
         return
-    
-    # نمایش پیام‌ها
     user = get_user(chat['user_id'])
     user_name_escaped = html.escape(user.get('name', 'User'))  # ✅
     text = f"💬 <b>چت با {user_name_escaped}</b> (ID: {chat['user_id']})\n\n"
@@ -27888,8 +25262,6 @@ async def admin_chat_view(callback: CallbackQuery):
     for msg in chat['messages'][-10:]:
         sender = "👤 کاربر" if msg['sender'] == 'user' else "👑 ادمین"
         text += f"{sender}: {msg['text'][:50]}\n"
-    
-    # ذخیره chat_id برای پاسخ
     user_states[callback.from_user.id] = {'awaiting_chat_reply': True, 'chat_id': chat_id}
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -27925,16 +25297,10 @@ async def admin_close_chat(callback: CallbackQuery):
         await log_system.log_chat_closed(chat_id, chat.get('user_id'), "admin")
     
     close_chat(chat_id, closed_by="admin")
-    
-    # پاک کردن وضعیت کاربر
     if chat and chat.get('user_id') in user_states:
         user_states.pop(chat['user_id'], None)
-    
-    # پاک کردن وضعیت ادمین
     if callback.from_user.id in user_states:
         user_states.pop(callback.from_user.id, None)
-    
-    # اطلاع به کاربر
     if chat:
         try:
             user_lang = get_user(chat['user_id']).get('lang', 'fa')
@@ -27964,11 +25330,7 @@ async def admin_sync_configs(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     await callback.message.edit_text("⏳ در حال همگام‌سازی...")
-    
-    # اجرای همگام‌سازی
     stats = await sync_deleted_configs()
-    
-    # =============== پیام کامل با آمار ===============
     if lang == "fa":
         text = f"""
 ✅ <b>همگام‌سازی با پنل انجام شد!</b>
@@ -28061,13 +25423,10 @@ async def confirm_clear_logs(callback: CallbackQuery):
     
     cleared_items = []
     errors = []
-    
-    # ۱. پاکسازی فایل لاگ
     try:
         log_files = ['bot_debug.log', 'bot_error.log', 'bot.log']
         for log_file in log_files:
             if os.path.exists(log_file):
-                # بکاپ کوچک از ۱۰۰ خط آخر قبل از پاک کردن
                 with open(log_file, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
                     last_lines = lines[-100:] if len(lines) > 100 else lines
@@ -28083,8 +25442,6 @@ async def confirm_clear_logs(callback: CallbackQuery):
         error_msg = f"خطا در پاکسازی لاگ: {str(e)[:50]}"
         errors.append(error_msg)
         logger.error(f"❌ {error_msg}")
-    
-    # ۲. پاکسازی چت‌های بسته شده قدیمی (>۷ روز)
     global chats
     try:
         closed_count = 0
@@ -28106,12 +25463,9 @@ async def confirm_clear_logs(callback: CallbackQuery):
         error_msg = f"خطا در پاکسازی چت‌ها: {str(e)[:50]}"
         errors.append(error_msg)
         logger.error(f"❌ {error_msg}")
-    
-    # ۳. پاکسازی فیدبک‌های قدیمی (>۱۰۰ عدد)
     global feedbacks
     try:
         if len(feedbacks) > 100:
-            # فقط ۵۰ فیدبک آخر رو نگه دار
             sorted_feedbacks = sorted(
                 feedbacks.items(),
                 key=lambda x: x[1].get('date', ''),
@@ -28125,8 +25479,6 @@ async def confirm_clear_logs(callback: CallbackQuery):
         error_msg = f"خطا در پاکسازی بازخوردها: {str(e)[:50]}"
         errors.append(error_msg)
         logger.error(f"❌ {error_msg}")
-    
-    # ۴. پاکسازی سفارشات معلق خیلی قدیمی (>۳۰ روز)
     global orders
     try:
         cancelled_count = 0
@@ -28150,8 +25502,6 @@ async def confirm_clear_logs(callback: CallbackQuery):
         error_msg = f"خطا در پاکسازی سفارشات: {str(e)[:50]}"
         errors.append(error_msg)
         logger.error(f"❌ {error_msg}")
-    
-    # ۵. پاکسازی کش دیتابیس
     global _db_cache, _db_modified
     try:
         cache_size = len(_db_cache)
@@ -28162,8 +25512,6 @@ async def confirm_clear_logs(callback: CallbackQuery):
     except Exception as e:
         error_msg = f"خطا در پاکسازی کش: {str(e)[:50]}"
         errors.append(error_msg)
-    
-    # ۶. پاکسازی user_states قدیمی
     global user_states
     try:
         states_count = len(user_states)
@@ -28173,8 +25521,6 @@ async def confirm_clear_logs(callback: CallbackQuery):
     except Exception as e:
         error_msg = f"خطا در پاکسازی وضعیت‌ها: {str(e)[:50]}"
         errors.append(error_msg)
-    
-    # ساخت پیام نتیجه
     if lang == "fa":
         text = "✅ <b>پاکسازی انجام شد!</b>\n\n"
         if cleared_items:
@@ -28186,8 +25532,6 @@ async def confirm_clear_logs(callback: CallbackQuery):
             text += f"\n⚠️ <b>خطاها:</b>\n"
             for error in errors:
                 text += f"• {error}\n"
-        
-        # آمار بعد از پاکسازی
         text += f"\n━━━━━━━━━━━━━━━━━━\n"
         text += f"📊 <b>وضعیت فعلی:</b>\n"
         text += f"• کاربران: {len(users)}\n"
@@ -28249,8 +25593,6 @@ async def admin_chat_reply(message: Message):
     
     if not chat_id:
         return
-    
-    # =============== ✅ بررسی بسته بودن چت ===============
     chat = chats.get(str(chat_id))
     if not chat:
         await message.reply("❌ چت یافت نشد")
@@ -28264,11 +25606,7 @@ async def admin_chat_reply(message: Message):
         )
         user_states.pop(admin_id, None)
         return
-    
-    # ذخیره پیام
     add_message(chat_id, 'admin', message.text or '[پیام]')
-    
-    # ارسال به کاربر
     if log_system:
         await log_system.log_chat_message(chat['user_id'], chat_id, message.text or "[فایل]", "admin")
     
@@ -28291,8 +25629,6 @@ async def cmd_check_user_coupon(message: Message):
         return
     
     parts = message.text.split()
-    
-    # =============== اگر آیدی داده نشده، از خود ادمین استفاده کن ===============
     if len(parts) < 2:
         target_id = message.from_user.id
         target_name = "خودتان (ادمین)"
@@ -28303,8 +25639,6 @@ async def cmd_check_user_coupon(message: Message):
         except ValueError:
             await message.reply("❌ لطفاً یک آیدی عددی معتبر وارد کنید.\nمثال: `/check_user_coupon 123456789`")
             return
-    
-    # بررسی در دیتابیس
     uid = str(target_id)
     
     if uid not in users:
@@ -28312,19 +25646,13 @@ async def cmd_check_user_coupon(message: Message):
         return
     
     user = users[uid]
-    
-    # اطلاعات از دیتابیس
     coupon_code = user.get('coupon_code')
     coupon_applied = user.get('coupon_applied', False)
     coupon_discount = user.get('coupon_discount', 0)
-    
-    # اطلاعات از user_states
     user_state = user_states.get(target_id, {})
     state_code = user_state.get('coupon_code')
     state_applied = user_state.get('coupon_applied', False)
     state_discount = user_state.get('coupon_discount', 0)
-    
-    # بررسی کوپن در دیتابیس کوپن‌ها
     coupon_valid = False
     coupon_status = None
     is_used = False
@@ -28335,8 +25663,6 @@ async def cmd_check_user_coupon(message: Message):
         coupon_status = coupon.get('status', 'unknown')
         coupon_used_by = coupon.get('used_by', [])
         is_used = target_id in coupon_used_by
-    
-    # دریافت اطلاعات کاربر از تلگرام
     user_info = await get_user_info_from_telegram(target_id)
     
     text = f"""
@@ -28391,11 +25717,7 @@ async def admin_test_panel(callback: CallbackQuery):
     global SENAI_PANEL_ENABLED
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     await callback.message.edit_text("⏳ در حال تست اتصال...")
-    
-    # 1. تست پنل
     panel_result = await test_panel_connection()
-    
-    # 2. پینگ به DNSها
     dns_targets = [
         ('Google DNS', '8.8.8.8'),
         ('Cloudflare DNS', '1.1.1.1'),
@@ -28417,8 +25739,6 @@ async def admin_test_panel(callback: CallbackQuery):
             ping_results[f'🟢 {name}'] = f'{value:.1f}ms'
         else:
             ping_results[f'🔴 {name}'] = 'Timeout'
-    
-    # 3. پینگ به سایتای معروف
     http_targets = [
         ('Google', 'https://www.google.com'),
         ('YouTube', 'https://www.youtube.com'),
@@ -28436,15 +25756,12 @@ async def admin_test_panel(callback: CallbackQuery):
                     ping_results[f'🌐 {name}'] = f'{elapsed}ms'
         except:
             ping_results[f'🔴 {name}'] = 'Timeout'
-    
-    # =============== ساخت متن با مدیریت None ===============
     if lang == "fa":
         text = "🔌 <b>وضعیت پنل</b>\n"
         text += f"🌐 آدرس: <code>{SENAI_PANEL_URL}</code>\n"
         text += f"⚙️ وضعیت: {'🟢 فعال' if SENAI_PANEL_ENABLED else '🔴 غیرفعال'}\n\n"
         
         if SENAI_PANEL_ENABLED:
-            # ✅ مدیریت None برای پینگ
             ping_display = f"{panel_result['ping']}ms" if panel_result['ping'] is not None else "❌"
             text += f"📡 پینگ: {ping_display}\n"
             
@@ -28470,7 +25787,6 @@ async def admin_test_panel(callback: CallbackQuery):
         text += f"⚙️ Status: {'🟢 On' if SENAI_PANEL_ENABLED else '🔴 Off'}\n\n"
         
         if SENAI_PANEL_ENABLED:
-            # ✅ مدیریت None برای پینگ
             ping_display = f"{panel_result['ping']}ms" if panel_result['ping'] is not None else "❌"
             text += f"📡 Ping: {ping_display}\n"
             
@@ -28492,8 +25808,6 @@ async def admin_test_panel(callback: CallbackQuery):
                 text += f"  {key}: <code>{ping_results[key]}</code>\n"
     
     text += f"\n<code>🕐 {datetime.now().strftime('%H:%M:%S')}</code>"
-    
-    # دکمه‌ها
     buttons = [[InlineKeyboardButton(text="🔄 تست مجدد" if lang=="fa" else "🔄 Retest", callback_data="panel_test")]]
     
     if SENAI_PANEL_ENABLED:
@@ -28546,7 +25860,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
     logger.info("🔄 شروع همگام‌سازی با پنل...")
     
     try:
-        # =============== 1. ذخیره اطلاعات کاربران ===============
         user_balances = {}
         user_coupons = {}
         
@@ -28559,16 +25872,12 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
             }
         
         logger.info(f"💰 اطلاعات {len(user_balances)} کاربر ذخیره شد")
-        
-        # =============== 2. دریافت اطلاعات از پنل ===============
         logger.info("📡 دریافت اطلاعات از پنل...")
         
         inbounds = await xui_get_inbounds()
         if not inbounds:
             logger.error("❌ هیچ اینباندی یافت نشد")
             return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
-        
-        # =============== 3. استخراج کلاینت‌ها ===============
         clients_dict = {}
         skipped_clients = 0
         bot_clients = 0
@@ -28586,8 +25895,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 email = client.get('email', '')
                 if not email:
                     continue
-                
-                # =============== تشخیص کلاینت ربات ===============
                 is_bot_client = False
                 user_id = None
                 order_type = 'purchase'
@@ -28595,40 +25902,30 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 is_active = client.get('enable', True)
                 
                 import re
-                
-                # ✅ فرمت جدید تست: t123456_1785187567
                 if email.startswith('t') and '_' in email:
                     match = re.search(r't(\d+)_\d+', email)
                     if match:
                         user_id = int(match.group(1))
                         is_bot_client = True
                         order_type = 'test'
-                
-                # ✅ فرمت جدید کاربر: u123456_1785186951
                 elif email.startswith('u') and '_' in email:
                     match = re.search(r'u(\d+)_\d+', email)
                     if match:
                         user_id = int(match.group(1))
                         is_bot_client = True
                         order_type = 'purchase'
-                
-                # ✅ فرمت قدیمی تست
                 elif email.startswith('test_'):
                     parts = email.split('_')
                     if len(parts) >= 2 and parts[1].isdigit():
                         user_id = int(parts[1])
                         is_bot_client = True
                         order_type = 'test'
-                
-                # ✅ فرمت قدیمی کاربر
                 elif email.startswith('user'):
                     match = re.search(r'user(\d+)', email)
                     if match:
                         user_id = int(match.group(1))
                         is_bot_client = True
                         order_type = 'purchase'
-                
-                # ✅ تشخیص از کامنت
                 if not is_bot_client and comment:
                     patterns = [
                         r'\(ID[:=](\d+)\)',
@@ -28684,8 +25981,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
         if not clients:
             logger.warning("⚠️ هیچ کلاینتی در پنل یافت نشد")
             return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
-        
-        # =============== 4. به‌روزرسانی کاربران ===============
         logger.info("👤 به‌روزرسانی کاربران...")
         
         for user_id in users_with_configs:
@@ -28728,8 +26023,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     'requested_approval': False,
                     'registration_status': 'approved'
                 }
-        
-        # بازگرداندن موجودی
         for uid, balance in user_balances.items():
             if uid in users:
                 users[uid]['balance'] = balance
@@ -28739,8 +26032,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     users[uid]['coupon_applied'] = user_coupons[uid]['coupon_applied']
         
         logger.info(f"💰 موجودی {len(user_balances)} کاربر حفظ شد")
-        
-        # =============== 5. ذخیره اطلاعات اوردرهای قبلی از دیتابیس ===============
         logger.info("💾 ذخیره اطلاعات اوردرهای قبلی از دیتابیس...")
         old_order_info = {}
         existing_emails = set()
@@ -28766,8 +26057,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     existing_emails.add(email)
         
         logger.info(f"📋 اطلاعات {len(old_order_info)} اوردر قبلی از دیتابیس ذخیره شد")
-        
-        # =============== 6. به‌روزرسانی اوردرها (بدون پاک کردن) ===============
         logger.info("📝 به‌روزرسانی اوردرها بر اساس پنل...")
         
         stats = {
@@ -28777,8 +26066,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
             'new': 0,
             'total_checked': len(clients)
         }
-        
-        # =============== 6.1 بروزرسانی اوردرهای موجود و ایجاد جدید ===============
         for client in clients:
             email = client.get('email', '')
             user_id = client.get('user_id')
@@ -28786,22 +26073,15 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
             comment = client.get('comment', '')
             ip_limit = client.get('ip_limit', 0)
             is_active = client.get('enable', True)
-            
-            # حجم از پنل (برای موارد جدید)
             total_gb_from_panel = client.get('totalGB', 0) / (1024**3)
             total_gb_from_panel = round(total_gb_from_panel, 6)
             
             sub_link = f"{SENAI_SUB_URL}/sub/{email}"
             inbound_ids = client.get('inbound_ids', [])
-            
-            # تشخیص تست
             is_test = order_type == 'test' or email.startswith('test_') or email.startswith('t')
-            
-            # =============== استفاده از اطلاعات دیتابیس قبلی ===============
             old_info = old_order_info.get(email)
             
             if old_info:
-                # =============== اوردر موجود: حفظ همه اطلاعات از دیتابیس ===============
                 order_id = old_info['order_id']
                 original_date = old_info['date']
                 days = old_info['days']
@@ -28812,8 +26092,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 config_id = old_info['config_id']
                 notes = old_info.get('notes', '')
                 created_at = old_info.get('created_at', datetime.now().isoformat())
-                
-                # فقط وضعیت از پنل
                 if is_active:
                     status = 'approved'
                     stats['approved'] += 1
@@ -28824,8 +26102,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 logger.debug(f"🔄 به‌روزرسانی اوردر #{order_id} - {email} - وضعیت: {status}")
                 
             else:
-                # =============== اوردر جدید: از پنل + مقادیر پیش‌فرض ===============
-                # پیدا کردن order_id جدید
                 max_order_id = 0
                 for oid in old_order_info.values():
                     if oid.get('order_id', 0) > max_order_id:
@@ -28854,8 +26130,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 
                 stats['new'] += 1
                 logger.info(f"🆕 اوردر جدید #{order_id} - {email} - کاربر {user_id}")
-            
-            # =============== ذخیره اوردر در دیتابیس ===============
             orders[str(order_id)] = {
                 'order_id': order_id,
                 'user_id': user_id,
@@ -28884,8 +26158,6 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 'is_test': is_test,
                 'volume_unit': 'GB',
             }
-            
-            # لاگ
             if is_test and volume_gb < 1:
                 display_volume = f"{volume_gb * 1024:.1f}MB"
             else:
@@ -28893,12 +26165,9 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
             
             status_icon = "🟢" if is_active else "🔴"
             logger.info(f"📝 اوردر #{order_id} - کاربر {user_id} - {display_volume}/{days} روز - {price} تومان - {status_icon}")
-        
-        # =============== 7. پیدا کردن کانفیگ‌های حذف شده ===============
         deleted_configs = []
         for oid, order in orders.items():
             email = order.get('email')
-            # ✅ کانفیگ‌های approved و inactive که در پنل نیستند
             if order.get('status') in ['approved', 'inactive'] and email and email not in clients_dict:
                 deleted_configs.append(order)
 
@@ -28906,11 +26175,8 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
             orders[str(order['order_id'])]['status'] = 'deleted'
             stats['deleted'] += 1
             logger.info(f"🗑 کانفیگ #{order['order_id']} از پنل حذف شده - وضعیت به deleted تغییر کرد")        
-        # =============== 8. ذخیره نهایی ===============
         save_all()
         logger.info("✅ دیتابیس با موفقیت ذخیره شد")
-        
-        # =============== 9. لاگ نهایی ===============
         logger.info("=" * 60)
         logger.info(f"📊 نتیجه همگام‌سازی:")
         logger.info(f"  🟢 فعال: {stats['approved']}")
@@ -28946,21 +26212,15 @@ async def is_config_active_in_panel(config_link: str) -> bool:
     email = extract_email_from_sub_link(config_link)
     if not email:
         return False
-    
-    # =============== بررسی کش ===============
     current_time = datetime.now()
     if email in _panel_cache:
         cache_time, is_active = _panel_cache[email]
         if (current_time - cache_time).total_seconds() < _panel_cache_ttl:
             logger.debug(f"📦 استفاده از کش پنل برای {email}: {is_active}")
             return is_active
-    
-    # =============== دریافت از پنل ===============
     try:
         client = await xui_get_client_info(email)
         is_active = client is not None and client != {}
-        
-        # ذخیره در کش
         _panel_cache[email] = (current_time, is_active)
         logger.debug(f"💾 کش پنل برای {email} بروزرسانی شد: {is_active}")
         
@@ -28968,7 +26228,6 @@ async def is_config_active_in_panel(config_link: str) -> bool:
         
     except Exception as e:
         logger.error(f"❌ خطا در بررسی کانفیگ {email}: {e}")
-        # در صورت خطا، از کش قبلی استفاده کن (اگر وجود دارد)
         if email in _panel_cache:
             _, cached_result = _panel_cache[email]
             return cached_result
@@ -29010,8 +26269,6 @@ async def sync_single_config(order_id: int) -> bool:
     if not email:
         logger.warning(f"⚠️ ایمیل سفارش #{order_id} یافت نشد")
         return False
-    
-    # تلاش با حداکثر 3 بار تکرار
     for attempt in range(3):
         try:
             cookie = await xui_login()
@@ -29025,7 +26282,6 @@ async def sync_single_config(order_id: int) -> bool:
             client = await xui_get_client_info(email)
             
             if not client:
-                # حذف شده
                 async with config_lock:
                     update_order(order_id, status='deleted')
                 logger.info(f"🗑 کانفیگ #{order_id} ({email}) از پنل حذف شده - وضعیت به deleted تغییر کرد")
@@ -29056,8 +26312,6 @@ def get_sync_stats() -> dict:
     pending = len([o for o in valid_orders.values() if o.get('status') == 'pending'])
     rejected = len([o for o in valid_orders.values() if o.get('status') == 'rejected'])
     awaiting = len([o for o in valid_orders.values() if o.get('status') == 'awaiting_payment'])
-    
-    # کانفیگ‌های بدون ایمیل معتبر
     invalid_configs = []
     for o in valid_orders.values():
         if o.get('status') == 'approved' and o.get('config_link'):
@@ -29092,7 +26346,6 @@ async def cleanup_orphaned_configs(days: int = 30):
     orphaned = []
     for o in valid_orders.values():
         if o.get('status') == 'approved' and o.get('config_link'):
-            # فقط سفارشات قدیمی را بررسی کن
             created_at = o.get('created_at', o.get('date', ''))
             if created_at:
                 try:
@@ -29166,8 +26419,6 @@ async def add_balance_manual(message: Message):
     
     target_id = full_state.get('manual_balance_target')
     action = full_state.get('balance_action', 'add')
-    
-    # =============== دریافت کوپن کاربر از state ادمین ===============
     target_coupon_code = full_state.get('target_coupon_code')
     target_coupon_discount = full_state.get('target_coupon_discount')
     target_coupon_applied = full_state.get('target_coupon_applied', False)
@@ -29181,8 +26432,6 @@ async def add_balance_manual(message: Message):
         return
     
     target = get_user(target_id)
-    
-    # ✅ escape کردن نام کاربر برای جلوگیری از خطاهای HTML
     target_name_raw = target.get('name', f'کاربر_{target_id}')
     target_name_escaped = html.escape(target_name_raw)
     
@@ -29198,7 +26447,6 @@ async def add_balance_manual(message: Message):
             return
         
         if action == 'reduce':
-            # =============== کاهش موجودی ===============
             if amount > target.get('balance', 0):
                 if lang == "fa":
                     await message.reply(
@@ -29213,8 +26461,6 @@ async def add_balance_manual(message: Message):
                 return
             
             new_balance = reduce_balance(target_id, amount)
-            
-            # =============== لاگ کاهش موجودی ===============
             if log_system:
                 await log_system.log_balance_change(
                     user_id=target_id,
@@ -29226,8 +26472,6 @@ async def add_balance_manual(message: Message):
             CustomLogger.log_event('BALANCE_REDUCE', 
                 f'کاهش موجودی کاربر {target_id}: {amount:,} تومان - موجودی جدید: {new_balance:,}', 
                 target_id)
-            
-            # =============== ارسال پیام به کاربر هدف ===============
             target_lang = get_user(target_id).get('lang', 'fa')
             try:
                 coupon_msg = ""
@@ -29246,8 +26490,6 @@ async def add_balance_manual(message: Message):
                     )
             except Exception as e:
                 logger.error(f"خطا در ارسال پیام به کاربر {target_id}: {e}")
-            
-            # =============== تایید به ادمین ===============
             if lang == "fa":
                 await message.reply(
                     f"✅ مبلغ {amount:,} تومان از حساب کاربر {target_name_escaped} (ID: {target_id}) کسر شد\n"
@@ -29264,10 +26506,7 @@ async def add_balance_manual(message: Message):
             logger.info(f"ادمین مبلغ {amount} از حساب کاربر {target_id} کسر کرد")
             
         else:
-            # =============== افزایش موجودی ===============
             new_balance = add_balance(target_id, amount)
-            
-            # =============== لاگ افزایش موجودی ===============
             if log_system:
                 await log_system.log_balance_change(
                     user_id=target_id,
@@ -29279,8 +26518,6 @@ async def add_balance_manual(message: Message):
             CustomLogger.log_event('BALANCE_ADD', 
                 f'افزایش موجودی کاربر {target_id}: {amount:,} تومان - موجودی جدید: {new_balance:,}', 
                 target_id)
-            
-            # =============== ارسال پیام به کاربر هدف ===============
             target_lang = get_user(target_id).get('lang', 'fa')
             try:
                 coupon_msg = ""
@@ -29299,8 +26536,6 @@ async def add_balance_manual(message: Message):
                     )
             except Exception as e:
                 logger.error(f"خطا در ارسال پیام به کاربر {target_id}: {e}")
-            
-            # =============== تایید به ادمین ===============
             if lang == "fa":
                 await message.reply(
                     f"✅ مبلغ {amount:,} تومان به حساب کاربر {target_name_escaped} (ID: {target_id}) اضافه شد\n"
@@ -29313,20 +26548,15 @@ async def add_balance_manual(message: Message):
                 )
             
             logger.info(f"ادمین مبلغ {amount} به حساب کاربر {target_id} اضافه کرد")
-        
-        # =============== ذخیره مجدد کوپن کاربر در user_states و دیتابیس ===============
         if target_coupon_applied and target_coupon_code:
-            # بررسی اینکه کوپن هنوز معتبر است
             coupon = COUPONS.get(target_coupon_code)
             if coupon and coupon.get('status') == 'active':
                 if target_id not in coupon.get('used_by', []):
-                    # ✅ ذخیره در user_states
                     user_states[target_id] = {
                         'coupon_code': target_coupon_code,
                         'coupon_applied': True,
                         'coupon_discount': target_coupon_discount if target_coupon_discount else 0
                     }
-                    # ✅ ذخیره در دیتابیس
                     save_coupon_to_user_db(target_id)
                     logger.info(f"🏷️ [add_balance_manual] کوپن {target_coupon_code} برای کاربر {target_id} در دیتابیس ذخیره شد")
                 else:
@@ -29345,22 +26575,15 @@ async def add_balance_manual(message: Message):
                     user_states[target_id].pop('coupon_applied', None)
         else:
             logger.info(f"ℹ️ [add_balance_manual] کاربر {target_id} کوپن فعالی ندارد")
-            # اطمینان از پاک شدن کوپن از دیتابیس
             clear_coupon_from_user_db(target_id)
-        
-        # =============== لاگ عملیات ادمین ===============
         if log_system:
             await log_system.log_admin_action(
                 admin_id=admin_id,
                 action=f"{'کاهش' if action == 'reduce' else 'افزایش'} موجودی",
                 details=f"کاربر: {target_id} - مبلغ: {amount:,} تومان"
             )
-        
-        # =============== دیباگ نهایی ===============
         final_state = user_states.get(target_id, {})
         logger.info(f"🔍 [add_balance_manual] وضعیت نهایی کاربر {target_id}: {final_state}")
-        
-        # =============== پاک کردن وضعیت ادمین ===============
         user_states.pop(admin_id, None)
         
     except ValueError:
@@ -29418,8 +26641,6 @@ async def rebuild_sub_links_in_database():
     failed_orders = []
     skipped_orders = []
     invalid_links_skipped = []  # لینک‌های نامعتبری که دست نخوردند
-    
-    # دریافت همه سفارشات معتبر
     valid_orders = get_valid_orders()
     
     if not valid_orders:
@@ -29438,77 +26659,50 @@ async def rebuild_sub_links_in_database():
             config_link = order.get('config_link')
             sub_link = order.get('sub_link')
             email = order.get('email')
-            
-            # اگر هیچ لینکی وجود ندارد، رد کن
             if not config_link and not sub_link:
                 skipped_orders.append({
                     'order_id': order_id,
                     'reason': 'No links found'
                 })
                 continue
-            
-            # =============== بررسی اعتبار لینک ===============
             def is_valid_link(link: str) -> bool:
                 """بررسی اینکه لینک معتبر است یا نه"""
                 if not link:
                     return False
-                # اگر لینک با http یا https شروع می‌شود، معتبر است
                 if link.startswith('http://') or link.startswith('https://'):
                     return True
-                # اگر لینک با // شروع می‌شود (مثل //sub.zyvora.ir)
                 if link.startswith('//'):
                     return True
-                # اگر لینک با sub. شروع می‌شود (بدون پروتکل)
                 if link.startswith('sub.'):
                     return True
                 return False
-            
-            # =============== تابع بازسازی لینک (فقط برای لینک‌های معتبر) ===============
             def rebuild_link(link: str) -> str:
                 """بازسازی یک لینک ساب (فقط برای لینک‌های معتبر)"""
                 if not link:
                     return None
-                
-                # اگر لینک نامعتبر است، هیچ کاری نکن
                 if not is_valid_link(link):
                     return None
-                
-                # =============== روش 1: اگر لینک حاوی /sub/ باشد ===============
                 if '/sub/' in link:
                     sub_path = link.split('/sub/')[-1]
                     if sub_path:
                         return f"{SENAI_SUB_URL}/sub/{sub_path}"
-                
-                # =============== روش 2: اگر لینک با // شروع می‌شود ===============
                 if link.startswith('//'):
-                    # //sub.zokoyun.xyz:2083/sub/email
-                    # تبدیل به https://sub.zokoyun.xyz:2083/sub/email
                     link_with_protocol = f"https:{link}"
-                    # حالا پردازش کن
                     return rebuild_link(link_with_protocol)
-                
-                # =============== روش 3: اگر لینک با sub. شروع می‌شود ===============
                 if link.startswith('sub.'):
-                    # sub.zokoyun.xyz:2083/sub/email
                     parts = link.split('/')
                     if len(parts) >= 2:
                         path = '/' + '/'.join(parts[1:])
                         return f"{SENAI_SUB_URL}{path}"
                     return f"{SENAI_SUB_URL}/{link}"
-                
-                # =============== روش 4: پردازش با urlparse ===============
                 try:
                     parsed = urlparse(link)
                     if parsed.scheme and parsed.netloc:
                         path = parsed.path or '/sub/'
                         query = parsed.query or ''
-                        
-                        # ساخت لینک جدید با حفظ مسیر
                         new_link = f"{SENAI_SUB_URL}{path}"
                         if query:
                             new_link += f"?{query}"
-                        
-                        # اگر SENAI_SUB_URL پورت ندارد ولی لینک قدیمی پورت داشت
                         if parsed.port and ':' not in SENAI_SUB_URL:
                             base_url_no_port = SENAI_SUB_URL.replace('https://', '').replace('http://', '')
                             protocol = 'https://' if SENAI_SUB_URL.startswith('https://') else 'http://'
@@ -29519,13 +26713,8 @@ async def rebuild_sub_links_in_database():
                         return new_link
                 except Exception as e:
                     logger.warning(f"⚠️ خطا در parsing لینک: {e}")
-                
-                # =============== روش 5: اگر همه روش‌ها شکست خوردند ===============
-                # فقط اگر لینک معتبر بود اما نتوانستیم بازسازی کنیم
                 if is_valid_link(link):
-                    # سعی می‌کنیم فقط دامنه را جایگزین کنیم
                     try:
-                        # استخراج پروتکل
                         protocol = 'https://'
                         if link.startswith('http://'):
                             protocol = 'http://'
@@ -29533,8 +26722,6 @@ async def rebuild_sub_links_in_database():
                             protocol = 'https://'
                         elif link.startswith('//'):
                             protocol = 'https://'
-                        
-                        # استخراج مسیر
                         path = '/sub/'
                         if '/sub/' in link:
                             path = link.split('/sub/')[0] + '/sub/'
@@ -29550,12 +26737,8 @@ async def rebuild_sub_links_in_database():
                         return None
                 
                 return None
-            
-            # =============== بازسازی لینک‌ها ===============
             new_config_link = None
             new_sub_link = None
-            
-            # بررسی config_link
             if config_link:
                 if is_valid_link(config_link):
                     new_config_link = rebuild_link(config_link)
@@ -29569,15 +26752,12 @@ async def rebuild_sub_links_in_database():
                             'reason': 'Rebuild failed for valid link'
                         })
                 else:
-                    # لینک نامعتبر است (مثل Goz) - دست نزن
                     invalid_links_skipped.append({
                         'order_id': order_id,
                         'link': config_link,
                         'reason': 'Invalid link (skipped)'
                     })
                     logger.info(f"⏭️ config_link #{order_id} نامعتبر است، دست نخورد: '{config_link}'")
-            
-            # بررسی sub_link
             if sub_link:
                 if is_valid_link(sub_link):
                     new_sub_link = rebuild_link(sub_link)
@@ -29591,15 +26771,12 @@ async def rebuild_sub_links_in_database():
                             'reason': 'Rebuild failed for valid link'
                         })
                 else:
-                    # لینک نامعتبر است - دست نزن
                     invalid_links_skipped.append({
                         'order_id': order_id,
                         'link': sub_link,
                         'reason': 'Invalid link (skipped)'
                     })
                     logger.info(f"⏭️ sub_link #{order_id} نامعتبر است، دست نخورد: '{sub_link}'")
-            
-            # =============== به‌روزرسانی سفارش ===============
             update_data = {}
             if new_config_link and new_config_link != config_link:
                 update_data['config_link'] = new_config_link
@@ -29621,7 +26798,6 @@ async def rebuild_sub_links_in_database():
                 })
                 logger.info(f"✅ سفارش #{order_id} بروزرسانی شد")
             else:
-                # اگر هیچ تغییری نکرده بود
                 if config_link and sub_link:
                     skipped_orders.append({
                         'order_id': order_id,
@@ -29639,8 +26815,6 @@ async def rebuild_sub_links_in_database():
                 'order_id': order_id,
                 'error': str(e)
             })
-    
-    # =============== گزارش نهایی ===============
     result = {
         'success': True,
         'total_orders': len(valid_orders),
@@ -29687,8 +26861,6 @@ async def rebuild_single_order_sub_link(order_id: int):
     
     config_link = order.get('config_link')
     sub_link = order.get('sub_link')
-    
-    # اگر لینک نامعتبر است، هیچ کاری نکن
     def is_valid_link(link: str) -> bool:
         if not link:
             return False
@@ -29714,8 +26886,6 @@ async def rebuild_single_order_sub_link(order_id: int):
             'config_link': config_link,
             'sub_link': sub_link
         }
-    
-    # بازسازی
     def rebuild_link(link: str) -> str:
         if not link:
             return None
@@ -29801,14 +26971,11 @@ async def cmd_rebuild_links(message: Message):
 
 {f"📋 <b>سفارشات بروزرسانی شده:</b>" if result['updated_orders'] else ""}
 """
-            
-            # نمایش 10 سفارش اول
             for i, order in enumerate(result['updated_orders'][:10], 1):
                 report += f"\n{i}. #{order['order_id']} - {order.get('email', 'بدون ایمیل')}"
                 if order.get('old_config_link') != order.get('new_config_link'):
                     old_link = order.get('old_config_link', '')
                     new_link = order.get('new_config_link', '')
-                    # نمایش خلاصه لینک‌ها
                     old_short = old_link[:50] + '...' if len(old_link) > 50 else old_link
                     new_short = new_link[:50] + '...' if len(new_link) > 50 else new_link
                     report += f"\n   📝 config_link: {old_short} → {new_short}"
@@ -29977,11 +27144,6 @@ async def cmd_rebuild_single(message: Message):
             )
     else:
         await message.reply(f"❌ {result.get('error', 'خطا')}")
-        
-        
-        
-
-# =============== یک هندلر واحد برای تمام پیام‌های متنی ===============
 @dp.message(F.text)
 async def handle_text_messages(message: Message):
     """هندلر یکپارچه برای تمام پیام‌های متنی"""
@@ -29989,20 +27151,10 @@ async def handle_text_messages(message: Message):
     user_id = message.from_user.id
     user_state = user_states.get(user_id, {})
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # لاگ پیام
     CustomLogger.log_event('MESSAGE', f'پیام: {message.text[:50]}', user_id)
-    
-    # ============================================================
-    # اولویت 1: کاربر در حالت چت با AI
-    # ============================================================
     if user_state.get('ai_chat_mode'):
         await process_ai_chat_message(message)
         return
-    
-    # ============================================================
-    # اولویت 2: کاربر در حال ارسال فیش (فقط عکس قبوله، متن نه)
-    # ============================================================
     if user_state.get('awaiting_receipt'):
         await message.reply(
             "📸 لطفاً <b>تصویر فیش</b> را ارسال کنید، نه متن\n"
@@ -30011,44 +27163,20 @@ async def handle_text_messages(message: Message):
             parse_mode=ParseMode.HTML
         )
         return
-    
-    # ============================================================
-    # اولویت 3: کاربر در حال وارد کردن مبلغ شارژ حساب
-    # ============================================================
     if user_state.get('awaiting_amount'):
         await process_balance_amount(message)
         return
-    
-    # ============================================================
-    # اولویت 4: کاربر در حال چت با پشتیبانی
-    # ============================================================
     if user_state.get('awaiting_chat'):
         await handle_chat_message(message)
         return
-    
-    # ============================================================
-    # اولویت 5: کاربر در حال ارسال نظر بازخورد
-    # ============================================================
     if user_state.get('awaiting_feedback_comment'):
         await handle_feedback_comment(message)
         return
-    
-    # ============================================================
-    # اولویت 6: کاربر در لیست سیاه است
-    # ============================================================
     if await block_unauthorized(message, user_id):
         return
-    
-    # ============================================================
-    # اولویت 7: ادمین در حالت‌های خاص
-    # ============================================================
     if user_id == ADMIN_ID_INT:
         await handle_admin_special_states(message, user_state)
         return
-    
-    # ============================================================
-    # اولویت 8: پاسخ خودکار AI (اختیاری)
-    # ============================================================
     if AUTO_AI_RESPONSE and (gemini_client or openrouter_client):  # بررسی هر دو سرویس
         if is_ai_question(message.text) and len(message.text.strip()) >= 5:
             can_use, remaining, limit_msg = check_ai_limit(user_id)
@@ -30056,46 +27184,23 @@ async def handle_text_messages(message: Message):
                 logger.info(f"🤖 پاسخ خودکار AI به سوال کاربر {user_id}")
                 await auto_ai_response(message)
                 return
-    
-    # ============================================================
-    # در غیر این صورت، پیام را نادیده بگیر
-    # ============================================================
     logger.debug(f"پیام بدون وضعیت از کاربر {user_id}: {message.text[:50]}")
-    
-    
-    
-    
-# =============== توابع کمکی برای هندلر یکپارچه ===============
-# =============== توابع کمکی برای هندلر یکپارچه ===============
 async def get_ai_response(message_text: str, user_id: int = None, username: str = None) -> str:
     """دریافت پاسخ کامل از AI - با تلاش مجدد در صورت ناقص بودن"""
-    
-    # =============== فقط Google Gemini ===============
     if gemini_client:
         try:
             logger.info(f"🎯 استفاده از Gemini: {message_text[:50]}...")
-            
-            # =============== تنظیم maxOutputTokens ===============
-            # همیشه مقدار کافی برای پاسخ کامل بده
             max_tokens = 1500
-            
-            # =============== ساخت پیام کامل ===============
             full_message = ""
-            
-            # تاریخچه مکالمه
             if user_id and conversation_memory.has_history(user_id):
                 history = conversation_memory.get_context(user_id, max_messages=3)
                 full_message += f"{history}\n\n"
-            
-            # اضافه کردن پیام کاربر
             if user_id:
                 user_info = get_user(user_id) if 'get_user' in globals() else {}
                 user_name = user_info.get('name', 'کاربر') if user_info else username or f"کاربر_{user_id}"
                 full_message += f"کاربر {user_name}: {message_text}"
             else:
                 full_message += f"کاربر: {message_text}"
-            
-            # =============== درخواست اول ===============
             payload = {
                 "system_instruction": {
                     "parts": [{"text": GEMINI_SYSTEM_PROMPT}]
@@ -30114,7 +27219,6 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
             
             async with aiohttp.ClientSession() as session:
-                # =============== درخواست اول ===============
                 async with session.post(
                     url,
                     json=payload,
@@ -30131,8 +27235,6 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                             
                             if reply:
                                 reply = reply.strip()
-                                
-                                # تمیز کردن پاسخ
                                 import re
                                 patterns_to_remove = [
                                     r'\*Iterative refinement\*:?',
@@ -30157,12 +27259,8 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                 
                                 if not reply:
                                     return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
-                                
-                                # =============== اگر پاسخ ناقص است، دوباره تلاش کن ===============
                                 if finish_reason == 'MAX_TOKENS':
                                     logger.warning(f"⚠️ پاسخ ناقص است (MAX_TOKENS)، تلاش مجدد با توکن بیشتر...")
-                                    
-                                    # =============== درخواست دوم با توکن بیشتر ===============
                                     payload2 = {
                                         "system_instruction": {
                                             "parts": [{"text": GEMINI_SYSTEM_PROMPT}]
@@ -30195,8 +27293,6 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                                     
                                                     if reply2:
                                                         reply2 = reply2.strip()
-                                                        
-                                                        # تمیز کردن
                                                         for pattern in patterns_to_remove:
                                                             reply2 = re.sub(pattern, '', reply2, flags=re.IGNORECASE | re.MULTILINE)
                                                         
@@ -30215,12 +27311,8 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                                 logger.warning(f"⚠️ درخواست دوم ناموفق: {response2.status}")
                                     except Exception as e2:
                                         logger.error(f"❌ خطا در درخواست دوم: {e2}")
-                                    
-                                    # =============== اگر باز هم ناقص است، به کاربر بگو ===============
                                     if finish_reason == 'MAX_TOKENS':
                                         reply += "\n\n⚠️ پاسخ کامل نشد. لطفاً سوال خود را کوتاه‌تر بپرسید."
-                                
-                                # ذخیره در حافظه
                                 if user_id:
                                     conversation_memory.add_message(user_id, 'user', message_text)
                                     conversation_memory.add_message(user_id, 'assistant', reply)
@@ -30231,8 +27323,6 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                             return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
                         
                         return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
-                    
-                    # =============== مدیریت خطاهای Gemini ===============
                     elif response.status == 429:
                         logger.warning("⚠️ Gemini Rate Limit")
                         return "⚠️ محدودیت درخواست. لطفاً چند لحظه صبر کنید."
@@ -30269,8 +27359,6 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
 def detect_question_topic(text: str) -> str:
     """تشخیص موضوع سوال کاربر"""
     text_lower = text.lower()
-    
-    # کلمات کلیدی برای هر موضوع
     topics = {
         'price': ['قیمت', 'چنده', 'چقدر', 'تومان', 'هزینه', 'ارزان', 'گران'],
         'install': ['نصب', 'راه‌اندازی', 'نحوه', 'چجوری', 'چطور', 'آموزش', 'نرم‌افزار', 'برنامه'],
@@ -30293,39 +27381,28 @@ async def get_openrouter_response(message_text: str, user_id: int = None, userna
     
     try:
         logger.info(f"🎯 OpenRouter: {message_text[:50]}...")
-        
-        # =============== ساخت پیام‌ها ===============
         messages = [
             {"role": "system", "content": OPENROUTER_SYSTEM_PROMPT}
         ]
-        
-        # تاریخچه مکالمه
         if user_id and conversation_memory.has_history(user_id):
             history = conversation_memory.get_history(user_id, max_messages=6)
             for msg in history:
                 role = "user" if msg['role'] == 'user' else "assistant"
                 messages.append({"role": role, "content": msg['content']})
-        
-        # اضافه کردن پیام کاربر
         if user_id:
             user_info = get_user(user_id) if 'get_user' in globals() else {}
             user_name = user_info.get('name', 'کاربر') if user_info else username or f"کاربر_{user_id}"
             messages.append({"role": "user", "content": f"کاربر {user_name}: {message_text}"})
         else:
             messages.append({"role": "user", "content": message_text})
-        
-        # =============== انتخاب مدل مناسب ===============
         model = openrouter_client.default_model
         if not model:
-            # تست اتصال برای دریافت مدل
             test_result = await openrouter_client.test_connection()
             if test_result.get('success') and test_result.get('default_model'):
                 model = test_result['default_model']
                 openrouter_client.default_model = model
             else:
                 return "❌ هیچ مدلی در OpenRouter در دسترس نیست."
-        
-        # =============== ارسال درخواست ===============
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -30347,8 +27424,6 @@ async def get_openrouter_response(message_text: str, user_id: int = None, userna
                     if reply:
                         reply = reply.strip()
                         reply = '\n'.join([line for line in reply.split('\n') if line.strip()])
-                        
-                        # ذخیره در حافظه
                         if user_id:
                             conversation_memory.add_message(user_id, 'user', message_text)
                             conversation_memory.add_message(user_id, 'assistant', reply)
@@ -30365,7 +27440,6 @@ async def get_openrouter_response(message_text: str, user_id: int = None, userna
                 
                 elif response.status == 404:
                     logger.warning(f"⚠️ مدل {model} در OpenRouter موجود نیست")
-                    # تلاش با مدل بعدی
                     for backup_model in OPENROUTER_MODELS:
                         if backup_model != model:
                             logger.info(f"🔄 تلاش با مدل {backup_model}...")
@@ -30401,8 +27475,6 @@ async def cmd_test_full(message: Message):
     test_question = "لطفاً یک توضیح کامل درباره کانفیگ‌ها بده. شامل: قیمت‌ها، انواع، مزایا، معایب و نحوه خرید. حداقل ۵ پاراگراف."
     
     answer = await get_ai_response(test_question, message.from_user.id)
-    
-    # آمار
     words = len(answer.split())
     paragraphs = len([p for p in answer.split('\n') if p.strip()])
     
@@ -30464,16 +27536,11 @@ async def process_ai_chat_message(message: Message):
     logger.info(f"🤖 پردازش پیام AI از کاربر {user_id}: {message.text[:50]}...")
     
     if message.text.strip() == '/cancel':
-        # =============== کوپن را قبل از پاک کردن وضعیت نگه دار ===============
         user_state = user_states.get(user_id, {})
         coupon_code = user_state.get('coupon_code')
         coupon_discount = user_state.get('coupon_discount')
         coupon_applied = user_state.get('coupon_applied', False)
-        
-        # پاک کردن وضعیت AI
         user_states.pop(user_id, None)
-        
-        # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
         if coupon_applied and coupon_code:
             user_states[user_id] = {
                 'coupon_code': coupon_code,
@@ -30509,13 +27576,10 @@ async def process_ai_chat_message(message: Message):
     processing_msg = await message.reply("⏳ در حال پردازش سوال شما..." if lang == "fa" else "⏳ Processing your question...")
     
     try:
-        # افزایش تایم‌اوت برای پاسخ کامل
         answer = await asyncio.wait_for(
             get_ai_response(message.text, user_id, message.from_user.username),
             timeout=90  # افزایش به 90 ثانیه برای پاسخ کامل
         )
-        
-        # =============== بررسی اینکه پاسخ کامل است یا خطا ===============
         error_keywords = ["❌", "⚠️", "خطا", "متأسفانه", "در دسترس نیست", "شلوغ است", "Error"]
         warning_keywords = ["پاسخ کامل نشد", "کوتاه‌تر بپرسید"]
         
@@ -30531,18 +27595,13 @@ async def process_ai_chat_message(message: Message):
             return
         
         if is_incomplete:
-            # اگر پاسخ ناقص است، به کاربر بگو دوباره تلاش کند
             logger.warning(f"⚠️ پاسخ ناقص است، محدودیت کاهش نیافت")
             await processing_msg.edit_text(
                 "⚠️ پاسخ کامل نشد. لطفاً سوال خود را کوتاه‌تر بپرسید.\n\n💡 محدودیت شما کاهش نیافت." if lang == "fa" else "⚠️ Response was incomplete. Please ask a shorter question.\n\n💡 Your limit was not reduced.",
                 parse_mode=ParseMode.HTML
             )
             return
-        
-        # =============== فقط پاسخ‌های کامل و موفق ===============
         increment_ai_usage(user_id)
-        
-        # فرمت‌بندی
         lines = [line.strip() for line in answer.split('\n') if line.strip()]
         formatted_answer = '\n'.join(lines)
         
@@ -30622,8 +27681,6 @@ async def cmd_test_ai(message: Message):
         return
     
     await message.reply("⏳ در حال تست هوش مصنوعی...")
-    
-    # تست با یک پیام ساده
     test_message = "سلام، یک تست ساده است. لطفاً پاسخ بده."
     
     try:
@@ -30640,23 +27697,16 @@ async def process_balance_amount(message: Message):
     settings = configs_pool.get('price_settings', {})
     min_charge = settings.get('min_charge', 10000)
     max_charge = settings.get('max_charge', 5000000)
-    
-    # =============== کوپن را نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [process_balance_amount] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    
-    # بررسی دکمه انصراف
     cancel_text = "❌ انصراف" if lang == "fa" else "❌ Cancel"
     if message.text == cancel_text:
-        # پاک کردن وضعیت (به جز کوپن)
         if user_id in user_states:
             user_states.pop(user_id, None)
-        
-        # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
         if coupon_applied and coupon_code:
             user_states[user_id] = {
                 'coupon_code': coupon_code,
@@ -30682,12 +27732,8 @@ async def process_balance_amount(message: Message):
         amount = int(message.text.replace(',', '').replace('،', '').replace(' ', '').strip())
         
         if min_charge <= amount <= max_charge:
-            # =============== مقدار معتبر ===============
-            # پاک کردن وضعیت (به جز کوپن)
             if user_id in user_states:
                 user_states.pop(user_id, None)
-            
-            # ✅ اگر کوپن فعال بود، دوباره ذخیره کن
             if coupon_applied and coupon_code:
                 user_states[user_id] = {
                     'coupon_code': coupon_code,
@@ -30699,8 +27745,6 @@ async def process_balance_amount(message: Message):
             order_id = create_balance_order(user_id, amount)
             
             card_num = ' '.join([BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)])
-            
-            # =============== ساخت متن با پریمیوم ایموجی ===============
             if lang == "fa":
                 text = f"""
 {premium_emoji('card', '💳')} <b>پرداخت برای شارژ حساب</b>
@@ -30748,8 +27792,6 @@ async def process_balance_amount(message: Message):
             ])
             
             await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-            
-            # ✅ تنظیم user_states با حفظ کوپن
             user_states[user_id] = {
                 'awaiting_receipt': True,
                 'current_order_id': order_id,
@@ -30763,7 +27805,6 @@ async def process_balance_amount(message: Message):
                 logger.info(f"🏷️ [process_balance_amount] کوپن {coupon_code} در user_states ذخیره شد")
             
         else:
-            # =============== مقدار نامعتبر ===============
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=f"❌ {'انصراف از شارژ' if lang=='fa' else 'Cancel Charge'}",
@@ -30788,7 +27829,6 @@ async def process_balance_amount(message: Message):
                 )
             
     except ValueError:
-        # =============== ورودی عددی نیست ===============
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=f"❌ {'انصراف از شارژ' if lang=='fa' else 'Cancel Charge'}",
@@ -30865,8 +27905,6 @@ async def handle_admin_special_states(message: Message, user_state: dict):
     """پردازش وضعیت‌های خاص ادمین - نسخه کامل"""
     admin_id = message.from_user.id
     text = message.text.strip() if message.text else ""
-    
-    # =============== دستورات مستقیم (بدون وضعیت) ===============
     if text.startswith('/test_full'):
         await cmd_test_full(message)
         return
@@ -30921,46 +27959,28 @@ async def handle_admin_special_states(message: Message, user_state: dict):
     if text.startswith('/check_coupon'):
         await cmd_check_coupon(message)
         return
-    
-    # =============== دستور check_user_coupon ===============
     if text.startswith('/check_user_coupon'):
         await cmd_check_user_coupon(message)
         return
-    
-    # =============== دستور use_coupon ===============
     if text.startswith('/use_coupon'):
         await use_coupon(message)
         return
-
-    
-    # =============== دستورات مدیریت کاربران ===============
     if text.startswith('/blacklist'):
         await cmd_blacklist(message)
         return
-    
-    # =============== دستور stats ===============
     if text.startswith('/stats'):
         await cmd_stats(message)
         return
-    
-    # =============== دستور help ===============
     if text.startswith('/help'):
         await cmd_help_admin(message)
         return
-    
-    # =============== دستور cleanup_backups ===============
     if text.startswith('/cleanup_backups'):
         await cmd_cleanup_backups(message)
         return
-    
-    # =============== دستور test_keyboard ===============
     if text.startswith('/test_keyboard'):
         await cmd_test_keyboard(message)
         return
-    
-    # =============== اگر /cancel زده شد ===============
     if text == '/cancel':
-        # اگر ادمین در حالتی است که نیاز به لغو داشته باشد
         if user_state.get('awaiting_config'):
             user_states.pop(admin_id, None)
             await message.reply("❌ ارسال کانفیگ لغو شد")
@@ -31006,7 +28026,6 @@ async def handle_admin_special_states(message: Message, user_state: dict):
             await message.reply("❌ ایجاد کوپن لغو شد")
             return
         else:
-            # اگر در حالت خاصی نیست - نمایش تمام دستورات
             await message.reply(
                 "❌ شما در حالت خاصی نیستید که نیاز به لغو داشته باشد.\n\n"
                 "📋 <b>دستورات موجود:</b>\n\n"
@@ -31050,8 +28069,6 @@ async def handle_admin_special_states(message: Message, user_state: dict):
                 "/help - نمایش این راهنما"
             )
             return
-    
-    # =============== وضعیت‌های خاص ادمین ===============
     if user_state.get('awaiting_config'):
         await admin_get_config(message)
     elif user_state.get('awaiting_broadcast'):
@@ -31075,7 +28092,6 @@ async def handle_admin_special_states(message: Message, user_state: dict):
     elif user_state.get('awaiting_coupon_create'):
         await admin_coupon_create_process(message)
     else:
-        # =============== اگر هیچ وضعیت خاصی نیست ===============
         logger.debug(f"ادمین - پیام نادیده گرفته شد: {message.text}")
 
 
@@ -31083,8 +28099,6 @@ async def auto_ai_response(message: Message):
     """پاسخ خودکار AI به سوالات مرتبط - با مدیریت خطا"""
     user_id = message.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # بررسی محدودیت روزانه
     daily_limit = GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT
     can_use, remaining, limit_msg = check_ai_limit(user_id)
     
@@ -31095,23 +28109,17 @@ async def auto_ai_response(message: Message):
     processing_msg = await message.reply("🤖 در حال بررسی سوال شما..." if lang == "fa" else "🤖 Checking your question...")
     
     try:
-        # دریافت پاسخ
         answer = await get_ai_response(message.text, user_id, message.from_user.username)
-        
-        # =============== بررسی اینکه پاسخ خطا نیست ===============
         error_keywords = ["❌", "⚠️", "خطا", "متأسفانه", "Error", "متاسفانه"]
         is_error = any(kw in answer for kw in error_keywords)
         
         if is_error:
-            # اگر پاسخ خطا است، محدودیت را افزایش نده
             logger.warning(f"⚠️ پاسخ خودکار AI خطا بود، محدودیت کاهش نیافت: {answer[:50]}...")
             await processing_msg.edit_text(
                 f"{answer}\n\n💡 محدودیت شما کاهش نیافت. لطفاً دوباره تلاش کنید." if lang == "fa" else f"{answer}\n\n💡 Your limit was not reduced. Please try again.",
                 parse_mode=ParseMode.HTML
             )
             return
-        
-        # =============== فقط در صورت پاسخ موفق، محدودیت را افزایش بده ===============
         increment_ai_usage(user_id)
         
         response_text = f"""
@@ -31134,26 +28142,19 @@ async def auto_ai_response(message: Message):
 def is_ai_question(text: str) -> bool:
     """تشخیص سوال مرتبط با کانفیگ"""
     text_lower = text.lower()
-    
-    # کلمات کلیدی فارسی و انگلیسی
     keywords = [
-        # فارسی
         'چطور', 'چگونه', 'راهنمایی', 'مشکل', 'ارور', 'خطا', 'اتصال', 'قطع', 'وصل',
         'vpn', 'کانفیگ', 'کانفیک', 'کانف', 'v2ray', 'vless', 'trojan', 'ساب', 'لینک',
         'حجم', 'مدت', 'قیمت', 'تومان', 'خرید', 'شارژ', 'پرداخت', 'فیش', 'کارت',
         'رفرال', 'دعوت', 'پشتیبانی', 'آموزش', 'نحوه', 'طریقه', 'شیوه',
         'اندروید', 'ios', 'ویندوز', 'مک', 'لینوکس', 'موبایل', 'کامپیوتر',
         'نمیشه', 'کار نمیکنه', 'وصل نمیشه', 'قطع میشه',
-        
-        # انگلیسی
         'how', 'why', 'what', 'help', 'error', 'problem', 'connection',
         'config', 'profile', 'subscription', 'link', 'expire', 'renew',
         'payment', 'card', 'balance', 'charge', 'referral', 'invite'
     ]
     
     return any(kw in text_lower for kw in keywords)
-  
-# =============== پنل ادمین ===============
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
@@ -31163,19 +28164,14 @@ async def admin_panel(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     logger.info("ادمین وارد پنل مدیریت شد")
-    
-    # =============== اصلاح: بررسی وجود متن در پیام ===============
     try:
-        # اگر پیام عکس یا فایل است، نمی‌توانیم edit_text کنیم
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
-            # پیام را حذف کن و جدید بفرست
             await callback.message.delete()
             await callback.message.answer(
                 f"{premium_emoji('admin', '👑')} {'پنل ادمین' if lang=='fa' else 'Admin Panel'}",
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
-            # پیام متنی است، ویرایش کن
             await callback.message.edit_text(
                 f"{premium_emoji('admin', '👑')} {'پنل ادمین' if lang=='fa' else 'Admin Panel'}",
                 reply_markup=get_admin_keyboard(lang)
@@ -31183,7 +28179,6 @@ async def admin_panel(callback: CallbackQuery):
     except Exception as e:
         error_str = str(e)
         if "there is no text in the message to edit" in error_str:
-            # اگر خطای no text بود، پیام را حذف و جدید بفرست
             try:
                 await callback.message.delete()
             except:
@@ -31193,7 +28188,6 @@ async def admin_panel(callback: CallbackQuery):
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
-            # خطای دیگر
             logger.error(f"خطا در admin_panel: {e}")
             await callback.answer("❌ خطا در نمایش پنل", show_alert=True)
             raise
@@ -31211,24 +28205,15 @@ async def admin_orders(callback: CallbackQuery):
         return
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     valid_orders = get_valid_orders()
-    
-    # =============== ✅ فقط سفارشاتی که فیش ارسال شده ===============
-    # سفارشات خرید با فیش ارسال شده (pending)
     pending_purchase = [o for o in valid_orders.values() 
                         if o.get('type') == 'purchase' 
                         and o.get('status') == 'pending']
-    
-    # سفارشات بسته آماده با فیش ارسال شده (pending)
     pending_ready_package = [o for o in valid_orders.values() 
                              if o.get('type') in ['ready_package', 'category_purchase'] 
                              and o.get('status') == 'pending']
-    
-    # درخواست‌های شارژ با فیش ارسال شده (pending_balance_charge)
     pending_balance = [o for o in valid_orders.values() 
                        if o.get('type') == 'balance_charge' 
                        and o.get('status') == 'pending_balance_charge']
-    
-    # ❌ حذف: سفارشات awaiting_payment (هنوز پولی نداده‌اند)
     total_pending = len(pending_purchase) + len(pending_ready_package) + len(pending_balance)
     
     logger.info(f"ادمین لیست سفارشات را مشاهده می‌کند - خرید: {len(pending_purchase)}, بسته آماده: {len(pending_ready_package)}, شارژ: {len(pending_balance)}")
@@ -31248,21 +28233,15 @@ async def admin_orders(callback: CallbackQuery):
         return
     
     buttons = []
-    
-    # =============== خریدهای معمولی با فیش ارسال شده ===============
     for o in pending_purchase:
         user_display = await get_user_display_name(o['user_id'])
         buttons.append([InlineKeyboardButton(
             text=f"🛒 📸 #{o['order_id']} - {user_display} - {o.get('price', 0):,}",
             callback_data=f"view_order_{o['order_id']}"
         )])
-    
-    # =============== بسته‌های آماده با فیش ارسال شده ===============
     for o in pending_ready_package:
         user_display = await get_user_display_name(o['user_id'])
         category_name = o.get('category_name', 'بسته')
-        
-        # پیدا کردن آیکون دسته
         icon = "📦"
         category_id = o.get('category_id')
         if category_id:
@@ -31275,16 +28254,12 @@ async def admin_orders(callback: CallbackQuery):
             text=f"{icon} 📸 #{o['order_id']} - {user_display} - {category_name} - {o.get('price', 0):,}",
             callback_data=f"view_order_{o['order_id']}"
         )])
-    
-    # =============== شارژ حساب با فیش ارسال شده ===============
     for o in pending_balance:
         user_display = await get_user_display_name(o['user_id'])
         buttons.append([InlineKeyboardButton(
             text=f"💰 📸 #{o['order_id']} - {user_display} - {o.get('amount', 0):,}",
             callback_data=f"view_balance_{o['order_id']}"
         )])
-    
-    # دکمه‌های پایین
     buttons.append([InlineKeyboardButton(text="🔄 بروزرسانی" if lang=="fa" else "🔄 Refresh", callback_data="admin_orders")])
     buttons.append([InlineKeyboardButton(text="🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data="admin_panel")])
     
@@ -31305,11 +28280,6 @@ async def admin_orders(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
 
-
-
-
-# =============== توابع مدیریت ریستور بکاپ ===============
-
 def get_backup_list() -> list:
     """دریافت لیست تمام فایل‌های بکاپ موجود"""
     backup_dir = os.path.join(DATA_DIR, 'backups')
@@ -31323,19 +28293,15 @@ def get_backup_list() -> list:
     
     backups = []
     for f in os.listdir(backup_dir):
-        # شامل همه فایل‌های JSON و backup در پوشه backups
         if f.endswith('.json') or f.endswith('.backup'):
             file_path = os.path.join(backup_dir, f)
             logger.info(f"📁 پیدا شد: {f}")
-            
-            # استخراج timestamp از نام فایل
             timestamp_str = ""
             if f.startswith('full_backup_'):
                 timestamp_str = f.replace('full_backup_', '').replace('.json', '')
             elif f.startswith('before_restore_'):
                 timestamp_str = f.replace('before_restore_', '').replace('.json', '')
             else:
-                # برای فایل‌های دیگر از زمان تغییر فایل استفاده کن
                 pass
             
             try:
@@ -31347,8 +28313,6 @@ def get_backup_list() -> list:
                 backup_time = datetime.fromtimestamp(os.path.getmtime(file_path))
             
             size = os.path.getsize(file_path)
-            
-            # تعیین نوع بکاپ
             backup_type = "unknown"
             if f.startswith('full_backup_'):
                 backup_type = "full_backup"
@@ -31366,8 +28330,6 @@ def get_backup_list() -> list:
                 'size_mb': size / (1024 * 1024),
                 'type': backup_type
             })
-    
-    # مرتب‌سازی بر اساس تاریخ (جدیدترین اول)
     backups.sort(key=lambda x: x['date'], reverse=True)
     
     logger.info(f"📊 تعداد بکاپ‌های یافت شده: {len(backups)}")
@@ -31387,12 +28349,8 @@ def get_backup_info(backup_file: str) -> Optional[dict]:
         
         backup_info = data.get('backup_info', {})
         stats = backup_info.get('stats', {})
-        
-        # اطلاعات بسته‌های آماده
         ready_packages = data.get('ready_packages', {})
         categories_count = len(ready_packages.get('categories', []))
-        
-        # اطلاعات تنظیمات تست
         test_service = data.get('test_service', {})
         test_inbounds = test_service.get('inbound_ids', [])
         
@@ -31445,8 +28403,6 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         logger.info(f"  - configs: {len(data.get('configs', {}).get('configs', []))} کانفیگ")
         logger.info(f"  - ready_packages: {len(data.get('ready_packages', {}).get('categories', []))} دسته")
         logger.info(f"  - test_service: {data.get('test_service', {}).get('inbound_ids', [])}")
-        
-        # =============== گرفتن بکاپ از وضعیت فعلی قبل از ریستور ===============
         logger.info("💾 گرفتن بکاپ از وضعیت فعلی قبل از ریستور...")
         current_backup = os.path.join(DATA_DIR, 'backups', f'before_restore_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
         full_backup = {
@@ -31473,20 +28429,14 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
             logger.info(f"✅ بکاپ از وضعیت فعلی ذخیره شد: {current_backup}")
         else:
             logger.warning(f"⚠️ خطا در ذخیره بکاپ وضعیت فعلی")
-        
-        # =============== بازگردانی کاربران ===============
         logger.info("👥 در حال بازگردانی کاربران...")
         backup_users = data.get('users', {})
         result['restored_users'] = len(backup_users)
         users.clear()
         users.update(backup_users)
         logger.info(f"✅ {result['restored_users']} کاربر بازگردانی شد")
-        
-        # =============== بازگردانی سفارشات با IP Limit ===============
         logger.info("📋 در حال بازگردانی سفارشات...")
         backup_orders = data.get('orders', {})
-        
-        # =============== اطمینان از وجود ip_limit در سفارشات ===============
         for oid, order_data in backup_orders.items():
             if isinstance(order_data, dict):
                 if 'ip_limit' not in order_data:
@@ -31497,15 +28447,11 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         orders.clear()
         orders.update(backup_orders)
         logger.info(f"✅ {result['restored_orders']} سفارش بازگردانی شد")
-        
-        # =============== بازگردانی رفرال‌ها ===============
         logger.info("🎁 در حال بازگردانی رفرال‌ها...")
         backup_referrals = data.get('referrals', {})
         referrals.clear()
         referrals.update(backup_referrals)
         logger.info(f"✅ {len(backup_referrals)} رفرال بازگردانی شد")
-        
-        # =============== بازگردانی کانفیگ‌ها و تنظیمات ===============
         logger.info("📦 در حال بازگردانی کانفیگ‌ها و تنظیمات...")
         backup_configs = data.get('configs', {})
         result['restored_configs'] = len(backup_configs.get('configs', []))
@@ -31513,8 +28459,6 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         configs_pool.clear()
         configs_pool.update(backup_configs)
         logger.info(f"✅ {result['restored_configs']} کانفیگ بازگردانی شد")
-        
-        # =============== بازگردانی بسته‌های آماده ===============
         logger.info("📦 در حال بازگردانی بسته‌های آماده...")
         backup_ready = data.get('ready_packages', {})
         if backup_ready and backup_ready.get('categories'):
@@ -31528,8 +28472,6 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
                 logger.info(f"  📡 {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
         else:
             logger.warning("⚠️ هیچ بسته آماده‌ای در بکاپ یافت نشد")
-        
-        # =============== بازگردانی تنظیمات تست ===============
         logger.info("🧪 در حال بازگردانی تنظیمات تست...")
         backup_test = data.get('test_service', {})
         if backup_test:
@@ -31539,53 +28481,39 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
             logger.info(f"✅ تنظیمات تست بازگردانی شد: اینباندها = {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
         else:
             logger.warning("⚠️ تنظیمات تست در بکاپ یافت نشد")
-        
-        # =============== بازگردانی انتخاب‌های اینباند کاربران ===============
         logger.info("📡 در حال بازگردانی انتخاب‌های اینباند کاربران...")
         backup_inbound_selection = data.get('user_inbound_selection', {})
         if backup_inbound_selection:
             USER_INBOUND_SELECTION.clear()
             USER_INBOUND_SELECTION.update(backup_inbound_selection)
             logger.info(f"✅ انتخاب‌های اینباند {len(USER_INBOUND_SELECTION)} کاربر بازگردانی شد")
-        
-        # =============== بازگردانی تست کاربران ===============
         logger.info("🧪 در حال بازگردانی تست کاربران...")
         backup_test_usage = data.get('user_test_usage', {})
         if backup_test_usage:
             USER_TEST_USAGE.clear()
             USER_TEST_USAGE.update(backup_test_usage)
             logger.info(f"✅ تست {len(USER_TEST_USAGE)} کاربر بازگردانی شد")
-        
-        # =============== بازگردانی وضعیت فروش ===============
         logger.info("🛒 در حال بازگردانی وضعیت فروش...")
         backup_shop = data.get('shop_status', {})
         if backup_shop:
             SHOP_STATUS.clear()
             SHOP_STATUS.update(backup_shop)
             logger.info(f"✅ وضعیت فروش بازگردانی شد: {'باز' if SHOP_STATUS.get('open') else 'بسته'}")
-        
-        # =============== بازگردانی بازخوردها ===============
         logger.info("📝 در حال بازگردانی بازخوردها...")
         backup_feedbacks = data.get('feedback', {})
         feedbacks.clear()
         feedbacks.update(backup_feedbacks)
         logger.info(f"✅ {len(backup_feedbacks)} بازخورد بازگردانی شد")
-        
-        # =============== بازگردانی چت‌ها ===============
         logger.info("💬 در حال بازگردانی چت‌ها...")
         backup_chats = data.get('chats', {})
         chats.clear()
         chats.update(backup_chats)
         logger.info(f"✅ {len(backup_chats)} چت بازگردانی شد")
-        
-        # =============== بازگردانی لیست سیاه ===============
         logger.info("🚫 در حال بازگردانی لیست سیاه...")
         backup_blacklist = data.get('blacklist', {})
         BLACKLIST.clear()
         BLACKLIST.update(set(backup_blacklist.get('users', [])))
         logger.info(f"✅ {len(BLACKLIST)} کاربر در لیست سیاه بازگردانی شد")
-        
-        # =============== ذخیره نهایی ===============
         logger.info("💾 ذخیره نهایی دیتابیس...")
         
         configs_pool['ready_packages'] = READY_PACKAGES
@@ -31594,8 +28522,6 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         
         save_all()
         logger.info("✅ دیتابیس ذخیره شد")
-        
-        # =============== تأیید نهایی ===============
         logger.info("🔍 تأیید نهایی:")
         logger.info(f"  - بسته‌های آماده: {len(READY_PACKAGES.get('categories', []))} دسته")
         for cat in READY_PACKAGES.get('categories', []):
@@ -31679,9 +28605,6 @@ async def cmd_check_backup(message: Message):
     
     await message.reply(text, parse_mode=ParseMode.HTML)
 
-
-# =============== هندلرهای ریستور بکاپ ===============
-
 @dp.callback_query(F.data == "admin_restore_backup")
 async def admin_restore_backup_menu(callback: CallbackQuery):
     """نمایش منوی ریستور بکاپ با لیست بکاپ‌های موجود"""
@@ -31709,8 +28632,6 @@ async def admin_restore_backup_menu(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"خطا در callback.answer: {e}")
         return
-    
-    # ساخت متن و دکمه‌ها
     if lang == "fa":
         text = f"🔄 <b>ریستور از بکاپ</b>\n\n📁 تعداد بکاپ‌ها: {len(backups)}\n\n"
         text += "لطفاً بکاپ مورد نظر را انتخاب کنید:\n"
@@ -31759,8 +28680,6 @@ async def admin_restore_backup_confirm(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     filename = callback.data.replace("restore_backup_", "")
-    
-    # پیدا کردن فایل بکاپ
     backups = get_backup_list()
     backup = None
     for b in backups:
@@ -31771,11 +28690,7 @@ async def admin_restore_backup_confirm(callback: CallbackQuery):
     if not backup:
         await callback.answer("❌ بکاپ یافت نشد" if lang == "fa" else "❌ Backup not found", show_alert=True)
         return
-    
-    # دریافت اطلاعات بکاپ
     info = get_backup_info(backup['path'])
-    
-    # =============== ساخت متن بر اساس زبان ===============
     if lang == "fa":
         text = f"""
 ⚠️ <b>تأیید ریستور بکاپ</b>
@@ -31887,8 +28802,6 @@ async def restore_details(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     filename = callback.data.replace("restore_details_", "")
-    
-    # پیدا کردن فایل بکاپ
     backups = get_backup_list()
     backup = None
     for b in backups:
@@ -31903,8 +28816,6 @@ async def restore_details(callback: CallbackQuery):
     try:
         with open(backup['path'], 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
-        # =============== اطلاعات کامل ===============
         ready_packages = data.get('ready_packages', {})
         test_service = data.get('test_service', {})
         user_inbound_selection = data.get('user_inbound_selection', {})
@@ -32045,8 +28956,6 @@ async def confirm_restore(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     filename = callback.data.replace("confirm_restore_", "")
-    
-    # پیدا کردن فایل بکاپ
     backups = get_backup_list()
     backup = None
     for b in backups:
@@ -32057,16 +28966,12 @@ async def confirm_restore(callback: CallbackQuery):
     if not backup:
         await callback.answer("❌ بکاپ یافت نشد" if lang == "fa" else "❌ Backup not found", show_alert=True)
         return
-    
-    # پیام در حال پردازش
     await callback.message.edit_text(
         "⏳ در حال ریستور بکاپ...\n\n"
         "⚠️ لطفاً صبر کنید...\n"
         "📌 این عملیات چند لحظه طول می‌کشد.",
         reply_markup=None
     )
-    
-    # اجرای ریستور
     result = await restore_from_backup(backup['path'], restore_panel=False)
     
     if result['success']:
@@ -32161,15 +29066,9 @@ async def admin_restore_backup_execute(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # ⚠️ مهم: دیگر اجازه بازسازی پنل نمی‌دهیم
     restore_panel = False
-    
-    # استخراج filename
     prefix = "confirm_restore_"
     filename = callback.data.replace(prefix, "")
-    
-    # پیدا کردن فایل بکاپ
     backups = get_backup_list()
     backup = None
     for b in backups:
@@ -32180,8 +29079,6 @@ async def admin_restore_backup_execute(callback: CallbackQuery):
     if not backup:
         await callback.answer("❌ بکاپ یافت نشد", show_alert=True)
         return
-    
-    # ارسال پیام در حال پردازش
     await callback.message.edit_text(
         "⏳ در حال ریستور بکاپ...\n\n"
         "⚠️ لطفاً صبر کنید...\n"
@@ -32189,11 +29086,7 @@ async def admin_restore_backup_execute(callback: CallbackQuery):
         "🔒 کانفیگ‌های پنل تغییری نمی‌کنند",
         reply_markup=None
     )
-    
-    # اجرای ریستور (با restore_panel=False)
     result = await restore_from_backup(backup['path'], restore_panel=False)
-    
-    # نمایش نتیجه
     if result['success']:
         text = f"""
 ✅ <b>ریستور بکاپ با موفقیت انجام شد!</b>
@@ -32237,9 +29130,6 @@ async def admin_restore_backup_execute(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
 
-
-# =============== اضافه کردن دکمه حذف بکاپ به منوی مدیریت ===============
-
 @dp.callback_query(F.data == "admin_manage_backups")
 async def admin_manage_backups(callback: CallbackQuery):
     """مدیریت بکاپ‌ها (حذف بکاپ‌های قدیمی و پاکسازی کامل)"""
@@ -32248,8 +29138,6 @@ async def admin_manage_backups(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     backups = get_backup_list()
-    
-    # دسته‌بندی بکاپ‌ها
     full_backups = [b for b in backups if b.get('type') == 'full_backup']
     before_restore = [b for b in backups if b.get('type') == 'before_restore']
     auto_backups = [b for b in backups if b.get('type') == 'auto_backup']
@@ -32379,8 +29267,6 @@ async def admin_list_all_backups(callback: CallbackQuery):
         text="🔙 برگشت" if lang=="fa" else "🔙 Back",
         callback_data="admin_manage_backups"
     )])
-    
-    # برای صفحات طولانی، از pagination استفاده کنید
     if len(buttons) > 15:
         buttons = buttons[:20]
         if lang == "fa":
@@ -32480,8 +29366,6 @@ async def admin_delete_all_backups_execute(callback: CallbackQuery):
             logger.error(f"❌ خطا در حذف بکاپ {backup['filename']}: {e}")
     
     total_freed_str = format_size(total_freed_size)
-    
-    # لاگ عملیات
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
@@ -32559,8 +29443,6 @@ async def admin_delete_single_backup(callback: CallbackQuery):
             f"✅ بکاپ حذف شد ({size_str})" if lang=="fa" else f"✅ Backup deleted ({size_str})",
             show_alert=True
         )
-        
-        # بازگشت به لیست بکاپ‌ها
         await admin_list_all_backups(callback)
         
     except Exception as e:
@@ -32597,8 +29479,6 @@ async def admin_delete_old_backups(callback: CallbackQuery):
             except Exception as e:
                 failed_count += 1
                 logger.error(f"❌ خطا در حذف بکاپ {backup['filename']}: {e}")
-    
-    # لاگ عملیات
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
@@ -32704,28 +29584,18 @@ async def view_order(callback: CallbackQuery):
         uname = "کاربر" if lang == 'fa' else "User"
     
     logger.info(f"ادمین در حال مشاهده سفارش #{order_id}")
-    
-    # =============== دریافت IP Limit ===============
     ip_limit = order.get('ip_limit', 0)
     ip_display = f"👤 محدودیت IP: {ip_limit}" if ip_limit > 0 else "👤 محدودیت IP: ♾️ نامحدود"
-    
-    # =============== تشخیص نوع سفارش ===============
     order_type = order.get('type', 'purchase')
     order_status = order.get('status', 'نامشخص')
-    
-    # =============== دریافت اطلاعات بسته آماده ===============
     category_name = order.get('category_name')
     category_id = order.get('category_id')
-    
-    # پیدا کردن آیکون دسته
     icon = "📦"
     if category_id:
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
                 icon = cat.get('icon', '📦')
                 break
-    
-    # =============== وضعیت ===============
     status_emoji_fa = {
         'awaiting_payment': '⏳ در انتظار پرداخت',
         'pending': '📸 فیش ارسال شده',
@@ -32744,16 +29614,12 @@ async def view_order(callback: CallbackQuery):
     }
     
     status_text = status_emoji_fa.get(order_status, f"⚠️ {order_status}") if lang == 'fa' else status_emoji_en.get(order_status, f"⚠️ {order_status}")
-    
-    # =============== ساخت متن ===============
     if lang == "fa":
         text = f"""
 <tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> سفارش #{order_id}
 
 <tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> کاربر: {uname}
 """
-        
-        # =============== نمایش بر اساس نوع سفارش (فارسی) ===============
         if order_type == 'balance_charge':
             amount = order.get('amount', 0)
             text += f"""
@@ -32777,8 +29643,6 @@ async def view_order(callback: CallbackQuery):
 <tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> حجم: {order.get('volume', 0)} GB
 <tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> مدت: {order.get('days', 0)} روز
 """
-        
-        # قیمت
         price = order.get('price', 0)
         if order_type == 'balance_charge':
             price = order.get('amount', 0)
@@ -32799,14 +29663,11 @@ async def view_order(callback: CallbackQuery):
             text += f"📝 دلیل رد: {order.get('rejected_reason')}\n"
     
     else:
-        # =============== نسخه انگلیسی ===============
         text = f"""
 <tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> Order #{order_id}
 
 <tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> User: {uname}
 """
-        
-        # =============== نمایش بر اساس نوع سفارش (انگلیسی) ===============
         if order_type == 'balance_charge':
             amount = order.get('amount', 0)
             text += f"""
@@ -32830,8 +29691,6 @@ async def view_order(callback: CallbackQuery):
 <tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> Volume: {order.get('volume', 0)} GB
 <tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Duration: {order.get('days', 0)} days
 """
-        
-        # قیمت
         price = order.get('price', 0)
         if order_type == 'balance_charge':
             price = order.get('amount', 0)
@@ -32850,12 +29709,7 @@ async def view_order(callback: CallbackQuery):
         
         if order.get('rejected_reason'):
             text += f"📝 Reject reason: {order.get('rejected_reason')}\n"
-    
-    
-    # =============== ساخت دکمه‌ها بر اساس وضعیت ===============
     buttons = []
-    
-    # اگر سفارش در انتظار پرداخت است
     if order_status == 'awaiting_payment':
         buttons.append([
             InlineKeyboardButton(
@@ -32869,8 +29723,6 @@ async def view_order(callback: CallbackQuery):
                 callback_data=f"cancel_order_admin_{order_id}"
             )
         ])
-    
-    # اگر فیش ارسال شده است
     elif order_status in ['pending', 'pending_balance_charge']:
         buttons.append([
             InlineKeyboardButton(
@@ -32895,10 +29747,7 @@ async def view_order(callback: CallbackQuery):
                     callback_data=f"view_receipt_{order_id}"
                 )
             ])
-    
-    # اگر تایید شده است
     elif order_status == 'approved':
-        # ✅ برای سفارش‌های شارژ، دکمه کانفیگ نمایش داده نشود
         if order_type != 'balance_charge' and order.get('config_link'):
             buttons.append([
                 InlineKeyboardButton(
@@ -32906,18 +29755,12 @@ async def view_order(callback: CallbackQuery):
                     callback_data=f"admin_view_config_{order_id}"
                 )
             ])
-            
-    
-    # دکمه بازگشت
-    # =============== دکمه بازگشت ===============
         buttons.append([
             InlineKeyboardButton(
                 text=f"🔙 {'برگشت به کاربر' if lang=='fa' else 'Back to User'}",
                 callback_data=f"admin_user_{order.get('user_id')}_0"  # ✅ برگشت به صفحه کاربر
             )
         ])
-    
-    # =============== ارسال پیام ===============
     try:
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice']:
             try:
@@ -32971,8 +29814,6 @@ async def request_receipt(callback: CallbackQuery):
     
     user_id = order['user_id']
     lang = get_user(user_id).get('lang', 'fa')
-    
-    # ارسال پیام به کاربر
     try:
         if lang == "fa":
             await bot.send_message(
@@ -33006,8 +29847,6 @@ async def request_receipt(callback: CallbackQuery):
                     )]
                 ])
             )
-        
-        # تنظیم وضعیت کاربر برای دریافت فیش
         user_states[user_id] = {
             'awaiting_receipt': True,
             'current_order_id': order_id,
@@ -33019,8 +29858,6 @@ async def request_receipt(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"خطا در ارسال درخواست فیش به کاربر {user_id}: {e}")
         await callback.answer("❌ خطا در ارسال پیام", show_alert=True)
-    
-    # بازگشت به صفحه سفارش
     await view_order(callback)
     
 @dp.callback_query(F.data.startswith("view_receipt_"))
@@ -33068,8 +29905,6 @@ async def cancel_order_admin(callback: CallbackQuery):
     logger.info(f"🔴 [cancel_order_admin] CALLED: {callback.data}")
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # فرمت: cancel_order_admin_123
     parts = callback.data.split("_")
     if len(parts) < 4:
         await callback.answer("❌ فرمت کالبک نامعتبر", show_alert=True)
@@ -33090,8 +29925,6 @@ async def cancel_order_admin(callback: CallbackQuery):
     user_info = get_user(user_id)
     user_name_raw = user_info.get('name', f'کاربر_{user_id}')
     user_name_escaped = html.escape(user_name_raw)
-    
-    # =============== نمایش پیام تایید ===============
     if lang == "fa":
         text = f"""
 ⚠️ <b>لغو سفارش #{order_id} توسط ادمین</b>
@@ -33130,8 +29963,6 @@ Are you sure?
             )
         ]
     ])
-    
-    # حذف پیام قبلی و ارسال پیام جدید
     try:
         await callback.message.delete()
     except:
@@ -33151,8 +29982,6 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
         return await callback.answer("⛔", show_alert=True)
     
     logger.info(f"🔴 [confirm_cancel_order_admin] CALLED: {callback.data}")
-    
-    # فرمت: confirm_cancel_order_admin_123
     parts = callback.data.split("_")
     if len(parts) < 5:
         await callback.answer("❌ فرمت کالبک نامعتبر", show_alert=True)
@@ -33174,65 +30003,44 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
     user_info = get_user(user_id)
     user_name_raw = user_info.get('name', f'کاربر_{user_id}')
     user_name_escaped = html.escape(user_name_raw)
-    
-    # =============== دریافت کوپن قبل از لغو ===============
     coupon_code = None
     coupon_applied = False
-    
-    # بررسی کوپن در user_states
     user_state = user_states.get(user_id, {})
     if user_state.get('coupon_applied'):
         coupon_code = user_state.get('coupon_code')
         coupon_applied = True
-    
-    # =============== دریافت اطلاعات سفارش ===============
     old_status = order.get('status', 'unknown')
     price = order.get('price', 0)
     volume = order.get('volume', 0)
     days = order.get('days', 0)
     order_type = order.get('type', 'purchase')
-    
-    # =============== ✅ اصلاح: تشخیص اینکه آیا واقعاً پولی پرداخت شده ===============
     should_refund = False
     refund_amount = 0
-    
-    # ✅ فقط سفارش‌های تایید شده یا در حال انتظار تایید ادمین (که فیش ارسال شده) باید برگشت داده شوند
     if old_status == 'approved':
-        # سفارش تایید شده - حتماً پرداخت شده
         should_refund = True
         refund_amount = price
         logger.info(f"💰 سفارش #{order_id} تایید شده بود - برگشت {price:,} تومان")
     
     elif old_status == 'pending':
-        # فیش ارسال شده و در انتظار تایید ادمین - احتمالاً پرداخت شده
         should_refund = True
         refund_amount = price
         logger.info(f"💰 سفارش #{order_id} در انتظار تایید (فیش ارسال شده) - برگشت {price:,} تومان")
     
     elif old_status == 'pending_balance_charge':
-        # درخواست شارژ حساب - فیش ارسال شده
         should_refund = True
         refund_amount = price
         logger.info(f"💰 سفارش #{order_id} درخواست شارژ - برگشت {price:,} تومان")
-    
-    # ❌ سفارشات با وضعیت awaiting_payment هنوز پرداخت نشده‌اند
     elif old_status == 'awaiting_payment':
         should_refund = False
         refund_amount = 0
         logger.info(f"ℹ️ سفارش #{order_id} در انتظار پرداخت است - هیچ موجودی برگشت داده نمی‌شود")
-    
-    # =============== لغو سفارش ===============
     update_order(order_id, status='cancelled')
     
     logger.info(f"🗑 سفارش #{order_id} توسط ادمین {callback.from_user.id} لغو شد (وضعیت قبلی: {old_status})")
-    
-    # =============== برگرداندن موجودی (فقط در صورت نیاز) ===============
     if should_refund and refund_amount > 0:
         old_balance = get_user(user_id).get('balance', 0)
         new_balance = add_balance(user_id, refund_amount)
         logger.info(f"💰 موجودی کاربر {user_id} برگشت داده شد: {old_balance} -> {new_balance} ({refund_amount:,} تومان)")
-        
-        # لاگ در سیستم
         if log_system:
             await log_system.log_balance_change(
                 user_id=user_id,
@@ -33245,10 +30053,7 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
     else:
         if old_status == 'awaiting_payment':
             logger.info(f"ℹ️ سفارش #{order_id} در انتظار پرداخت بود - موجودی برگشت داده نشد")
-    
-    # =============== آزادسازی کوپن (اگر وجود داشته باشد) ===============
     if coupon_applied and coupon_code:
-        # بررسی اینکه آیا کوپن قبلاً مصرف شده یا نه
         coupon = COUPONS.get(coupon_code)
         coupon_consumed = False
         if coupon and user_id in coupon.get('used_by', []):
@@ -33262,14 +30067,9 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
                 logger.warning(f"⚠️ کوپن {coupon_code} برای کاربر {user_id} آزاد نشد")
         else:
             logger.info(f"ℹ️ کوپن {coupon_code} قبلاً توسط کاربر {user_id} مصرف شده بود")
-    
-    # =============== اطلاع به کاربر ===============
     try:
         user_lang = get_user(user_id).get('lang', 'fa')
-        
-        # =============== پیام متفاوت بر اساس وضعیت ===============
         if old_status == 'awaiting_payment':
-            # کاربر هنوز پرداخت نکرده بود
             if user_lang == "fa":
                 await bot.send_message(
                     user_id,
@@ -33289,7 +30089,6 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
                     f"{f'🏷️ Your coupon ({coupon_code}) is still valid.' if coupon_applied and coupon_code else ''}"
                 )
         else:
-            # کاربر پرداخت کرده بود یا فیش ارسال کرده بود
             refund_text = f"💰 مبلغ {refund_amount:,} تومان به حساب شما برگشت داده شد." if should_refund and refund_amount > 0 else ""
             coupon_text = f"🏷️ کوپن شما ({coupon_code}) {'آزاد شد' if coupon_applied and coupon_code else 'ندارد'}"
             
@@ -33315,8 +30114,6 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
         logger.info(f"📨 پیام لغو سفارش به کاربر {user_id} ارسال شد")
     except Exception as e:
         logger.error(f"خطا در ارسال پیام لغو سفارش به کاربر {user_id}: {e}")
-    
-    # =============== لاگ عملیات ===============
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
@@ -33328,9 +30125,6 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
     CustomLogger.log_event('ORDER_CANCELLED_BY_ADMIN', 
         f'سفارش #{order_id} توسط ادمین لغو شد - کاربر: {user_name_escaped} ({user_id}) - وضعیت قبلی: {old_status} - برگشت موجودی: {should_refund}', 
         user_id)
-    
-    # =============== پیام موفقیت به ادمین ===============
-    # ✅ نمایش وضعیت دقیق به ادمین
     if old_status == 'awaiting_payment':
         refund_status = "❌ کاربر هنوز پرداختی انجام نداده بود - موجودی برگشت داده نشد"
     elif should_refund:
@@ -33403,11 +30197,7 @@ async def confirm_cancel_order(callback: CallbackQuery):
     
     user_id = order['user_id']
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # لغو سفارش
     update_order(order_id, status='cancelled')
-    
-    # اطلاع به کاربر
     try:
         user_lang = get_user(user_id).get('lang', 'fa')
         if user_lang == "fa":
@@ -33466,29 +30256,18 @@ async def approve_order(callback: CallbackQuery):
     lang = user_info.get('lang', 'fa')
     
     logger.info(f"ادمین تایید سفارش #{order_id} را شروع کرد")
-    
-    # === اگر پنل فعاله، خودکار کلاینت بساز ===
     if SENAI_PANEL_ENABLED:
         await callback.message.edit_text(f"⏳ در حال ساخت کلاینت برای سفارش #{order_id}...")
-        
-        # آپدیت سفارش
         update_order(order_id, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         await check_referral_bonus(user_id)
-        
-        # ساخت کلاینت در پنل
         timestamp = int(datetime.now().timestamp())
         email = f"user{user_id}_{timestamp}"
         
         sub_link = await create_client_in_panel(user_id, email, volume, days, user_name)
         
         if sub_link:
-            # ذخیره لینک
             update_order(order_id, config_link=sub_link, email=email)
-            
-            # ارسال به کاربر
             await send_config_with_qr_option(user_id, order_id, volume, days, price, sub_link, lang)
-            
-            # درخواست بازخورد
             try:
                 await bot.send_message(
                     user_id,
@@ -33497,8 +30276,6 @@ async def approve_order(callback: CallbackQuery):
                 )
             except:
                 pass
-            
-            # تایید به ادمین
             await callback.message.edit_text(
                 f"✅ سفارش #{order_id} تایید و کلاینت ساخته شد!\n"
                 f"👤 کاربر: {user_name} ({user_id})\n"
@@ -33506,7 +30283,6 @@ async def approve_order(callback: CallbackQuery):
                 f"🔗 لینک: {sub_link[:40]}..."
             )
         else:
-            # خطا - برگشت موجودی
             user = get_user(user_id)
             update_user(user_id, 'balance', user['balance'] + price)
             
@@ -33515,7 +30291,6 @@ async def approve_order(callback: CallbackQuery):
                 f"💰 موجودی کاربر برگشت داده شد."
             )
     else:
-        # روش قدیمی: منتظر لینک از ادمین
         user_states[callback.from_user.id] = {
             'awaiting_config': True,
             'order_id': order_id,
@@ -33605,8 +30380,6 @@ async def view_balance(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== استخراج صحیح order_id ===============
     try:
         parts = callback.data.split("_")
         if len(parts) >= 3:
@@ -33634,8 +30407,6 @@ async def view_balance(callback: CallbackQuery):
     date_escaped = html.escape(order.get('date', 'نامشخص'))
     amount = order.get('amount', 0)
     status = order.get('status', 'unknown')
-    
-    # =============== ساخت متن ===============
     if lang == "fa":
         text = f"""
 💰 <b>درخواست شارژ #{order_id}</b>
@@ -33654,13 +30425,8 @@ async def view_balance(callback: CallbackQuery):
 📅 Date: {date_escaped}
 📊 Status: {status}
 """
-    
-    # =============== ساخت دکمه‌ها بر اساس وضعیت ===============
     buttons = []
-    
-    # اگر در انتظار تایید است
     if status in ['pending_balance_charge', 'pending']:
-        # دکمه‌های اصلی
         buttons.append([
             InlineKeyboardButton(
                 text="✅ تایید" if lang == 'fa' else "✅ Approve",
@@ -33673,8 +30439,6 @@ async def view_balance(callback: CallbackQuery):
                 style="danger"
             )
         ])
-        
-        # دکمه پرداخت دلخواه
         buttons.append([
             InlineKeyboardButton(
                 text="💰 پرداخت دلخواه" if lang == 'fa' else "💰 Custom Payment",
@@ -33682,8 +30446,6 @@ async def view_balance(callback: CallbackQuery):
                 style="primary"
             )
         ])
-        
-        # دکمه مشاهده فیش (اگر فیش وجود دارد)
         if order.get('receipt_photo_id'):
             buttons.append([
                 InlineKeyboardButton(
@@ -33692,8 +30454,6 @@ async def view_balance(callback: CallbackQuery):
                     style="primary"
                 )
             ])
-    
-    # دکمه برگشت
     buttons.append([
         InlineKeyboardButton(
             text=f"🔙 {'برگشت' if lang=='fa' else 'Back'}",
@@ -33728,14 +30488,10 @@ async def approve_balance(callback: CallbackQuery):
     
     user_id = order['user_id']
     amount = order['amount']
-    
-    # =============== کوپن کاربر را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
-    
-    # اگر در user_states نبود، از دیتابیس بازیابی کن
     if not coupon_applied or not coupon_code:
         coupon_data = load_coupon_from_user_db(user_id)
         if coupon_data.get('coupon_applied'):
@@ -33750,12 +30506,8 @@ async def approve_balance(callback: CallbackQuery):
             logger.info(f"🏷️ [approve_balance] کوپن {coupon_code} از دیتابیس برای کاربر {user_id} بازیابی شد")
     
     logger.info(f"🔍 [approve_balance] کوپن کاربر {user_id}: code={coupon_code}, applied={coupon_applied}")
-    
-    # =============== افزایش موجودی ===============
     new_balance = add_balance(user_id, amount)
     update_order(order_id, status='approved')
-    
-    # =============== ذخیره مجدد کوپن کاربر ===============
     if coupon_applied and coupon_code:
         coupon = COUPONS.get(coupon_code)
         if coupon and coupon.get('status') == 'active':
@@ -33784,8 +30536,6 @@ async def approve_balance(callback: CallbackQuery):
     else:
         logger.info(f"ℹ️ [approve_balance] کاربر {user_id} کوپن فعالی ندارد")
         clear_coupon_from_user_db(user_id)
-    
-    # =============== ارسال پیام به کاربر با escape ===============
     user_lang = get_user(user_id).get('lang', 'fa')
     await send_sticker(user_id, 'balance_added', '💰')
     
@@ -33796,8 +30546,6 @@ async def approve_balance(callback: CallbackQuery):
             if coupon and coupon.get('status') == 'active':
                 if user_id not in coupon.get('used_by', []):
                     coupon_msg = f"\n\n🏷️ کوپن شما ({html.escape(coupon_code)}) همچنان معتبر است."
-        
-        # ✅ escape کردن مبلغ در پیام
         await bot.send_message(user_id, 
             f"{premium_emoji('success', '✅')} {'درخواست شارژ شما تایید شد!' if user_lang == 'fa' else 'Your balance request approved!'}\n"
             f"{premium_emoji('wallet', '💰')} {amount:,} {'تومان اضافه شد' if user_lang == 'fa' else 'Toman added'}\n"
@@ -33805,8 +30553,6 @@ async def approve_balance(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(f"خطا در ارسال پیام تایید شارژ: {e}")
-    
-    # =============== لاگ ===============
     if log_system:
         await log_system.log_balance_change(
             user_id, 
@@ -33818,12 +30564,8 @@ async def approve_balance(callback: CallbackQuery):
     
     logger.info(f"شارژ حساب #{order_id} تایید شد - کاربر: {user_id}, مبلغ: {amount}")
     await callback.answer("✅ شارژ انجام شد" if lang == 'fa' else "✅ Balance added", show_alert=True)
-    
-    # =============== دیباگ نهایی ===============
     final_state = user_states.get(user_id, {})
     logger.info(f"🔍 [approve_balance] وضعیت نهایی کاربر {user_id}: {final_state}")
-    
-    # =============== بازگشت به لیست درخواست‌ها ===============
     await admin_balance(callback)
 
 
@@ -33869,13 +30611,10 @@ async def admin_list_configs(callback: CallbackQuery):
             text = "✅ هیچ کانفیگی موجود نیست"
         else:
             text = "✅ No configs available"
-        
-        # =============== ✅ اصلاح: با try/except ===============
         try:
             await callback.message.edit_text(text, reply_markup=get_admin_configs_keyboard(lang))
         except Exception as e:
             if "message is not modified" in str(e):
-                # اگر پیام تغییر نکرده، فقط کیبورد را آپدیت کن
                 try:
                     await callback.message.edit_reply_markup(reply_markup=get_admin_configs_keyboard(lang))
                 except:
@@ -33910,7 +30649,6 @@ async def admin_list_configs(callback: CallbackQuery):
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     except Exception as e:
         if "message is not modified" in str(e):
-            # اگر پیام تغییر نکرده، فقط کیبورد را آپدیت کن
             try:
                 await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
             except:
@@ -34023,8 +30761,6 @@ async def admin_view_config_detail(callback: CallbackQuery):
     if not order:
         await callback.answer("❌ سفارش یافت نشد", show_alert=True)
         return
-    
-    # =============== دریافت تعداد کاربر ===============
     ip_limit = order.get('ip_limit', 0)
     if ip_limit == 0:
         ip_display = "تعداد کاربر: ♾️ نامحدود"
@@ -34095,23 +30831,15 @@ async def admin_user_detail(callback: CallbackQuery):
     """مشاهده جزئیات کاربر - با نمایش تاریخچه سفارشات"""
     if callback.from_user.id != ADMIN_ID_INT:
         return
-    
-    # =============== دریافت پارامترها ===============
     parts = callback.data.split("_")
     target_id = int(parts[2])
-    
-    # صفحه (پیش‌فرض 0)
     page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
     per_page = 5  # تعداد سفارشات در هر صفحه
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     target = get_user(target_id)
-    
-    # =============== ✅ IMPORTANT: escape کردن نام کاربر ===============
     user_name_raw = target.get('name', f'کاربر_{target_id}')
     user_name_escaped = html.escape(user_name_raw)  # ✅ این خط مهم است
-    
-    # =============== کوپن کاربر ===============
     user_state = user_states.get(target_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_applied = user_state.get('coupon_applied', False)
@@ -34121,20 +30849,14 @@ async def admin_user_detail(callback: CallbackQuery):
         if coupon_data.get('coupon_applied'):
             coupon_code = coupon_data.get('coupon_code')
             coupon_applied = True
-    
-    # =============== آمار ===============
     ref_count = len([r for r in referrals.values() if r.get('referrer') == target_id])
     valid_orders = get_valid_orders()
     user_orders = [o for o in valid_orders.values() if o.get('user_id') == target_id]
-    
-    # =============== تفکیک سفارشات ===============
     approved = [o for o in user_orders if o.get('status') == 'approved']
     pending = [o for o in user_orders if o.get('status') in ['pending', 'pending_balance_charge']]
     awaiting_payment = [o for o in user_orders if o.get('status') == 'awaiting_payment']
     rejected = [o for o in user_orders if o.get('status') == 'rejected']
     cancelled = [o for o in user_orders if o.get('status') == 'cancelled']
-    
-    # =============== مرتب‌سازی سفارشات بر اساس تاریخ (جدیدترین اول) ===============
     all_orders = sorted(
         user_orders,
         key=lambda x: x.get('date', ''),
@@ -34152,16 +30874,12 @@ async def admin_user_detail(callback: CallbackQuery):
     start_idx = page * per_page
     end_idx = min(start_idx + per_page, total_orders)
     page_orders = all_orders[start_idx:end_idx]
-    
-    # =============== ساخت متن اصلی با نام escaped ===============
     join_date_escaped = html.escape(target.get('join_date', 'نامشخص'))
     
     if lang == "fa":
         text = f"👤 <b>{user_name_escaped}</b>\n🆔 <code>{target_id}</code>\n💰 {target.get('balance', 0):,} تومان\n👥 {ref_count} | 📦 {len(user_orders)} | ✅ {len(approved)}\n📅 {join_date_escaped}"
     else:
         text = f"👤 <b>{user_name_escaped}</b>\n🆔 <code>{target_id}</code>\n💰 {target.get('balance', 0):,} T\n👥 {ref_count} | 📦 {len(user_orders)} | ✅ {len(approved)}\n📅 {join_date_escaped}"
-    
-    # =============== نمایش سفارشات ===============
     buttons = []
     
     if all_orders:
@@ -34169,8 +30887,6 @@ async def admin_user_detail(callback: CallbackQuery):
             text += f"\n\n📋 <b>سفارشات</b> ({start_idx+1}-{end_idx} از {total_orders})"
         else:
             text += f"\n\n📋 <b>Orders</b> ({start_idx+1}-{end_idx} of {total_orders})"
-        
-        # نمایش سفارشات این صفحه
         for o in page_orders:
             order_id = o.get('order_id', '?')
             order_type = o.get('type', 'purchase')
@@ -34180,8 +30896,6 @@ async def admin_user_detail(callback: CallbackQuery):
             days = o.get('days', 0)
             amount = o.get('amount', 0)
             date = html.escape(o.get('date', 'نامشخص')[:10])
-            
-            # =============== آیکون نوع سفارش ===============
             if order_type == 'balance_charge':
                 type_icon = "💰"
                 type_name = "شارژ"
@@ -34198,8 +30912,6 @@ async def admin_user_detail(callback: CallbackQuery):
                 type_icon = "🛒"
                 type_name = "خرید"
                 detail = f"{volume}GB/{days}روز"
-            
-            # =============== وضعیت ===============
             status_icons = {
                 'approved': '✅',
                 'pending': '📸',
@@ -34209,16 +30921,12 @@ async def admin_user_detail(callback: CallbackQuery):
                 'cancelled': '🚫'
             }
             status_icon = status_icons.get(order_status, '❓')
-            
-            # =============== برچسب ===============
             label = f"{status_icon} #{order_id} {type_icon}{type_name} - {detail} - {price:,}T"
             
             buttons.append([InlineKeyboardButton(
                 text=label[:55],
                 callback_data=f"view_order_{order_id}"
             )])
-        
-        # =============== دکمه‌های Pagination ===============
         if total_pages > 1:
             nav = []
             if page > 0:
@@ -34240,8 +30948,6 @@ async def admin_user_detail(callback: CallbackQuery):
             
             if nav:
                 buttons.append(nav)
-    
-    # =============== دکمه‌های مدیریت ===============
     buttons.append([
         InlineKeyboardButton(text=f"➕ {'افزایش' if lang=='fa' else 'Add'}", callback_data=f"admin_add_balance_{target_id}"),
         InlineKeyboardButton(text=f"➖ {'کاهش' if lang=='fa' else 'Reduce'}", callback_data=f"admin_reduce_balance_{target_id}")
@@ -34253,8 +30959,6 @@ async def admin_user_detail(callback: CallbackQuery):
         InlineKeyboardButton(text=f"🔄 {'بروزرسانی' if lang=='fa' else 'Refresh'}", callback_data=f"admin_user_{target_id}_{page}"),
         InlineKeyboardButton(text=f"🗑 {'حذف کاربر' if lang=='fa' else 'Delete User'}", callback_data=f"admin_delete_user_{target_id}")
     ])
-    
-    # =============== دکمه حذف سفارشات لغو شده و کنسل شده ===============
     cancelled_orders_count = len(cancelled) + len(rejected)
     if cancelled_orders_count > 0:
         buttons.append([
@@ -34270,21 +30974,16 @@ async def admin_user_detail(callback: CallbackQuery):
     ])
     
     text += f"\n\n<code>🕐 {datetime.now().strftime('%H:%M:%S')}</code>"
-    
-    # =============== ارسال پیام ===============
     try:
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
     except Exception as e:
         if "message is not modified" not in str(e):
             logger.error(f"خطا در ویرایش پیام: {e}")
-            # تلاش با حذف و ارسال مجدد
             try:
                 await callback.message.delete()
             except:
                 pass
             await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
-    
-    # =============== ذخیره کوپن ===============
     if coupon_applied and coupon_code:
         save_coupon_to_user_db(target_id)
     
@@ -34305,8 +31004,6 @@ async def delete_cancelled_orders(callback: CallbackQuery):
     
     valid_orders = get_valid_orders()
     user_orders = [o for o in valid_orders.values() if o.get('user_id') == target_id]
-    
-    # سفارشات لغو شده و رد شده
     cancelled_orders = [o for o in user_orders if o.get('status') in ['cancelled', 'rejected']]
     
     if not cancelled_orders:
@@ -34315,8 +31012,6 @@ async def delete_cancelled_orders(callback: CallbackQuery):
             show_alert=True
         )
         return
-    
-    # =============== نمایش پیام تایید ===============
     if lang == "fa":
         text = f"""
 ⚠️ <b>حذف سفارشات لغو/رد شده</b>
@@ -34386,8 +31081,6 @@ async def confirm_delete_cancelled_orders(callback: CallbackQuery):
     
     valid_orders = get_valid_orders()
     user_orders = [o for o in valid_orders.values() if o.get('user_id') == target_id]
-    
-    # سفارشات لغو شده و رد شده
     cancelled_orders = [o for o in user_orders if o.get('status') in ['cancelled', 'rejected']]
     
     deleted_count = 0
@@ -34400,11 +31093,7 @@ async def confirm_delete_cancelled_orders(callback: CallbackQuery):
             del orders[oid]
             deleted_count += 1
             logger.info(f"🗑 سفارش #{o.get('order_id')} (لغو/رد شده) حذف شد")
-    
-    # ذخیره دیتابیس
     save_json(DB_FILES['orders'], orders)
-    
-    # =============== پیام نتیجه ===============
     if lang == "fa":
         text = f"""
 ✅ <b>سفارشات لغو/رد شده حذف شدند!</b>
@@ -34455,20 +31144,14 @@ async def admin_add_balance_cmd(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     target_id = int(callback.data.split("_")[3])
     target = get_user(target_id)
-    
-    # ✅ escape کردن نام کاربر
     target_name_raw = target.get('name', f'کاربر_{target_id}')
     target_name_escaped = html.escape(target_name_raw)
-    
-    # =============== کوپن کاربر را قبل از هر کاری نگه دار ===============
     user_state = user_states.get(target_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [admin_add_balance_cmd] کوپن کاربر {target_id}: code={coupon_code}, applied={coupon_applied}")
-    
-    # ✅ ذخیره کوپن کاربر در state ادمین برای استفاده بعدی
     user_states[callback.from_user.id] = {
         'awaiting_manual_balance': True, 
         'manual_balance_target': target_id,
@@ -34497,8 +31180,6 @@ async def admin_stats(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
         return
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # آمار پایه
     total_users = len(users)
     valid_orders = get_valid_orders()
     approved = [o for o in valid_orders.values() if o.get('status') == 'approved']
@@ -34507,8 +31188,6 @@ async def admin_stats(callback: CallbackQuery):
     total_revenue = sum(o.get('price', 0) for o in approved)
     total_balance = sum(u.get('balance', 0) for u in users.values())
     available_configs = get_available_configs_count()
-    
-    # محاسبه مصرف کل از پنل
     total_used_gb = 0
     total_capacity_gb = 0
     active_configs_count = 0
@@ -34526,8 +31205,6 @@ async def admin_stats(callback: CallbackQuery):
                         down = (traffic.get('down', 0) if traffic else 0) / (1024**3)
                         total_used_gb += up + down
                         active_configs_count += 1
-    
-    # 🔥 اضافه کردن timestamp برای جلوگیری از خطای تکراری
     now = datetime.now().strftime("%H:%M:%S")
     
     if lang == "fa":
@@ -34584,8 +31261,6 @@ async def admin_reset_db_confirm(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
         return
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # گرفتن تعداد کانفیگ‌های فعال برای هشدار
     active_configs_count = 0
     if SENAI_PANEL_ENABLED:
         valid_orders = get_valid_orders()
@@ -34662,8 +31337,6 @@ async def reset_db_only(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== تایید دو مرحله‌ای ===============
     if lang == "fa":
         text = f"""
 ⚠️ <b>تأیید ریست دیتابیس</b>
@@ -34731,12 +31404,9 @@ async def confirm_reset_db_only(callback: CallbackQuery):
     )
     
     try:
-        # =============== 1. گرفتن بکاپ قبل از ریست ===============
         logger.info("💾 گرفتن بکاپ قبل از ریست دیتابیس...")
         await callback.message.edit_text("💾 گرفتن بکاپ...")
         backup_database()
-        
-        # =============== 2. گرفتن لیست کانفیگ‌های فعال فعلی ===============
         active_configs_before = []
         if SENAI_PANEL_ENABLED:
             valid_orders = get_valid_orders()
@@ -34751,8 +31421,6 @@ async def confirm_reset_db_only(callback: CallbackQuery):
                         'order_id': o.get('order_id')
                     })
             logger.info(f"📊 تعداد کانفیگ‌های فعال قبل از ریست: {len(active_configs_before)}")
-        
-        # =============== 3. ذخیره تنظیمات مهم قبل از ریست ===============
         saved_price_settings = configs_pool.get('price_settings', {})
         saved_force_join_settings = configs_pool.get('force_join_settings', {})
         saved_ai_settings = configs_pool.get('ai_settings', {})
@@ -34762,19 +31430,13 @@ async def confirm_reset_db_only(callback: CallbackQuery):
         saved_default_inbound_ids = configs_pool.get('default_inbound_ids', [])
         saved_user_inbound_selection = USER_INBOUND_SELECTION.copy()
         saved_user_test_usage = USER_TEST_USAGE.copy()
-        
-        # =============== 4. ریست کردن داده‌های دیتابیس ===============
         await callback.message.edit_text("🗑 در حال پاکسازی دیتابیس...")
-        
-        # ریست دیتابیس
         users = {}
         orders = {}
         referrals = {}
         feedbacks = {}
         chats = {}
         BLACKLIST = set()
-        
-        # =============== 5. بازگردانی تنظیمات مهم ===============
         configs_pool = {
             'configs': [],
             'last_id': 0,
@@ -34786,22 +31448,16 @@ async def confirm_reset_db_only(callback: CallbackQuery):
             'ready_packages': saved_ready_packages,
             'default_inbound_ids': saved_default_inbound_ids
         }
-        
-        # =============== 6. بازگردانی اطلاعات اینباندها و تست‌ها ===============
         USER_INBOUND_SELECTION.clear()
         USER_INBOUND_SELECTION.update(saved_user_inbound_selection)
         
         USER_TEST_USAGE.clear()
         USER_TEST_USAGE.update(saved_user_test_usage)
-        
-        # =============== 7. ذخیره نهایی ===============
         await callback.message.edit_text("💾 ذخیره دیتابیس...")
         save_all()
         
         logger.info(f"✅ دیتابیس ریست شد - کانفیگ‌های پنل دست نخورده باقی ماندند")
         logger.info(f"📊 کانفیگ‌های فعال در پنل: {len(active_configs_before)} عدد")
-        
-        # =============== 8. پیام موفقیت ===============
         if lang == "fa":
             text = f"""
 ✅ <b>دیتابیس با موفقیت ریست شد!</b>
@@ -34924,8 +31580,6 @@ async def reset_db_full(callback: CallbackQuery):
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # =============== تایید اول ===============
     if lang == "fa":
         text = f"""
 ⚠️ <b>هشدار! ریست کامل دیتابیس + حذف کانفیگ‌های ربات</b>
@@ -34993,11 +31647,8 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
     )
     
     try:
-        # =============== 1. گرفتن بکاپ ===============
         await callback.message.edit_text("💾 گرفتن بکاپ...")
         backup_database()
-        
-        # =============== 2. دریافت لیست کلاینت‌های ربات برای حذف ===============
         await callback.message.edit_text("📡 دریافت لیست کانفیگ‌های ربات...")
         
         deleted_clients = 0
@@ -35011,8 +31662,6 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
             if inbounds:
                 total_bot_clients = 0
                 total_personal_clients = 0
-                
-                # =============== مرحله 1: جمع‌آوری همه کلاینت‌ها ===============
                 all_clients = []
                 for inbound in inbounds:
                     settings = inbound.get('settings', {})
@@ -35022,16 +31671,12 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                         email = client.get('email', '')
                         if not email:
                             continue
-                        
-                        # اضافه کردن به لیست با اطلاعات اینباند
                         all_clients.append({
                             'email': email,
                             'inbound_id': inbound.get('id'),
                             'inbound_remark': inbound.get('remark', ''),
                             'enable': client.get('enable', True)
                         })
-                
-                # =============== مرحله 2: گروه‌بندی بر اساس ایمیل ===============
                 clients_by_email = {}
                 for client in all_clients:
                     email = client['email']
@@ -35047,16 +31692,10 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                     })
                 
                 logger.info(f"📊 تعداد کل کلاینت‌های یکتا: {len(clients_by_email)}")
-                
-                # =============== مرحله 3: تشخیص کلاینت‌های ربات ===============
                 for email, data in clients_by_email.items():
                     is_bot_client = False
-                    
-                    # الگوی 1: تست
                     if email.startswith('test_'):
                         is_bot_client = True
-                    
-                    # الگوی 2: خرید
                     elif email.startswith('user'):
                         import re
                         match = re.search(r'user(\d+)', email)
@@ -35078,8 +31717,6 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                     f"⏭️ {total_personal_clients} کلاینت شخصی حفظ می‌شوند...\n"
                     f"📊 مجموع کلاینت‌های یکتا: {len(clients_by_email)}"
                 )
-                
-                # =============== مرحله 4: حذف کلاینت‌های ربات ===============
                 for i, email in enumerate(client_list):
                     try:
                         success = await xui_delete_client(email)
@@ -35108,8 +31745,6 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                 logger.info("📭 هیچ اینباندی در پنل یافت نشد")
         else:
             logger.info("📴 پنل غیرفعال است - حذف کانفیگ‌ها انجام نشد")
-        
-        # =============== 3. ذخیره تنظیمات مهم قبل از ریست ===============
         saved_price_settings = configs_pool.get('price_settings', {})
         saved_force_join_settings = configs_pool.get('force_join_settings', {})
         saved_ai_settings = configs_pool.get('ai_settings', {})
@@ -35117,8 +31752,6 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
         saved_test_service = configs_pool.get('test_service', {})
         saved_ready_packages = configs_pool.get('ready_packages', {})
         saved_default_inbound_ids = configs_pool.get('default_inbound_ids', [])
-        
-        # =============== 4. ریست کردن داده‌ها ===============
         await callback.message.edit_text("🗑 پاک کردن دیتابیس...")
         
         users = {}
@@ -35139,15 +31772,11 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
             'ready_packages': saved_ready_packages,
             'default_inbound_ids': saved_default_inbound_ids
         }
-        
-        # =============== 5. پاک کردن کش‌ها ===============
         USER_INBOUND_SELECTION.clear()
         USER_TEST_USAGE.clear()
         user_states.clear()
         _db_cache.clear()
         _db_modified.clear()
-        
-        # =============== 6. ذخیره نهایی ===============
         await callback.message.edit_text("💾 ذخیره دیتابیس...")
         save_all()
         
@@ -35155,8 +31784,6 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
         logger.info(f"   - {deleted_clients} کانفیگ ربات از پنل حذف شد")
         logger.info(f"   - {skipped_personal} کانفیگ شخصی حفظ شد")
         logger.info(f"   - {failed_clients} کانفیگ ربات حذف نشد")
-        
-        # =============== 7. پیام نهایی ===============
         if lang == "fa":
             text = f"""
 🔴 <b>ریست کامل انجام شد!</b>
@@ -35273,8 +31900,6 @@ async def admin_delete_user_confirm(callback: CallbackQuery):
     target_id = int(callback.data.split("_")[3])
     target = get_user(target_id)
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # ✅ escape کردن نام کاربر
     target_name_raw = target.get('name', f'کاربر_{target_id}')
     target_name_escaped = html.escape(target_name_raw)
     
@@ -35319,9 +31944,7 @@ async def admin_delete_user_confirm(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
     
-    
-    
-    
+
 @dp.callback_query(F.data.startswith("confirm_delete_user_"))
 async def confirm_delete_user(callback: CallbackQuery):
     """اجرای حذف کاربر"""
@@ -35331,16 +31954,12 @@ async def confirm_delete_user(callback: CallbackQuery):
     target_id = int(callback.data.split("_")[3])
     target = get_user(target_id)
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    # ✅ escape کردن نام کاربر
     target_name_raw = target.get('name', f'کاربر_{target_id}')
     target_name_escaped = html.escape(target_name_raw)
     
     await callback.message.edit_text("⏳ در حال حذف کاربر...")
     
     deleted_configs = 0
-    
-    # 1. حذف کانفیگ‌های پنل
     if SENAI_PANEL_ENABLED:
         valid_orders = get_valid_orders()
         user_orders = [o for o in valid_orders.values() 
@@ -35355,23 +31974,15 @@ async def confirm_delete_user(callback: CallbackQuery):
                 if success:
                     deleted_configs += 1
                     logger.info(f"🗑 کانفیگ {email} از پنل حذف شد")
-    
-    # 2. حذف از دیتابیس
     uid = str(target_id)
     if uid in users:
         del users[uid]
-    
-    # 3. حذف سفارشات
     for oid in list(orders.keys()):
         if isinstance(orders[oid], dict) and orders[oid].get('user_id') == target_id:
             del orders[oid]
-    
-    # 4. حذف رفرال‌ها
     for key in list(referrals.keys()):
         if referrals[key].get('referrer') == target_id or referrals[key].get('referred') == target_id:
             del referrals[key]
-    
-    # 5. حذف چت‌ها
     for cid in list(chats.keys()):
         if chats[cid].get('user_id') == target_id:
             del chats[cid]
@@ -35424,8 +32035,6 @@ async def get_panel_status() -> Optional[dict]:
         async with aiohttp.ClientSession(connector=connector) as session:
             csrf = await xui_get_csrf_token(session)
             headers = {"X-CSRF-Token": csrf} if csrf else {}
-            
-            # =============== دریافت وضعیت سیستم ===============
             async with session.get(
                 f"{SENAI_PANEL_URL}/panel/api/server/status",
                 cookies={"3x-ui": cookie},
@@ -35436,18 +32045,11 @@ async def get_panel_status() -> Optional[dict]:
                     data = await response.json()
                     if data.get("success"):
                         obj = data.get("obj", {})
-                        
-                        # =============== اصلاح: دریافت صحیح RAM ===============
                         mem = obj.get("mem", {})
-                        
-                        # RAM به صورت bytes است
                         mem_total = mem.get("total", 0)
                         mem_current = mem.get("current", 0)
                         mem_percent = mem.get("percent", 0)
-                        
-                        # اگر مقدار RAM صفر است، از روش جایگزین استفاده کن
                         if mem_total == 0:
-                            # دریافت از /proc/meminfo
                             try:
                                 async with session.get(
                                     f"{SENAI_PANEL_URL}/panel/api/server/meminfo",
@@ -35464,8 +32066,6 @@ async def get_panel_status() -> Optional[dict]:
                                             mem_percent = mem_obj.get("percent", 0)
                             except:
                                 pass
-                        
-                        # استخراج netIO
                         net_io = obj.get("netIO", {})
                         
                         return {
@@ -35511,17 +32111,11 @@ async def admin_panel_status(callback: CallbackQuery):
         
         net_up = status.get('net_up', 0)
         net_down = status.get('net_down', 0)
-        
-        # =============== محاسبه صحیح RAM ===============
         mem_total_gb = mem.get('total', 0) / (1024**3)
         mem_current_gb = mem.get('current', 0) / (1024**3)
         mem_percent = mem.get('percent', 0)
-        
-        # اگر درصد صفر است ولی مقادیر وجود دارند، خودمان محاسبه کنیم
         if mem_percent == 0 and mem_total_gb > 0 and mem_current_gb > 0:
             mem_percent = (mem_current_gb / mem_total_gb) * 100
-        
-        # =============== محاسبه صحیح Disk ===============
         disk_total_gb = disk.get('total', 0) / (1024**3)
         disk_current_gb = disk.get('current', 0) / (1024**3)
         disk_percent = disk.get('percent', 0)
@@ -35573,8 +32167,6 @@ async def admin_ping_test(callback: CallbackQuery):
     await callback.message.edit_text("⏳ در حال تست پینگ...")
     
     results = {}
-    
-    # 1. پنل خودمون (HTTP)
     if SENAI_PANEL_ENABLED:
         try:
             import time
@@ -35587,8 +32179,6 @@ async def admin_ping_test(callback: CallbackQuery):
                     results['🟢 پنل'] = f'{elapsed:.0f}ms'
         except:
             results['🔴 پنل'] = 'Timeout'
-    
-    # 2. HTTP ping به سرورها
     http_targets = [
         ('Google', 'https://www.google.com'),
         ('Cloudflare', 'https://www.cloudflare.com'),
@@ -35609,7 +32199,6 @@ async def admin_ping_test(callback: CallbackQuery):
             results[f'🔴 {name}'] = 'Timeout'
         except Exception as e:
             logger.error(f"❌ {name} HTTP error: {e}")
-            # Fallback به TCP
             try:
                 ip = {'Google': '8.8.8.8', 'Cloudflare': '1.1.1.1', 'Telegram': '149.154.167.99'}.get(name, '8.8.8.8')
                 start = time.time()
@@ -35620,8 +32209,6 @@ async def admin_ping_test(callback: CallbackQuery):
                 results[f'🟡 {name} (TCP)'] = f'{elapsed:.0f}ms'
             except:
                 results[f'🔴 {name}'] = 'Failed'
-    
-    # ساخت متن
     if lang == "fa":
         text = f"📡 <b>تست پینگ (HTTP)</b>\n<code>🕐 {datetime.now().strftime('%H:%M:%S')}</code>\n\n"
     else:
@@ -35640,10 +32227,6 @@ async def admin_ping_test(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-    
-
-
-# =============== دکمه بدون عملیات ===============
 @dp.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery):
     try:
@@ -35686,18 +32269,12 @@ async def init_ai():
     
     logger.info("=" * 60)
     logger.info("🤖 راه‌اندازی هوش مصنوعی...")
-    
-    # =============== دیباگ مقادیر ===============
     logger.info(f"🔍 GEMINI_ENABLED: {GEMINI_ENABLED}")
     logger.info(f"🔍 GEMINI_API_KEY: {GEMINI_API_KEY[:20] if GEMINI_API_KEY and GEMINI_API_KEY != 'AIzaSyDxxxxxxxxxxxxxxxxxx' else 'NOT SET'}...")
     logger.info(f"🔍 GEMINI_MODEL: {GEMINI_MODEL}")
-    
-    # =============== Google Gemini ===============
     if GEMINI_ENABLED and GEMINI_API_KEY and GEMINI_API_KEY != "AIzaSyDxxxxxxxxxxxxxxxxxx":
         try:
             logger.info(f"🔑 در حال تست اتصال به Gemini...")
-            
-            # تست ساده با requests
             test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
             
             async with aiohttp.ClientSession() as session:
@@ -35732,8 +32309,6 @@ async def init_ai():
             logger.warning("⚠️ GEMINI_ENABLED = False")
         if not GEMINI_API_KEY or GEMINI_API_KEY == "AIzaSyDxxxxxxxxxxxxxxxxxx":
             logger.warning("⚠️ GEMINI_API_KEY معتبر نیست")
-    
-    # =============== نتیجه ===============
     if gemini_client:
         logger.info("🎉 هوش مصنوعی فعال است (Google Gemini)")
     else:
@@ -35744,12 +32319,10 @@ async def init_ai():
         logger.error("   3. مدل معتبر مانند gemini-1.5-flash را امتحان کنید")
     
     logger.info("=" * 60)
-# =============== اجرای اصلی ===============
+
 async def main():
-    """تابع اصلی اجرای ربات با تمام بهینه‌سازی‌های لازم"""
     global log_system, panel_semaphore, panel_rate_limiter, shared_connector
     
-    # =============== بارگذاری دیتابیس ===============
     ensure_data_directory()
     await init_http_session()
     load_all_data()
@@ -35757,7 +32330,6 @@ async def main():
     logger.info("=" * 60)
     logger.info("در حال راه‌اندازی ربات...")
     logger.info("دیتابیس با موفقیت بارگذاری شد")
-    # بعد از load_all_data() اضافه کنید
     logger.info("=" * 60)
     logger.info("🔍 بررسی فایل‌های دیتابیس پس از بارگذاری:")
     for name, path in DB_FILES.items():
@@ -35769,16 +32341,13 @@ async def main():
         logger.info("=" * 60)
     
     try:
-        # =============== تنظیمات اولیه ===============
         import sys
         sys.setrecursionlimit(10000)
         logger.info("Recursion limit به 10000 افزایش یافت")
         
-        # بارگذاری لیست سیاه
         blacklist_count = load_blacklist()
         logger.info(f"لیست سیاه بارگذاری شد: {blacklist_count} کاربر")
         
-        # =============== راه‌اندازی سیستم لاگ ===============
         logger.info("در حال راه‌اندازی سیستم لاگ خارجی...")
         try:
             if LOG_BOT_TOKEN and LOG_CHANNEL_ID:
@@ -35799,12 +32368,10 @@ async def main():
             logger.error(f"❌ خطا در راه‌اندازی سیستم لاگ: {e}", exc_info=True)
             log_system = None
         
-        # =============== دریافت اطلاعات ربات ===============
         logger.info("دریافت اطلاعات ربات از Telegram API...")
         bot_info = await bot.get_me()
         logger.info(f"اطلاعات ربات دریافت شد: {bot_info.first_name} (@{bot_info.username})")
         
-        # ارسال لاگ استارت در سیستم خارجی
         if log_system:
             try:
                 await log_system.log_bot_start(bot_info, ADMIN_ID_INT)
@@ -35812,7 +32379,6 @@ async def main():
             except Exception as e:
                 logger.error(f"خطا در ارسال لاگ استارت به سیستم خارجی: {e}", exc_info=True)
         
-        # =============== آمار اولیه ===============
         total_users = len(users)
         active_configs = get_available_configs_count()
         total_orders = len(get_valid_orders())
@@ -35831,7 +32397,6 @@ async def main():
         logger.info("=" * 60)
         logger.info("🚀 ربات آماده به کار است!")
         
-        # =============== ارسال پیام به ادمین ===============
         startup_message = f"""
 🚀 <b>ربات راه‌اندازی شد!</b>
 
@@ -35855,14 +32420,12 @@ async def main():
         except Exception as e:
             logger.warning(f"نتوانست پیام استارت به ادمین ارسال کند: {e}")
         
-        # =============== تسک‌های پس‌زمینه ===============
         logger.info("در حال راه‌اندازی تسک‌های پس‌زمینه...")
         
-        # 1. تسک پاکسازی وضعیت‌های منقضی (هر 30 دقیقه)
         async def cleanup_expired_states_task():
             """پاکسازی خودکار وضعیت‌های منقضی شده کاربران"""
             logger.info("تسک پاکسازی وضعیت‌ها راه‌اندازی شد (هر 30 دقیقه)")
-            await asyncio.sleep(10)  # تاخیر اولیه
+            await asyncio.sleep(10)  
             
             while True:
                 try:
@@ -35879,7 +32442,6 @@ async def main():
                     logger.error(f"خطا در تسک پاکسازی وضعیت‌ها: {e}", exc_info=True)
                     await asyncio.sleep(60)
         
-        # 2. تسک همگام‌سازی کانفیگ‌های حذف شده (هر 6 ساعت)
         async def sync_deleted_configs_task():
             """همگام‌سازی کانفیگ‌های حذف شده از پنل"""
             logger.info("تسک همگام‌سازی کانفیگ‌ها راه‌اندازی شد (هر 6 ساعت)")
@@ -35904,7 +32466,6 @@ async def main():
                     
 
         
-        # 3. تسک پاکسازی هفتگی دیتابیس (هر یکشنبه ساعت 00:00)
         weekly_cleanup_running = False
         
         async def weekly_cleanup():
@@ -35923,7 +32484,6 @@ async def main():
                     weekly_cleanup_running = True
                     logger.info("پاکسازی هفتگی: در حال محاسبه زمان تا یکشنبه بعدی...")
                     
-                    # محاسبه زمان تا یکشنبه بعدی
                     now = datetime.now()
                     days_until_sunday = (6 - now.weekday()) % 7
                     next_sunday = (now + timedelta(days=days_until_sunday)).replace(
@@ -35938,15 +32498,12 @@ async def main():
                     logger.info(f"⏳ زمان تا پاکسازی هفتگی: {wait_seconds / 3600:.1f} ساعت")
                     await asyncio.sleep(wait_seconds)
                     
-                    # تاخیر قبل از اجرا برای جلوگیری از flood
                     await asyncio.sleep(5)
                     logger.info("شروع پاکسازی هفتگی دیتابیس...")
                     
-                    # =============== اجرای پاکسازی ===============
                     cleaned = optimize_storage()
                     logger.info(f"🧹 پاکسازی هفتگی دیتابیس انجام شد - {cleaned} رکورد حذف شد")
                     
-                    # =============== بررسی فضای دیسک ===============
                     try:
                         import shutil
                         total, used, free = shutil.disk_usage(".")
@@ -35957,11 +32514,9 @@ async def main():
                         
                         logger.info(f"💾 فضای دیسک: کل={total_gb:.1f}GB, استفاده={used_gb:.1f}GB, خالی={free_gb:.1f}GB ({disk_percent:.1f}%)")
                         
-                        # =============== هشدار فضای خالی دیسک ===============
                         if free_gb < 1.0:
                             logger.warning(f"⚠️ فضای خالی دیسک کم است: {free_gb:.1f} GB")
                             
-                            # دریافت لیست فایل‌های بزرگ
                             large_files = []
                             try:
                                 for file in ['bot_debug.log', 'events.log', 'bot_error.log']:
@@ -35996,7 +32551,6 @@ async def main():
                     except Exception as e:
                         logger.error(f"خطا در بررسی فضای دیسک: {e}", exc_info=True)
                     
-                    # ارسال لاگ پاکسازی
                     if log_system:
                         try:
                             await asyncio.sleep(2)
@@ -36009,7 +32563,6 @@ async def main():
                         except Exception as e:
                             logger.warning(f"خطا در ارسال لاگ پاکسازی به سیستم خارجی: {e}")
                     
-                    # =============== پاکسازی بکاپ‌های قدیمی ===============
                     try:
                         backup_dir = os.path.join(DATA_DIR, 'backups')
                         if os.path.exists(backup_dir):
@@ -36026,12 +32579,10 @@ async def main():
                     except Exception as e:
                         logger.error(f"خطا در پاکسازی بکاپ‌ها: {e}")
                     
-                    # =============== بررسی مصرف حافظه ===============
                     try:
                         mem = get_memory_usage()
                         if mem.get('rss_mb', 0) > 400:
                             logger.warning(f"⚠️ مصرف حافظه بالا: {mem.get('rss_mb', 0):.1f} MB")
-                            # پاکسازی کش
                             _db_cache.clear()
                             _db_modified.clear()
                             logger.info("🧹 کش دیتابیس پاکسازی شد")
@@ -36055,7 +32606,6 @@ async def main():
                     weekly_cleanup_running = False
                     await asyncio.sleep(3600)
 
-        # =============== تسک گزارش سلامت (هر 8 ساعت) ===============
         async def health_monitor():
             """مانیتورینگ سلامت ربات و ارسال گزارش هر 8 ساعت"""
             logger.info("تسک مانیتورینگ سلامت راه‌اندازی شد (هر 8 ساعت)")
@@ -36064,8 +32614,6 @@ async def main():
                 try:
                     await asyncio.sleep(16 * 3600)  # هر 16 ساعت
                     logger.info("شروع مانیتورینگ سلامت...")
-                    
-                    # ارسال گزارش سلامت به ادمین
                     await send_health_report(ADMIN_ID_INT)
                     
                 except asyncio.CancelledError:
@@ -36076,12 +32624,10 @@ async def main():
                     await asyncio.sleep(3600)
 
 
-        # =============== تسک هشدار فضای دیسک (هر 48 ساعت) ===============
         async def disk_space_monitor():
             """هشدار فضای دیسک هر 48 ساعت (فقط در صورت کم بودن فضا)"""
             logger.info("تسک هشدار فضای دیسک راه‌اندازی شد (هر 48 ساعت)")
             
-            # صبر اولیه 5 دقیقه
             await asyncio.sleep(300)
             
             while True:
@@ -36090,14 +32636,12 @@ async def main():
                     total, used, free = shutil.disk_usage(".")
                     free_gb = free / (1024**3)
                     
-                    # فقط در صورت کم بودن فضا هشدار بده
                     if free_gb < 0.1:
                         await send_disk_warning(ADMIN_ID_INT)  # ← اینجا صدا زده می‌شود
                         logger.info(f"هشدار فضای دیسک ارسال شد (فضای خالی: {free_gb:.1f} GB)")
                     else:
                         logger.info(f"فضای دیسک کافی است: {free_gb:.1f} GB")
                     
-                    # صبر تا 48 ساعت بعد
                     await asyncio.sleep(48 * 3600)
                     
                 except asyncio.CancelledError:
@@ -36107,7 +32651,6 @@ async def main():
                     logger.error(f"خطا در هشدار فضای دیسک: {e}", exc_info=True)
                     await asyncio.sleep(3600)
 
-        # =============== تسک گزارش هفتگی (هر یکشنبه) ===============
         async def weekly_detailed_report_task():
             """گزارش کامل هفتگی دقیقاً ساعت ۰۰:۰۰ یکشنبه - فقط یک بار در هفته"""
             logger.info("📅 تسک گزارش هفتگی راه‌اندازی شد (هر یکشنبه ۰۰:۰۰)")
@@ -36118,13 +32661,11 @@ async def main():
                 try:
                     now = datetime.now()
                     
-                    # =============== محاسبه زمان تا یکشنبه بعدی ساعت ۰۰:۰۰ ===============
                     days_until_sunday = (6 - now.weekday()) % 7
                     next_sunday = (now + timedelta(days=days_until_sunday)).replace(
                         hour=0, minute=0, second=0, microsecond=0
                     )
                     
-                    # اگر امروز یکشنبه است و ساعت از ۰۰:۰۰ گذشته، یکشنبه بعدی را محاسبه کن
                     if now.weekday() == 6 and now.hour >= 0 and now.minute >= 0:
                         next_sunday = (now + timedelta(days=7)).replace(
                             hour=0, minute=0, second=0, microsecond=0
@@ -36132,7 +32673,6 @@ async def main():
                     
                     wait_seconds = (next_sunday - now).total_seconds()
                     
-                    # اگر زمان کمتر از ۱ ساعت بود، حداقل ۱ ساعت صبر کن
                     if wait_seconds < 3600:
                         wait_seconds = 3600
                         logger.info(f"⏳ زمان کمتر از ۱ ساعت، تنظیم به ۱ ساعت")
@@ -36143,7 +32683,6 @@ async def main():
                     
                     await asyncio.sleep(wait_seconds)
                     
-                    # =============== بررسی اینکه این هفته گزارش ارسال نشده ===============
                     now = datetime.now()
                     current_week_key = f"{now.isocalendar()[0]}-{now.isocalendar()[1]}"
                     
@@ -36152,15 +32691,12 @@ async def main():
                         await asyncio.sleep(86400)
                         continue
                     
-                    # =============== ارسال گزارش ===============
                     logger.info(f"📊 شروع ارسال گزارش هفتگی - هفته {current_week_key}")
                     await send_weekly_detailed_report(ADMIN_ID_INT)
                     logger.info("✅ گزارش هفتگی ارسال شد")
                     
-                    # ثبت هفته ارسال شده
                     last_report_week = current_week_key
                     
-                    # لاگ
                     if log_system:
                         try:
                             await log_system.log_admin_action(
@@ -36171,7 +32707,6 @@ async def main():
                         except Exception as e:
                             logger.warning(f"خطا در ثبت لاگ گزارش هفتگی: {e}")
                     
-                    # =============== بعد از ارسال، ۲۴ ساعت صبر کن ===============
                     logger.info("⏳ صبر ۲۴ ساعت برای جلوگیری از ارسال مجدد...")
                     await asyncio.sleep(86400)
                     
@@ -36189,11 +32724,11 @@ async def main():
         async def config_pool_monitor():
             """بررسی مخزن کانفیگ و هشدار در صورت کمبود"""
             logger.info("تسک مانیتورینگ مخزن کانفیگ راه‌اندازی شد (هر 1 ساعت)")
-            await asyncio.sleep(300)  # 5 دقیقه اول صبر کن
+            await asyncio.sleep(300)  
             
             while True:
                 try:
-                    await asyncio.sleep(3600)  # هر 1 ساعت
+                    await asyncio.sleep(3600)  
                     
                     if not SENAI_PANEL_ENABLED:
                         available = get_available_configs_count()
@@ -36217,8 +32752,6 @@ async def main():
                 except Exception as e:
                     logger.error(f"خطا در مانیتورینگ مخزن: {e}", exc_info=True)
                     await asyncio.sleep(3600)
-        
-        # 6. تسک چرخش لاگ‌ها (هر 7 روز)
         async def log_rotation():
             """چرخش خودکار لاگ‌ها هر 7 روز"""
             logger.info("تسک چرخش لاگ‌ها راه‌اندازی شد (هر 7 روز)")
@@ -36244,7 +32777,6 @@ async def main():
                                 rotated_count += 1
                                 logger.info(f"🔄 چرخش لاگ: {log_file} -> {backup_name}")
                                 
-                                # حذف فایل‌های قدیمی‌تر از 30 روز
                                 for old_file in os.listdir('.'):
                                     if old_file.startswith(log_file) and old_file.endswith('.old'):
                                         file_path = os.path.join('.', old_file)
@@ -36263,7 +32795,6 @@ async def main():
                     logger.error(f"خطا در چرخش لاگ: {e}", exc_info=True)
                     await asyncio.sleep(24 * 3600)
         
-        # 7. تسک ریست محدودیت‌های پنل (هر 24 ساعت)
         async def panel_limits_reset():
             """ریست خودکار محدودیت‌های پنل هر 24 ساعت"""
             logger.info("تسک ریست محدودیت‌های پنل راه‌اندازی شد (هر 24 ساعت)")
@@ -36286,7 +32817,6 @@ async def main():
                     logger.error(f"خطا در ریست محدودیت‌های پنل: {e}", exc_info=True)
                     await asyncio.sleep(3600)
         
-        # 8. تسک بررسی مصرف حافظه (هر 15 دقیقه)
         async def memory_monitor():
             """بررسی مصرف حافظه و پاکسازی در صورت نیاز"""
             logger.info("تسک مانیتورینگ حافظه راه‌اندازی شد (هر 15 دقیقه)")
@@ -36294,14 +32824,12 @@ async def main():
             
             while True:
                 try:
-                    await asyncio.sleep(900)  # هر 15 دقیقه
+                    await asyncio.sleep(900) # هر 15 دقیقه
                     mem = get_memory_usage()
                     logger.debug(f"مصرف حافظه: {mem['rss_mb']:.1f} MB ({mem['percent']:.1f}%)")
                     
                     if mem['rss_mb'] > 500:
                         logger.warning(f"⚠️ مصرف حافظه بالا: {mem['rss_mb']:.1f} MB - در حال پاکسازی...")
-                        
-                        # پاکسازی کش
                         cache_size_before = len(_db_cache)
                         _db_cache.clear()
                         _db_modified.clear()
@@ -36318,7 +32846,6 @@ async def main():
                     logger.error(f"خطا در مانیتورینگ حافظه: {e}", exc_info=True)
                     await asyncio.sleep(300)
         
-        # =============== شروع تسک‌های پس‌زمینه ===============
         logger.info("در حال ایجاد تسک‌های پس‌زمینه...")
         
         tasks = [
@@ -36337,12 +32864,10 @@ async def main():
         for task in tasks:
             logger.info(f"  - {task.get_name()}")
         
-        # =============== مهاجرت داده‌های قدیمی ===============
         logger.info("شروع مهاجرت داده‌های قدیمی...")
         migrate_old_data()
         logger.info("مهاجرت داده‌های قدیمی کامل شد")
         
-        # =============== اضافه کردن handler برای سیگنال‌های سیستمی ===============
         try:
             import signal
             
@@ -36359,7 +32884,6 @@ async def main():
         except Exception as e:
             logger.warning(f"⚠️ نمی‌توان handler سیگنال را اضافه کرد: {e}")
         
-        # =============== ایجاد shared connector برای aiohttp ===============
         shared_connector = aiohttp.TCPConnector(
             ssl=False,
             limit=20,
@@ -36368,7 +32892,6 @@ async def main():
         )
         logger.info("✅ shared connector برای aiohttp ایجاد شد (limit=20, limit_per_host=10, ttl_dns_cache=300)")
         
-        # =============== اجرای اصلی ربات ===============
         logger.info("🚀 شروع polling...")
         logger.info("=" * 60)
         await dp.start_polling(bot)
@@ -36379,7 +32902,6 @@ async def main():
         error_msg = f"خطای بحرانی در راه‌اندازی: {e}"
         logger.critical(error_msg, exc_info=True)
         
-        # ارسال خطا به ادمین
         try:
             await bot.send_message(
                 ADMIN_ID_INT,
@@ -36391,7 +32913,6 @@ async def main():
         except Exception as send_err:
             logger.error(f"نتوانست پیام خطا به ادمین ارسال کند: {send_err}")
         
-        # ارسال خطا به سیستم لاگ
         if log_system:
             try:
                 await log_system.log_error(e, "main")
@@ -36399,7 +32920,6 @@ async def main():
             except Exception as log_err:
                 logger.error(f"خطا در ثبت خطا در سیستم لاگ خارجی: {log_err}")
         
-        # بستن connector در صورت خطا
         if 'shared_connector' in globals() and shared_connector:
             await shared_connector.close()
             logger.info("Shared connector بسته شد")
@@ -36407,22 +32927,18 @@ async def main():
         raise
 
 async def get_server_info() -> dict:
-    """دریافت اطلاعات سرور (فضای دیسک، CPU، آپتایم)"""
     try:
         import shutil
         import psutil
         
-        # فضای دیسک
         total, used, free = shutil.disk_usage(".")
         free_gb = free / (1024**3)
         total_gb = total / (1024**3)
         used_gb = used / (1024**3)
         disk_percent = (used / total) * 100
         
-        # CPU
         cpu_percent = psutil.cpu_percent(interval=1)
         
-        # آپتایم
         boot_time = datetime.fromtimestamp(psutil.boot_time())
         uptime_seconds = int((datetime.now() - boot_time).total_seconds())
         days = uptime_seconds // 86400
@@ -36474,7 +32990,6 @@ async def get_server_info() -> dict:
             'uptime': 'نامشخص',
             'uptime_seconds': 0
         }
-# =============== توابع کمکی بهبود یافته ===============
 
 def cleanup_expired_states():
     """پاک کردن وضعیت‌های منقضی شده کاربران با نگهداری آمار"""
@@ -36523,11 +33038,9 @@ def cleanup_expired_states():
             expired.append(user_id)
             expired_types[state_type] = expired_types.get(state_type, 0) + 1
     
-    # پاک کردن وضعیت‌های منقضی
     for user_id in expired:
         user_states.pop(user_id, None)
     
-    # لاگ آمار پاکسازی
     if expired_count > 0 or no_timestamp_count > 0:
         logger.info(f"🧹 پاکسازی وضعیت‌ها: {expired_count} با timestamp منقضی | {no_timestamp_count} بدون timestamp - مجموع: {len(expired)}")
         if expired_types:
@@ -36545,28 +33058,23 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
     shutdown_start = datetime.now()
     
     try:
-        # =============== 1. ذخیره نهایی دیتابیس ===============
         logger.info("💾 ذخیره نهایی دیتابیس...")
         save_all()
         logger.info("✅ دیتابیس با موفقیت ذخیره شد")
         
-        # =============== 2. پاکسازی وضعیت‌ها ===============
         logger.info("🧹 پاکسازی وضعیت‌های باقیمانده...")
         cleaned = cleanup_expired_states()
         if cleaned > 0:
             logger.info(f"🧹 {cleaned} وضعیت منقضی پاک شد")
         
-        # =============== 3. بستن کلیه جلسات aiohttp ===============
         logger.info("🔌 بستن جلسات HTTP...")
         
-        # 3.1 بستن session سراسری
         try:
             await close_http_session()
             logger.info("✅ HTTP session بسته شد")
         except Exception as e:
             logger.warning(f"⚠️ خطا در بستن HTTP session: {e}")
         
-        # 3.2 بستن connector سراسری
         try:
             if 'shared_connector' in globals() and shared_connector:
                 await shared_connector.close()
@@ -36574,7 +33082,6 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         except Exception as e:
             logger.warning(f"⚠️ خطا در بستن shared connector: {e}")
         
-        # 3.3 بستن connector تکی (اگر وجود داشته باشه)
         try:
             if 'CONNECTOR' in globals() and CONNECTOR:
                 await CONNECTOR.close()
@@ -36582,7 +33089,6 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         except Exception as e:
             logger.warning(f"⚠️ خطا در بستن CONNECTOR: {e}")
         
-        # 3.4 بستن session تکی (اگر وجود داشته باشه)
         try:
             if 'HTTP_SESSION' in globals() and HTTP_SESSION:
                 await HTTP_SESSION.close()
@@ -36590,7 +33096,6 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         except Exception as e:
             logger.warning(f"⚠️ خطا در بستن HTTP_SESSION: {e}")
         
-        # =============== 4. بستن جلسات aiogram ===============
         logger.info("🔌 بستن جلسات aiogram...")
         
         try:
@@ -36605,7 +33110,6 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         except Exception as e:
             logger.warning(f"⚠️ خطا در بستن bot session: {e}")
         
-        # =============== 5. لاگ در سیستم خارجی ===============
         if log_system:
             try:
                 await log_system.log_bot_stop(ADMIN_ID_INT)
@@ -36616,7 +33120,6 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
             except Exception as e:
                 logger.warning(f"⚠️ خطا در بستن سیستم لاگ: {e}")
         
-        # =============== 6. ارسال پیام به ادمین ===============
         try:
             uptime = datetime.now() - shutdown_start
             shutdown_msg = f"""
@@ -36633,14 +33136,11 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         except Exception as e:
             logger.warning(f"⚠️ نتواست پیام توقف به ادمین ارسال کند: {e}")
         
-        # =============== 7. صبر برای بسته شدن کامل ===============
         await asyncio.sleep(0.5)
         
-        # =============== 8. بستن event loop ===============
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # اجازه بده تسک‌های باقی‌مونده کامل بشن
                 pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
                 if pending:
                     logger.info(f"⏳ منتظر {len(pending)} تسک باقیمانده...")
@@ -36661,11 +33161,9 @@ async def emergency_shutdown(dispatcher: Dispatcher, bot: Bot, error: Exception)
     logger.critical(f"🚨 شروع خاموشی اضطراری به دلیل: {error}")
     
     try:
-        # ذخیره فوری دیتابیس
         save_all()
         logger.info("دیتابیس در حالت اضطراری ذخیره شد")
         
-        # ارسال هشدار به ادمین
         emergency_msg = f"""
 🚨 <b>خاموشی اضطراری ربات!</b>
 
@@ -36679,7 +33177,6 @@ async def emergency_shutdown(dispatcher: Dispatcher, bot: Bot, error: Exception)
     except Exception as send_err:
         logger.error(f"نتوانست پیام خاموشی اضطراری ارسال کند: {send_err}")
     
-    # بستن جلسات
     try:
         await dispatcher.fsm.storage.close()
         logger.debug("FSM storage در حالت اضطراری بسته شد")
@@ -36732,11 +33229,7 @@ def get_memory_usage() -> dict:
             'db_cache_size': len(_db_cache),
             'user_states_size': len(user_states)
         }
-
-
-        
-        
-        
+       
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     """دستور نمایش آمار (فقط ادمین)"""
@@ -36746,7 +33239,6 @@ async def cmd_stats(message: Message):
     
     logger.info(f"ادمین ({ADMIN_ID_INT}) درخواست آمار کرد")
     
-    # جمع‌آوری آمار
     total_users = len(users)
     total_orders = len(get_valid_orders())
     total_referrals = len(referrals)
@@ -36784,7 +33276,6 @@ async def cmd_stats(message: Message):
         logger.error(f"خطا در ارسال آمار به ادمین: {e}", exc_info=True)
 
 
-# =============== اجرای ربات ===============
 if __name__ == "__main__":
     async def run():
         """تابع اجرای اصلی با مدیریت خطا"""
