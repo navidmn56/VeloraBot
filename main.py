@@ -12644,6 +12644,11 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📦 ready Package", callback_data="admin_ready_packages")
             ],
             [
+                InlineKeyboardButton(text="health report test🧪", callback_data="test_health_report"),
+                InlineKeyboardButton(text="disk warning test🧪", callback_data="test_disk_warning"),
+                InlineKeyboardButton(text="weekly report test🧪", callback_data="test_weekly_report"),
+            ],
+            [
                 InlineKeyboardButton(text="💬 Chats", callback_data="admin_chats"),
                 InlineKeyboardButton(text="📦 Configs", callback_data="admin_configs")
             ],
@@ -14381,14 +14386,16 @@ async def buy_specific_package(callback: CallbackQuery):
     original_price = package.get('price', 0)
     ip_limit = package.get('ip_limit', 0)
     
-    volume_display = "♾️ نامحدود" if volume == 0 else f"{volume} GB"
-    
-    if ip_limit == 0:
-        ip_display = "👤 تعداد کاربر: ♾️ نامحدود"
-    elif ip_limit == 1:
-        ip_display = "👤 تعداد کاربر: ۱ دستگاه"
+    if volume == 0:
+        volume_display = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
     else:
-        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه"
+        volume_display = f"{volume} GB"    
+    if ip_limit == 0:
+        ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
+    elif ip_limit == 1:
+        ip_display = "👤 تعداد کاربر: ۱ دستگاه" if lang == "fa" else "👤 Users: 1 Device"
+    else:
+        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه" if lang == "fa" else f"👤 Users: {ip_limit} Devices"
     user_state = user_states.get(user_id, {})
     discount_percent = 0
     final_price = original_price
@@ -19348,7 +19355,7 @@ async def pay_card(callback: CallbackQuery):
         ip_limit = full_state.get('ip_limit', 0)
         order_type = "ready_package"
         
-        volume_display = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
+        volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
         logger.info(f"📦 [pay_card] بسته آماده: {category_name} - حجم: {volume_display} - قیمت: {final_price:,} تومان")
     else:
         vol = user.get('volume', 1)
@@ -19371,7 +19378,7 @@ async def pay_card(callback: CallbackQuery):
                         final_price = original_price - (original_price * discount_percent // 100)
                         logger.info(f"🏷️ [pay_card] تخفیف {discount_percent}% اعمال شد: {original_price:,} → {final_price:,}")
         
-        volume_display = f"{vol} GB"
+        volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
         logger.info(f"🛒 [pay_card] خرید سفارشی: {vol}GB/{days} روز - قیمت: {final_price:,} تومان")
     if final_price == 0:
         logger.info(f"💰 [pay_card] پرداخت رایگان برای کاربر {user_id}")
@@ -19500,7 +19507,7 @@ async def pay_card(callback: CallbackQuery):
             await send_config_with_qr_option(user_id, order_id, vol, days, 0, sub_link, lang)
             
             category_display = f"{category_name} - " if is_ready_package else ""
-            volume_display_text = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
+            volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
             
             if lang == "fa":
                 text = f"""
@@ -19578,10 +19585,13 @@ async def pay_card(callback: CallbackQuery):
         logger.warning(f"خطا در ارسال استیکر: {e}")
         await callback.message.answer(premium_emoji('card', '💳'))
     card_num = ' '.join([BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)])
-    price_display = f"{final_price:,} تومان"
+    price_display = f"{final_price:,} تومان" if lang == "fa" else f"{final_price:,} Toman"
     if discount_percent > 0 and final_price != original_price:
-        price_display = f"<s>{original_price:,}</s> → {final_price:,} تومان (تخفیف {discount_percent}%)"
-    volume_display_text = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
+        if lang == "fa":
+            price_display = f"<s>{original_price:,}</s> → {final_price:,} تومان (تخفیف {discount_percent}%)"
+        else:
+            price_display = f"<s>{original_price:,}</s> → {final_price:,} Toman ({discount_percent}% off)"
+    volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
     if is_ready_package and category_name:
         icon = "📦"
         if category_id:
@@ -19591,9 +19601,15 @@ async def pay_card(callback: CallbackQuery):
                     break
         extend_display = ""
         if is_extend and extend_order_id:
-            extend_display = f"""
+            if lang == "fa":
+                extend_display = f"""
 🔄 <b>تمدید سرویس #{extend_order_id}</b>
 این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
+"""
+            else:
+                extend_display = f"""
+🔄 <b>Extending Service #{extend_order_id}</b>
+These values will be added to your current service:
 """
         
         if lang == "fa":
@@ -19634,9 +19650,15 @@ async def pay_card(callback: CallbackQuery):
 """
     else:
         if is_extend and extend_order_id:
-            extend_display = f"""
+            if lang == "fa":
+                extend_display = f"""
 🔄 <b>تمدید سرویس #{extend_order_id}</b>
 این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
+"""
+            else:
+                extend_display = f"""
+🔄 <b>Extending Service #{extend_order_id}</b>
+These values will be added to your current service:
 """
         else:
             extend_display = ""
@@ -20139,7 +20161,7 @@ async def pay_balance(callback: CallbackQuery):
         package_id = full_state.get('package_id')
         order_type = "ready_package"
         
-        volume_display = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
+        volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
         logger.info(f"📦 [pay_balance] بسته آماده: {category_name} - حجم: {volume_display} - قیمت نهایی: {final_price:,} تومان")
     else:
         vol = user.get('volume', 1)
@@ -20163,8 +20185,8 @@ async def pay_balance(callback: CallbackQuery):
                         final_price = original_price - (original_price * discount_percent // 100)
                         logger.info(f"🏷️ [pay_balance] تخفیف {discount_percent}% اعمال شد: {original_price:,} → {final_price:,}")
         
-        volume_display = f"{vol} GB"
-        logger.info(f"🛒 [pay_balance] خرید سفارشی: {vol}GB/{days} روز - قیمت: {final_price:,} تومان")
+        volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
+        logger.info(f"🛒 [pay_balance] خرید سفارشی: {volume_display}/{days} روز - قیمت: {final_price:,} تومان")
     
     balance = user.get('balance', 0)
     
@@ -20319,7 +20341,7 @@ async def pay_balance(callback: CallbackQuery):
             await send_config_with_qr_option(user_id, order_id, vol, days, 0, sub_link, lang)
             
             category_display = f"{category_name} - " if is_ready_package else ""
-            volume_display_text = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
+            volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
             
             if lang == "fa":
                 text = f"""
@@ -20361,10 +20383,14 @@ async def pay_balance(callback: CallbackQuery):
         except:
             pass
         
-        price_display = f"{final_price:,} تومان"
-        if discount_percent > 0:
-            price_display = f"{final_price:,} تومان (تخفیف {discount_percent}%)"
-        
+        if lang == "fa":
+            price_display = f"{final_price:,} تومان"
+            if discount_percent > 0:
+                price_display = f"{final_price:,} تومان (تخفیف {discount_percent}%)"
+        else:
+            price_display = f"{final_price:,} Toman"
+            if discount_percent > 0:
+                price_display = f"{final_price:,} Toman ({discount_percent}% off)"        
         msg = f"❌ موجودی کافی نیست!\n💰 موجودی شما: {balance:,} تومان\n💰 قیمت سرویس: {price_display}" if lang == "fa" else f"❌ Insufficient balance!\n💰 Your balance: {balance:,} Toman\n💰 Service price: {price_display}"
         
         if log_system:
@@ -20587,7 +20613,7 @@ async def pay_balance(callback: CallbackQuery):
                         user_states[user_id].pop('price', None)
                         user_states[user_id].pop('inbound_id', None)
                     
-                    volume_display_text = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
+                    volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
                     logger.info(f"✅ [pay_balance] خرید موفق کاربر {user_id} - سفارش #{order_id} - حجم: {volume_display_text} - مبلغ: {final_price:,} تومان")
                     
                 except Exception as e:
@@ -20803,7 +20829,7 @@ async def pay_balance(callback: CallbackQuery):
                 user_states[user_id].pop('price', None)
                 user_states[user_id].pop('inbound_id', None)
             
-            volume_display_text = "♾️ نامحدود" if vol == 0 else f"{vol} GB"
+            volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
             logger.info(f"✅ [pay_balance] خرید موفق کاربر {user_id} از مخزن - سفارش #{order_id} - حجم: {volume_display_text} - مبلغ: {final_price:,} تومان")
             
         else:
