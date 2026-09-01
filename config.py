@@ -21,9 +21,7 @@ CONFIGS_FILE = os.path.join(DATA_DIR, "configs.json")
 # These settings MUST be filled for the bot to work properly
 BOT_TOKEN = "Main_bot_token"  # Get from @BotFather
 ADMIN_ID = "YOUR_TELEGRAM_USER_ID" # Your Telegram ID (get from @myidbot)
-LOG_BOT_TOKEN = "Log_bot_token"  # Token of the second bot (will work after make it admin in LOG Group)
-LOG_CHANNEL_ID = -5145528893  # group ID where logs will be sent (add @myidbot to your Group then get group Id)
-BANK_CARD_NUMBER = "676778785656565656" # Your bank card number (16 digits)
+BANK_CARD_NUMBER = "1234567812345678" # Your bank card number (Only 16 digits (no spaces, dashes, or underscores))
 BANK_CARD_HOLDER = "Navid" # Card holder's full name
 BANK_NAME = "Blue Bank" # e.g., "Blue Bank", "Melli", "Mellat"
 SENAI_PANEL_URL = "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW" # OR use localhost: "https://127.0.0.1:2053/your_Web_Path"
@@ -32,9 +30,12 @@ SENAI_PANEL_PASSWORD = "Panel_password" # Panel admin password
 SENAI_SUB_URL = "https://sub.Domain.com:2083" # Subscription URL for clients
 SUPPORT_USERNAME = "@your_username_here"
 
+# =============== 🟡 OPTIONAL: LOGS SETTINGS ===============
+LOG_BOT_TOKEN = ""  # Token of the second bot (will work after make it admin in LOG Group)
+LOG_CHANNEL_ID = None  # replace None to group ID where logs will be sent (how to get group id: add @myidbot to your Group then get group Id with this command "/getid@myidbot", output example: Your own ID is: -5165329724 (start with negetive))
 
 
-# =============== 🟡 OPTIONAL: Google Gemini ===============
+# =============== 🟡 OPTIONAL:َAi Google Gemini ===============
 GEMINI_ENABLED = False # Set to True to enable Gemini AI
 GEMINI_API_KEY = "Gemini_API_Key" # Get from https://ai.google.dev/
 GEMINI_MODEL = "gemini-2.5-flash" #you can set it to any model of gemini
