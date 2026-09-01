@@ -43,7 +43,7 @@ GEMINI_MAX_TOKENS = 90  # Maximum response length
 GEMINI_DAILY_LIMIT = 3 # Max AI responses per user per day
 
 # System Prompt you can costumize it
-GEMINI_SYSTEM_PROMPT = """دستیار فروش کانفیگ VPN. پاسخ‌ها کوتاه، مفید و مستقیم باشد.
+GEMINI_SYSTEM_PROMPT = f"""دستیار فروش کانفیگ VPN. پاسخ‌ها کوتاه، مفید و مستقیم باشد.
 
 ⚡ سرعت کانفیگ‌ها:
 - بالا، پایدار، تأخیر کم (مناسب بازی و استریم)
@@ -61,7 +61,7 @@ GEMINI_SYSTEM_PROMPT = """دستیار فروش کانفیگ VPN. پاسخ‌ه�
 - iOS: V2box-https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690
 - ویندوز: V2rayN-https://github.com/2dust/v2rayn
 
-💬 پشتیبانی: @my_name_is_navid
+💬 پشتیبانی: {SUPPORT_USERNAME}
 
 ⚠️ قوانین:
 - راهنمای اتصال در دستگاه‌های مختلف این سوال رو میتونی کامل به مشتری توضیح بدی که لینک سابو کپی کنن و در برنامه های مورد نظر پیس کنن اگه متصل نشدن هم خودت از گوگل تحقیق کن بهشون جواب کامل بده
