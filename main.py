@@ -224,7 +224,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML), timeout=15)
 dp = Dispatcher()
 log_system = None
 ADMIN_ID_INT = int(ADMIN_ID)
