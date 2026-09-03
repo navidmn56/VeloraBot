@@ -25834,6 +25834,155 @@ async def confirm_clear_logs(callback: CallbackQuery):
     )
     await callback.answer("✅ پاکسازی کامل شد" if lang == "fa" else "✅ Cleanup completed", show_alert=True)
 
+async def auto_log_cleanup():
+    """پاکسازی خودکار فایل‌های لاگ هر 72 ساعت - ارسال گزارش به بات لاگ"""
+    
+    # از LOG_BOT_TOKEN و LOG_CHANNEL_ID استفاده کنید
+    if not LOG_BOT_TOKEN or not LOG_CHANNEL_ID:
+        logger.warning("⚠️ بات لاگ تنظیم نشده است! لاگ‌ها به بات اصلی ارسال می‌شوند.")
+        log_bot = bot
+        log_chat_id = ADMIN_ID_INT
+    else:
+        log_bot = Bot(token=LOG_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        log_chat_id = LOG_CHANNEL_ID
+    
+    logger.info("🧹 Auto log cleanup task started (every 72 hours)")
+    
+    await asyncio.sleep(300)
+    
+    while True:
+        try:
+            await asyncio.sleep(259200)  # 72 hours = 259200
+            
+            logger.info("🧹 Starting automatic log file cleanup...")
+            
+            # Calculate disk space before cleanup
+            import shutil
+            total_before, used_before, free_before = shutil.disk_usage(".")
+            
+            cleaned_files = []
+            errors = []
+            total_lines_before = 0
+            total_lines_after = 0
+            total_size_freed = 0  # Freed space in bytes
+            
+            log_files = ['bot_debug.log', 'bot_error.log', 'bot.log', 'events.log']
+            
+            for log_file in log_files:
+                if os.path.exists(log_file):
+                    try:
+                        # Get file size before cleanup
+                        size_before = os.path.getsize(log_file)
+                        
+                        with open(log_file, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                        
+                        lines_before = len(lines)
+                        total_lines_before += lines_before
+                        
+                        keep_lines = 500
+                        last_lines = lines[-keep_lines:] if len(lines) > keep_lines else lines
+                        lines_after = len(last_lines)
+                        total_lines_after += lines_after
+                        
+                        with open(log_file, 'w', encoding='utf-8') as f:
+                            f.write(f"=== Log auto cleaned: {datetime.now().isoformat()} ===\n")
+                            f.write(f"=== {lines_after} last lines kept ===\n\n")
+                            f.writelines(last_lines)
+                        
+                        # Get file size after cleanup
+                        size_after = os.path.getsize(log_file)
+                        size_freed = size_before - size_after
+                        total_size_freed += size_freed
+                        
+                        cleaned_files.append({
+                            'name': log_file,
+                            'before': lines_before,
+                            'after': lines_after,
+                            'size_before': size_before,
+                            'size_after': size_after,
+                            'size_freed': size_freed
+                        })
+                        
+                        logger.info(f"✅ File {log_file} cleaned ({lines_before} → {lines_after} lines, {size_freed / 1024:.1f} KB freed)")
+                        
+                    except Exception as e:
+                        error_msg = f"Error cleaning {log_file}: {str(e)[:50]}"
+                        errors.append(error_msg)
+                        logger.error(f"❌ {error_msg}")
+            
+            # Calculate disk space after cleanup
+            total_after, used_after, free_after = shutil.disk_usage(".")
+            free_gained_mb = (free_after - free_before) / (1024 * 1024)
+            
+            # Helper function for formatting size
+            def format_size(size_bytes):
+                if size_bytes >= 1024 * 1024:  # Larger than 1 MB
+                    return f"{size_bytes / (1024 * 1024):.2f} MB"
+                elif size_bytes >= 1024:  # Larger than 1 KB
+                    return f"{size_bytes / 1024:.1f} KB"
+                else:
+                    return f"{size_bytes} B"
+            
+            # Send report to log bot
+            if cleaned_files:
+                # Format total freed space
+                total_freed_display = format_size(total_size_freed)
+                
+                report = f"""
+🧹 <b>Auto Log Cleanup Completed!</b>
+
+🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📁 Files cleaned: {len(cleaned_files)}
+📊 Lines removed: {total_lines_before - total_lines_after:,}
+💾 Space freed: {total_freed_display}
+
+<b>File Details:</b>
+"""
+                for f in cleaned_files:
+                    size_before_display = format_size(f['size_before'])
+                    size_after_display = format_size(f['size_after'])
+                    
+                    if f['size_freed'] > 0:
+                        freed_display = f"-{format_size(f['size_freed'])}"
+                    else:
+                        freed_display = "No change"
+                    
+                    report += f"• {f['name']}: {f['before']:,} → {f['after']:,} lines | {size_before_display} → {size_after_display} ({freed_display})\n"
+                
+                # Only show total freed space
+                report += f"\n💾 Total space freed: {free_gained_mb:.2f} MB"
+                
+                if errors:
+                    report += f"\n\n⚠️ <b>Errors:</b>\n"
+                    for err in errors:
+                        report += f"• {err}\n"
+                
+                try:
+                    await log_bot.send_message(log_chat_id, report, parse_mode=ParseMode.HTML)
+                    logger.info("✅ Auto cleanup report sent to log bot")
+                except Exception as e:
+                    logger.error(f"❌ Error sending report to log bot: {e}")
+                    try:
+                        await bot.send_message(ADMIN_ID_INT, 
+                            f"⚠️ Error sending to log bot: {e}\n\n{report[:500]}", 
+                            parse_mode=ParseMode.HTML)
+                    except:
+                        pass
+            
+        except asyncio.CancelledError:
+            logger.info("❌ Auto log cleanup task cancelled")
+            break
+        except Exception as e:
+            logger.error(f"❌ Error in auto log cleanup: {e}", exc_info=True)
+            await asyncio.sleep(3600)
+        finally:
+            if LOG_BOT_TOKEN and LOG_CHANNEL_ID:
+                try:
+                    await log_bot.session.close()
+                except:
+                    pass
+                
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_chat_reply'))
 async def admin_chat_reply(message: Message):
     """پاسخ ادمین به چت - با بررسی بسته بودن چت"""
@@ -33301,6 +33450,7 @@ async def main():
             asyncio.create_task(panel_limits_reset(), name="panel_limits_reset"),
             asyncio.create_task(weekly_detailed_report_task(), name="weekly_detailed_report"),
             asyncio.create_task(memory_monitor(), name="memory_monitor"),
+            asyncio.create_task(auto_log_cleanup(), name="auto_log_cleanup"),
         ]
         
         logger.info(f"✅ {len(tasks)} تسک پس‌زمینه ایجاد شد:")
