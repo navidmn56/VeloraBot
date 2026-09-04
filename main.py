@@ -26637,6 +26637,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 days = old_info['days']
                 price = old_info['price']
                 volume_gb = old_info['volume']
+                order_type = old_info['type']
                 payment_method = old_info['payment_method']
                 receipt_photo_id = old_info['receipt_photo_id']
                 config_id = old_info['config_id']
