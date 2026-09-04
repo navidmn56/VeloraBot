@@ -5653,7 +5653,7 @@ async def errors_handler(event: types.ErrorEvent):
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    """دستور استارت - نسخه نهایی با مدیریت کامل تایید دستی"""
+    """دستور استارت - نسخه نهایی با مدیریت کامل تایید دستی و عضویت اجباری"""
     user_id = message.from_user.id
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id, message)
@@ -5810,15 +5810,55 @@ async def cmd_start(message: Message):
             reply_markup=get_main_keyboard(True, lang, user_id)
         )
         return
+    
+    # ============ بررسی عضویت اجباری - تابع مشترک ============
+    async def check_force_join_and_show():
+        """بررسی عضویت اجباری و نمایش صفحه مناسب"""
+        settings = configs_pool.get('force_join_settings', {})
+        force_join_enabled = settings.get('enabled', False)
+        channels = settings.get('channels', [])
+        
+        if not force_join_enabled or not channels:
+            return True  # عضویت اجباری غیرفعال است
+        
+        # بررسی واقعی عضویت
+        membership_report = await check_membership_detailed(user_id)
+        
+        if not membership_report['is_all_joined']:
+            # کاربر عضو نیست یا لفت داده
+            if users[uid].get('verified', False):
+                users[uid]['verified'] = False
+                users[uid]['updated_at'] = datetime.now().isoformat()
+                save_json(DB_FILES['users'], users)
+                logger.warning(f"⚠️ کاربر {user_id} از کانال لفت داده، صفحه عضویت نمایش داده شد")
+            
+            await show_verification_page(message, user_id, lang)
+            return False
+        else:
+            # کاربر عضو همه کانال‌هاست
+            if not users[uid].get('verified', False):
+                users[uid]['verified'] = True
+                users[uid]['updated_at'] = datetime.now().isoformat()
+                save_json(DB_FILES['users'], users)
+                logger.info(f"✅ کاربر {user_id} عضو همه کانال‌هاست، verified به True تغییر کرد")
+            
+            return True
+    
+    # ============ مسیر 1: تایید دستی غیرفعال ============
     if not approval_enabled:
-        if not user.get('approved_by_admin', False):
+        if not users[uid].get('approved_by_admin', False):
             users[uid]['approved_by_admin'] = True
             users[uid]['registration_status'] = 'approved'
             users[uid]['approved_date'] = datetime.now().isoformat()
             users[uid]['updated_at'] = datetime.now().isoformat()
             save_json(DB_FILES['users'], users)
-            user = users[uid]
             logger.info(f"✅ کاربر {user_id} خودکار تایید شد (تایید دستی غیرفعال)")
+        
+        # بررسی عضویت اجباری
+        can_continue = await check_force_join_and_show()
+        if not can_continue:
+            return
+        
         if lang == "fa":
             text = f"{premium_emoji('rocket', '🚀')} سلام {user_name_escaped}! خوش آمدید"
         else:
@@ -5826,7 +5866,10 @@ async def cmd_start(message: Message):
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
-    if user.get('approved_by_admin', False) or user.get('has_purchased', False):
+    
+    # ============ مسیر 2: کاربر تایید شده ============
+    if users[uid].get('approved_by_admin', False) or users[uid].get('has_purchased', False):
+        # بازیابی کوپن
         coupon_data = load_coupon_from_user_db(user_id)
         coupon_code = coupon_data.get('coupon_code')
         coupon_discount = coupon_data.get('coupon_discount')
@@ -5852,13 +5895,12 @@ async def cmd_start(message: Message):
             user_state = user_states.get(user_id, {})
             if user_state.get('coupon_applied', False) and user_state.get('coupon_code'):
                 save_coupon_to_user_db(user_id)
-        settings = configs_pool.get('force_join_settings', {})
-        force_join_enabled = settings.get('enabled', False)
-        channels = settings.get('channels', [])
         
-        if force_join_enabled and channels and not user.get('verified', False) and not is_admin:
-            await show_verification_page(message, user_id, lang)
+        # بررسی عضویت اجباری
+        can_continue = await check_force_join_and_show()
+        if not can_continue:
             return
+        
         if lang == "fa":
             text = f"{premium_emoji('rocket', '🚀')} سلام {user_name_escaped}! خوش آمدید"
         else:
@@ -5866,7 +5908,9 @@ async def cmd_start(message: Message):
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
-    status = user.get('registration_status', 'pending')
+    
+    # ============ مسیر 3: کاربر در انتظار تایید ============
+    status = users[uid].get('registration_status', 'pending')
     if status == 'requested':
         if lang == "fa":
             text = f"""
@@ -5886,114 +5930,16 @@ async def cmd_start(message: Message):
 """
         await message.answer(text, parse_mode=ParseMode.HTML)
         return
-    if status == 'cancelled':
+    
+    if status in ['cancelled', 'rejected']:
         users[uid]['registration_status'] = 'pending'
         users[uid]['requested_approval'] = False
         users[uid]['admin_notified'] = False
         users[uid]['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
-        logger.info(f"🔄 وضعیت کاربر {user_id} از cancelled به pending تغییر کرد (درخواست مجدد)")
-        
-        if lang == "fa":
-            text = f"""
-{premium_emoji('loading', '🔹')}  <b>به جمع ما خوش آمدید</b>
-
-برای ادامه، یکی از گزینه‌های زیر را انتخاب کنید:
-
-{premium_emoji('email','📨')} <b>ارسال درخواست</b>
-در صورت تمایل به استفاده از ربات، درخواست خود را ثبت کنید.
-
-{premium_emoji('cancel','❌')} <b>خروج</b>
-در صورت عدم تمایل، از دکمه خروج استفاده کنید.
-
-{premium_emoji('danger','⚠️')} توجه: این یک بات خصوصی است.
-"""
-        else:
-            text = f"""
-{premium_emoji('loading', '🔹')} <b>Welcome to our community</b>
-
-To continue, select one of the options below:
-
-{premium_emoji('email','📨')} <b>Submit Request</b>
-If interested, submit your request.
-
-{premium_emoji('cancel','❌')} <b>Exit</b>
-If not interested, exit here.
-
-{premium_emoji('danger','⚠️')} Note: This is a private Bot.
-"""
-        
-        buttons = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📨 ارسال درخواست" if lang == "fa" else "📨 Submit Request",
-                    callback_data="request_approval",
-                    style="primary"
-                ),
-                InlineKeyboardButton(
-                    text="❌ خروج" if lang == "fa" else "❌ Exit",
-                    callback_data="cancel_registration",
-                    style="danger"
-                )
-            ]
-        ])
-        
-        await message.answer(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
-        return
-    if status == 'rejected':
-        users[uid]['registration_status'] = 'pending'
-        users[uid]['requested_approval'] = False
-        users[uid]['admin_notified'] = False
-        users[uid]['updated_at'] = datetime.now().isoformat()
-        save_json(DB_FILES['users'], users)
-        logger.info(f"🔄 وضعیت کاربر {user_id} از rejected به pending تغییر کرد (درخواست مجدد)")
-        
-        if lang == "fa":
-            text = f"""
-{premium_emoji('loading', '🔹')}  <b>به جمع ما خوش آمدید</b>
-
-برای ادامه، یکی از گزینه‌های زیر را انتخاب کنید:
-
-{premium_emoji('email','📨')} <b>ارسال درخواست</b>
-در صورت تمایل به استفاده از ربات، درخواست خود را ثبت کنید.
-
-{premium_emoji('cancel','❌')} <b>خروج</b>
-در صورت عدم تمایل، از دکمه خروج استفاده کنید.
-
-{premium_emoji('danger','⚠️')} توجه: این یک بات خصوصی است.
-"""
-        else:
-            text = f"""
-{premium_emoji('loading','🔹')} <b>Welcome to our community</b>
-
-To continue, select one of the options below:
-
-{premium_emoji('email','📨')} <b>Submit Request</b>
-If interested, submit your request.
-
-{premium_emoji('cancel','❌')} <b>Exit</b>
-If not interested, exit here.
-
-{premium_emoji('danger','⚠️')} Note: This is a private Bot.
-"""
-        
-        buttons = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📨 ارسال درخواست" if lang == "fa" else "📨 Submit Request",
-                    callback_data="request_approval",
-                    style="primary"
-                ),
-                InlineKeyboardButton(
-                    text="❌ خروج" if lang == "fa" else "❌ Exit",
-                    callback_data="cancel_registration",
-                    style="danger"
-                )
-            ]
-        ])
-        
-        await message.answer(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
-        return
+        logger.info(f"🔄 وضعیت کاربر {user_id} از {status} به pending تغییر کرد (درخواست مجدد)")
+    
+    # نمایش فرم درخواست
     if lang == "fa":
         text = f"""
 {premium_emoji('loading', '🔹')}  <b>به جمع ما خوش آمدید</b>
@@ -6033,14 +5979,128 @@ If not interested, exit here.
             InlineKeyboardButton(
                 text="❌ خروج" if lang == "fa" else "❌ Exit",
                 callback_data="cancel_registration",
-                style="danger"
             )
         ]
     ])
     
     await message.answer(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+async def check_membership_detailed(user_id: int) -> dict:
+    """
+    بررسی دقیق عضویت کاربر در همه کانال‌ها
+    """
+    # لاگ شروع بررسی
+    logger.info(f"🔍 شروع بررسی عضویت کاربر {user_id}")
     
+    if user_id == ADMIN_ID_INT:
+        logger.info(f"👑 کاربر {user_id} ادمین است")
+        return {
+            'is_all_joined': True,
+            'not_joined': [],
+            'left_channels': [],
+            'kicked_channels': [],
+            'details': []
+        }
     
+    settings = configs_pool.get('force_join_settings', {})
+    
+    if not settings.get('enabled', False):
+        logger.info(f"ℹ️ عضویت اجباری غیرفعال است")
+        return {
+            'is_all_joined': True,
+            'not_joined': [],
+            'left_channels': [],
+            'kicked_channels': [],
+            'details': []
+        }
+    
+    channels = settings.get('channels', [])
+    
+    if not channels:
+        logger.info(f"ℹ️ هیچ کانالی ثبت نشده است")
+        return {
+            'is_all_joined': True,
+            'not_joined': [],
+            'left_channels': [],
+            'kicked_channels': [],
+            'details': []
+        }
+    
+    result = {
+        'is_all_joined': True,
+        'not_joined': [],
+        'left_channels': [],
+        'kicked_channels': [],
+        'details': []
+    }
+    
+    for ch in channels:
+        try:
+            channel_id = ch.get('id')
+            channel_name = ch.get('name', channel_id)
+            
+            # لاگ بررسی هر کانال
+            logger.info(f"📢 بررسی کانال {channel_name} (ID: {channel_id})")
+            
+            # اطمینان از فرمت صحیح
+            if isinstance(channel_id, str) and channel_id.startswith('@'):
+                chat_id = channel_id
+            elif isinstance(channel_id, str) and channel_id.lstrip('-').isdigit():
+                chat_id = int(channel_id)
+            elif isinstance(channel_id, int):
+                chat_id = channel_id
+            else:
+                logger.error(f"❌ فرمت نامعتبر channel_id: {channel_id}")
+                result['is_all_joined'] = False
+                result['not_joined'].append(ch)
+                result['details'].append({
+                    'channel_id': channel_id,
+                    'channel_name': channel_name,
+                    'status': 'invalid_format',
+                    'is_member': False
+                })
+                continue
+            
+            member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+            status = member.status
+            
+            logger.info(f"📊 وضعیت کاربر در {channel_name}: {status}")
+            
+            channel_detail = {
+                'channel_id': channel_id,
+                'channel_name': channel_name,
+                'status': status,
+                'is_member': status in ['member', 'administrator', 'creator']
+            }
+            
+            result['details'].append(channel_detail)
+            
+            if status not in ['member', 'administrator', 'creator']:
+                result['is_all_joined'] = False
+                result['not_joined'].append(ch)
+                
+                if status == 'left':
+                    result['left_channels'].append(channel_name)
+                    logger.warning(f"🚪 کاربر از {channel_name} لفت داده")
+                elif status == 'kicked':
+                    result['kicked_channels'].append(channel_name)
+                    logger.warning(f"⛔ کاربر از {channel_name} بن شده")
+                    
+        except Exception as e:
+            logger.error(f"❌ خطا در بررسی عضویت کاربر {user_id} در کانال {channel_id}: {e}")
+            result['is_all_joined'] = False
+            result['not_joined'].append(ch)
+            result['details'].append({
+                'channel_id': channel_id,
+                'channel_name': channel_name,
+                'status': 'error',
+                'is_member': False
+            })
+    
+    logger.info(f"📋 نتیجه نهایی بررسی: is_all_joined={result['is_all_joined']}")
+    
+    return result
+
+ 
 def get_pending_users() -> list:
     """دریافت لیست کاربرانی که درخواست تایید داده‌اند"""
     pending = []
@@ -8227,11 +8287,11 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
     volume_display = format_volume(volume, is_test=is_test)
     
     if ip_limit == 0:
-        ip_display = "👤 تعداد کاربر: ♾️ نامحدود"
+        ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
     elif ip_limit == 1:
-        ip_display = "👤 تعداد کاربر: ۱ دستگاه"
+        ip_display = "👤 تعداد کاربر: ۱ دستگاه" if lang == "fa" else "👤 Users: 1 Device"
     else:
-        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه"
+        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه" if lang == "fa" else f"👤 Users: {ip_limit} Devices"
     caption = get_config_caption(order_id, volume, days, price, config_link, lang)
     
     if is_test:
@@ -8303,11 +8363,11 @@ async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: U
     volume_display = format_volume(volume_mb)
     
     if ip_limit == 0:
-        ip_display = "👤 تعداد کاربر: ♾️ نامحدود"
+        ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
     elif ip_limit == 1:
-        ip_display = "👤 تعداد کاربر: ۱ دستگاه"
+        ip_display = "👤 تعداد کاربر: ۱ دستگاه" if lang == "fa" else "👤 Users: 1 Device"
     else:
-        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه"
+        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه" if lang == "fa" else f"👤 Users: {ip_limit} Devices"
     
     caption = get_config_caption(order_id, volume, days, price, config_link, lang)
     
@@ -10246,19 +10306,26 @@ def progress_bar(percent: float, length: int = 12) -> str:
     return color * filled + "⬜" * empty
 
 
-def format_traffic_info(client: dict, traffic: dict = None) -> str:
-    """نمایش اطلاعات کانفیگ با نمایش هوشمند حجم و گرد کردن اعداد"""
+def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") -> str:
+    """نمایش اطلاعات کانفیگ با پشتیبانی کامل از دو زبان فارسی و انگلیسی"""
     
     if not client:
-        return "❌ اطلاعاتی در دسترس نیست."
+        if lang == "fa":
+            return "❌ اطلاعاتی در دسترس نیست."
+        else:
+            return "❌ No information available."
 
     enabled = client.get("enable", True)
     status_emoji = premium_emoji('success', '✅') if enabled else premium_emoji('cancel', '❌')
-    status = f"{status_emoji} فعال" if enabled else f"{status_emoji} غیرفعال"
+    
+    if lang == "fa":
+        status = f"{status_emoji} {'فعال' if enabled else 'غیرفعال'}"
+    else:
+        status = f"{status_emoji} {'Active' if enabled else 'Inactive'}"
 
     total_bytes = client.get("totalGB", 0)
     if total_bytes == 0:
-        total_display = "♾️ نامحدود"
+        total_display = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
     else:
         total_gb = total_bytes / (1024 ** 3)
         email = client.get("email", "")
@@ -10271,12 +10338,20 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
             total_display = format_volume(total_gb, is_test=False)
 
     ip_limit = client.get("limitIp", 0)
-    if ip_limit == 0:
-        ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: ♾️ نامحدود"
-    elif ip_limit == 1:
-        ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: ۱ دستگاه"
+    if lang == "fa":
+        if ip_limit == 0:
+            ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: ♾️ نامحدود"
+        elif ip_limit == 1:
+            ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: ۱ دستگاه"
+        else:
+            ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: {ip_limit} دستگاه"
     else:
-        ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: {ip_limit} دستگاه"
+        if ip_limit == 0:
+            ip_display = f"{premium_emoji('user', '👤')} Users: ♾️ Unlimited"
+        elif ip_limit == 1:
+            ip_display = f"{premium_emoji('user', '👤')} Users: 1 Device"
+        else:
+            ip_display = f"{premium_emoji('user', '👤')} Users: {ip_limit} Devices"
 
     if total_bytes > 0:
         total_gb = total_bytes / (1024 ** 3)
@@ -10293,48 +10368,85 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
         
         email = client.get("email", "")
         is_test = email.startswith("test_")
-        if is_test:
-            used_mb = used * 1024
-            remain_mb = remain * 1024
-            if used <= 0:
-                used_display = "0 MB"
+        
+        # ✅ نمایش مصرف و باقیمانده بر اساس زبان
+        if lang == "fa":
+            if is_test:
+                used_mb = used * 1024
+                remain_mb = remain * 1024
+                used_display = "0 MB" if used <= 0 else f"{round(used_mb, 2)} MB"
+                remain_display = "0 MB" if remain <= 0 else f"{round(remain_mb, 2)} MB"
             else:
-                used_display = f"{round(used_mb, 2)} MB"
-            
-            if remain <= 0:
-                remain_display = "0 MB"
-            else:
-                remain_display = f"{round(remain_mb, 2)} MB"
+                if used <= 0:
+                    used_display = "0 MB"
+                elif used < 1:
+                    used_display = f"{round(used * 1024, 2)} MB"
+                else:
+                    used_display = f"{round(used, 2)} GB"
+                
+                if remain <= 0:
+                    remain_display = "0 MB"
+                elif remain < 1:
+                    remain_display = f"{round(remain * 1024, 2)} MB"
+                else:
+                    remain_display = f"{round(remain, 2)} GB"
         else:
-            if used <= 0:
-                used_display = "0 MB"
-            elif used < 1:
-                used_display = f"{round(used * 1024, 2)} MB"
+            # زبان انگلیسی
+            if is_test:
+                used_mb = used * 1024
+                remain_mb = remain * 1024
+                used_display = "0 MB" if used <= 0 else f"{round(used_mb, 2)} MB"
+                remain_display = "0 MB" if remain <= 0 else f"{round(remain_mb, 2)} MB"
             else:
-                used_display = f"{round(used, 2)} GB"
-            if remain <= 0:
-                remain_display = "0 MB"
-            elif remain < 1:
-                remain_display = f"{round(remain * 1024, 2)} MB"
-            else:
-                remain_display = f"{round(remain, 2)} GB"
+                if used <= 0:
+                    used_display = "0 MB"
+                elif used < 1:
+                    used_display = f"{round(used * 1024, 2)} MB"
+                else:
+                    used_display = f"{round(used, 2)} GB"
+                
+                if remain <= 0:
+                    remain_display = "0 MB"
+                elif remain < 1:
+                    remain_display = f"{round(remain * 1024, 2)} MB"
+                else:
+                    remain_display = f"{round(remain, 2)} GB"
         
         bar = progress_bar(percent)
-        volume_info = f"""
+        
+        # ✅ بخش حجم بر اساس زبان
+        if lang == "fa":
+            volume_info = f"""
 {premium_emoji('box','📦')} حجم کل: {total_display}
 {premium_emoji('upload','📤')} مصرف: {used_display}
 {premium_emoji('download','📥')} باقی‌مانده: {remain_display}
 
 {premium_emoji('amar','📊')} میزان مصرف
+
+{bar} {percent:.0f}%
+"""
+        else:
+            volume_info = f"""
+{premium_emoji('box','📦')} Total Volume: {total_display}
+{premium_emoji('upload','📤')} Used: {used_display}
+{premium_emoji('download','📥')} Remaining: {remain_display}
+
+{premium_emoji('amar','📊')} Usage
+
 {bar} {percent:.0f}%
 """
     else:
-        volume_info = f"""
+        if lang == "fa":
+            volume_info = f"""
 {premium_emoji('box','📦')} حجم کل: ♾️ نامحدود
+"""
+        else:
+            volume_info = f"""
+{premium_emoji('box','📦')} Total Volume: ♾️ Unlimited
 """
 
     expiry = client.get("expiryTime", 0)
-    days_left = "♾️"
+    days_left = "♾️" if lang == "fa" else "♾️ Unlimited"
 
     if expiry > 0:
         try:
@@ -10342,23 +10454,33 @@ def format_traffic_info(client: dict, traffic: dict = None) -> str:
             delta = expire_time - datetime.now()
 
             if delta.total_seconds() <= 0:
-                days_left = "منقضی"
+                days_left = "منقضی" if lang == "fa" else "Expired"
             elif delta.days == 0:
                 hours = max(1, int(delta.total_seconds() // 3600))
-                days_left = f"{hours} ساعت"
+                days_left = f"{hours} ساعت" if lang == "fa" else f"{hours} Hours"
             else:
-                days_left = f"{delta.days} روز"
+                days_left = f"{delta.days} روز" if lang == "fa" else f"{delta.days} Days"
 
         except Exception as e:
             logger.error(e)
             days_left = "❌"
 
-    return f"""
+    # ✅ بخش پایانی بر اساس زبان
+    if lang == "fa":
+        return f"""
 {status}
 
 {ip_display}
 {volume_info}
 {premium_emoji('hourglass','⏳')} اعتبار: {days_left}
+"""
+    else:
+        return f"""
+{status}
+
+{ip_display}
+{volume_info}
+{premium_emoji('hourglass','⏳')} Expiry: {days_left}
 """
 from aiogram.types import BufferedInputFile
 
@@ -10391,7 +10513,7 @@ def get_config_caption(order_id: int, volume: Union[int, float], days: int, pric
         is_test = order.get('type') == 'test'
         ip_limit = order.get('ip_limit', 0)
     if volume is None or volume == 0 or (isinstance(volume, float) and volume < 0.001):
-        volume_display = "نامحدود"
+        volume_display = "نامحدود" if lang == "fa" else "Unlimited"
     else:
         if is_test:
             volume_display = format_volume(volume *1024, is_test=True)
@@ -10399,11 +10521,11 @@ def get_config_caption(order_id: int, volume: Union[int, float], days: int, pric
             volume_display = format_volume(volume, is_test=False)
     
     if ip_limit == 0:
-        ip_display = "👤 تعداد کاربر: ♾️ نامحدود"
+        ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
     elif ip_limit == 1:
-        ip_display = "👤 تعداد کاربر: ۱ دستگاه"
+        ip_display = "👤 تعداد کاربر: ۱ دستگاه" if lang == "fa" else "👤 Users: 1 Device"
     else:
-        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه"
+        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه" if lang == "fa" else f"👤 Users: {ip_limit} Devices"
     
     if lang == "fa":
         if is_test:
@@ -12134,148 +12256,6 @@ def migrate_test_inbound_data():
         configs_pool['test_service'] = TEST_SERVICE_STATUS
         save_all()
         
-@dp.callback_query(F.data == "verify_membership")
-async def verify_membership(callback: CallbackQuery):
-    """بررسی عضویت کاربر و تایید آن"""
-    user_id = callback.from_user.id
-    if user_id == ADMIN_ID_INT:
-        user = get_user(user_id)
-        user['verified'] = True
-        save_all()
-        try:
-            await callback.message.delete()
-        except:
-            pass
-        lang = get_user(user_id).get('lang', 'fa')
-        await bot.send_message(
-            user_id,
-            f"{premium_emoji('rocket', '🚀')} {'به پنل ادمین خوش آمدید!' if lang=='fa' else 'Welcome to Admin Panel!'}",
-            reply_markup=get_main_keyboard(True, lang)
-        )
-        try:
-            await callback.answer()
-        except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
-        return
-    
-    settings = configs_pool.get('force_join_settings', {})
-    
-    if not settings.get('enabled', False):
-        await callback.answer("✅ قابلیت عضویت اجباری غیرفعال است", show_alert=True)
-        try:
-            await callback.message.delete()
-        except:
-            pass
-        lang = get_user(user_id).get('lang', 'fa')
-        await bot.send_message(
-            user_id,
-            f"{premium_emoji('rocket', '🚀')} {'منوی اصلی' if lang=='fa' else 'Main Menu'}",
-            reply_markup=get_main_keyboard(False, lang)
-        )
-        try:
-            await callback.answer()
-        except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
-        return
-    
-    channels = settings.get('channels', [])
-    
-    if not channels:
-        await callback.answer("✅ هیچ کانالی ثبت نشده است", show_alert=True)
-        try:
-            await callback.message.delete()
-        except:
-            pass
-        lang = get_user(user_id).get('lang', 'fa')
-        await bot.send_message(
-            user_id,
-            f"{premium_emoji('rocket', '🚀')} {'منوی اصلی' if lang=='fa' else 'Main Menu'}",
-            reply_markup=get_main_keyboard(False, lang)
-        )
-        try:
-            await callback.answer()
-        except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
-        return
-    await callback.message.edit_text(
-        "⏳ در حال بررسی عضویت شما..." if get_user(user_id).get('lang', 'fa') == "fa" else "⏳ Checking your membership...",
-        reply_markup=None
-    )
-    
-    not_joined = []
-    
-    for ch in channels:
-        try:
-            channel_id = ch.get('id')
-            if isinstance(channel_id, str) and channel_id.startswith('@'):
-                member = await bot.get_chat_member(channel_id, user_id)
-            else:
-                member = await bot.get_chat_member(int(channel_id), user_id)
-            
-            if member.status in ['left', 'kicked']:
-                not_joined.append(ch)
-        except Exception as e:
-            logger.error(f"خطا در بررسی عضویت کانال {ch.get('id')}: {e}")
-            not_joined.append(ch)
-    
-    lang = get_user(user_id).get('lang', 'fa')
-    
-    if not_joined:
-        text = "❌ <b>شما در کانال‌های زیر عضو نیستید:</b>\n\n" if lang == "fa" else "❌ <b>You are not a member of:</b>\n\n"
-        for ch in not_joined:
-            text += f"• {ch.get('name', ch.get('id'))}\n"
-        text += f"\nلطفاً ابتدا عضو شوید سپس دوباره تلاش کنید." if lang == "fa" else f"\nPlease join first then try again."
-        buttons = []
-        for ch in not_joined:
-            channel_id = ch.get('id')
-            channel_name = ch.get('name', 'کانال')
-            
-            if isinstance(channel_id, str) and channel_id.startswith('@'):
-                channel_link = f"https://t.me/{channel_id[1:]}"
-            else:
-                channel_id_str = str(channel_id).replace('-100', '')
-                channel_link = f"https://t.me/c/{channel_id_str}"
-            
-            buttons.append([InlineKeyboardButton(
-                text=f"📢 عضویت در {channel_name}",
-                url=channel_link
-            )])
-        
-        buttons.append([InlineKeyboardButton(
-            text="✅ تایید عضویت",
-            callback_data="verify_membership",
-            style="success"
-        )])
-        
-        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
-        try:
-            await callback.answer()
-        except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
-    else:
-        user = get_user(user_id)
-        user['verified'] = True
-        save_all()
-        try:
-            await callback.message.delete()
-        except:
-            pass
-        welcome_text = "✅ <b>عضویت شما تأیید شد!</b>\n\nاکنون می‌توانید از تمام امکانات ربات استفاده کنید." if lang == "fa" else "✅ <b>Your membership has been verified!</b>\n\nYou can now use all bot features."
-        
-        await bot.send_message(
-            user_id,
-            welcome_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_main_keyboard(False, lang)
-        )
-        if log_system:
-            await log_system.log_user_action(
-                user_id,
-                "تایید عضویت اجباری",
-                f"تعداد کانال‌ها: {len(channels)}"
-            )
-        
-        await callback.answer("✅ عضویت شما تأیید شد!" if lang == "fa" else "✅ Your membership has been verified!", show_alert=True)
 @dp.callback_query(F.data == "ai_chat")
 async def ai_chat_start(callback: CallbackQuery):
     """شروع چت با هوش مصنوعی - با حفظ کوپن"""
@@ -17313,71 +17293,6 @@ async def admin_force_join_settings(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
 
-async def show_verification_page(message: Message, user_id: int, lang: str = "fa"):
-    """نمایش صفحه تایید عضویت با لینک کانال‌ها"""
-    settings = configs_pool.get('force_join_settings', {})
-    channels = settings.get('channels', [])
-    buttons = []
-    for ch in channels:
-        channel_id = ch.get('id')
-        channel_name = ch.get('name', 'کانال')
-        channel_username = ch.get('username')  # یوزرنیم ذخیره شده
-        if channel_username and channel_username.startswith('@'):
-            channel_link = f"https://t.me/{channel_username[1:]}"
-        elif isinstance(channel_id, int) and channel_id < 0:
-            channel_id_str = str(channel_id).replace('-100', '')
-            channel_link = f"https://t.me/c/{channel_id_str}"
-        elif isinstance(channel_id, str) and channel_id.startswith('@'):
-            channel_link = f"https://t.me/{channel_id[1:]}"
-        else:
-            channel_link = f"https://t.me/{channel_id}"
-        
-        buttons.append([InlineKeyboardButton(
-            text=f"📢 عضویت در {channel_name}",
-            url=channel_link
-        )])
-    buttons.append([InlineKeyboardButton(
-        text="✅ تایید عضویت",
-        callback_data="verify_membership",
-        style="success"
-    )])
-    
-    if lang == "fa":
-        text = f"""
-🔒 <b>تایید عضویت اجباری</b>
-
-{premium_emoji('warning', '⚠️')} برای استفاده از ربات، ابتدا باید در کانال‌های زیر عضو شوید:
-
-"""
-        for ch in channels:
-            text += f"• {ch.get('name', ch.get('id'))}\n"
-        
-        text += f"""
-
-{premium_emoji('link', '🔗')} روی دکمه هر کانال کلیک کنید و عضو شوید.
-
-✅ پس از عضویت در تمام کانال‌ها، دکمه <b>تایید عضویت</b> را بزنید.
-"""
-    else:
-        text = f"""
-🔒 <b>Force Membership Verification</b>
-
-{premium_emoji('warning', '⚠️')} To use the bot, you must join the following channels:
-
-"""
-        for ch in channels:
-            text += f"• {ch.get('name', ch.get('id'))}\n"
-        
-        text += f"""
-
-{premium_emoji('link', '🔗')} Click the button of each channel and join.
-
-✅ After joining all channels, click the <b>Verify Membership</b> button.
-"""
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    
-    await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     
     
     
@@ -17630,7 +17545,9 @@ async def force_join_check_membership(callback: CallbackQuery):
         
         
 async def check_membership(user_id: int) -> bool:
-    """بررسی عضویت کاربر در کانال‌های اجباری"""
+    """
+    بررسی کامل عضویت کاربر در کانال‌های اجباری
+    """
     if user_id == ADMIN_ID_INT:
         return True
     
@@ -17643,11 +17560,237 @@ async def check_membership(user_id: int) -> bool:
     
     if not channels:
         return True
-    user = get_user(user_id)
-    if user.get('verified', False):
+    
+    # بررسی واقعی عضویت
+    for ch in channels:
+        try:
+            channel_id = ch.get('id')
+            member = await bot.get_chat_member(channel_id, user_id)
+            if member.status in ['left', 'kicked']:
+                return False
+        except Exception as e:
+            logger.error(f"خطا در بررسی عضویت کاربر {user_id} در کانال {channel_id}: {e}")
+            return False
+    
+    return True
+
+async def verify_membership(user_id: int) -> bool:
+    """
+    بررسی و ثبت عضویت کاربر - نسخه ساده
+    """
+    if user_id == ADMIN_ID_INT:
         return True
     
-    return False
+    # استفاده از تابع دقیق
+    membership_report = await check_membership_detailed(user_id)
+    
+    if membership_report['is_all_joined']:
+        # اگر کاربر عضو همه کانال‌هاست، وضعیت verified را ثبت کن
+        user = get_user(user_id)
+        if user:
+            user['verified'] = True
+            user['updated_at'] = datetime.now().isoformat()
+            save_json(DB_FILES['users'], users)
+            logger.info(f"✅ کاربر {user_id} عضویت در کانال‌ها را تایید کرد")
+        return True
+    else:
+        # اگر کاربر عضو نیست، verified را False کن
+        user = get_user(user_id)
+        if user and user.get('verified', False):
+            user['verified'] = False
+            user['updated_at'] = datetime.now().isoformat()
+            save_json(DB_FILES['users'], users)
+            logger.warning(f"⚠️ کاربر {user_id} از کانال لفت داده، verified به False تغییر کرد")
+        return False
+
+@dp.callback_query(F.data == "verify_membership")
+async def process_verify_membership(callback: CallbackQuery):
+    """
+    بررسی عضویت کاربر بعد از کلیک روی دکمه تایید
+    """
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    
+    try:
+        # بررسی دقیق عضویت با جزئیات
+        membership_report = await check_membership_detailed(user_id)
+        
+        if membership_report['is_all_joined']:
+            # کاربر عضو همه کانال‌هاست - ثبت وضعیت
+            user = get_user(user_id)
+            if user:
+                user['verified'] = True
+                user['updated_at'] = datetime.now().isoformat()
+                save_json(DB_FILES['users'], users)
+                logger.info(f"✅ کاربر {user_id} عضویت در همه کانال‌ها تایید شد")
+            
+            if lang == "fa":
+                success_text = f"""
+{premium_emoji('success', '✅')} <b>عضویت شما تایید شد!</b>
+
+{premium_emoji('rocket', '🚀')} به ربات خوش آمدید.
+"""
+            else:
+                success_text = f"""
+{premium_emoji('success', '✅')} <b>Membership confirmed!</b>
+
+{premium_emoji('rocket', '🚀')} Welcome to the bot.
+"""
+            
+            await callback.message.delete()
+            await callback.message.answer(
+                success_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_main_keyboard(False, lang, user_id)
+            )
+            
+        else:
+            # کاربر عضو همه کانال‌ها نیست
+            not_joined = membership_report['not_joined']
+            left_channels = membership_report['left_channels']
+            kicked_channels = membership_report['kicked_channels']
+            
+            # ساخت پیام خطا با جزئیات
+            if lang == "fa":
+                warning_text = f"""
+{premium_emoji('danger', '⚠️')} <b>عضویت شما کامل نیست!</b>
+
+"""
+                if left_channels:
+                    warning_text += f"""
+{premium_emoji('exit', '🚪')} <b>کانال‌هایی که لفت دادید:</b>
+{chr(10).join([f"• {ch}" for ch in left_channels])}
+
+"""
+                
+                if kicked_channels:
+                    warning_text += f"""
+{premium_emoji('ban', '⛔')} <b>کانال‌هایی که بن شدید:</b>
+{chr(10).join([f"• {ch}" for ch in kicked_channels])}
+
+"""
+                
+                warning_text += f"""
+{premium_emoji('info', 'ℹ️')} لطفاً ابتدا در همه کانال‌ها عضو شوید و سپس دوباره تلاش کنید.
+"""
+            else:
+                warning_text = f"""
+{premium_emoji('danger', '⚠️')} <b>Membership incomplete!</b>
+
+"""
+                if left_channels:
+                    warning_text += f"""
+{premium_emoji('exit', '🚪')} <b>Left channels:</b>
+{chr(10).join([f"• {ch}" for ch in left_channels])}
+
+"""
+                
+                if kicked_channels:
+                    warning_text += f"""
+{premium_emoji('ban', '⛔')} <b>Kicked from:</b>
+{chr(10).join([f"• {ch}" for ch in kicked_channels])}
+
+"""
+                
+                warning_text += f"""
+{premium_emoji('info', 'ℹ️')} Please join all channels first and try again.
+"""
+            
+            # به‌روزرسانی وضعیت verified به False
+            user = get_user(user_id)
+            if user and user.get('verified', False):
+                user['verified'] = False
+                user['updated_at'] = datetime.now().isoformat()
+                save_json(DB_FILES['users'], users)
+                logger.warning(f"⚠️ کاربر {user_id} از کانال لفت داده، verified به False تغییر کرد")
+            
+            await callback.answer("❌ هنوز عضو نشده‌اید!", show_alert=True)
+            
+            # نمایش مجدد صفحه عضویت با لینک‌ها
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            
+            await show_verification_page(callback.message, user_id, lang)
+            
+    except Exception as e:
+        logger.error(f"❌ خطا در بررسی عضویت: {e}")
+        await callback.answer("❌ خطا در بررسی، لطفاً دوباره تلاش کنید", show_alert=True)
+
+async def show_verification_page(message: Message, user_id: int, lang: str = "fa"):
+    """نمایش صفحه تایید عضویت با لینک کانال‌ها"""
+    settings = configs_pool.get('force_join_settings', {})
+    channels = settings.get('channels', [])
+    buttons = []
+    
+    for ch in channels:
+        channel_name = ch.get('name', 'کانال')
+        channel_username = ch.get('username')
+        
+        # ساخت لینک مناسب
+        if channel_username and channel_username.startswith('@'):
+            channel_link = f"https://t.me/{channel_username[1:]}"
+        elif channel_username:
+            channel_link = f"https://t.me/{channel_username}"
+        else:
+            channel_id = ch.get('id')
+            if isinstance(channel_id, int) and channel_id < 0:
+                # برای کانال‌های خصوصی
+                channel_id_str = str(channel_id).replace('-100', '')
+                channel_link = f"https://t.me/c/{channel_id_str}"
+            else:
+                channel_link = f"https://t.me/{channel_id}"
+        
+        buttons.append([InlineKeyboardButton(
+            text=f"📢 عضویت در {channel_name}",
+            url=channel_link
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text="✅ تایید عضویت",
+        callback_data="verify_membership",
+        style="primary"
+    )])
+    
+    if lang == "fa":
+        text = f"""
+🔒 <b>تایید عضویت</b>
+
+{premium_emoji('warning', '⚠️')} برای استفاده از ربات، ابتدا باید در کانال‌های زیر عضو شوید:
+
+"""
+        for ch in channels:
+            text += f"• {ch.get('name', ch.get('id'))}\n"
+        
+        text += f"""
+
+{premium_emoji('link', '🔗')} روی دکمه هر کانال کلیک کنید و عضو شوید.
+
+{premium_emoji('info', 'ℹ️')} پس از عضویت در تمام کانال‌ها، دکمه <b>تایید عضویت</b> را بزنید.
+"""
+    else:
+        text = f"""
+🔒 <b>Membership Verification</b>
+
+{premium_emoji('warning', '⚠️')} To use the bot, you must join the following channels:
+
+"""
+        for ch in channels:
+            text += f"• {ch.get('name', ch.get('id'))}\n"
+        
+        text += f"""
+
+{premium_emoji('link', '🔗')} Click the button of each channel and join.
+
+{premium_emoji('info', 'ℹ️')} After joining all channels, click the <b>Verify Membership</b> button.
+"""
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+    
+    
 @dp.message(lambda message: message.from_user.id == ADMIN_ID_INT and user_states.get(message.from_user.id, {}).get('awaiting_config', False))
 async def catch_admin_messages(message: Message):
     """هندلر مخصوص ادمین - تایید خودکار از طریق پنل"""
@@ -24427,8 +24570,9 @@ async def view_single_config(callback: CallbackQuery):
     if email and SENAI_PANEL_ENABLED:
         client_info = await xui_get_client_info(email)
         if client_info:
+            lang = get_user(user_id).get('lang', 'fa')
             traffic_data = await xui_get_client_traffic(email)
-            caption += "\n" + format_traffic_info(client_info, traffic_data)
+            caption += "\n" + format_traffic_info(client_info, traffic_data, lang)
     try:
         qr_img = generate_qr_code(order['config_link'], order_id)
         await bot.send_photo(
@@ -24473,7 +24617,8 @@ async def refresh_config_info(callback: CallbackQuery):
     client_info = await xui_get_client_info(email)
     if client_info:
         traffic_data = await xui_get_client_traffic(email)
-        traffic_text = format_traffic_info(client_info, traffic_data)
+        lang = get_user(user_id).get('lang', 'fa')
+        traffic_text = format_traffic_info(client_info, traffic_data, lang)
         await callback.message.answer(
             f"🔄 <b>{'اطلاعات زنده' if lang=='fa' else 'Live Info'}</b>\n{traffic_text}",
             parse_mode=ParseMode.HTML

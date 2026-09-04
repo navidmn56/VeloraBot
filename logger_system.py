@@ -3,6 +3,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 from aiogram import Bot
+import html
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +20,14 @@ class LogSystem:
         self.is_sending = False
         self.last_send_time = 0
         self.min_interval = 1.0  # حداقل 1 ثانیه بین هر پیام
-        
+    
+    @staticmethod
+    def _safe(text) -> str:
+        """امن کردن متن برای HTML"""
+        if text is None:
+            return ""
+        return html.escape(str(text))
+    
     async def _send_with_retry(self, message: str, parse_mode: str = "HTML", retry_count: int = 3):
         """ارسال پیام با قابلیت تلاش مجدد و مدیریت flood control"""
         for attempt in range(retry_count):
@@ -41,7 +50,6 @@ class LogSystem:
                 error_msg = str(e)
                 if "retry after" in error_msg.lower():
                     # استخراج زمان انتظار از خطا
-                    import re
                     match = re.search(r'retry after (\d+)', error_msg)
                     if match:
                         wait_time = int(match.group(1))
@@ -49,6 +57,19 @@ class LogSystem:
                         await asyncio.sleep(wait_time + 1)
                     else:
                         await asyncio.sleep(5 * (attempt + 1))
+                elif "can't parse entities" in error_msg.lower():
+                    # اگر خطای HTML بود، بدون parse_mode تلاش کن
+                    logger.warning(f"⚠️ خطای HTML در لاگ، تلاش بدون parse_mode")
+                    try:
+                        await self.bot.send_message(
+                            self.log_channel_id,
+                            message,
+                            parse_mode=None
+                        )
+                        self.last_send_time = datetime.now().timestamp()
+                        return True
+                    except Exception as e2:
+                        logger.error(f"❌ خطا در ارسال بدون parse_mode: {e2}")
                 elif attempt < retry_count - 1:
                     logger.warning(f"⚠️ خطا در ارسال لاگ (تلاش {attempt + 1}): {e}")
                     await asyncio.sleep(2 * (attempt + 1))
@@ -104,8 +125,8 @@ class LogSystem:
         text = f"""
 🚀 <b>ربات راه‌اندازی شد!</b>
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-🤖 <b>نام:</b> {bot_info.first_name}
-📛 <b>یوزرنیم:</b> @{bot_info.username}
+🤖 <b>نام:</b> {self._safe(bot_info.first_name)}
+📛 <b>یوزرنیم:</b> @{self._safe(bot_info.username)}
 🆔 <b>آیدی:</b> <code>{bot_info.id}</code>
 👑 <b>ادمین:</b> <code>{admin_id}</code>
 """
@@ -127,8 +148,8 @@ class LogSystem:
 👑 <b>اقدام ادمین</b>
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>ادمین:</b> <code>{admin_id}</code>
-⚡ <b>اقدام:</b> {action}{target_text}
-📄 <b>جزئیات:</b> {details}
+⚡ <b>اقدام:</b> {self._safe(action)}{target_text}
+📄 <b>جزئیات:</b> {self._safe(details)}
 """
         await self.send_log(text)
     
@@ -138,8 +159,8 @@ class LogSystem:
 📝 <b>اقدام کاربر</b>
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>کاربر:</b> <code>{user_id}</code>
-⚡ <b>اقدام:</b> {action}
-📄 <b>جزئیات:</b> {details}
+⚡ <b>اقدام:</b> {self._safe(action)}
+📄 <b>جزئیات:</b> {self._safe(details)}
 """
         await self.send_log(text)
     
@@ -148,9 +169,9 @@ class LogSystem:
         text = f"""
 🆕 <b>کاربر جدید</b>
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>نام:</b> {user_name}
+👤 <b>نام:</b> {self._safe(user_name)}
 🆔 <b>آیدی:</b> <code>{user_id}</code>
-📛 <b>یوزرنیم:</b> @{username if username else 'ندارد'}
+📛 <b>یوزرنیم:</b> @{self._safe(username) if username else 'ندارد'}
 """
         await self.send_log(text)
     
@@ -164,7 +185,7 @@ class LogSystem:
 📦 <b>حجم:</b> {volume} GB
 ⏱ <b>مدت:</b> {days} روز
 💰 <b>مبلغ:</b> {price:,} تومان
-💳 <b>روش پرداخت:</b> {method}
+💳 <b>روش پرداخت:</b> {self._safe(method)}
 """
         await self.send_log(text)
     
@@ -210,7 +231,7 @@ class LogSystem:
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 🆔 <b>سفارش:</b> #{order_id}
 👤 <b>کاربر:</b> <code>{user_id}</code>
-📄 <b>دلیل:</b> {reason if reason else 'نامشخص'}
+📄 <b>دلیل:</b> {self._safe(reason) if reason else 'نامشخص'}
 """
         await self.send_log(text)
     
@@ -219,7 +240,7 @@ class LogSystem:
         action_text = "افزایش" if action == "add" else "کاهش"
         emoji = "➕" if action == "add" else "➖"
         admin_text = f"\n👑 <b>توسط ادمین:</b> <code>{admin_id}</code>" if admin_id else ""
-        details_text = f"\n📄 <b>توضیحات:</b> {details}" if details else ""
+        details_text = f"\n📄 <b>توضیحات:</b> {self._safe(details)}" if details else ""
         amount_abs = abs(amount)
         
         text = f"""
@@ -239,7 +260,7 @@ class LogSystem:
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>کاربر:</b> <code>{user_id}</code>
 🆔 <b>سفارش:</b> #{order_id}
-📧 <b>ایمیل:</b> <code>{email}</code>
+📧 <b>ایمیل:</b> <code>{self._safe(email)}</code>
 📦 <b>حجم:</b> {volume} GB
 ⏱ <b>مدت:</b> {days} روز
 """
@@ -252,7 +273,7 @@ class LogSystem:
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>کاربر:</b> <code>{user_id}</code>
 🆔 <b>سفارش:</b> #{order_id}
-📱 <b>نوع مشاهده:</b> {view_type}
+📱 <b>نوع مشاهده:</b> {self._safe(view_type)}
 """
         await self.send_log(text)
     
@@ -263,8 +284,8 @@ class LogSystem:
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>کاربر:</b> <code>{user_id}</code>
 🆔 <b>سفارش:</b> #{order_id}
-🎯 <b>امتیاز:</b> {rating}
-💬 <b>نظر:</b> {comment if comment else 'بدون نظر'}
+🎯 <b>امتیاز:</b> {self._safe(rating)}
+💬 <b>نظر:</b> {self._safe(comment) if comment else 'بدون نظر'}
 """
         await self.send_log(text)
     
@@ -277,7 +298,7 @@ class LogSystem:
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>فرستنده:</b> {sender_text} (<code>{user_id}</code>)
 🆔 <b>چت:</b> #{chat_id}
-📝 <b>متن:</b> {message[:200]}
+📝 <b>متن:</b> {self._safe(message[:200])}
 """
         await self.send_log(text)
     
@@ -299,7 +320,7 @@ class LogSystem:
 🗑️ <b>حذف کاربر</b>
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>ادمین:</b> <code>{admin_id}</code>
-👤 <b>کاربر حذف شده:</b> {user_name} (<code>{user_id}</code>)
+👤 <b>کاربر حذف شده:</b> {self._safe(user_name)} (<code>{user_id}</code>)
 """
         await self.send_log(text)
     
@@ -309,7 +330,7 @@ class LogSystem:
 ⚙️ <b>تغییر تنظیمات قیمت</b>
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>ادمین:</b> <code>{admin_id}</code>
-📊 <b>تنظیمات:</b> {setting_key}
+📊 <b>تنظیمات:</b> {self._safe(setting_key)}
 📉 <b>مقدار قدیم:</b> {old_value:,} تومان
 📈 <b>مقدار جدید:</b> {new_value:,} تومان
 """
@@ -321,8 +342,8 @@ class LogSystem:
         text = f"""
 ⚠️ <b>خطا در سیستم</b>
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-📁 <b>تابع:</b> {function_name}
-❌ <b>خطا:</b> {str(error)[:200]}{user_text}
+📁 <b>تابع:</b> {self._safe(function_name)}
+❌ <b>خطا:</b> {self._safe(str(error)[:200])}{user_text}
 """
         await self.send_log(text)
     
@@ -335,7 +356,7 @@ class LogSystem:
 🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>ادمین:</b> <code>{admin_id}</code>
 ⚡ <b>عملیات:</b> {action_text}
-📢 <b>کانال:</b> {channel_name}
+📢 <b>کانال:</b> {self._safe(channel_name)}
 🆔 <b>آیدی:</b> <code>{channel_id}</code>
 """
         await self.send_log(text)
@@ -354,8 +375,7 @@ class LogSystem:
     
     async def close(self):
         """بستن جلسه بات و انتظار برای ارسال لاگ‌های باقیمانده"""
-        # انتظار برای خالی شدن صف
-        timeout = 30  # حداکثر 30 ثانیه انتظار
+        timeout = 30
         start = datetime.now()
         
         while not self.log_queue.empty() and (datetime.now() - start).seconds < timeout:
