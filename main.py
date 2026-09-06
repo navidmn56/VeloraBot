@@ -29139,12 +29139,12 @@ async def admin_panel(callback: CallbackQuery):
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
             await callback.message.delete()
             await callback.message.answer(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.9'}",
+                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.0'}",
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
             await callback.message.edit_text(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.2.9' if lang=='fa' else 'Admin Panel v1.2.9'}",
+                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.0'}",
                 reply_markup=get_admin_keyboard(lang)
             )
     except Exception as e:
@@ -29155,7 +29155,7 @@ async def admin_panel(callback: CallbackQuery):
             except:
                 pass
             await callback.message.answer(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.2.9' if lang=='fa' else 'Admin Panel v1.2.9'}",
+                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.0'}",
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
@@ -33100,7 +33100,8 @@ async def admin_delete_user_confirm(callback: CallbackQuery):
             f"• کاربر را از دیتابیس حذف میکند\n"
             f"• کانفیگ‌های پنل را حذف میکند\n"
             f"• تمام اطلاعات کاربر پاک میشود\n\n"
-            f"<b>قابل بازگشت نیست!</b>"
+            f"<b>قابل بازگشت نیست!</b>\n\n"
+            f"انتخاب کنید:"
         )
     else:
         text = (
@@ -33111,15 +33112,32 @@ async def admin_delete_user_confirm(callback: CallbackQuery):
             f"• Delete user from database\n"
             f"• Delete panel configs\n"
             f"• Remove all user data\n\n"
-            f"<b>This is irreversible!</b>"
+            f"<b>This is irreversible!</b>\n\n"
+            f"Choose:"
         )
     
     await callback.message.edit_text(
         text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ بله، حذف کن" if lang=="fa" else "✅ Yes, delete", callback_data=f"confirm_delete_user_{target_id}", style="danger"),
-                InlineKeyboardButton(text="❌ انصراف" if lang=="fa" else "❌ Cancel", callback_data=f"admin_user_{target_id}")
+                InlineKeyboardButton(
+                    text="🗑 حذف کامل + کانفیگ" if lang=="fa" else "🗑 Delete all + configs", 
+                    callback_data=f"confirm_delete_user_{target_id}",
+                    style="danger"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👤 فقط حذف کاربر" if lang=="fa" else "👤 Delete user only", 
+                    callback_data=f"confirm_delete_user_keep_config_{target_id}",
+                    style="primary"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ انصراف" if lang=="fa" else "❌ Cancel", 
+                    callback_data=f"admin_user_{target_id}"
+                )
             ]
         ]),
         parse_mode=ParseMode.HTML
@@ -33130,6 +33148,57 @@ async def admin_delete_user_confirm(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
     
 
+@dp.callback_query(F.data.startswith("confirm_delete_user_keep_config_"))
+async def confirm_delete_user_keep_config(callback: CallbackQuery):
+    """اجرای حذف کاربر بدون حذف کانفیگ از پنل"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    # روش صحیح: جدا کردن از آخر
+    target_id = int(callback.data.rsplit("_", 1)[1])
+    target = get_user(target_id)
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    target_name_raw = target.get('name', f'کاربر_{target_id}')
+    target_name_escaped = html.escape(target_name_raw)
+    
+    await callback.message.edit_text("⏳ در حال حذف کاربر...")
+    
+    # حذف فقط از دیتابیس بدون حذف کانفیگ
+    uid = str(target_id)
+    if uid in users:
+        del users[uid]
+    for oid in list(orders.keys()):
+        if isinstance(orders[oid], dict) and orders[oid].get('user_id') == target_id:
+            del orders[oid]
+    for key in list(referrals.keys()):
+        if referrals[key].get('referrer') == target_id or referrals[key].get('referred') == target_id:
+            del referrals[key]
+    for cid in list(chats.keys()):
+        if chats[cid].get('user_id') == target_id:
+            del chats[cid]
+    
+    save_all()
+    
+    if lang == "fa":
+        text = f"✅ کاربر {target_name_escaped} (ID: {target_id}) حذف شد!\n\n"
+        text += f"🔧 کانفیگ‌های کاربر در پنل باقی ماندند\n"
+        text += f"📊 دیتابیس بروزرسانی شد"
+    else:
+        text = f"✅ User {target_name_escaped} (ID: {target_id}) deleted!\n\n"
+        text += f"🔧 User configs kept in panel\n"
+        text += f"📊 Database updated"
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 برگشت به لیست" if lang=="fa" else "🔙 Back to list", callback_data="admin_users")]
+        ]),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer("✅ حذف شد" if lang=="fa" else "✅ Deleted", show_alert=True)
+    
+    
+    
 @dp.callback_query(F.data.startswith("confirm_delete_user_"))
 async def confirm_delete_user(callback: CallbackQuery):
     """اجرای حذف کاربر"""
@@ -33193,7 +33262,8 @@ async def confirm_delete_user(callback: CallbackQuery):
         parse_mode=ParseMode.HTML
     )
     await callback.answer("✅ حذف شد" if lang=="fa" else "✅ Deleted", show_alert=True)
-    
+
+
     
 @dp.callback_query(F.data == "backup_db")
 async def backup_db_cmd(callback: CallbackQuery):
