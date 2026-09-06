@@ -3,6 +3,7 @@ openrouter_client = None
 gemini_error_message = None 
 openrouter_error_message = None 
 user_ai_requests = {}
+from config import GEMINI_SYSTEM_PROMPT, refresh_gemini_prompt
 import asyncio
 import json
 import logging
@@ -413,7 +414,6 @@ def save_json(file_path: str, data) -> bool:
         filename = os.path.basename(file_path)
         file_dir = os.path.dirname(file_path)
         
-
         logger.info(f"💾 ذخیره {filename} در مسیر: {os.path.abspath(file_path)}")
         
         os.makedirs(file_dir, exist_ok=True)
@@ -428,9 +428,7 @@ def save_json(file_path: str, data) -> bool:
             f.flush()  
             os.fsync(f.fileno())  
         
-        
         if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            
             if os.path.exists(file_path):
                 os.replace(temp_file, file_path)
             else:
@@ -439,11 +437,9 @@ def save_json(file_path: str, data) -> bool:
             logger.error(f"❌ فایل موقت {temp_file} ایجاد نشد یا خالی است")
             return False
         
-        
         if os.path.exists(file_path):
             file_size = os.path.getsize(file_path)
             logger.info(f"✅ {filename} با موفقیت ذخیره شد ({file_size:,} bytes)")
-            
             
             with open(file_path, 'r', encoding='utf-8') as f:
                 verify_data = json.load(f)
@@ -452,8 +448,19 @@ def save_json(file_path: str, data) -> bool:
             logger.error(f"❌ {filename} ذخیره نشد!")
             return False
         
-        
         _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
+        
+        # ✅ جدید: Refresh کردن پرامپت هوش مصنوعی بعد از ذخیره configs.json
+        if filename == 'configs.json':
+            try:
+                # import داخل تابع برای جلوگیری از circular import
+                from config import refresh_gemini_prompt
+                refresh_gemini_prompt()
+                logger.info("🔄 GEMINI_SYSTEM_PROMPT بعد از ذخیره configs.json به‌روزرسانی شد")
+            except ImportError:
+                logger.debug("⏭️ config.py در دسترس نیست - رد شدن از refresh")
+            except Exception as e:
+                logger.warning(f"⚠️ خطا در refresh پرامپت: {e}")
         
         return True
         
@@ -465,16 +472,13 @@ def save_json(file_path: str, data) -> bool:
         
            
 def load_json(file_path: str, use_cache: bool = True) -> dict:
-    
     filename = os.path.basename(file_path)
-    
     
     if use_cache and file_path in _db_cache and file_path not in _db_modified:
         logger.debug(f"📂 {filename} از کش خوانده شد")
         return _db_cache[file_path]
     
     logger.info(f"📂 بارگذاری {filename} از دیسک... مسیر: {os.path.abspath(file_path)}")
-    
     
     if not os.path.exists(file_path):
         logger.error(f"❌ فایل {filename} وجود ندارد! مسیر: {file_path}")
@@ -483,7 +487,6 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
             json.dump({}, f)
         logger.info(f"✅ فایل {filename} ایجاد شد (خالی)")
         return {}
-    
     
     if os.path.getsize(file_path) == 0:
         logger.warning(f"⚠️ فایل {filename} خالی است - حجم: 0 bytes")
@@ -499,12 +502,24 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
             
             data = json.loads(content)
             
-            
             if use_cache:
                 _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
             
             logger.info(f"✅ {filename} بارگذاری شد - {len(data) if isinstance(data, dict) else 'N/A'} آیتم")
             logger.info(f"   نمونه داده: {str(list(data.keys())[:3]) if isinstance(data, dict) and data else 'خالی'}")
+            
+            # ✅ جدید: Refresh کردن پرامپت بعد از بارگذاری configs.json
+            if filename == 'configs.json':
+                try:
+                    # import داخل تابع برای جلوگیری از circular import
+                    from config import refresh_gemini_prompt
+                    refresh_gemini_prompt()
+                    logger.info("🔄 GEMINI_SYSTEM_PROMPT بعد از بارگذاری configs.json به‌روزرسانی شد")
+                except ImportError:
+                    logger.debug("⏭️ config.py در دسترس نیست - رد شدن از refresh")
+                except Exception as e:
+                    logger.warning(f"⚠️ خطا در refresh پرامپت: {e}")
+            
             return data
             
     except json.JSONDecodeError as e:
@@ -4187,7 +4202,7 @@ def migrate_inbound_data():
             logger.info(f"✅ مهاجرت اینباند پیش‌فرض: {old_default} -> {configs_pool['default_inbound_ids']}")
         del configs_pool['default_inbound_id']
         save_all()
-        
+
 @dp.callback_query(F.data.startswith("admin_inbound_detail_"))
 async def admin_inbound_detail(callback: CallbackQuery):
     """نمایش جزئیات یک اینباند و تنظیم آن برای کاربران"""
@@ -10949,11 +10964,7 @@ async def get_test_service(callback: CallbackQuery):
 
 {test_message}
 
-📦 حجم: {volume_display}
-⏱ مدت: {days} روز
-👤 محدودیت IP: {ip_display}
 🔢 تعداد تست‌های باقیمانده: {remaining_text}
-
 💡 برای خرید سرویس کامل از منوی اصلی اقدام کنید.
 """
             else:
@@ -10962,11 +10973,7 @@ async def get_test_service(callback: CallbackQuery):
 
 {test_message}
 
-📦 Volume: {volume_display}
-⏱ Duration: {days} days
-👤 IP Limit: {ip_display}
 🔢 Remaining tests: {remaining_text}
-
 💡 To purchase full service, use the main menu.
 """
             
@@ -12313,10 +12320,11 @@ async def ai_chat_start(callback: CallbackQuery):
 
 <b>{premium_emoji('note','📋')} چه سوالاتی می‌توانید بپرسید؟</b>
 • نحوه خرید کانفیگ و قیمت‌ها
-• راهنمای اتصال با دستگاه های مختلف با لینک دانلود
+• راهنمای اتصال با دستگاه های مختلف با لینک دانلود اپ های رسمی
 • حل مشکلات اتصال VPN
 • راهنمای شارژ حساب و پرداخت
 • پرسیدن سوال در رابطه با سرعت و پایداری
+• گرفتن ایدی پشتیبانی
 
 <b>{premium_emoji('danger','⚠️')} محدودیت:</b> {GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT} سوال در روز
 
@@ -12331,9 +12339,11 @@ Welcome to AI Support!
 
 <b>{premium_emoji('note','📋')} What can you ask?</b>
 • How to purchase configs and pricing
-• Connection guide for different devices
+• Connection guide for different devices with official app download links
 • VPN connection issues
 • Balance recharge and payment guide
+• Questions about speed and stability
+• Support ID retrieval
 
 <b>{premium_emoji('danger','⚠️')} Limit:</b> {GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT} questions per day
 
@@ -20154,20 +20164,73 @@ async def send_admin_notification(purchase_type: str, data: dict):
     
     user_id = data.get('user_id')
     
+    # ✅ دریافت اطلاعات کاربر از تلگرام
     try:
         user_info = await get_user_info_from_telegram(user_id)
         user_name_raw = user_info.get('full_name', f'کاربر {user_id}')
-        user_name_escaped = html.escape(user_name_raw)
         user_username = user_info.get('username', '')
-        username_display = f"@{html.escape(user_username)}" if user_username else 'ندارد'
     except Exception as e:
         logger.error(f"خطا در دریافت اطلاعات کاربر {user_id}: {e}")
-        user_name_escaped = f"کاربر {user_id}"
-        username_display = 'ندارد'
+        user_name_raw = f'کاربر {user_id}'
+        user_username = ''
+    
+    # ✅ دریافت نام از دیتابیس (اگه موجود باشه)
+    db_name = ''
+    try:
+        user_db = get_user(user_id)
+        if user_db:
+            db_name = user_db.get('name', '') or ''
+    except:
+        pass
+    
+    # ✅ انتخاب بهترین نام
+    if db_name and db_name.strip() and not db_name.startswith('کاربر_'):
+        display_name = db_name.strip()
+    elif user_name_raw and user_name_raw.strip():
+        display_name = user_name_raw.strip()
+    else:
+        display_name = f'کاربر_{user_id}'
+    
+    # ✅ نرمال‌سازی یونیکد (تبدیل کاراکترهای فانتزی به ASCII)
+    try:
+        import unicodedata
+        display_name_normalized = unicodedata.normalize('NFKD', display_name)
+        display_name_clean = display_name_normalized.encode('ascii', 'ignore').decode('ascii')
+        
+        # اگه بعد از نرمال‌سازی خالی شد، از نام اصلی استفاده کن
+        if not display_name_clean or display_name_clean.strip() == '':
+            display_name_clean = display_name
+    except:
+        display_name_clean = display_name
+    
+    # ✅ ساخت نمایش امن HTML
+    def safe_html_escape(text: str) -> str:
+        """Escape امن برای HTML - نمایش درست < >"""
+        if not text:
+            return ''
+        text = text.replace('&', '&amp;')
+        text = text.replace('<', '&#60;')
+        text = text.replace('>', '&#62;')
+        text = text.replace('"', '&quot;')
+        text = text.replace("'", '&#39;')
+        return text
+    
+    user_name_escaped = safe_html_escape(display_name_clean)
+    user_username_escaped = safe_html_escape(user_username) if user_username else ''
+    
+    # ✅ ساخت نمایش کاربر - نام + یوزرنیم باهم
+    if user_username_escaped:
+        user_display = f"{user_name_escaped} (@{user_username_escaped})"
+    else:
+        user_display = f"{user_name_escaped}"
+    
+    # ✅ اطلاعات اصلی
     is_test = (purchase_type == 'test')
     is_extend = data.get('is_extend', False)
-    payment_type = data.get('payment_type', '')
-    price = data.get('price', 0)
+    payment_type = data.get('payment_type', '') or ''
+    price = data.get('price', 0) or 0
+    
+    # ✅ عنوان
     if is_test:
         title = "🧪 تست رایگان"
     elif is_extend:
@@ -20188,92 +20251,138 @@ async def send_admin_notification(purchase_type: str, data: dict):
             title = "🎁 خرید رایگان"
         else:
             title = "🛒 خرید جدید"
+    
+    # ✅ حجم
     volume = data.get('volume', 'نامشخص')
     
     if isinstance(volume, (int, float)):
         if volume == 0:
-            volume_display = "نامحدود"
+            volume_display = "♾️ نامحدود"
         elif is_test:
             volume_display = format_volume(volume, is_test=True)
         else:
             volume_display = format_volume(volume, is_test=False)
     else:
         volume_display = volume
-    ip_limit = data.get('ip_limit', 0)
+    
+    # ✅ محدودیت IP
+    ip_limit = data.get('ip_limit', 0) or 0
     ip_display = "نامحدود" if ip_limit == 0 else str(ip_limit)
+    
+    # ✅ ساخت متن
     text = f"{title}\n\n"
-    text += f"👤 {user_name_escaped}\n"
-    text += f"🆔 {user_id}\n"
-    text += f"📛 {username_display}\n"
+    text += f"👤 {user_display}\n"
+    text += f"🆔 <code>{user_id}</code>\n"
     text += "━━━━━━━━━━━━━━━━━━━━━━\n"
     text += f"📦 {volume_display}\n"
-    text += f"⏱️ {data.get('days', 0)} روز\n"
-    text += f"💰 {data.get('price', 0):,} تومان\n"
+    text += f"⏱️ {data.get('days', 0) or 0} روز\n"
+    text += f"💰 {price:,} تومان\n"
+    
+    # ✅ اطلاعات تمدید
     if is_extend:
-        old_volume = data.get('old_volume', 0)
-        old_days = data.get('old_days', 0)
-        new_volume = data.get('new_volume', 0)
-        new_days = data.get('new_days', 0)
+        old_volume = data.get('old_volume', 0) or 0
+        old_days = data.get('old_days', 0) or 0
+        new_volume = data.get('new_volume', 0) or 0
+        new_days = data.get('new_days', 0) or 0
         parent_order_id = data.get('parent_order_id', 'نامشخص')
-        old_volume_display = "نامحدود" if old_volume == 0 else f"{old_volume:.1f}GB"
-        new_volume_display = "نامحدود" if new_volume == 0 else f"{new_volume:.1f}GB"
+        
+        old_volume_display = "♾️ نامحدود" if old_volume == 0 else f"{old_volume:.1f}GB"
+        new_volume_display = "♾️ نامحدود" if new_volume == 0 else f"{new_volume:.1f}GB"
         
         text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-        text += f"🆔 سفارش اصلی: #{parent_order_id}\n"
+        text += f"🔄 سفارش اصلی: <code>#{parent_order_id}</code>\n"
         text += f"📦 {old_volume_display} → {new_volume_display}\n"
         text += f"⏱️ {old_days} → {new_days} روز\n"
+    
+    # ✅ اطلاعات تست
     if is_test:
         remaining_tests = data.get('remaining_tests', 'نامشخص')
         text += f"🧪 تست‌های باقیمانده: {remaining_tests}\n"
         text += f"👤 محدودیت IP: {ip_display}\n"
-    if data.get('category_name'):
-        text += f"📦 بسته: {data.get('category_name')}\n"
     
+    # ✅ نام بسته
+    if data.get('category_name'):
+        category_name = safe_html_escape(str(data.get('category_name', '')))
+        text += f"📦 بسته: {category_name}\n"
+    
+    # ✅ شماره سفارش
     if data.get('order_id'):
-        text += f"🆔 سفارش: #{data.get('order_id')}\n"
+        text += f"🆔 سفارش: <code>#{data.get('order_id')}</code>\n"
+    
+    # ✅ موجودی
     if data.get('balance_before') is not None:
         text += f"💰 موجودی قبلی: {data.get('balance_before'):,} تومان\n"
     if data.get('balance_after') is not None:
         text += f"💰 موجودی جدید: {data.get('balance_after'):,} تومان\n"
+    
+    # ✅ اینباندها
     inbound_ids = data.get('inbound_ids')
     if inbound_ids:
         if isinstance(inbound_ids, list):
-            text += f"📡 اینباندها: {inbound_ids}\n"
+            inbound_display = ', '.join(str(ib) for ib in inbound_ids if ib)
+            if inbound_display:
+                text += f"📡 اینباندها: <code>{inbound_display}</code>\n"
         else:
-            text += f"📡 اینباند: {inbound_ids}\n"
+            text += f"📡 اینباند: <code>{inbound_ids}</code>\n"
+    
+    # ✅ اطلاعات کوپن
+    coupon_code = data.get('coupon_code')
+    coupon_discount = data.get('coupon_discount', 0) or 0
+    original_price = data.get('original_price', 0) or 0
+    
+    if coupon_discount > 0:
+        text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        text += f"🏷️ کوپن: <code>{safe_html_escape(str(coupon_code))}</code>\n"
+        text += f"📊 تخفیف: {coupon_discount}%\n"
+        
+        if original_price > 0 and original_price != price:
+            text += f"💰 قیمت اصلی: {original_price:,} تومان\n"
+            text += f"💎 قیمت نهایی: {price:,} تومان\n"
     
     text += f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
+    # ✅ ارسال نوتیفیکیشن
     try:
         await bot.send_message(ADMIN_ID_INT, text, parse_mode=ParseMode.HTML)
         logger.info(f"📨 نوتیفیکیشن {purchase_type} به ادمین ارسال شد - کاربر {user_id}")
     except Exception as e:
         logger.error(f"❌ خطا در ارسال نوتیفیکیشن به ادمین: {e}")
         try:
-            await bot.send_message(
-                ADMIN_ID_INT,
-                f"{title}\nکاربر: {user_name_escaped}\nمبلغ: {data.get('price', 0):,} تومان\nنوع: {purchase_type}",
-                parse_mode=None
+            # ارسال ساده بدون HTML
+            simple_text = (
+                f"{title}\n"
+                f"کاربر: {display_name_clean}\n"
+                f"یوزرنیم: @{user_username if user_username else 'ندارد'}\n"
+                f"آیدی: {user_id}\n"
+                f"مبلغ: {price:,} تومان\n"
+                f"نوع: {purchase_type}"
             )
+            await bot.send_message(ADMIN_ID_INT, simple_text, parse_mode=None)
             logger.info(f"📨 نوتیفیکیشن {purchase_type} با متن ساده ارسال شد")
         except Exception as e2:
             logger.error(f"❌ خطا در ارسال نوتیفیکیشن ساده: {e2}")
+
+
 @dp.callback_query(F.data == "pay_balance")
 async def pay_balance(callback: CallbackQuery):
     """پرداخت از موجودی - نسخه کامل با پشتیبانی از تمدید و ترکیب اینباندها"""
     user_id = callback.from_user.id
     logger.info(f"🔍 [pay_balance] شروع برای کاربر {user_id}")
     debug_coupon_state(user_id, "pay_balance_start")
+    
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
+    
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
         return
+    
     if not await check_shop_status_and_notify(user_id, callback):
         return
+    
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
     full_state = user_states.get(user_id, {})
@@ -20293,6 +20402,7 @@ async def pay_balance(callback: CallbackQuery):
     logger.info(f"🔍 [pay_balance] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
     logger.info(f"🔍 [pay_balance] current_volume={current_volume}GB, current_days={current_days}روز")
     logger.info(f"🔍 [pay_balance] ip_limit={ip_limit}, inbound_ids={inbound_ids}")
+    
     if is_ready_package:
         vol = full_state.get('volume', 1)
         days = full_state.get('days', 30)
@@ -20335,191 +20445,9 @@ async def pay_balance(callback: CallbackQuery):
     
     logger.info(f"💰 [pay_balance] موجودی کاربر: {balance:,} تومان")
     logger.info(f"💰 [pay_balance] قیمت نهایی: {final_price:,} تومان")
-    if final_price == 0:
-        logger.info(f"💰 [pay_balance] پرداخت رایگان برای کاربر {user_id}")
-        await callback.message.edit_text("⏳ در حال فعال‌سازی سرویس رایگان...")
-        if is_extend and extend_order_id:
-            logger.info(f"🔄 [pay_balance] شروع تمدید رایگان سفارش #{extend_order_id}")
-            parent_order = orders.get(str(extend_order_id))
-            if not parent_order:
-                logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
-                await callback.message.edit_text(
-                    "❌ خطا: سفارش اصلی برای تمدید یافت نشد. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error: Original order not found. Please try again.",
-                    reply_markup=get_back_only_keyboard(lang)
-                )
-                return
-            success = await extend_service(
-                extend_order_id, 
-                user_id, 
-                vol, 
-                days,
-                inbound_ids,  # ✅ اینباندهای انتخاب شده
-                ip_limit      # ✅ محدودیت IP
-            )
-            
-            if success:
-                order_id = create_order(user_id, vol, days, 0, "extend", ip_limit=ip_limit)
-                update_order(order_id, 
-                            status='approved',
-                            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            payment_method='free_coupon_extend',
-                            payment_label='🎁 رایگان (تمدید)',
-                            parent_order_id=extend_order_id,
-                            is_extend=True,
-                            inbound_id=inbound_ids)
-                if is_ready_package:
-                    update_order(order_id, 
-                                category_id=category_id,
-                                category_name=category_name,
-                                package_id=package_id)
-                
-                consume_coupon(user_id)
-                if user_id in user_states:
-                    user_states[user_id].pop('is_extend', None)
-                    user_states[user_id].pop('extend_order_id', None)
-                    user_states[user_id].pop('current_volume', None)
-                    user_states[user_id].pop('current_days', None)
-                updated_parent = orders.get(str(extend_order_id))
-                new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
-                new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
-                await send_admin_notification('extend', {
-                    'user_id': user_id,
-                    'volume': vol,
-                    'days': days,
-                    'price': 0,
-                    'discount_percent': discount_percent,
-                    'balance_before': balance,
-                    'balance_after': balance,
-                    'order_id': order_id,
-                    'payment_type': 'free_extend',
-                    'payment_label': '🎁 رایگان (تمدید)',
-                    'payment_emoji': '🎁🔄',
-                    'is_extend': True,
-                    'parent_order_id': extend_order_id,
-                    'old_volume': current_volume,
-                    'old_days': current_days,
-                    'new_volume': new_volume,
-                    'new_days': new_days,
-                    'category_name': category_name,
-                    'inbound_ids': inbound_ids,
-                    'ip_limit': ip_limit
-                })
-                try:
-                    await callback.message.delete()
-                except:
-                    pass
-                if lang == "fa":
-                    text = f"""
-✅ <b>سرویس با موفقیت تمدید شد!</b>
-
-📦 +{vol}GB به حجم شما اضافه شد
-⏱ +{days} روز به مدت شما اضافه شد
-🎁 روش پرداخت: رایگان (تمدید)
-💰 مبلغ پرداختی: ۰ تومان
-"""
-                else:
-                    text = f"""
-✅ <b>Service extended successfully!</b>
-
-📦 +{vol}GB added to your volume
-⏱ +{days} days added to your duration
-🎁 Payment method: Free (Extended)
-💰 Amount paid: 0 Toman
-"""
-                
-                await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
-                logger.info(f"✅ [pay_balance] تمدید رایگان برای کاربر {user_id} - سفارش #{order_id}")
-                await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
-                return
-            else:
-                await callback.message.edit_text(
-                    "❌ خطا در تمدید سرویس. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error extending service. Please try again.",
-                    reply_markup=get_back_only_keyboard(lang)
-                )
-                return
-        order_id = create_order(user_id, vol, days, 0, order_type, ip_limit=ip_limit)
-        update_order(order_id, 
-                    status='approved',
-                    approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    payment_method='free_coupon',
-                    payment_label='🎁 رایگان (کوپن)',
-                    inbound_id=inbound_ids)
-        
-        if is_ready_package:
-            update_order(order_id, 
-                        category_id=category_id,
-                        category_name=category_name,
-                        package_id=package_id)
-        await send_admin_notification('balance', {
-            'user_id': user_id,
-            'volume': vol,
-            'days': days,
-            'price': 0,
-            'discount_percent': discount_percent,
-            'balance_before': balance,
-            'balance_after': balance,
-            'order_id': order_id,
-            'payment_type': 'free',
-            'payment_label': '🎁 رایگان (کوپن)',
-            'payment_emoji': '🎁',
-            'inbound_ids': inbound_ids,
-            'ip_limit': ip_limit
-        })
-        timestamp = int(datetime.now().timestamp())
-        email = f"user{user_id}_{timestamp}"
-        user_name = user.get('name', f'کاربر_{user_id}')
-        
-        if is_ready_package and inbound_ids:
-            inbound_to_use = inbound_ids
-        else:
-            inbound_to_use = get_user_inbound(user_id)
-        
-        sub_link = await xui_create_client_with_inbound(email, vol, days, user_name, user_id, inbound_to_use, ip_limit=ip_limit)
-        
-        if sub_link:
-            update_order(order_id, config_link=sub_link, sub_link=sub_link, email=email)
-            record_purchase(user_id, 0)
-            consume_coupon(user_id)
-            
-            await send_config_with_qr_option(user_id, order_id, vol, days, 0, sub_link, lang)
-            
-            category_display = f"{category_name} - " if is_ready_package else ""
-            volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-            
-            if lang == "fa":
-                text = f"""
-✅ <b>سرویس رایگان با موفقیت فعال شد!</b>
-
-{category_display}📦 حجم: {volume_display_text}
-⏱ مدت: {days} روز
-🎁 روش پرداخت: رایگان (کوپن)
-💰 مبلغ پرداختی: ۰ تومان
-
-✅ کانفیگ شما در بخش «کانفیگ‌های من» موجود است.
-"""
-            else:
-                text = f"""
-✅ <b>Free service activated successfully!</b>
-
-{category_display}📦 Volume: {volume_display_text}
-⏱ Duration: {days} days
-🎁 Payment method: Free (Coupon)
-💰 Amount paid: 0 Toman
-
-✅ Your config is available in 'My Configs'.
-"""
-            
-            await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
-            logger.info(f"✅ [pay_balance] سرویس رایگان برای کاربر {user_id} فعال شد - سفارش #{order_id}")
-            await callback.answer("✅ سرویس رایگان فعال شد!" if lang == "fa" else "✅ Free service activated!")
-            return
-        else:
-            await callback.message.edit_text(
-                "❌ خطا در ساخت سرویس. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error creating service. Please try again.",
-                reply_markup=get_back_only_keyboard(lang)
-            )
-            return
-    if balance < final_price:
+    
+    # ✅ بررسی موجودی کافی (برای خریدهای غیر رایگان)
+    if final_price > 0 and balance < final_price:
         try:
             insufficient_sticker = "CAACAgIAAxkBAAERYtdqLYNgjzOUQi8uRFj-ZxHiOhEZvwACRh4AAvyUOEnTIzZfgD7FIDwE"
             await callback.message.answer_sticker(insufficient_sticker)
@@ -20534,6 +20462,7 @@ async def pay_balance(callback: CallbackQuery):
             price_display = f"{final_price:,} Toman"
             if discount_percent > 0:
                 price_display = f"{final_price:,} Toman ({discount_percent}% off)"        
+        
         msg = f"❌ موجودی کافی نیست!\n💰 موجودی شما: {balance:,} تومان\n💰 قیمت سرویس: {price_display}" if lang == "fa" else f"❌ Insufficient balance!\n💰 Your balance: {balance:,} Toman\n💰 Service price: {price_display}"
         
         if log_system:
@@ -20545,406 +20474,120 @@ async def pay_balance(callback: CallbackQuery):
         
         await callback.answer(msg, show_alert=True)
         return
-    new_balance = balance - final_price
-    update_user(user_id, 'balance', new_balance)
-    if log_system:
-        await log_system.log_balance_change(
-            user_id=user_id,
-            amount=-final_price,
-            new_balance=new_balance,
-            action="reduce",
-            admin_id=None,
-            details=f"خرید سرویس {vol}GB/{days} روز (تخفیف {discount_percent}%)"
-        )
-    order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-    update_order(order_id, inbound_id=inbound_ids)
+    
+    # ✅ کسر موجودی (فقط اگر قیمت > 0)
+    new_balance = balance
+    if final_price > 0:
+        new_balance = balance - final_price
+        update_user(user_id, 'balance', new_balance)
+        if log_system:
+            await log_system.log_balance_change(
+                user_id=user_id,
+                amount=-final_price,
+                new_balance=new_balance,
+                action="reduce",
+                admin_id=None,
+                details=f"خرید سرویس {vol}GB/{days} روز (تخفیف {discount_percent}%)"
+            )
+    
+    # ============================================
+    # ✅ ساخت سفارش فقط یکبار در این نقطه
+    # ============================================
     if is_extend and extend_order_id:
-        update_order(order_id, parent_order_id=extend_order_id, is_extend=True)
-        logger.info(f"🔄 [pay_balance] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} ایجاد شد")
+        order_id = create_order(user_id, vol, days, final_price, "extend", ip_limit=ip_limit)
+    else:
+        order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
+    
+    logger.info(f"📝 [pay_balance] سفارش #{order_id} ایجاد شد - نوع: {order_type if not is_extend else 'extend'} - حجم: {vol}GB - قیمت: {final_price:,}")
+    
+    # ✅ آپدیت اطلاعات پایه سفارش
+    update_order(order_id, inbound_id=inbound_ids, ip_limit=ip_limit)
+    
     if is_ready_package:
         update_order(order_id, 
                     category_id=category_id,
                     category_name=category_name,
-                    package_id=package_id,
-                    inbound_id=inbound_ids,
-                    ip_limit=ip_limit,
-                    status='approved' if SENAI_PANEL_ENABLED else 'pending',
-                    payment_method='balance',
-                    payment_label='💰 موجودی حساب')
-    else:
-        update_order(order_id, 
-                    status='approved' if SENAI_PANEL_ENABLED else 'pending',
-                    payment_method='balance',
-                    payment_label='💰 موجودی حساب')
+                    package_id=package_id)
     
-    logger.info(f"📝 [pay_balance] سفارش #{order_id} ایجاد شد - نوع: {order_type} - حجم: {vol}GB")
-    logger.info(f"💰 [pay_balance] روش پرداخت: موجودی حساب")
+    if is_extend and extend_order_id:
+        update_order(order_id, parent_order_id=extend_order_id, is_extend=True)
+        logger.info(f"🔄 [pay_balance] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} تنظیم شد")
+    
+    logger.info(f"💰 [pay_balance] روش پرداخت: {'موجودی حساب' if final_price > 0 else 'رایگان (کوپن)'}")
     logger.info(f"📡 [pay_balance] اینباندها: {inbound_ids}")
     logger.info(f"👤 [pay_balance] محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
-    if SENAI_PANEL_ENABLED:
-        try:
-            await callback.message.edit_text("⏳ در حال ساخت کانفیگ...")
-            if is_extend and extend_order_id:
-                logger.info(f"🔄 [pay_balance] شروع تمدید با پرداخت سفارش #{extend_order_id}")
-                parent_order = orders.get(str(extend_order_id))
-                if not parent_order:
-                    logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
-                    update_user(user_id, 'balance', balance)
-                    await callback.message.edit_text(
-                        "❌ خطا: سفارش اصلی برای تمدید یافت نشد. موجودی برگشت داده شد." if lang == "fa" else "❌ Error: Original order not found. Balance refunded.",
-                        reply_markup=get_back_only_keyboard(lang)
-                    )
-                    return
-                success = await extend_service(
-                    extend_order_id, 
-                    user_id, 
-                    vol, 
-                    days,
-                    inbound_ids,  # ✅ اینباندهای انتخاب شده
-                    ip_limit      # ✅ محدودیت IP
-                )
-                
-                if success:
-                    order_id = create_order(user_id, vol, days, final_price, "extend", ip_limit=ip_limit)
-                    update_order(order_id, 
-                                status='approved',
-                                approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                payment_method='balance_extend',
-                                payment_label='🔄 موجودی (تمدید)',
-                                parent_order_id=extend_order_id,
-                                is_extend=True,
-                                inbound_id=inbound_ids)
-                    if is_ready_package:
-                        update_order(order_id, 
-                                    category_id=category_id,
-                                    category_name=category_name,
-                                    package_id=package_id)
-                    
-                    record_purchase(user_id, final_price)
-                    consume_coupon(user_id)
-                    if user_id in user_states:
-                        user_states[user_id].pop('is_extend', None)
-                        user_states[user_id].pop('extend_order_id', None)
-                        user_states[user_id].pop('current_volume', None)
-                        user_states[user_id].pop('current_days', None)
-                    updated_parent = orders.get(str(extend_order_id))
-                    new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
-                    new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
-                    await send_admin_notification('extend', {
-                        'user_id': user_id,
-                        'volume': vol,
-                        'days': days,
-                        'price': final_price,
-                        'discount_percent': discount_percent,
-                        'balance_before': balance,
-                        'balance_after': new_balance,
-                        'order_id': order_id,
-                        'payment_type': 'balance_extend',
-                        'payment_label': '🔄 موجودی (تمدید)',
-                        'payment_emoji': '🔄💰',
-                        'is_extend': True,
-                        'parent_order_id': extend_order_id,
-                        'old_volume': current_volume,
-                        'old_days': current_days,
-                        'new_volume': new_volume,
-                        'new_days': new_days,
-                        'category_name': category_name,
-                        'inbound_ids': inbound_ids,
-                        'ip_limit': ip_limit
-                    })
-                    try:
-                        await callback.message.delete()
-                    except:
-                        pass
-                    if lang == "fa":
-                        text = f"""
-✅ <b>سرویس با موفقیت تمدید شد!</b>
-
-📦 +{vol}GB به حجم شما اضافه شد
-⏱ +{days} روز به مدت شما اضافه شد
-💰 روش پرداخت: موجودی (تمدید)
-💰 مبلغ پرداختی: {final_price:,} تومان
-"""
-                    else:
-                        text = f"""
-✅ <b>Service extended successfully!</b>
-
-📦 +{vol}GB added to your volume
-⏱ +{days} days added to your duration
-💰 Payment method: Balance (Extended)
-💰 Amount paid: {final_price:,} Toman
-"""
-                    
-                    await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
-                    logger.info(f"✅ [pay_balance] تمدید برای کاربر {user_id} - سفارش #{order_id}")
-                    await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
-                    debug_coupon_state(user_id, "pay_balance_end")
-                    return
-                else:
-                    update_user(user_id, 'balance', balance)
-                    error_msg = "خطا در تمدید سرویس\nموجودی برگشت داده شد" if lang == "fa" else "Error extending service\nBalance refunded"
-                    await callback.message.edit_text(
-                        f"{premium_emoji('danger', '❌')} {error_msg}",
-                        reply_markup=get_back_only_keyboard(lang)
-                    )
-                    return
-            timestamp = int(datetime.now().timestamp())
-            email = f"user{user_id}_{timestamp}"
-            user_name = user.get('name', f'کاربر_{user_id}')
-            
-            if is_ready_package and inbound_ids:
-                sub_link = await xui_create_client_with_inbound(email, vol, days, user_name, user_id, inbound_ids, ip_limit=ip_limit)
-                logger.info(f"📡 [pay_balance] استفاده از اینباندهای بسته: {inbound_ids}")
-            else:
-                sub_link = await create_client_in_panel(user_id, email, vol, days, user_name)
-            
-            if sub_link:
-                try:
-                    await send_sticker(user_id, 'success', '✅')
-                    order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-                    update_order(order_id, 
-                                status='approved', 
-                                config_link=sub_link, 
-                                sub_link=sub_link, 
-                                email=email, 
-                                payment_method='balance',
-                                payment_label='💰 موجودی حساب',
-                                inbound_id=inbound_ids)
-                    
-                    if is_ready_package:
-                        update_order(order_id, 
-                                    category_id=category_id,
-                                    category_name=category_name,
-                                    package_id=package_id)
-                    
-                    record_purchase(user_id, final_price)
-                    consume_coupon(user_id)
-                    
-                    referral_result = await check_referral_bonus(user_id)
-                    if referral_result:
-                        logger.info(f"✅ [pay_balance] پاداش رفرال برای کاربر {user_id} اعمال شد")
-                    
-                    if log_system:
-                        await log_system.log_config_created(user_id, order_id, email, vol, days)
-                        await log_system.log_purchase(user_id, order_id, vol, days, final_price, "موجودی")
-                    await send_admin_notification('balance', {
-                        'user_id': user_id,
-                        'volume': vol,
-                        'days': days,
-                        'price': final_price,
-                        'discount_percent': discount_percent,
-                        'balance_before': balance,
-                        'balance_after': new_balance,
-                        'order_id': order_id,
-                        'payment_type': 'balance',
-                        'payment_label': '💰 موجودی حساب',
-                        'payment_emoji': '💰',
-                        'inbound_ids': inbound_ids,
-                        'ip_limit': ip_limit
-                    })
-                    try:
-                        await callback.message.delete()
-                    except:
-                        pass
-                    await send_config_with_qr_option(user_id, order_id, vol, days, final_price, sub_link, lang)
-                    await callback.message.answer(
-                        f"{premium_emoji('star', '⭐')} {'لطفا امتیاز دهید' if lang=='fa' else 'Please rate'}",
-                        reply_markup=get_feedback_keyboard(order_id, lang)
-                    )
-                    if is_ready_package and user_id in user_states:
-                        user_states[user_id].pop('is_ready_package', None)
-                        user_states[user_id].pop('price', None)
-                        user_states[user_id].pop('inbound_id', None)
-                    
-                    volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-                    logger.info(f"✅ [pay_balance] خرید موفق کاربر {user_id} - سفارش #{order_id} - حجم: {volume_display_text} - مبلغ: {final_price:,} تومان")
-                    
-                except Exception as e:
-                    logger.error(f"❌ [pay_balance] خطا در ثبت سفارش: {e}")
-                    if log_system:
-                        await log_system.log_error(e, "pay_balance_register_order", user_id)
-                    
-                    update_user(user_id, 'balance', balance)
-                    error_msg = "خطا در ثبت سفارش\nموجودی برگشت داده شد" if lang == "fa" else "Error registering order\nBalance refunded"
-                    
-                    await callback.message.edit_text(
-                        f"{premium_emoji('danger', '❌')} {error_msg}",
-                        reply_markup=get_back_only_keyboard(lang)
-                    )
-            else:
+    
+    # ============================================
+    # ✅ پردازش تمدید
+    # ============================================
+    if is_extend and extend_order_id:
+        logger.info(f"🔄 [pay_balance] شروع تمدید سفارش #{extend_order_id}")
+        parent_order = orders.get(str(extend_order_id))
+        if not parent_order:
+            logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
+            if final_price > 0:
                 update_user(user_id, 'balance', balance)
-                error_msg = "خطا در ساخت کانفیگ\nموجودی برگشت داده شد" if lang == "fa" else "Error creating config\nBalance refunded"
-                
-                await callback.message.edit_text(
-                    f"{premium_emoji('danger', '❌')} {error_msg}",
-                    reply_markup=get_back_only_keyboard(lang)
-                )
-                
                 if log_system:
-                    await log_system.log_error(
-                        Exception("خطا در ساخت کلاینت در پنل"), 
-                        "pay_balance_create_client", 
-                        user_id
-                    )
                     await log_system.log_balance_change(
                         user_id=user_id,
                         amount=final_price,
                         new_balance=balance,
                         action="add",
                         admin_id=None,
-                        details="برگشت موجودی به دلیل خطا در ساخت کانفیگ"
+                        details="برگشت موجودی به دلیل عدم یافتن سفارش اصلی تمدید"
                     )
-                
-                logger.error(f"❌ [pay_balance] خطا در ساخت کلاینت برای کاربر {user_id}")
-        
-        except Exception as e:
-            logger.error(f"❌ [pay_balance] خطای غیرمنتظره: {e}")
-            if log_system:
-                await log_system.log_error(e, "pay_balance_main", user_id)
-            
-            update_user(user_id, 'balance', balance)
-            error_msg = "خطای غیرمنتظره\nموجودی برگشت داده شد" if lang == "fa" else "Unexpected error\nBalance refunded"
-            
             await callback.message.edit_text(
-                f"{premium_emoji('danger', '❌')} {error_msg}",
+                "❌ خطا: سفارش اصلی برای تمدید یافت نشد. موجودی برگشت داده شد." if lang == "fa" else "❌ Error: Original order not found. Balance refunded.",
                 reply_markup=get_back_only_keyboard(lang)
             )
-        debug_coupon_state(user_id, "pay_balance_end")
+            return
         
-        try:
-            await callback.answer()
-        except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
-        return
-    try:
-        config = await get_config_from_pool_safe(vol, days)
-        if is_extend and extend_order_id:
-            logger.info(f"🔄 [pay_balance] شروع تمدید از مخزن برای سفارش #{extend_order_id}")
-            parent_order = orders.get(str(extend_order_id))
-            if not parent_order:
-                logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
-                update_user(user_id, 'balance', balance)
-                await callback.message.edit_text(
-                    "❌ خطا: سفارش اصلی برای تمدید یافت نشد. موجودی برگشت داده شد." if lang == "fa" else "❌ Error: Original order not found. Balance refunded.",
-                    reply_markup=get_back_only_keyboard(lang)
-                )
-                return
-            success = await extend_service(
-                extend_order_id, 
-                user_id, 
-                vol, 
-                days,
-                inbound_ids,  # ✅ اینباندهای انتخاب شده
-                ip_limit      # ✅ محدودیت IP
-            )
-            
-            if success:
-                order_id = create_order(user_id, vol, days, final_price, "extend", ip_limit=ip_limit)
-                update_order(order_id, 
-                            status='approved', 
-                            payment_method='balance_pool_extend',
-                            payment_label='🔄 موجودی (تمدید - مخزن)',
-                            parent_order_id=extend_order_id,
-                            is_extend=True,
-                            inbound_id=inbound_ids)
-                if is_ready_package:
-                    update_order(order_id, 
-                                category_id=category_id,
-                                category_name=category_name,
-                                package_id=package_id)
-                
-                record_purchase(user_id, final_price)
-                consume_coupon(user_id)
-                
-                if log_system:
-                    await log_system.log_purchase(user_id, order_id, vol, days, final_price, "تمدید (مخزن)")
-                updated_parent = orders.get(str(extend_order_id))
-                new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
-                new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
-                
-                await send_admin_notification('extend', {
-                    'user_id': user_id,
-                    'volume': vol,
-                    'days': days,
-                    'price': final_price,
-                    'discount_percent': discount_percent,
-                    'balance_before': balance,
-                    'balance_after': new_balance,
-                    'order_id': order_id,
-                    'payment_type': 'balance_pool_extend',
-                    'payment_label': '🔄 موجودی (تمدید - مخزن)',
-                    'payment_emoji': '🔄💰',
-                    'is_extend': True,
-                    'parent_order_id': extend_order_id,
-                    'old_volume': current_volume,
-                    'old_days': current_days,
-                    'new_volume': new_volume,
-                    'new_days': new_days,
-                    'category_name': category_name,
-                    'inbound_ids': inbound_ids,
-                    'ip_limit': ip_limit
-                })
-                try:
-                    await callback.message.delete()
-                except:
-                    pass
-                
-                if lang == "fa":
-                    text = f"""
-✅ <b>سرویس با موفقیت تمدید شد!</b>
-
-📦 +{vol}GB به حجم شما اضافه شد
-⏱ +{days} روز به مدت شما اضافه شد
-💰 روش پرداخت: موجودی (تمدید)
-💰 مبلغ پرداختی: {final_price:,} تومان
-"""
-                else:
-                    text = f"""
-✅ <b>Service extended successfully!</b>
-
-📦 +{vol}GB added to your volume
-⏱ +{days} days added to your duration💰 Payment method: Balance (Extended)
-💰 Amount paid: {final_price:,} Toman
-"""
-                
-                await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
-                logger.info(f"✅ [pay_balance] تمدید از مخزن برای کاربر {user_id} - سفارش #{order_id}")
-                return
-            else:
-                update_user(user_id, 'balance', balance)
-                error_msg = "خطا در تمدید سرویس\nموجودی برگشت داده شد" if lang == "fa" else "Error extending service\nBalance refunded"
-                await callback.message.edit_text(
-                    f"{premium_emoji('danger', '❌')} {error_msg}",
-                    reply_markup=get_back_only_keyboard(lang)
-                )
-                return
-        if config:
-            order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
+        success = await extend_service(
+            extend_order_id, 
+            user_id, 
+            vol, 
+            days,
+            inbound_ids,
+            ip_limit
+        )
+        
+        if success:
+            # ✅ آپدیت سفارش موجود با اطلاعات موفقیت
             update_order(order_id, 
-                        status='approved', 
-                        config_link=config['link'], 
-                        config_id=config['id'],
-                        payment_method='balance_pool',
-                        payment_label='💰 موجودی حساب (مخزن)',
-                        inbound_id=inbound_ids)
+                        status='approved',
+                        approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             
-            if is_ready_package:
+            if final_price > 0:
                 update_order(order_id, 
-                            category_id=category_id,
-                            category_name=category_name,
-                            package_id=package_id)
+                            payment_method='balance_extend',
+                            payment_label='🔄 موجودی (تمدید)')
+            else:
+                update_order(order_id, 
+                            payment_method='free_coupon_extend',
+                            payment_label='🎁 رایگان (تمدید)')
             
             record_purchase(user_id, final_price)
             consume_coupon(user_id)
             
-            referral_result = await check_referral_bonus(user_id)
-            if referral_result:
-                logger.info(f"✅ [pay_balance] پاداش رفرال برای کاربر {user_id} اعمال شد")
+            # پاکسازی state
+            if user_id in user_states:
+                user_states[user_id].pop('is_extend', None)
+                user_states[user_id].pop('extend_order_id', None)
+                user_states[user_id].pop('current_volume', None)
+                user_states[user_id].pop('current_days', None)
+                user_states[user_id].pop('is_ready_package', None)
+                user_states[user_id].pop('inbound_ids', None)
+                user_states[user_id].pop('ip_limit', None)
             
-            if log_system:
-                await log_system.log_purchase(user_id, order_id, vol, days, final_price, "موجودی (مخزن)")
+            updated_parent = orders.get(str(extend_order_id))
+            new_volume = updated_parent.get('volume', 0) if updated_parent else current_volume + vol
+            new_days = updated_parent.get('days', 0) if updated_parent else current_days + days
             
-            await send_admin_notification('balance', {
+            payment_label = '🔄 موجودی (تمدید)' if final_price > 0 else '🎁 رایگان (تمدید)'
+            payment_emoji = '🔄💰' if final_price > 0 else '🎁🔄'
+            payment_type = 'balance_extend' if final_price > 0 else 'free_extend'
+            
+            await send_admin_notification('extend', {
                 'user_id': user_id,
                 'volume': vol,
                 'days': days,
@@ -20953,106 +20596,260 @@ async def pay_balance(callback: CallbackQuery):
                 'balance_before': balance,
                 'balance_after': new_balance,
                 'order_id': order_id,
-                'payment_type': 'balance_pool',
-                'payment_label': '💰 موجودی حساب (مخزن)',
-                'payment_emoji': '💰',
+                'payment_type': payment_type,
+                'payment_label': payment_label,
+                'payment_emoji': payment_emoji,
+                'is_extend': True,
+                'parent_order_id': extend_order_id,
+                'old_volume': current_volume,
+                'old_days': current_days,
+                'new_volume': new_volume,
+                'new_days': new_days,
+                'category_name': category_name,
                 'inbound_ids': inbound_ids,
                 'ip_limit': ip_limit
             })
             
-            await callback.message.edit_text("✅ در حال ارسال کانفیگ...")
-            await send_config_with_qr_option(user_id, order_id, vol, days, final_price, config['link'], lang)
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            
+            if lang == "fa":
+                text = f"""
+✅ <b>سرویس با موفقیت تمدید شد!</b>
+
+📦 +{vol}GB به حجم شما اضافه شد
+⏱ +{days} روز به مدت شما اضافه شد
+💰 روش پرداخت: {payment_label}
+💰 مبلغ پرداختی: {final_price:,} تومان
+"""
+            else:
+                text = f"""
+✅ <b>Service extended successfully!</b>
+
+📦 +{vol}GB added to your volume
+⏱ +{days} days added to your duration
+💰 Payment method: {payment_label}
+💰 Amount paid: {final_price:,} Toman
+"""
+            
+            await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
+            logger.info(f"✅ [pay_balance] تمدید برای کاربر {user_id} - سفارش #{order_id}")
+            await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
+            debug_coupon_state(user_id, "pay_balance_end")
+            return
+        else:
+            # ✅ برگشت موجودی در صورت خطا
+            if final_price > 0:
+                update_user(user_id, 'balance', balance)
+                if log_system:
+                    await log_system.log_balance_change(
+                        user_id=user_id,
+                        amount=final_price,
+                        new_balance=balance,
+                        action="add",
+                        admin_id=None,
+                        details="برگشت موجودی به دلیل خطا در تمدید سرویس"
+                    )
+            error_msg = "خطا در تمدید سرویس\nموجودی برگشت داده شد" if lang == "fa" else "Error extending service\nBalance refunded"
+            await callback.message.edit_text(
+                f"{premium_emoji('danger', '❌')} {error_msg}",
+                reply_markup=get_back_only_keyboard(lang)
+            )
+            return
+    
+    # ============================================
+    # ✅ پردازش خرید عادی (غیر تمدید)
+    # ============================================
+    await callback.message.edit_text("⏳ در حال ساخت کانفیگ...")
+    
+    timestamp = int(datetime.now().timestamp())
+    email = f"user{user_id}_{timestamp}"
+    user_name = user.get('name', f'کاربر_{user_id}')
+    
+    # ✅ انتخاب اینباند مناسب
+    if is_ready_package and inbound_ids:
+        inbound_to_use = inbound_ids
+        logger.info(f"📡 [pay_balance] استفاده از اینباندهای بسته: {inbound_ids}")
+    else:
+        inbound_to_use = get_user_inbound(user_id)
+        logger.info(f"📡 [pay_balance] استفاده از اینباند پیش‌فرض: {inbound_to_use}")
+    
+    # ✅ تلاش برای ساخت کانفیگ
+    sub_link = None
+    config_id = None
+    
+    if SENAI_PANEL_ENABLED:
+        # حالت پنل فعال - ساخت مستقیم کلاینت
+        try:
+            if is_ready_package and inbound_ids:
+                sub_link = await xui_create_client_with_inbound(email, vol, days, user_name, user_id, inbound_ids, ip_limit=ip_limit)
+                logger.info(f"📡 [pay_balance] استفاده از اینباندهای بسته: {inbound_ids}")
+            else:
+                sub_link = await create_client_in_panel(user_id, email, vol, days, user_name)
+        except Exception as e:
+            logger.error(f"❌ [pay_balance] خطا در ساخت کلاینت پنل: {e}")
+            sub_link = None
+    else:
+        # حالت پنل غیرفعال - استفاده از مخزن کانفیگ
+        try:
+            config = await get_config_from_pool_safe(vol, days)
+            if config:
+                sub_link = config['link']
+                config_id = config.get('id')
+                logger.info(f"📦 [pay_balance] کانفیگ از مخزن دریافت شد: {sub_link}")
+        except Exception as e:
+            logger.error(f"❌ [pay_balance] خطا در دریافت از مخزن: {e}")
+            sub_link = None
+    
+    if sub_link:
+        # ✅ آپدیت سفارش موجود با اطلاعات موفقیت
+        update_order(order_id, 
+                    status='approved',
+                    approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    config_link=sub_link, 
+                    sub_link=sub_link, 
+                    email=email)
+        
+        if config_id:
+            update_order(order_id, config_id=config_id)
+        
+        if final_price > 0:
+            if SENAI_PANEL_ENABLED:
+                update_order(order_id, 
+                            payment_method='balance',
+                            payment_label='💰 موجودی حساب')
+            else:
+                update_order(order_id, 
+                            payment_method='balance_pool',
+                            payment_label='💰 موجودی حساب (مخزن)')
+        else:
+            update_order(order_id, 
+                        payment_method='free_coupon',
+                        payment_label='🎁 رایگان (کوپن)')
+        
+        record_purchase(user_id, final_price)
+        consume_coupon(user_id)
+        
+        if final_price > 0:
+            referral_result = await check_referral_bonus(user_id)
+            if referral_result:
+                logger.info(f"✅ [pay_balance] پاداش رفرال برای کاربر {user_id} اعمال شد")
+        
+        if log_system:
+            await log_system.log_config_created(user_id, order_id, email, vol, days)
+            await log_system.log_purchase(user_id, order_id, vol, days, final_price, "موجودی" if final_price > 0 else "رایگان")
+        
+        payment_type = 'balance' if final_price > 0 else 'free'
+        payment_label = '💰 موجودی حساب' if final_price > 0 else '🎁 رایگان (کوپن)'
+        payment_emoji = '💰' if final_price > 0 else '🎁'
+        
+        await send_admin_notification('balance', {
+            'user_id': user_id,
+            'volume': vol,
+            'days': days,
+            'price': final_price,
+            'discount_percent': discount_percent,
+            'balance_before': balance,
+            'balance_after': new_balance,
+            'order_id': order_id,
+            'payment_type': payment_type,
+            'payment_label': payment_label,
+            'payment_emoji': payment_emoji,
+            'inbound_ids': inbound_ids,
+            'ip_limit': ip_limit
+        })
+        
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        
+        await send_config_with_qr_option(user_id, order_id, vol, days, final_price, sub_link, lang)
+        
+        if final_price > 0:
             await callback.message.answer(
                 f"{premium_emoji('star', '⭐')} {'لطفا امتیاز دهید' if lang=='fa' else 'Please rate'}",
                 reply_markup=get_feedback_keyboard(order_id, lang)
             )
-            
-            if is_ready_package and user_id in user_states:
-                user_states[user_id].pop('is_ready_package', None)
-                user_states[user_id].pop('price', None)
-                user_states[user_id].pop('inbound_id', None)
-            
-            volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-            logger.info(f"✅ [pay_balance] خرید موفق کاربر {user_id} از مخزن - سفارش #{order_id} - حجم: {volume_display_text} - مبلغ: {final_price:,} تومان")
-            
-        else:
-            order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
-            update_order(order_id, 
-                        status='pending',
-                        payment_method='balance_pool',
-                        payment_label='💰 موجودی حساب (مخزن)',
-                        inbound_id=inbound_ids)
-            
-            if is_ready_package:
-                update_order(order_id, 
-                            category_id=category_id,
-                            category_name=category_name,
-                            package_id=package_id)
-            
-            if log_system:
-                await log_system.log_user_action(
-                    user_id, 
-                    "درخواست کانفیگ (موجودی کافی ولی کانفیگ موجود نیست)", 
-                    f"سفارش #{order_id} | {vol}GB/{days} روز | مبلغ: {final_price:,} تومان"
-                )
-            extend_note = ""
-            if is_extend and extend_order_id:
-                extend_note = f"\n🔄 <b>تمدید سرویس #{extend_order_id}</b>"
-            
-            admin_text = f"📝 <b>درخواست کانفیگ</b>\n👤 {user.get('name')} ({user_id})\n📦 {vol}GB/{days} روز\n💰 {final_price:,} تومان{extend_note}"
-            if discount_percent > 0:
-                admin_text += f"\n🏷️ تخفیف {discount_percent}% (قیمت اصلی: {original_price:,})"
-            
-            if is_ready_package:
-                icon = "📦"
-                if category_id:
-                    for cat in READY_PACKAGES.get('categories', []):
-                        if cat.get('id') == category_id:
-                            icon = cat.get('icon', '📦')
-                            break
-                admin_text += f"\n{icon} بسته آماده: {category_name}"
-                if package_id:
-                    for cat in READY_PACKAGES.get('categories', []):
-                        if cat.get('id') == category_id:
-                            for pkg in cat.get('packages', []):
-                                if pkg.get('id') == package_id:
-                                    admin_text += f" ({pkg.get('volume')}GB)"
-                                    break
-                            break
-            
-            await bot.send_message(
-                ADMIN_ID_INT,
-                admin_text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="📝 ارسال کانفیگ", callback_data=f"send_config_{order_id}")]
-                ])
-            )
-            
-            warn_msg = "کانفیگ آماده نیست\nبه زودی ارسال میشود" if lang == "fa" else "Config not ready\nWill be sent soon"
-            await callback.message.edit_text(
-                f"{premium_emoji('warning', '⚠️')} {warn_msg}",
-                reply_markup=get_back_only_keyboard(lang)
-            )
-            
-            logger.info(f"📝 [pay_balance] درخواست کانفیگ برای کاربر {user_id} - سفارش #{order_id}")
-    
-    except Exception as e:
-        logger.error(f"❌ [pay_balance] خطای غیرمنتظره: {e}")
-        if log_system:
-            await log_system.log_error(e, "pay_balance_offline", user_id)
         
-        update_user(user_id, 'balance', balance)
-        error_msg = "خطای غیرمنتظره\nموجودی برگشت داده شد" if lang == "fa" else "Unexpected error\nBalance refunded"
+        # پاکسازی state
+        if user_id in user_states:
+            user_states[user_id].pop('is_ready_package', None)
+            user_states[user_id].pop('price', None)
+            user_states[user_id].pop('inbound_id', None)
+            user_states[user_id].pop('inbound_ids', None)
+            user_states[user_id].pop('ip_limit', None)
+            user_states[user_id].pop('coupon_code', None)
+            user_states[user_id].pop('coupon_applied', None)
+            user_states[user_id].pop('coupon_discount', None)
+        
+        volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
+        category_display = f"{category_name} - " if is_ready_package else ""
+        
+        if lang == "fa":
+            text = f"""
+✅ <b>سرویس با موفقیت فعال شد!</b>
+
+{category_display}📦 حجم: {volume_display_text}
+⏱ مدت: {days} روز
+💰 روش پرداخت: {payment_label}
+💰 مبلغ پرداختی: {final_price:,} تومان
+
+✅ کانفیگ شما در بخش «کانفیگ‌های من» موجود است.
+"""
+        else:
+            text = f"""
+✅ <b>Service activated successfully!</b>
+
+{category_display}📦 Volume: {volume_display_text}
+⏱ Duration: {days} days
+💰 Payment method: {payment_label}
+💰 Amount paid: {final_price:,} Toman
+
+✅ Your config is available in 'My Configs'.
+"""
+        
+        logger.info(f"✅ [pay_balance] خرید موفق کاربر {user_id} - سفارش #{order_id} - حجم: {volume_display_text} - مبلغ: {final_price:,} تومان")
+        
+    else:
+        # ✅ خطا در ساخت کانفیگ - برگشت موجودی
+        if final_price > 0:
+            update_user(user_id, 'balance', balance)
+            if log_system:
+                await log_system.log_balance_change(
+                    user_id=user_id,
+                    amount=final_price,
+                    new_balance=balance,
+                    action="add",
+                    admin_id=None,
+                    details="برگشت موجودی به دلیل خطا در ساخت کانفیگ"
+                )
+        
+        error_msg = "خطا در ساخت کانفیگ\nموجودی برگشت داده شد" if lang == "fa" else "Error creating config\nBalance refunded"
+        
         await callback.message.edit_text(
             f"{premium_emoji('danger', '❌')} {error_msg}",
             reply_markup=get_back_only_keyboard(lang)
         )
+        
+        if log_system:
+            await log_system.log_error(
+                Exception("خطا در ساخت کلاینت"), 
+                "pay_balance_create_client", 
+                user_id
+            )
+        
+        logger.error(f"❌ [pay_balance] خطا در ساخت کلاینت برای کاربر {user_id}")
+    
     debug_coupon_state(user_id, "pay_balance_end")
     
     try:
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
+    return
 
 
 def debug_coupon_state(user_id: int, location: str):
@@ -21317,6 +21114,7 @@ async def handle_receipt(message: Message):
     except:
         await message.reply("❌ خطا در دریافت عکس" if lang=='fa' else "❌ Error")
         return
+    
     valid_orders = get_valid_orders()
     pending_orders = []
     for o in valid_orders.values():
@@ -21329,9 +21127,11 @@ async def handle_receipt(message: Message):
         if user_id in user_states:
             user_states[user_id]['awaiting_receipt'] = False
         return
+    
     pending_orders.sort(key=lambda x: x.get('created_at', x.get('date', '')), reverse=True)
     pending = pending_orders[0]
     order_id = pending['order_id']
+    
     if len(pending_orders) > 1:
         old_orders = pending_orders[1:]
         for old_o in old_orders:
@@ -21355,6 +21155,7 @@ async def handle_receipt(message: Message):
                 )
         except:
             pass
+    
     order_type = pending.get('type', 'purchase')
     parent_order_id = pending.get('parent_order_id')
     is_extend = parent_order_id is not None
@@ -21369,63 +21170,269 @@ async def handle_receipt(message: Message):
     logger.info(f"📸 فیش برای سفارش #{order_id} دریافت شد - وضعیت جدید: {new_status}")
     if is_extend:
         logger.info(f"🔄 این سفارش برای تمدید سرویس #{parent_order_id} است")
-    order_price = pending.get('price', 0)
-    order_amount = pending.get('amount', 0)
-    order_volume = pending.get('volume', 0)
-    order_days = pending.get('days', 0)
     
-    category_name = pending.get('category_name')
+    # ✅ تعریف همه متغیرها با مقادیر امن
+    order_price = pending.get('price', 0) or 0
+    order_amount = pending.get('amount', 0) or 0
+    order_volume = pending.get('volume', 0) or 0
+    order_days = pending.get('days', 0) or 0
+    
+    # ✅ محاسبه expected_price
+    expected_price = order_price if order_price > 0 else order_amount
+    
+    category_name = pending.get('category_name') or ''
     category_id = pending.get('category_id')
     package_id = pending.get('package_id')
-    user_display_name = message.from_user.first_name or "کاربر"
-    user_username = message.from_user.username
     
-    user_display_escaped = html.escape(user_display_name)
-    if user_username:
-        user_display = f"@{html.escape(user_username)}"
+    # ✅ اطلاعات بیشتر برای نمایش
+    payment_method = pending.get('payment_method', '') or ''
+    payment_label = pending.get('payment_label', '') or ''
+    ip_limit = pending.get('ip_limit', 0) or 0
+    inbound_ids = pending.get('inbound_id', []) or []
+    
+    # ✅ اطلاعات کوپن - با مقادیر امن
+    coupon_code = pending.get('coupon_code') or ''
+    coupon_discount = pending.get('coupon_discount', 0) or 0
+    original_price = pending.get('original_price', 0) or 0
+    
+    # ✅ اطلاعات کاربر - امن
+    user_display_name = message.from_user.first_name or ""
+    user_username = message.from_user.username
+    user_last_name = message.from_user.last_name or ""
+    
+    # ✅ دریافت نام از دیتابیس
+    user_db = get_user(user_id)
+    db_name = user_db.get('name', '') if user_db else ''
+    
+    # ✅ ساخت نام کامل
+    telegram_full_name = ""
+    if user_display_name:
+        telegram_full_name = user_display_name
+        if user_last_name:
+            telegram_full_name += f" {user_last_name}"
+    
+    # ✅ انتخاب بهترین نام
+    if db_name and db_name.strip() and not db_name.startswith('کاربر_'):
+        display_name = db_name.strip()
+    elif telegram_full_name and telegram_full_name.strip():
+        display_name = telegram_full_name.strip()
     else:
-        user_display = f"{user_display_escaped} (ID: {user_id})"
-    date_escaped = html.escape(pending.get('date', 'نامشخص'))
+        display_name = f'کاربر_{user_id}'
+    
+    # ✅ ساخت نمایش امن
+    if user_username:
+        user_display = f"@{html.escape(user_username)} ({html.escape(display_name)})"
+    else:
+        user_display = f"{html.escape(display_name)} (ID: {user_id})"
+    
+    date_escaped = html.escape(str(pending.get('date', 'نامشخص')))
+    
     category_icon = "📦"
     if category_id:
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
                 category_icon = cat.get('icon', '📦')
                 break
+    
+    # ✅ ساخت متن ادمین
     admin_text = f"💰 <b>فیش جدید</b>\n"
     admin_text += f"🆔 #{order_id} | 👤 {user_display}\n"
     admin_text += f"📅 {date_escaped}\n"
+    admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # ✅ نوع سفارش
     if is_extend:
         admin_text += f"🔄 <b>نوع: تمدید سرویس #{parent_order_id}</b>\n"
+        
+        parent_order = orders.get(str(parent_order_id))
+        if parent_order:
+            parent_volume = parent_order.get('volume', 0) or 0
+            parent_days = parent_order.get('days', 0) or 0
+            parent_email = parent_order.get('email', '') or ''
+            
+            parent_volume_display = "♾️ نامحدود" if parent_volume == 0 else f"{parent_volume}GB"
+            
+            admin_text += f"📦 <b>سرویس قبلی:</b> {parent_volume_display} | {parent_days} روز\n"
+            
+            if parent_email:
+                admin_text += f"📧 <b>ایمیل:</b> <code>{html.escape(parent_email)}</code>\n"
+            
+            admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            if order_volume == 0:
+                admin_text += f"📦 <b>حجم اضافه:</b> ♾️ نامحدود\n"
+            else:
+                admin_text += f"📦 <b>حجم اضافه:</b> {order_volume}GB\n"
+            
+            admin_text += f"⏱ <b>روز اضافه:</b> {order_days} روز\n"
+            
+            if order_volume == 0:
+                new_volume = 0
+            else:
+                new_volume = parent_volume + order_volume
+            new_days = parent_days + order_days
+            
+            new_volume_display = "♾️ نامحدود" if new_volume == 0 else f"{new_volume}GB"
+            admin_text += f"📊 <b>نتیجه:</b> {parent_volume_display} → {new_volume_display} | {parent_days} → {new_days} روز\n"
+            
     elif order_type == 'balance_charge':
         admin_text += f"💰 <b>نوع: شارژ حساب</b>\n"
-    elif order_type == 'ready_package' or order_type == 'category_purchase':
+        admin_text += f"💳 <b>مبلغ شارژ:</b> {expected_price:,} تومان\n"
+        
+    elif order_type in ['ready_package', 'category_purchase']:
         category_name_display = category_name or "بسته آماده"
         category_name_escaped = html.escape(category_name_display)
         
-        package_info = ""
+        admin_text += f"{category_icon} <b>نوع: بسته آماده - {category_name_escaped}</b>\n"
+        admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        
+        package_found = False
         if category_id and package_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == category_id:
                     for pkg in cat.get('packages', []):
                         if pkg.get('id') == package_id:
-                            package_info = f" ({pkg.get('volume')}GB - {pkg.get('days')} روز)"
+                            pkg_volume = pkg.get('volume', 0) or 0
+                            pkg_days = pkg.get('days', 0) or 0
+                            pkg_price = pkg.get('price', 0) or 0
+                            
+                            pkg_volume_display = "♾️ نامحدود" if pkg_volume == 0 else f"{pkg_volume}GB"
+                            admin_text += f"📦 <b>حجم:</b> {pkg_volume_display}\n"
+                            admin_text += f"⏱ <b>مدت:</b> {pkg_days} روز\n"
+                            admin_text += f"💰 <b>قیمت اصلی:</b> {pkg_price:,} تومان\n"
+                            package_found = True
                             break
                     break
         
-        admin_text += f"{category_icon} <b>نوع: بسته آماده - {category_name_escaped}</b>{package_info}\n"
+        if not package_found:
+            volume_display = "♾️ نامحدود" if order_volume == 0 else f"{order_volume}GB"
+            admin_text += f"📦 <b>حجم:</b> {volume_display}\n"
+            admin_text += f"⏱ <b>مدت:</b> {order_days} روز\n"
+            if expected_price > 0:
+                admin_text += f"💰 <b>قیمت:</b> {expected_price:,} تومان\n"
+        
+        has_discount = coupon_discount > 0 or (original_price > 0 and original_price != expected_price)
+        if has_discount:
+            admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+            admin_text += f"🏷️ <b>کوپن تخفیف:</b>\n"
+            
+            if coupon_code:
+                admin_text += f"🎟 <b>کد:</b> <code>{html.escape(coupon_code)}</code>\n"
+            
+            if coupon_discount > 0:
+                admin_text += f"📊 <b>درصد تخفیف:</b> {coupon_discount}%\n"
+            
+            if original_price > 0:
+                admin_text += f"💰 <b>قیمت اصلی:</b> {original_price:,} تومان\n"
+                admin_text += f"💎 <b>قیمت با تخفیف:</b> {expected_price:,} تومان\n"
+                
+                discount_amount = original_price - expected_price
+                if discount_amount > 0:
+                    admin_text += f"🔻 <b>مبلغ تخفیف:</b> {discount_amount:,} تومان\n"
+            elif coupon_discount > 0 and expected_price > 0:
+                try:
+                    calculated_original = int(expected_price * 100 / (100 - coupon_discount))
+                    admin_text += f"💰 <b>قیمت اصلی:</b> {calculated_original:,} تومان\n"
+                    admin_text += f"💎 <b>قیمت با تخفیف:</b> {expected_price:,} تومان\n"
+                    
+                    discount_amount = calculated_original - expected_price
+                    if discount_amount > 0:
+                        admin_text += f"🔻 <b>مبلغ تخفیف:</b> {discount_amount:,} تومان\n"
+                except ZeroDivisionError:
+                    pass
+        
     elif order_type == 'purchase':
         admin_text += f"🛒 <b>نوع: خرید سفارشی</b>\n"
+        admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        volume_display = "♾️ نامحدود" if order_volume == 0 else f"{order_volume}GB"
+        admin_text += f"📦 <b>حجم:</b> {volume_display}\n"
+        admin_text += f"⏱ <b>مدت:</b> {order_days} روز\n"
+        
+        has_discount = coupon_discount > 0 or (original_price > 0 and original_price != expected_price)
+        if has_discount:
+            admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+            admin_text += f"🏷️ <b>کوپن تخفیف:</b>\n"
+            
+            if coupon_code:
+                admin_text += f"🎟 <b>کد:</b> <code>{html.escape(coupon_code)}</code>\n"
+            
+            if coupon_discount > 0:
+                admin_text += f"📊 <b>درصد تخفیف:</b> {coupon_discount}%\n"
+            
+            if original_price > 0:
+                admin_text += f"💰 <b>قیمت اصلی:</b> {original_price:,} تومان\n"
+                admin_text += f"💎 <b>قیمت با تخفیف:</b> {expected_price:,} تومان\n"
+                
+                discount_amount = original_price - expected_price
+                if discount_amount > 0:
+                    admin_text += f"🔻 <b>مبلغ تخفیف:</b> {discount_amount:,} تومان\n"
+            elif coupon_discount > 0 and expected_price > 0:
+                try:
+                    calculated_original = int(expected_price * 100 / (100 - coupon_discount))
+                    admin_text += f"💰 <b>قیمت اصلی:</b> {calculated_original:,} تومان\n"
+                    admin_text += f"💎 <b>قیمت با تخفیف:</b> {expected_price:,} تومان\n"
+                    
+                    discount_amount = calculated_original - expected_price
+                    if discount_amount > 0:
+                        admin_text += f"🔻 <b>مبلغ تخفیف:</b> {discount_amount:,} تومان\n"
+                except ZeroDivisionError:
+                    pass
+        
     elif order_type == 'test':
         admin_text += f"🧪 <b>نوع: تست رایگان</b>\n"
+        admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        if order_volume < 1:
+            volume_display = f"{order_volume * 1024:.1f}MB"
+        else:
+            volume_display = f"{order_volume}GB"
+        admin_text += f"📦 <b>حجم:</b> {volume_display}\n"
+        admin_text += f"⏱ <b>مدت:</b> {order_days} روز\n"
     else:
-        admin_text += f"⚠️ <b>نوع: {html.escape(order_type)}</b>\n"
-    expected_price = order_price or order_amount
-    admin_text += f"📦 {order_volume}GB | ⏱️ {order_days} روز | 💰 مبلغ مورد انتظار: {expected_price:,} تومان"
-    if is_extend:
-        admin_text += f"\n🔄 این سفارش برای <b>تمدید</b> سرویس #{parent_order_id} است."
+        admin_text += f"⚠️ <b>نوع: {html.escape(str(order_type))}</b>\n"
     
-    admin_text += "\n⏳ در انتظار تایید"
+    # ✅ اطلاعات پرداخت
+    if order_type != 'balance_charge':
+        admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        
+        has_discount = coupon_discount > 0 or (original_price > 0 and original_price != expected_price)
+        if has_discount:
+            admin_text += f"💎 <b>مبلغ نهایی (با تخفیف):</b> {expected_price:,} تومان\n"
+        else:
+            admin_text += f"💰 <b>مبلغ مورد انتظار:</b> {expected_price:,} تومان\n"
+        
+        if payment_label:
+            admin_text += f"💳 <b>روش پرداخت:</b> {html.escape(payment_label)}\n"
+        elif payment_method:
+            payment_method_display = {
+                'card': '💳 کارت به کارت',
+                'balance': '💰 موجودی حساب',
+                'balance_extend': '🔄 موجودی (تمدید)',
+                'free_coupon': '🎁 رایگان (کوپن)',
+                'free_coupon_extend': '🎁 رایگان (تمدید)',
+                'sync_from_panel': '🔄 همگام‌سازی',
+            }.get(payment_method, str(payment_method))
+            admin_text += f"💳 <b>روش پرداخت:</b> {html.escape(payment_method_display)}\n"
+        
+        if ip_limit > 0:
+            admin_text += f"👤 <b>محدودیت IP:</b> {ip_limit}\n"
+        else:
+            admin_text += f"👤 <b>محدودیت IP:</b> نامحدود\n"
+        
+        if inbound_ids:
+            if isinstance(inbound_ids, list):
+                inbound_display = ', '.join(str(ib) for ib in inbound_ids if ib)
+            else:
+                inbound_display = str(inbound_ids)
+            
+            if inbound_display and inbound_display != 'None':
+                admin_text += f"📡 <b>اینباند:</b> {inbound_display}\n"
+    else:
+        admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+        admin_text += f"💰 <b>مبلغ شارژ:</b> {expected_price:,} تومان\n"
+    
+    admin_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    admin_text += "⏳ <b>در انتظار تایید</b>"
+    
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ تایید", callback_data=f"approve_receipt_{order_id}"),
@@ -21446,11 +21453,38 @@ async def handle_receipt(message: Message):
             await bot.send_photo(ADMIN_ID_INT, photo_id)
         except Exception as e2:
             logger.error(f"خطا در ارسال فیش به ادمین (تلاش دوم): {e2}")
-    amount = expected_price
+    
+    # ✅ پیام به کاربر - بدون نمایش مبلغ
     if is_extend:
-        success = f"{premium_emoji('success','✅')} <b>فیش تمدید دریافت شد</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n🔄 تمدید سرویس #{parent_order_id}\n{premium_emoji('money','💰')} {amount:,} تومان\n{premium_emoji('time','⏳')} در انتظار تایید" if lang=='fa' else f"{premium_emoji('success','✅')} <b>Extension receipt received</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n🔄 Extending service #{parent_order_id}\n{premium_emoji('money','💰')} {amount:,} Toman\n{premium_emoji('time','⏳')} Pending approval"
+        if lang == 'fa':
+            success = f"{premium_emoji('success','✅')} <b>فیش تمدید دریافت شد</b>\n\n"
+            success += f"{premium_emoji('id','🆔')} شماره سفارش: #{order_id}\n"
+            success += f"🔄 تمدید سرویس #{parent_order_id}\n"
+            success += f"{premium_emoji('time','⏳')} در انتظار تایید..."
+        else:
+            success = f"{premium_emoji('success','✅')} <b>Extension receipt received</b>\n\n"
+            success += f"{premium_emoji('id','🆔')} Order number: #{order_id}\n"
+            success += f"🔄 Extending service #{parent_order_id}\n"
+            success += f"{premium_emoji('time','⏳')} Pending approval..."
+    
+    elif order_type == 'balance_charge':
+        if lang == 'fa':
+            success = f"{premium_emoji('success','✅')} <b>فیش شارژ حساب دریافت شد</b>\n\n"
+            success += f"{premium_emoji('id','🆔')} شماره سفارش: #{order_id}\n"
+            success += f"{premium_emoji('time','⏳')} در انتظار تایید..."
+        else:
+            success = f"{premium_emoji('success','✅')} <b>Balance charge receipt received</b>\n\n"
+            success += f"{premium_emoji('id','🆔')} Order number: #{order_id}\n"
+            success += f"{premium_emoji('time','⏳')} Pending approval..."
     else:
-        success = f"{premium_emoji('success','✅')} <b>فیش دریافت شد</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n{premium_emoji('money','💰')} {amount:,} تومان\n{premium_emoji('time','⏳')} در انتظار تایید" if lang=='fa' else f"{premium_emoji('success','✅')} <b>Receipt received</b>\n\n{premium_emoji('id','🆔')} #{order_id}\n{premium_emoji('money','💰')} {amount:,} Toman\n{premium_emoji('time','⏳')} Pending approval"
+        if lang == 'fa':
+            success = f"{premium_emoji('success','✅')} <b>فیش دریافت شد</b>\n\n"
+            success += f"{premium_emoji('id','🆔')} شماره سفارش: #{order_id}\n"
+            success += f"{premium_emoji('time','⏳')} در انتظار تایید..."
+        else:
+            success = f"{premium_emoji('success','✅')} <b>Receipt received</b>\n\n"
+            success += f"{premium_emoji('id','🆔')} Order number: #{order_id}\n"
+            success += f"{premium_emoji('time','⏳')} Pending approval..."
     
     await message.reply(success, parse_mode=ParseMode.HTML)
     
@@ -21458,11 +21492,25 @@ async def handle_receipt(message: Message):
         user_states[user_id]['awaiting_receipt'] = False
     
     is_admin = (user_id == ADMIN_ID_INT)
-    await message.answer("🚀 منوی اصلی" if lang=='fa' else "🚀 Main Menu", 
-                        reply_markup=get_main_keyboard(is_admin, lang))
+    
+    # ✅ اصلاح: استفاده از message.reply به جای message.answer
+    try:
+        await message.reply(
+            "🚀 منوی اصلی" if lang=='fa' else "🚀 Main Menu",
+            reply_markup=get_main_keyboard(is_admin, lang)
+        )
+    except Exception as e:
+        logger.warning(f"خطا در ارسال منوی اصلی: {e}")
+        try:
+            await bot.send_message(
+                user_id,
+                "🚀 منوی اصلی" if lang=='fa' else "🚀 Main Menu",
+                reply_markup=get_main_keyboard(is_admin, lang)
+            )
+        except Exception as e2:
+            logger.error(f"خطا در ارسال منوی اصلی (تلاش دوم): {e2}")
+            
 
-
-@dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_custom_payment_receipt_amount'))
 async def custom_payment_receipt_amount(message: Message):
     """دریافت مبلغ دلخواه - با هشدار کم بودن مبلغ"""
     admin_id = message.from_user.id
@@ -24657,6 +24705,12 @@ async def my_account(callback: CallbackQuery):
         o for o in approved_purchases 
         if o.get('config_link') is None or o.get('config_link') == ''
     ]
+    extend_orders = [
+        o for o in user_orders 
+        if o.get('is_extend', False) or o.get('parent_order_id') is not None
+    ]
+    approved_extends = [o for o in extend_orders if o.get('status') == 'approved']
+    total_extends = len(approved_extends)
     pending_orders = [o for o in purchase_orders if o.get('status') == 'pending']
     rejected_orders = [o for o in purchase_orders if o.get('status') == 'rejected']
     awaiting_payment_orders = [o for o in purchase_orders if o.get('status') == 'awaiting_payment']
@@ -24684,6 +24738,7 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('wallet', '💰')} <b>موجودی:</b> {user.get('balance', 0):,} تومان
 {premium_emoji('invite', '👥')} <b>تعداد دعوت:</b> {ref_count}
 {premium_emoji('config', '📦')} <b>کل خریدها:</b> {total_purchases}
+{premium_emoji('renew', '🔄')} <b>تعداد تمدیدها:</b> {total_extends}
 {premium_emoji('config', '🟢')} <b>کانفیگ فعال:</b> {len(active_configs)}
 {premium_emoji('calendar', '📅')} <b>عضویت:</b> {join_date_escaped}
 {coupon_info}
@@ -24702,6 +24757,7 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('wallet', '💰')} <b>Balance:</b> {user.get('balance', 0):,} Toman
 {premium_emoji('invite', '👥')} <b>Referrals:</b> {ref_count}
 {premium_emoji('config', '📦')} <b>Total Purchases:</b> {total_purchases}
+{premium_emoji('renew', '🔄')} <b>Total Extends:</b> {total_extends}
 {premium_emoji('config', '🟢')} <b>Active Configs:</b> {len(active_configs)}
 {premium_emoji('calendar', '📅')} <b>Joined:</b> {join_date_escaped}
 {coupon_info}
@@ -25140,9 +25196,9 @@ async def handle_chat_message(message: Message):
         await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
     
     if lang == "fa":
-        await message.reply("✅ پیام شما ارسال شد. منتظر پاسخ باشید.")
+        await message.reply("✅ پیام شما ارسال شد.")
     else:
-        await message.reply("✅ Message sent. Wait for reply.")
+        await message.reply("✅ Message sent.")
 @dp.callback_query(F.data.startswith("feedback_"))
 async def handle_feedback(callback: CallbackQuery):
     parts = callback.data.split("_")
@@ -25702,15 +25758,7 @@ async def admin_close_chat(callback: CallbackQuery):
         user_states.pop(chat['user_id'], None)
     if callback.from_user.id in user_states:
         user_states.pop(callback.from_user.id, None)
-    if chat:
-        try:
-            user_lang = get_user(chat['user_id']).get('lang', 'fa')
-            await bot.send_message(
-                chat['user_id'],
-                "🔒 گفتگو توسط پشتیبانی بسته شد." if user_lang == "fa" else "🔒 Conversation closed by support."
-            )
-        except:
-            pass
+    
     
     if lang == "fa":
         await callback.message.edit_text(f"✅ چت #{chat_id} بسته شد", reply_markup=get_admin_keyboard(lang))
@@ -26392,7 +26440,104 @@ async def admin_toggle_panel(callback: CallbackQuery):
     
     await admin_test_panel(callback)
     
+
+import re
+import html
+import unicodedata
+
+def clean_comment_text(comment: str) -> str:
+    """
+    پاکسازی کامنت از تگ‌های HTML و کاراکترهای یونیکد فانتزی
+    """
+    if not comment:
+        return ""
     
+    # حذف تگ‌های HTML
+    comment = re.sub(r'<[^>]+>', '', comment)
+    
+    # تبدیل HTML entities
+    comment = html.unescape(comment)
+    
+    # نرمال‌سازی یونیکد (تبدیل کاراکترهای فانتزی به ASCII)
+    comment = unicodedata.normalize('NFKD', comment)
+    comment = comment.encode('ascii', 'ignore').decode('ascii')
+    
+    # حذف فاصله‌های اضافی
+    comment = ' '.join(comment.split())
+    
+    return comment
+
+def extract_user_info_from_comment(comment: str):
+    """
+    استخراج ID و نام کاربر از کامنت
+    Returns: (user_id, user_name, is_bot_client, order_type)
+    """
+    if not comment:
+        return None, None, False, 'purchase'
+    
+    # پاکسازی کامنت
+    cleaned_comment = clean_comment_text(comment)
+    
+    if not cleaned_comment:
+        return None, None, False, 'purchase'
+    
+    user_id = None
+    user_name = None
+    is_bot_client = False
+    order_type = 'purchase'
+    
+    # الگوهای مختلف برای شناسایی ID
+    id_patterns = [
+        r'\(ID[:=](\d+)\)',
+        r'ID\s*[:=]\s*(\d+)',
+        r'\|\s*ID\s*[:=]\s*(\d+)',
+        r'user\s*(\d+)',
+        r'کاربر\s*(\d+)',
+        r'\(\s*(\d{6,})\s*\)',
+        r'(?:^|\s)(\d{9,})(?:\s|$)',
+    ]
+    
+    for pattern in id_patterns:
+        match = re.search(pattern, cleaned_comment, re.IGNORECASE)
+        if match:
+            user_id = int(match.group(1))
+            is_bot_client = True
+            break
+    
+    # اگر ID پیدا نشد، جستجوی اعداد طولانی
+    if not user_id:
+        numbers = re.findall(r'\d+', cleaned_comment)
+        if numbers:
+            long_numbers = [n for n in numbers if len(n) >= 6]
+            if long_numbers:
+                user_id = int(max(long_numbers, key=len))
+                is_bot_client = True
+    
+    # استخراج نام کاربر
+    if user_id and is_bot_client:
+        name_part = cleaned_comment
+        name_part = re.sub(r'\(ID[:=]\d+\)', '', name_part)
+        name_part = re.sub(r'ID\s*[:=]\s*\d+', '', name_part)
+        name_part = re.sub(r'\|\s*ID\s*[:=]\s*\d+', '', name_part)
+        name_part = re.sub(r'user\s*\d+', '', name_part)
+        name_part = re.sub(r'کاربر\s*\d+', '', name_part)
+        name_part = re.sub(r'\(\s*\d{6,}\s*\)', '', name_part)
+        name_part = re.sub(r'\d{9,}', '', name_part)
+        
+        name_part = name_part.strip()
+        name_part = re.sub(r'[\s\|\(\)\[\]\.]+$', '', name_part)
+        name_part = name_part.strip()
+        
+        if name_part and len(name_part) >= 1:
+            user_name = name_part
+        else:
+            user_name = f'کاربر_{user_id}'
+        
+        # تشخیص تست
+        if 'test' in cleaned_comment.lower() or 'تست' in cleaned_comment.lower():
+            order_type = 'test'
+    
+    return user_id, user_name, is_bot_client, order_type   
 async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
     """
     همگام‌سازی کامل با پنل
@@ -26477,20 +26622,23 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                         is_bot_client = True
                         order_type = 'purchase'
                 if not is_bot_client and comment:
-                    patterns = [
-                        r'\(ID[:=](\d+)\)',
-                        r'ID[:=](\d+)',
-                        r'\|\s*ID[:=](\d+)',
-                        r'user(\d+)',
-                        r'کاربر\s*(\d+)',
-                    ]
-                    for pattern in patterns:
-                        match = re.search(pattern, comment, re.IGNORECASE)
-                        if match:
-                            user_id = int(match.group(1))
-                            is_bot_client = True
-                            order_type = 'purchase'
-                            break
+                    try:
+                        user_id, extracted_name, is_bot_client, order_type = extract_user_info_from_comment(comment)
+                        
+                        if is_bot_client and user_id:
+                            logger.info(f"✅ کاربر {user_id} از کامنت شناسایی شد: {comment[:50]}...")
+                            
+                            # ذخیره نام کاربر اگر موجود بود
+                            if extracted_name and extracted_name != f'کاربر_{user_id}':
+                                uid_temp = str(user_id)
+                                if uid_temp in users:
+                                    if not users[uid_temp].get('name') or users[uid_temp]['name'].startswith('کاربر'):
+                                        users[uid_temp]['name'] = extracted_name
+                                        logger.info(f"📝 نام کاربر {user_id} به '{extracted_name}' به‌روزرسانی شد")
+                    except Exception as e:
+                        logger.error(f"❌ خطا در استخراج اطلاعات از کامنت: {e}")
+                        user_id = None
+                        is_bot_client = False
                 
                 if is_bot_client and user_id:
                     bot_clients += 1
@@ -26539,12 +26687,30 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 users[uid]['has_purchased'] = True
                 users[uid]['updated_at'] = datetime.now().isoformat()
             else:
+                # اول تلاش برای دریافت از تلگرام
+                user_name = f'کاربر_{user_id}'
+                telegram_username = ''
+                
                 try:
                     user_info = await get_user_info_from_telegram(user_id)
-                    user_name = user_info.get('full_name', f'کاربر_{user_id}')
-                except:
-                    user_name = f'کاربر_{user_id}'
+                    if user_info:
+                        full_name = user_info.get('full_name', '')
+                        if full_name and full_name.strip():
+                            user_name = full_name
+                        telegram_username = user_info.get('username', '')
+                except Exception as e:
+                    logger.warning(f"⚠️ خطا در دریافت اطلاعات تلگرام برای {user_id}: {e}")
                 
+                # اگر نام از تلگرام نگرفتیم، از کامنت‌های موجود استفاده کن
+                if user_name == f'کاربر_{user_id}':
+                    for client_data in clients_dict.values():
+                        if client_data.get('user_id') == user_id:
+                            comment_text = client_data.get('comment', '')
+                            if comment_text:
+                                _, extracted_name, _, _ = extract_user_info_from_comment(comment_text)
+                                if extracted_name and extracted_name != f'کاربر_{user_id}':
+                                    user_name = extracted_name
+                                    break                
                 users[uid] = {
                     'id': user_id,
                     'name': user_name,
@@ -27736,6 +27902,114 @@ async def handle_text_messages(message: Message):
                 await auto_ai_response(message)
                 return
     logger.debug(f"پیام بدون وضعیت از کاربر {user_id}: {message.text[:50]}")
+    
+    
+import re
+
+# ✅ لیست کلمات نامناسب فارسی و انگلیسی
+BAD_WORDS_FA = [
+    'کیر', 'کیرم', 'کیری', 'کس', 'کسم', 'کسی', 'کونی', 'کون', 'کونم',
+    'مادرجنده', 'مادرقحبه', 'مادرکصه', 'جنده', 'قحبه', 'کص', 'کصم',
+    'کصکش', 'کصخل', 'خارکصه', 'خواهرجنده', 'خواهرقحبه',
+    'گوه', 'گه', 'گوه خور', 'گه خور', 'عن', 'عین',
+    'آشغال', 'اشغال', 'سگ', 'سگم', 'سگی', 'خر', 'خرت', 'خری',
+    'گاو', 'گاوم', 'گاوی', 'الاغ', 'الاغی',
+    'دیوث', 'دیوس', 'نامرد', 'بیشرف', 'بی شرف', 'بی‌شرف',
+    'حرومزاده', 'حرامزاده', 'توله سگ', 'توله‌سگ',
+    'کسکش', 'کس کش', 'کیرم', 'کیرم تو', 'کیر تو',
+    'زنا زاده', 'زنازاده', 'ولگرد', 'بی‌پدر', 'بی پدر', 'بی‌مادر', 'بی مادر',
+    'پدرسگ', 'پدر سگ', 'مادرسگ', 'مادر سگ',
+    'فحش', 'فحشی', 'فوش', 'فوشی',
+]
+
+BAD_WORDS_EN = [
+    'fuck', 'fucking', 'fucker', 'fucked', 'fuckyou', 'fuck_you',
+    'shit', 'shitty', 'bullshit', 'bull shit',
+    'bitch', 'bitches', 'bitching',
+    'asshole', 'ass hole', 'ass',
+    'bastard', 'bastards',
+    'damn', 'damnit', 'dammit',
+    'motherfucker', 'mother fucker', 'motherfucking',
+    'cunt', 'cunts',
+    'dick', 'dicks', 'dickhead',
+    'pussy', 'pussies',
+    'whore', 'whores',
+    'slut', 'sluts',
+    'idiot', 'idiots', 'stupid', 'stupids',
+    'retard', 'retards', 'retarded',
+    'moron', 'morons',
+    'nigger', 'nigga',
+    'faggot', 'fag', 'fags',
+    'cock', 'cocks',
+    'suck', 'sucks', 'sucking',
+    'screw', 'screwed',
+    'hell', 'hellish',
+    'crap', 'crappy',
+    'jackass', 'jackasses',
+    'dumbass', 'dumbasses',
+    'douche', 'douchebag',
+    'wanker', 'wankers',
+    'bollocks', 'bollock',
+    'arse', 'arsehole',
+    'twat', 'twats',
+    'knob', 'knobs',
+]
+
+def contains_bad_words(text: str) -> tuple:
+    """
+    تشخیص فحش و کلمات نامناسب در متن
+    
+    Returns:
+        tuple: (has_bad_word: bool, bad_word: str or None, language: str or None)
+    """
+    if not text:
+        return False, None, None
+    
+    # ✅ نرمال‌سازی متن
+    text_lower = text.lower().strip()
+    
+    # ✅ حذف فاصله‌های اضافی
+    text_lower = ' '.join(text_lower.split())
+    
+    # ✅ حذف علائم نگارشی
+    text_clean = re.sub(r'[^\w\s\u0600-\u06FF]', ' ', text_lower)
+    text_clean = ' '.join(text_clean.split())
+    
+    # ✅ چک کردن کلمات فارسی
+    for bad_word in BAD_WORDS_FA:
+        # چک کردن کلمه کامل
+        pattern = r'(?:^|[\s\u0600-\u06FF])' + re.escape(bad_word) + r'(?:$|[\s\u0600-\u06FF])'
+        if re.search(pattern, text_clean):
+            return True, bad_word, 'fa'
+        
+        # چک کردن بدون فاصله
+        if bad_word in text_clean:
+            return True, bad_word, 'fa'
+    
+    # ✅ چک کردن کلمات انگلیسی
+    for bad_word in BAD_WORDS_EN:
+        # چک کردن کلمه کامل
+        pattern = r'(?:^|\s)' + re.escape(bad_word) + r'(?:$|\s)'
+        if re.search(pattern, text_clean):
+            return True, bad_word, 'en'
+        
+        # چک کردن کلمه با علائم
+        pattern = r'(?:^|\s)' + re.escape(bad_word) + r'[s\']?(?:$|\s)'
+        if re.search(pattern, text_clean):
+            return True, bad_word, 'en'
+        
+        # چک کردن بدون فاصله
+        if bad_word in text_clean:
+            return True, bad_word, 'en'
+    
+    return False, None, None
+
+def is_inappropriate_message(text: str) -> bool:
+    """بررسی سریع برای تشخیص پیام نامناسب"""
+    has_bad_word, _, _ = contains_bad_words(text)
+    return has_bad_word
+
+
 async def get_ai_response(message_text: str, user_id: int = None, username: str = None) -> str:
     """دریافت پاسخ کامل از AI - با تلاش مجدد در صورت ناقص بودن"""
     if gemini_client:
@@ -27752,6 +28026,7 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                 full_message += f"کاربر {user_name}: {message_text}"
             else:
                 full_message += f"کاربر: {message_text}"
+            
             payload = {
                 "system_instruction": {
                     "parts": [{"text": GEMINI_SYSTEM_PROMPT}]
@@ -27787,6 +28062,8 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                             if reply:
                                 reply = reply.strip()
                                 import re
+                                
+                                # ✅ حذف الگوهای انگلیسی
                                 patterns_to_remove = [
                                     r'\*Iterative refinement\*:?',
                                     r'I\'ll help you with that\.?',
@@ -27801,27 +28078,80 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                     r'^Of course,?',
                                     r'^Absolutely,?',
                                     r'^Okay,?',
+                                    r'^Here is:?',
+                                    r'^Here are:?',
+                                    r'^I can help:?',
+                                    r'^Let me know:?',
                                 ]
                                 for pattern in patterns_to_remove:
                                     reply = re.sub(pattern, '', reply, flags=re.IGNORECASE | re.MULTILINE)
                                 
+                                # ✅ حذف ستاره‌ها و علائم markdown
+                                reply = reply.replace('**', '').replace('*', '').replace('`', '').replace('#', '')
+                                
+                                # ✅ حذف HTML tags
+                                reply = re.sub(r'<[^>]+>', '', reply)
+                                
+                                # ✅ حذف خطوط خالی اضافی
                                 lines = [line.strip() for line in reply.split('\n') if line.strip()]
                                 reply = '\n'.join(lines)
                                 
+                                # ✅ اطمینان از فارسی بودن
+                                # اگه پاسخ انگلیسیه، ترجمه کن
+                                if not any('\u0600' <= c <= '\u06FF' for c in reply):
+                                    logger.warning("⚠️ پاسخ انگلیسی است، تلاش برای فارسی کردن...")
+                                    # درخواست مجدد با تأکید بر فارسی
+                                    full_message_fa = f"لطفاً فقط به فارسی جواب بده:\n{full_message}"
+                                    payload_fa = {
+                                        "system_instruction": {
+                                            "parts": [{"text": GEMINI_SYSTEM_PROMPT + "\n\n⚠️ فقط به زبان فارسی پاسخ بده. اگه کلمه انگلیسی استفاده میکنی، معنی فارسیش رو هم بنویس."}]
+                                        },
+                                        "contents": [{
+                                            "parts": [{"text": full_message_fa}]
+                                        }],
+                                        "generationConfig": {
+                                            "temperature": GEMINI_TEMPERATURE,
+                                            "maxOutputTokens": max_tokens,
+                                            "topP": 0.95,
+                                            "topK": 40
+                                        }
+                                    }
+                                    
+                                    try:
+                                        async with session.post(
+                                            url,
+                                            json=payload_fa,
+                                            timeout=aiohttp.ClientTimeout(total=45)
+                                        ) as response_fa:
+                                            if response_fa.status == 200:
+                                                data_fa = await response_fa.json()
+                                                candidates_fa = data_fa.get('candidates', [])
+                                                if candidates_fa:
+                                                    reply_fa = candidates_fa[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+                                                    if reply_fa:
+                                                        reply_fa = reply_fa.strip()
+                                                        reply_fa = reply_fa.replace('**', '').replace('*', '').replace('`', '')
+                                                        reply_fa = re.sub(r'<[^>]+>', '', reply_fa)
+                                                        lines_fa = [line.strip() for line in reply_fa.split('\n') if line.strip()]
+                                                        reply = '\n'.join(lines_fa)
+                                    except:
+                                        pass
+                                
                                 if not reply:
                                     return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
+                                
                                 if finish_reason == 'MAX_TOKENS':
                                     logger.warning(f"⚠️ پاسخ ناقص است (MAX_TOKENS)، تلاش مجدد با توکن بیشتر...")
                                     payload2 = {
                                         "system_instruction": {
-                                            "parts": [{"text": GEMINI_SYSTEM_PROMPT}]
+                                            "parts": [{"text": GEMINI_SYSTEM_PROMPT + "\n\n⚠️ فقط به زبان فارسی پاسخ بده."}]
                                         },
                                         "contents": [{
                                             "parts": [{"text": full_message}]
                                         }],
                                         "generationConfig": {
                                             "temperature": GEMINI_TEMPERATURE,
-                                            "maxOutputTokens": 2500,  # افزایش توکن
+                                            "maxOutputTokens": 2500,
                                             "topP": 0.95,
                                             "topK": 40
                                         }
@@ -27844,6 +28174,9 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                                     
                                                     if reply2:
                                                         reply2 = reply2.strip()
+                                                        reply2 = reply2.replace('**', '').replace('*', '').replace('`', '')
+                                                        reply2 = re.sub(r'<[^>]+>', '', reply2)
+                                                        
                                                         for pattern in patterns_to_remove:
                                                             reply2 = re.sub(pattern, '', reply2, flags=re.IGNORECASE | re.MULTILINE)
                                                         
@@ -27853,22 +28186,24 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                                         if reply2 and len(reply2) > len(reply):
                                                             reply = reply2
                                                             finish_reason = finish_reason2
-                                                            logger.info(f"✅ پاسخ کامل‌تر دریافت شد - طول: {len(reply)} - finishReason: {finish_reason}")
+                                                            logger.info(f"✅ پاسخ کامل‌تر دریافت شد - طول: {len(reply)}")
                                                     else:
-                                                        logger.warning("⚠️ پاسخ دوم خالی بود، استفاده از پاسخ اول")
+                                                        logger.warning("⚠️ پاسخ دوم خالی بود")
                                                 else:
-                                                    logger.warning("⚠️ پاسخ دوم نامعتبر بود، استفاده از پاسخ اول")
+                                                    logger.warning("⚠️ پاسخ دوم نامعتبر بود")
                                             else:
                                                 logger.warning(f"⚠️ درخواست دوم ناموفق: {response2.status}")
                                     except Exception as e2:
                                         logger.error(f"❌ خطا در درخواست دوم: {e2}")
+                                    
                                     if finish_reason == 'MAX_TOKENS':
                                         reply += "\n\n⚠️ پاسخ کامل نشد. لطفاً سوال خود را کوتاه‌تر بپرسید."
+                                
                                 if user_id:
                                     conversation_memory.add_message(user_id, 'user', message_text)
                                     conversation_memory.add_message(user_id, 'assistant', reply)
                                 
-                                logger.info(f"✅ پاسخ Gemini دریافت شد - طول: {len(reply)} کاراکتر - finishReason: {finish_reason}")
+                                logger.info(f"✅ پاسخ Gemini دریافت شد - طول: {len(reply)} کاراکتر")
                                 return reply
                             
                             return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
@@ -27906,7 +28241,6 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
             return f"❌ خطا: {str(e)[:100]}"
     
     return "❌ متأسفانه هیچ سرویس هوش مصنوعی در دسترس نیست. لطفاً بعداً تلاش کنید."
-
 def detect_question_topic(text: str) -> str:
     """تشخیص موضوع سوال کاربر"""
     text_lower = text.lower()
@@ -28110,6 +28444,35 @@ async def process_ai_chat_message(message: Message):
         )
         return
     
+    # ✅ بررسی فحش و کلمات نامناسب
+    has_bad_word, bad_word, bad_lang = contains_bad_words(message.text)
+    
+    if has_bad_word:
+        logger.warning(f"⛔ کاربر {user_id} پیام نامناسب ارسال کرد: {bad_word} ({bad_lang})")
+        
+        if lang == 'fa':
+            await message.reply(
+                "⚠️ لطفاً از کلمات مناسب استفاده کنید.\n\n"
+                "🤖 من اینجام تا به شما کمک کنم، نه برای شنیدن این حرف‌ها.\n"
+                "💡 اگه سوالی درباره کانفیگ دارید، بپرسید.",
+                reply_markup=get_back_only_keyboard(lang)
+            )
+        else:
+            await message.reply(
+                "⚠️ Please use appropriate language.\n\n"
+                "🤖 I'm here to help you, not to hear this.\n"
+                "💡 If you have questions about configs, please ask.",
+                reply_markup=get_back_only_keyboard(lang)
+            )
+        
+        if log_system:
+            await log_system.log_user_action(
+                user_id,
+                "پیام نامناسب در چت AI",
+                f"کلمه: {bad_word} ({bad_lang})"
+            )
+        
+        return
     
     if not gemini_client:
         await message.reply(
@@ -28129,16 +28492,38 @@ async def process_ai_chat_message(message: Message):
     try:
         answer = await asyncio.wait_for(
             get_ai_response(message.text, user_id, message.from_user.username),
-            timeout=90  # افزایش به 90 ثانیه برای پاسخ کامل
+            timeout=90
         )
-        error_keywords = ["❌", "⚠️", "خطا", "متأسفانه", "در دسترس نیست", "شلوغ است", "Error"]
-        warning_keywords = ["پاسخ کامل نشد", "کوتاه‌تر بپرسید"]
         
-        is_real_error = any(kw in answer for kw in error_keywords) and not any(kw in answer for kw in warning_keywords)
-        is_incomplete = any(kw in answer for kw in warning_keywords)
+        # ✅ لیست الگوهای خطای واقعی
+        real_error_patterns = [
+            "❌",
+            "⏰",
+            "⚠️ محدودیت",
+            "⚠️ سرویس",
+            "محدودیت درخواست",
+            "Rate Limit",
+            "خطای احراز هویت",
+            "خطای شبکه",
+            "خطای غیرمنتظره",
+            "خطا در ارتباط",
+            "خطا در پردازش",
+            "زمان پاسخگویی به پایان رسید",
+            "تایم‌اوت",
+            "سرویس شلوغ است",
+        ]
+        
+        # ✅ بررسی خطای واقعی
+        is_real_error = any(
+            answer.startswith(pattern) or pattern in answer 
+            for pattern in real_error_patterns
+        )
+        
+        # ✅ بررسی پاسخ ناقص
+        is_incomplete = "پاسخ کامل نشد" in answer or "کوتاه‌تر بپرسید" in answer
         
         if is_real_error:
-            logger.warning(f"⚠️ پاسخ خطا بود، محدودیت کاهش نیافت: {answer[:50]}...")
+            logger.warning(f"⚠️ پاسخ خطای واقعی بود، محدودیت کاهش نیافت: {answer[:50]}...")
             await processing_msg.edit_text(
                 f"{answer}\n\n💡 محدودیت شما کاهش نیافت. لطفاً دوباره تلاش کنید." if lang == "fa" else f"{answer}\n\n💡 Your limit was not reduced. Please try again.",
                 parse_mode=ParseMode.HTML
@@ -28152,22 +28537,27 @@ async def process_ai_chat_message(message: Message):
                 parse_mode=ParseMode.HTML
             )
             return
+        
+        # ✅ پاسخ درست بود - محدودیت کم کن
         increment_ai_usage(user_id)
+        
+        # ✅ پاکسازی پاسخ
         lines = [line.strip() for line in answer.split('\n') if line.strip()]
         formatted_answer = '\n'.join(lines)
+        formatted_answer = re.sub(r'<[^>]+>', '', formatted_answer)
+        formatted_answer = formatted_answer.replace('*', '').replace('`', '')
+        formatted_answer = formatted_answer.replace('**', '')
         
         remaining_display = max(0, remaining - 1)
         
-        response_text = f"""
-{premium_emoji('robot','🤖')} <b>پاسخ هوش مصنوعی:</b>
+        response_text = f"""🤖 <b>پاسخ هوش مصنوعی:</b>
 
 {formatted_answer}
 
 ━━━━━━━━━━━━━━━━━━━
-{premium_emoji('star', '📊')} سوالات باقیمانده امروز: {remaining_display}/{daily_limit}
-{premium_emoji('light','💡')} سوال بعدی خود را بپرسید...
-❌ برای خروج /cancel را ارسال کنید.
-"""
+📊 سوالات باقیمانده امروز: {remaining_display}/{daily_limit}
+💡 سوال بعدی خود را بپرسید...
+❌ برای خروج /cancel را ارسال کنید."""
         
         await processing_msg.edit_text(
             response_text,
@@ -28650,6 +29040,33 @@ async def auto_ai_response(message: Message):
     """پاسخ خودکار AI به سوالات مرتبط - با مدیریت خطا"""
     user_id = message.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
+    
+    # ✅ جدید: بررسی فحش
+    has_bad_word, bad_word, bad_lang = contains_bad_words(message.text)
+    
+    if has_bad_word:
+        logger.warning(f"⛔ کاربر {user_id} پیام نامناسب ارسال کرد: {bad_word} ({bad_lang})")
+        # ✅ بدون ارسال به AI - فقط پیام هشدار
+        if lang == 'fa':
+            await message.reply(
+                "⚠️ لطفاً از کلمات مناسب استفاده کنید.\n"
+                "💡 اگه سوالی درباره کانفیگ دارید، بپرسید."
+            )
+        else:
+            await message.reply(
+                "⚠️ Please use appropriate language.\n"
+                "💡 If you have questions about configs, please ask."
+            )
+        
+        if log_system:
+            await log_system.log_user_action(
+                user_id,
+                "پیام نامناسب",
+                f"کلمه: {bad_word} ({bad_lang})"
+            )
+        
+        return
+    
     daily_limit = GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT
     can_use, remaining, limit_msg = check_ai_limit(user_id)
     
@@ -28671,17 +29088,20 @@ async def auto_ai_response(message: Message):
                 parse_mode=ParseMode.HTML
             )
             return
+        
         increment_ai_usage(user_id)
         
-        response_text = f"""
-🤖 <b>پاسخ خودکار:</b>
+        # ✅ پاکسازی پاسخ
+        answer = re.sub(r'<[^>]+>', '', answer)
+        answer = answer.replace('*', '').replace('`', '')
+        
+        response_text = f"""🤖 <b>پاسخ خودکار:</b>
 
 {answer}
 
 ━━━━━━━━━━━━━━━━━━━━━━
 💡 برای چت اختصاصی، از دکمه «🤖 چت با AI» استفاده کنید.
-📊 سوالات باقیمانده امروز: {remaining - 1}/{daily_limit}
-"""
+📊 سوالات باقیمانده امروز: {remaining - 1}/{daily_limit}"""
         
         await processing_msg.edit_text(response_text, parse_mode=ParseMode.HTML)
         
@@ -28719,12 +29139,12 @@ async def admin_panel(callback: CallbackQuery):
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
             await callback.message.delete()
             await callback.message.answer(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین' if lang=='fa' else 'Admin Panel'}",
+                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.9'}",
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
             await callback.message.edit_text(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین' if lang=='fa' else 'Admin Panel'}",
+                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.2.9' if lang=='fa' else 'Admin Panel v1.2.9'}",
                 reply_markup=get_admin_keyboard(lang)
             )
     except Exception as e:
@@ -28735,7 +29155,7 @@ async def admin_panel(callback: CallbackQuery):
             except:
                 pass
             await callback.message.answer(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین' if lang=='fa' else 'Admin Panel'}",
+                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.2.9' if lang=='fa' else 'Admin Panel v1.2.9'}",
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
@@ -30115,7 +30535,7 @@ async def admin_delete_backup(callback: CallbackQuery):
     
 @dp.callback_query(F.data.startswith("view_order_"))
 async def view_order(callback: CallbackQuery):
-    """مشاهده جزئیات سفارش - با نمایش IP Limit"""
+    """مشاهده جزئیات سفارش - با نمایش IP Limit و اطلاعات کامل"""
     if callback.from_user.id != ADMIN_ID_INT:
         return
     
@@ -30131,29 +30551,70 @@ async def view_order(callback: CallbackQuery):
     try:
         u = await bot.get_chat(order['user_id'])
         uname = html.escape(u.first_name or "کاربر")
+        username = html.escape(u.username or "")
     except:
         uname = "کاربر" if lang == 'fa' else "User"
+        username = ""
     
     logger.info(f"ادمین در حال مشاهده سفارش #{order_id}")
+    
+    # ✅ اطلاعات پایه
     ip_limit = order.get('ip_limit', 0)
     ip_display = f"👤 محدودیت IP: {ip_limit}" if ip_limit > 0 else "👤 محدودیت IP: ♾️ نامحدود"
     order_type = order.get('type', 'purchase')
     order_status = order.get('status', 'نامشخص')
     category_name = order.get('category_name')
     category_id = order.get('category_id')
+    package_id = order.get('package_id')
+    payment_method = order.get('payment_method', '')
+    payment_label = order.get('payment_label', '')
+    created_at = order.get('created_at', '')
+    updated_at = order.get('updated_at', '')
+    approved_date = order.get('approved_date', '')
+    email = order.get('email', '')
+    sub_link = order.get('sub_link', '')
+    config_link = order.get('config_link', '')
+    notes = order.get('notes', '')
+    is_active_in_panel = order.get('is_active_in_panel', False)
+    is_test = order.get('is_test', False)
+    inbound_details = order.get('inbound_details', [])
+    inbound_id = order.get('inbound_id', [])
+    parent_order_id = order.get('parent_order_id')
+    is_extend = order.get('is_extend', False)
+    volume_unit = order.get('volume_unit', 'GB')
+    
+    # ✅ تبدیل لیست اینباند به لیست اگر نیست
+    if not isinstance(inbound_id, list):
+        inbound_id = [inbound_id] if inbound_id else []
+    
+    # ✅ آیکون دسته‌بندی
     icon = "📦"
     if category_id:
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
                 icon = cat.get('icon', '📦')
                 break
+    
+    # ✅ اطلاعات پکیج
+    package_info = ""
+    if package_id and category_id:
+        for cat in READY_PACKAGES.get('categories', []):
+            if cat.get('id') == category_id:
+                for pkg in cat.get('packages', []):
+                    if pkg.get('id') == package_id:
+                        package_info = f" ({pkg.get('volume', 0)}GB - {pkg.get('days', 0)} روز)"
+                        break
+                break
+    
+    # ✅ وضعیت‌ها
     status_emoji_fa = {
         'awaiting_payment': '⏳ در انتظار پرداخت',
         'pending': '📸 فیش ارسال شده',
         'pending_balance_charge': '📸 فیش ارسال شده (شارژ)',
         'approved': '✅ تایید شده',
         'rejected': '❌ رد شده',
-        'cancelled': '🚫 لغو شده'
+        'cancelled': '🚫 لغو شده',
+        'deleted': '🗑️ حذف شده'
     }
     status_emoji_en = {
         'awaiting_payment': '⏳ Waiting for payment',
@@ -30161,16 +30622,37 @@ async def view_order(callback: CallbackQuery):
         'pending_balance_charge': '📸 Receipt sent (Top-up)',
         'approved': '✅ Approved',
         'rejected': '❌ Rejected',
-        'cancelled': '🚫 Cancelled'
+        'cancelled': '🚫 Cancelled',
+        'deleted': '🗑️ Deleted'
     }
     
     status_text = status_emoji_fa.get(order_status, f"⚠️ {order_status}") if lang == 'fa' else status_emoji_en.get(order_status, f"⚠️ {order_status}")
+    
+    # ✅ نمایش حجم
+    volume = order.get('volume', 0)
+    if volume == 0:
+        volume_display = "♾️ نامحدود" if lang == 'fa' else "♾️ Unlimited"
+    else:
+        volume_display = f"{volume} {volume_unit}"
+    
+    # ✅ نمایش قیمت
+    price = order.get('price', 0)
+    if order_type == 'balance_charge':
+        price = order.get('amount', 0)
+    
+    # ✅ متن اصلی
     if lang == "fa":
         text = f"""
-<tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> سفارش #{order_id}
+<tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> <b>سفارش #{order_id}</b>
 
-<tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> کاربر: {uname}
+<tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> <b>کاربر:</b> {uname}
 """
+        if username:
+            text += f"🔹 <b>یوزرنیم:</b> @{username}\n"
+        
+        text += f"🆔 <b>آیدی عددی:</b> <code>{order.get('user_id')}</code>\n"
+        
+        # ✅ نوع سفارش
         if order_type == 'balance_charge':
             amount = order.get('amount', 0)
             text += f"""
@@ -30178,47 +30660,123 @@ async def view_order(callback: CallbackQuery):
 💰 <b>مبلغ شارژ:</b> {amount:,} تومان
 """
         elif order_type in ['ready_package', 'category_purchase']:
-            text += f"{icon} <b>نوع:</b> بسته آماده - {category_name or 'نامشخص'}\n"
             text += f"""
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> حجم: {order.get('volume', 0)} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> مدت: {order.get('days', 0)} روز
+{icon} <b>نوع:</b> بسته آماده - {category_name or 'نامشخص'}{package_info}
+📦 <b>حجم:</b> {volume_display}
+⏱ <b>مدت:</b> {order.get('days', 0)} روز
 """
         elif order_type == 'test':
             text += f"""
 🧪 <b>نوع:</b> تست رایگان
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> حجم: {order.get('volume', 0)} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> مدت: {order.get('days', 0)} روز
+📦 <b>حجم:</b> {volume_display}
+⏱ <b>مدت:</b> {order.get('days', 0)} روز
 """
+        elif order_type == 'extend':
+            text += f"""
+🔄 <b>نوع:</b> تمدید سرویس
+📦 <b>حجم:</b> {volume_display}
+⏱ <b>مدت:</b> {order.get('days', 0)} روز
+"""
+            if parent_order_id:
+                text += f"🔗 <b>سفارش اصلی:</b> #{parent_order_id}\n"
         else:
             text += f"""
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> حجم: {order.get('volume', 0)} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> مدت: {order.get('days', 0)} روز
+📦 <b>نوع:</b> خرید عادی
+📦 <b>حجم:</b> {volume_display}
+⏱ <b>مدت:</b> {order.get('days', 0)} روز
 """
-        price = order.get('price', 0)
-        if order_type == 'balance_charge':
-            price = order.get('amount', 0)
+        
+        # ✅ اطلاعات پرداخت
         text += f"""
-<tg-emoji emoji-id="5375296873982604963">💰</tg-emoji> قیمت: {price:,} تومان
-<tg-emoji emoji-id="5274055917766202507">📅</tg-emoji> تاریخ: {order.get('date', 'نامشخص')}
-📊 وضعیت: {status_text}
-{ip_display}
+💰 <b>قیمت:</b> {price:,} تومان
 """
+        
+        if payment_label:
+            text += f"💳 <b>روش پرداخت:</b> {payment_label}\n"
+        
+        if payment_method:
+            text += f"🔧 <b>متد پرداخت:</b> <code>{payment_method}</code>\n"
+        
+        # ✅ اطلاعات زمانی
+        text += f"""
+📅 <b>تاریخ ایجاد:</b> {order.get('date', 'نامشخص')}
+"""
+        
+        if approved_date:
+            text += f"✅ <b>تاریخ تایید:</b> {approved_date}\n"
+        
+        if created_at:
+            text += f"🕐 <b>ایجاد:</b> {created_at}\n"
+        
+        if updated_at and updated_at != created_at:
+            text += f"🕑 <b>آخرین بروزرسانی:</b> {updated_at}\n"
+        
+        # ✅ وضعیت
+        text += f"📊 <b>وضعیت:</b> {status_text}\n"
+        
+        # ✅ IP Limit
+        text += f"{ip_display}\n"
+        
+        # ✅ اطلاعات پنل
+        if is_active_in_panel:
+            text += f"🟢 <b>وضعیت پنل:</b> فعال\n"
+        else:
+            text += f"🔴 <b>وضعیت پنل:</b> غیرفعال\n"
+        
+        if is_test:
+            text += f"🧪 <b>تست:</b> بله\n"
+        
+        # ✅ اطلاعات کانفیگ
+        if email:
+            text += f"📧 <b>ایمیل:</b> <code>{email}</code>\n"
+        
+        if config_link:
+            text += f"🔗 <b>کانفیگ:</b> ارسال شده\n"
+            text += f"🔗 <b>لینک:</b> <code>{config_link}</code>\n"
+        
+        if sub_link and sub_link != config_link:
+            text += f"🔗 <b>ساب لینک:</b> <code>{sub_link}</code>\n"
+        
+        # ✅ اطلاعات اینباندها
+        if inbound_details:
+            text += f"\n📡 <b>اینباندها ({len(inbound_details)}):</b>\n"
+            for idx, inbound in enumerate(inbound_details, 1):
+                remark = inbound.get('remark', 'نامشخص')
+                protocol = inbound.get('protocol', '')
+                port = inbound.get('port', '')
+                text += f"  {idx}. {remark}"
+                if protocol:
+                    text += f" - {protocol.upper()}"
+                if port:
+                    text += f" :{port}"
+                text += "\n"
+        elif inbound_id:
+            text += f"\n📡 <b>اینباندها:</b> {', '.join(map(str, inbound_id))}\n"
+        
+        # ✅ اطلاعات اضافی
+        if notes:
+            text += f"\n📝 <b>یادداشت:</b> {notes}\n"
         
         if order.get('receipt_photo_id'):
-            text += f"📸 فیش: ارسال شده\n"
-        
-        if order.get('config_link'):
-            text += f"🔗 کانفیگ: ارسال شده\n"
+            text += f"\n📸 <b>فیش:</b> ارسال شده\n"
         
         if order.get('rejected_reason'):
-            text += f"📝 دلیل رد: {order.get('rejected_reason')}\n"
+            text += f"📝 <b>دلیل رد:</b> {order.get('rejected_reason')}\n"
+        
+        if is_extend:
+            text += f"\n🔄 <b>این سفارش یک تمدید است</b>\n"
     
     else:
         text = f"""
-<tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> Order #{order_id}
+<tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> <b>Order #{order_id}</b>
 
-<tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> User: {uname}
+<tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> <b>User:</b> {uname}
 """
+        if username:
+            text += f"🔹 <b>Username:</b> @{username}\n"
+        
+        text += f"🆔 <b>User ID:</b> <code>{order.get('user_id')}</code>\n"
+        
         if order_type == 'balance_charge':
             amount = order.get('amount', 0)
             text += f"""
@@ -30226,40 +30784,105 @@ async def view_order(callback: CallbackQuery):
 💰 <b>Amount:</b> {amount:,} Toman
 """
         elif order_type in ['ready_package', 'category_purchase']:
-            text += f"{icon} <b>Type:</b> Ready Package - {category_name or 'Unknown'}\n"
             text += f"""
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> Volume: {order.get('volume', 0)} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Duration: {order.get('days', 0)} days
+{icon} <b>Type:</b> Ready Package - {category_name or 'Unknown'}{package_info}
+📦 <b>Volume:</b> {volume_display}
+⏱ <b>Duration:</b> {order.get('days', 0)} days
 """
         elif order_type == 'test':
             text += f"""
 🧪 <b>Type:</b> Free Test
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> Volume: {order.get('volume', 0)} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Duration: {order.get('days', 0)} days
+📦 <b>Volume:</b> {volume_display}
+⏱ <b>Duration:</b> {order.get('days', 0)} days
 """
+        elif order_type == 'extend':
+            text += f"""
+🔄 <b>Type:</b> Service Extension
+📦 <b>Volume:</b> {volume_display}
+⏱ <b>Duration:</b> {order.get('days', 0)} days
+"""
+            if parent_order_id:
+                text += f"🔗 <b>Parent Order:</b> #{parent_order_id}\n"
         else:
             text += f"""
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> Volume: {order.get('volume', 0)} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Duration: {order.get('days', 0)} days
+📦 <b>Type:</b> Regular Purchase
+📦 <b>Volume:</b> {volume_display}
+⏱ <b>Duration:</b> {order.get('days', 0)} days
 """
-        price = order.get('price', 0)
-        if order_type == 'balance_charge':
-            price = order.get('amount', 0)
+        
         text += f"""
-<tg-emoji emoji-id="5375296873982604963">💰</tg-emoji> Price: {price:,} Toman
-<tg-emoji emoji-id="5274055917766202507">📅</tg-emoji> Date: {order.get('date', 'Unknown')}
-📊 Status: {status_text}
-{ip_display}
+💰 <b>Price:</b> {price:,} Toman
 """
+        
+        if payment_label:
+            text += f"💳 <b>Payment Label:</b> {payment_label}\n"
+        
+        if payment_method:
+            text += f"🔧 <b>Payment Method:</b> <code>{payment_method}</code>\n"
+        
+        text += f"""
+📅 <b>Date:</b> {order.get('date', 'Unknown')}
+"""
+        
+        if approved_date:
+            text += f"✅ <b>Approved Date:</b> {approved_date}\n"
+        
+        if created_at:
+            text += f"🕐 <b>Created:</b> {created_at}\n"
+        
+        if updated_at and updated_at != created_at:
+            text += f"🕑 <b>Last Updated:</b> {updated_at}\n"
+        
+        text += f"📊 <b>Status:</b> {status_text}\n"
+        
+        text += f"{ip_display}\n"
+        
+        if is_active_in_panel:
+            text += f"🟢 <b>Panel Status:</b> Active\n"
+        else:
+            text += f"🔴 <b>Panel Status:</b> Inactive\n"
+        
+        if is_test:
+            text += f"🧪 <b>Test:</b> Yes\n"
+        
+        if email:
+            text += f"📧 <b>Email:</b> <code>{email}</code>\n"
+        
+        if config_link:
+            text += f"🔗 <b>Config:</b> Sent\n"
+            text += f"🔗 <b>Link:</b> <code>{config_link}</code>\n"
+        
+        if sub_link and sub_link != config_link:
+            text += f"🔗 <b>Sub Link:</b> <code>{sub_link}</code>\n"
+        
+        if inbound_details:
+            text += f"\n📡 <b>Inbounds ({len(inbound_details)}):</b>\n"
+            for idx, inbound in enumerate(inbound_details, 1):
+                remark = inbound.get('remark', 'Unknown')
+                protocol = inbound.get('protocol', '')
+                port = inbound.get('port', '')
+                text += f"  {idx}. {remark}"
+                if protocol:
+                    text += f" - {protocol.upper()}"
+                if port:
+                    text += f" :{port}"
+                text += "\n"
+        elif inbound_id:
+            text += f"\n📡 <b>Inbounds:</b> {', '.join(map(str, inbound_id))}\n"
+        
+        if notes:
+            text += f"\n📝 <b>Notes:</b> {notes}\n"
         
         if order.get('receipt_photo_id'):
-            text += f"📸 Receipt: Sent\n"
-        
-        if order.get('config_link'):
-            text += f"🔗 Config: Sent\n"
+            text += f"\n📸 <b>Receipt:</b> Sent\n"
         
         if order.get('rejected_reason'):
-            text += f"📝 Reject reason: {order.get('rejected_reason')}\n"
+            text += f"📝 <b>Reject reason:</b> {order.get('rejected_reason')}\n"
+        
+        if is_extend:
+            text += f"\n🔄 <b>This is an extension order</b>\n"
+    
+    # ✅ دکمه‌ها
     buttons = []
     if order_status == 'awaiting_payment':
         buttons.append([
@@ -30306,12 +30929,23 @@ async def view_order(callback: CallbackQuery):
                     callback_data=f"admin_view_config_{order_id}"
                 )
             ])
+        
+        
+        
         buttons.append([
             InlineKeyboardButton(
                 text=f"🔙 {'برگشت به کاربر' if lang=='fa' else 'Back to User'}",
-                callback_data=f"admin_user_{order.get('user_id')}_0"  # ✅ برگشت به صفحه کاربر
+                callback_data=f"admin_user_{order.get('user_id')}_0"
             )
         ])
+    else:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🔙 {'برگشت' if lang=='fa' else 'Back'}",
+                callback_data=f"admin_user_{order.get('user_id')}_0"
+            )
+        ])
+    
     try:
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice']:
             try:
@@ -33060,7 +33694,7 @@ async def init_ai():
 
 async def main():
     global log_system, panel_semaphore, panel_rate_limiter, shared_connector
-    
+
     ensure_data_directory()
     await init_http_session()
     load_all_data()
