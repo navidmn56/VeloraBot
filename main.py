@@ -288,7 +288,7 @@ STICKER_IDS = {
     'referral': 'CAACAgQAAxkBAAERYvtqLYdkDe9oPhYCCzd5jRmj9eo-tgAC6xQAAndYgVIvZzhm7RBW9jwE',             # استیکر دعوت
     'warning': 'CAACAgIAAxkBAAEB',             
     'gift': 'CAACAgIAAxkBAAEB',
-    'robot': 'CAACAgIAAxkBAAERc4BqPkyfPD3zfNC7CRnle88Sv_3kWwAC1DAAApkwoUoENX02s8n9lTwE',# استیکر هدیه
+    'robot': 'CAACAgQAAxkBAAER3Odqnd93G152g-w4Q6ydGd74vbHRegACyxQAAn7WaFEz_uHI6TxiXz0E',# استیکر هدیه
     'money': 'CAACAgQAAxkBAAERYv1qLYg2VGtarsPxg7UUuJE5cJwsxgACbRIAAkMYUVBj6dJT6kRbJjwE',                # استیکر پول
     'cart': 'CAACAgIAAxkBAAEB',             
 }
@@ -6543,8 +6543,9 @@ def clear_blacklist() -> int:
     logger.info(f"🗑 لیست سیاه پاکسازی شد - {count} کاربر")
     return count
 def get_user(user_id: int, username: str = None) -> dict:
-    """دریافت اطلاعات کاربر یا ایجاد کاربر جدید با وضعیت‌های مختلف"""
+    """دریافت اطلاعات کاربر یا ایجاد کاربر جدید با وضعیت‌های مختلف و بررسی خودکار کوپن"""
     uid = str(user_id)
+    
     if uid not in users:
         user_name = username or f"کاربر_{user_id}"
         
@@ -6552,6 +6553,7 @@ def get_user(user_id: int, username: str = None) -> dict:
         manual_approval = configs_pool.get('manual_approval_settings', {})
         approval_enabled = manual_approval.get('enabled', False)
         is_admin = (user_id == ADMIN_ID_INT)
+        
         users[uid] = {
             'id': user_id,
             'name': user_name,
@@ -6575,10 +6577,10 @@ def get_user(user_id: int, username: str = None) -> dict:
             'coupon_code': None,
             'coupon_discount': 0,
             'coupon_applied': False,
-            'approved_by_admin': True if is_admin else False,  # ✅ ادمین همیشه تایید شده
+            'approved_by_admin': True if is_admin else False,
             'approved_date': datetime.now().isoformat() if is_admin else None,
             'requested_approval': False,
-            'registration_status': 'approved' if is_admin else 'pending'  # ✅ ادمین وضعیت approved
+            'registration_status': 'approved' if is_admin else 'pending'
         }
         
         save_json(DB_FILES['users'], users)
@@ -6589,12 +6591,17 @@ def get_user(user_id: int, username: str = None) -> dict:
             logger.info(f"✅ کاربر جدید {user_id} ایجاد شد - وضعیت: pending")
         
         return users[uid]
+    
     user = users[uid]
     modified = False
+    
+    # ✅ به‌روزرسانی username
     if username and user.get('telegram_username') != username:
         user['telegram_username'] = username
         user['username'] = username
         modified = True
+    
+    # فیلدهای ضروری
     required_fields = {
         'name': f"کاربر_{user_id}",
         'username': '',
@@ -6627,6 +6634,8 @@ def get_user(user_id: int, username: str = None) -> dict:
         if key not in user:
             user[key] = default_value
             modified = True
+    
+    # ✅ تایید خودکار ادمین
     if user_id == ADMIN_ID_INT:
         if not user.get('approved_by_admin', False):
             user['approved_by_admin'] = True
@@ -6634,12 +6643,16 @@ def get_user(user_id: int, username: str = None) -> dict:
             user['registration_status'] = 'approved'
             modified = True
             logger.info(f"👑 کاربر ادمین {user_id} تایید شد")
+    
+    # ✅ تایید خودکار کاربران دارای خرید
     if user.get('has_purchased', False) and not user.get('approved_by_admin', False):
         user['approved_by_admin'] = True
         user['approved_date'] = datetime.now().isoformat()
         user['registration_status'] = 'approved'
         modified = True
         logger.info(f"✅ کاربر {user_id} به دلیل داشتن خرید، خودکار تایید شد")
+    
+    # ✅ تایید خودکار وقتی تایید دستی غیرفعال است
     if not user.get('approved_by_admin', False) and user_id != ADMIN_ID_INT:
         manual_approval = configs_pool.get('manual_approval_settings', {})
         if not manual_approval.get('enabled', False):
@@ -6648,11 +6661,164 @@ def get_user(user_id: int, username: str = None) -> dict:
             user['registration_status'] = 'approved'
             modified = True
             logger.info(f"✅ کاربر {user_id} به دلیل غیرفعال بودن تایید دستی، خودکار تایید شد")
+    
+    # ✅✅✅ بررسی خودکار کوپن - مهمترین بخش!
+    coupon_code = user.get('coupon_code')
+    coupon_discount = user.get('coupon_discount', 0)
+    coupon_applied = user.get('coupon_applied', False)
+    
+    if coupon_code and coupon_applied:
+        # بررسی اعتبار کوپن
+        coupon_valid = True
+        invalid_reason = ""
+        
+        # ✅ 1. بررسی وجود در COUPONS
+        if coupon_code not in COUPONS:
+            coupon_valid = False
+            invalid_reason = "در لیست کوپن‌ها نیست"
+            logger.warning(f"⚠️ کوپن {coupon_code} در لیست کوپن‌ها نیست - از کاربر {user_id} پاک می‌شود")
+        else:
+            coupon = COUPONS[coupon_code]
+            
+            # ✅ 2. بررسی وضعیت
+            if coupon.get('status') != 'active':
+                coupon_valid = False
+                invalid_reason = f"وضعیت: {coupon.get('status')}"
+                logger.warning(f"⚠️ کوپن {coupon_code} غیرفعال است ({coupon.get('status')}) - از کاربر {user_id} پاک می‌شود")
+            
+            # ✅ 3. بررسی تاریخ انقضا
+            if coupon_valid:
+                expiry_date = coupon.get('expiry_date')
+                if expiry_date:
+                    try:
+                        expiry = datetime.fromisoformat(expiry_date)
+                        if expiry < datetime.now():
+                            coupon_valid = False
+                            invalid_reason = "منقضی شده"
+                            coupon['status'] = 'expired'
+                            save_coupons(COUPONS)
+                            logger.warning(f"⚠️ کوپن {coupon_code} منقضی شده - از کاربر {user_id} پاک می‌شود")
+                    except ValueError:
+                        logger.warning(f"⚠️ تاریخ نامعتبر برای کوپن {coupon_code}: {expiry_date}")
+            
+            # ✅ 4. بررسی تعداد استفاده
+            if coupon_valid:
+                usage_limit = coupon.get('usage_limit', 0)
+                used_count = coupon.get('used_count', 0)
+                
+                if usage_limit > 0 and used_count >= usage_limit:
+                    coupon_valid = False
+                    invalid_reason = f"ظرفیت پر شده ({used_count}/{usage_limit})"
+                    coupon['status'] = 'used'
+                    save_coupons(COUPONS)
+                    logger.warning(f"⚠️ کوپن {coupon_code} به حداکثر استفاده رسیده - از کاربر {user_id} پاک می‌شود")
+            
+            # ✅ 5. بررسی استفاده قبلی کاربر
+            if coupon_valid:
+                if user_id in coupon.get('used_by', []):
+                    coupon_valid = False
+                    invalid_reason = "قبلاً توسط کاربر استفاده شده"
+                    logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده - پاک می‌شود")
+        
+        if coupon_valid:
+            # ✅ کوپن معتبر است - لود به user_states
+            if user_id not in user_states:
+                user_states[user_id] = {}
+            
+            # فقط اگر تغییر کرده باشد لود کن
+            if user_states[user_id].get('coupon_code') != coupon_code or \
+               user_states[user_id].get('coupon_discount') != coupon_discount or \
+               not user_states[user_id].get('coupon_applied'):
+                user_states[user_id]['coupon_code'] = coupon_code
+                user_states[user_id]['coupon_discount'] = coupon_discount
+                user_states[user_id]['coupon_applied'] = True
+                logger.info(f"🏷️ کوپن {coupon_code} (تخفیف: {coupon_discount}%) از دیتابیس به user_states کاربر {user_id} لود شد")
+        else:
+            # ✅ کوپن نامعتبر است - پاک از همه جا
+            user['coupon_code'] = None
+            user['coupon_discount'] = 0
+            user['coupon_applied'] = False
+            modified = True
+            
+            # پاک از user_states
+            if user_id in user_states:
+                user_states[user_id].pop('coupon_code', None)
+                user_states[user_id].pop('coupon_discount', None)
+                user_states[user_id].pop('coupon_applied', None)
+            
+            logger.info(f"🗑️ کوپن {coupon_code} از کاربر {user_id} پاک شد - دلیل: {invalid_reason}")
+    else:
+        # ✅ کوپنی در دیتابیس نیست - پاک از user_states
+        if user_id in user_states:
+            has_coupon_in_state = (
+                user_states[user_id].get('coupon_code') or 
+                user_states[user_id].get('coupon_applied')
+            )
+            if has_coupon_in_state:
+                user_states[user_id].pop('coupon_code', None)
+                user_states[user_id].pop('coupon_discount', None)
+                user_states[user_id].pop('coupon_applied', None)
+                logger.debug(f"کوپن از user_states کاربر {user_id} پاک شد (در دیتابیس نیست)")
+    
+    # ✅ ذخیره تغییرات
     if modified:
         user['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
+        logger.debug(f"💾 تغییرات کاربر {user_id} ذخیره شد")
     
     return user
+
+
+def load_coupon_to_user_states(user_id: int) -> bool:
+    """لود کوپن از دیتابیس به user_states"""
+    uid = str(user_id)
+    
+    if uid not in users:
+        return False
+    
+    user_data = users[uid]
+    coupon_code = user_data.get('coupon_code')
+    coupon_discount = user_data.get('coupon_discount', 0)
+    coupon_applied = user_data.get('coupon_applied', False)
+    
+    if not coupon_code or not coupon_applied:
+        return False
+    
+    # بررسی اعتبار کوپن
+    if coupon_code in COUPONS:
+        coupon = COUPONS[coupon_code]
+        
+        # بررسی وضعیت
+        if coupon.get('status') != 'active':
+            logger.warning(f"⚠️ کوپن {coupon_code} غیرفعال است")
+            return False
+        
+        # بررسی تاریخ انقضا
+        expiry_date = coupon.get('expiry_date')
+        if expiry_date:
+            try:
+                expiry = datetime.fromisoformat(expiry_date)
+                if expiry < datetime.now():
+                    logger.warning(f"⚠️ کوپن {coupon_code} منقضی شده")
+                    return False
+            except:
+                pass
+        
+        # بررسی استفاده قبلی
+        if user_id in coupon.get('used_by', []):
+            logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده")
+            return False
+    
+    # لود به user_states
+    if user_id not in user_states:
+        user_states[user_id] = {}
+    
+    user_states[user_id]['coupon_code'] = coupon_code
+    user_states[user_id]['coupon_discount'] = coupon_discount
+    user_states[user_id]['coupon_applied'] = True
+    
+    logger.info(f"✅ کوپن {coupon_code} (تخفیف: {coupon_discount}%) به user_states کاربر {user_id} لود شد")
+    return True
 
 
 
@@ -6680,50 +6846,47 @@ def can_user_purchase(user_id: int) -> tuple:
     
     return False, msg
 
-def save_coupon_to_user_db(user_id: int):
-    """ذخیره کوپن در دیتابیس کاربر"""
-    try:
-        uid = str(user_id)
-        if uid not in users:
-            return
+def save_coupon_to_user_db(user_id: int) -> bool:
+    """ذخیره کوپن در دیتابیس کاربر
+    
+    Args:
+        user_id: شناسه کاربر
         
-        user_state = user_states.get(user_id, {})
-        coupon_code = user_state.get('coupon_code')
-        coupon_applied = user_state.get('coupon_applied', False)
-        coupon_discount = user_state.get('coupon_discount', 0)
-        if coupon_applied and coupon_code:
-            coupon = COUPONS.get(coupon_code)
-            if coupon and coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    users[uid]['coupon_code'] = coupon_code
-                    users[uid]['coupon_discount'] = coupon_discount
-                    users[uid]['coupon_applied'] = True
-                    save_json(DB_FILES['users'], users)
-                    logger.info(f"📁 [save_coupon_to_user_db] کوپن {coupon_code} برای کاربر {user_id} در دیتابیس ذخیره شد")
-                    return
-                else:
-                    logger.warning(f"⚠️ [save_coupon_to_user_db] کوپن {coupon_code} قبلاً مصرف شده است")
-                    users[uid]['coupon_code'] = None
-                    users[uid]['coupon_discount'] = 0
-                    users[uid]['coupon_applied'] = False
-                    save_json(DB_FILES['users'], users)
-                    return
-            else:
-                logger.warning(f"⚠️ [save_coupon_to_user_db] کوپن {coupon_code} نامعتبر است")
-                users[uid]['coupon_code'] = None
-                users[uid]['coupon_discount'] = 0
-                users[uid]['coupon_applied'] = False
-                save_json(DB_FILES['users'], users)
-                return
-        if users[uid].get('coupon_applied', False):
-            users[uid]['coupon_code'] = None
-            users[uid]['coupon_discount'] = 0
-            users[uid]['coupon_applied'] = False
-            save_json(DB_FILES['users'], users)
-            logger.info(f"🗑️ [save_coupon_to_user_db] کوپن کاربر {user_id} از دیتابیس پاک شد")
-            
+    Returns:
+        bool: True اگر موفق بود، False اگر خطا داشت
+    """
+    uid = str(user_id)
+    
+    # ✅ بررسی وجود کاربر
+    if uid not in users:
+        logger.warning(f"⚠️ کاربر {user_id} در دیتابیس یافت نشد - کوپن ذخیره نشد")
+        return False
+    
+    # ✅ دریافت اطلاعات کوپن از user_states
+    user_state = user_states.get(user_id, {})
+    coupon_code = user_state.get('coupon_code')
+    coupon_discount = user_state.get('coupon_discount', 0)
+    coupon_applied = user_state.get('coupon_applied', False)
+    
+    if not coupon_code:
+        logger.warning(f"⚠️ کوپنی در user_states کاربر {user_id} یافت نشد")
+        return False
+    
+    # ✅ اطمینان از وجود فیلدهای کوپن
+    add_coupon_fields_to_user(user_id)
+    
+    # ✅ ذخیره در دیتابیس
+    users[uid]['coupon_code'] = coupon_code
+    users[uid]['coupon_discount'] = coupon_discount
+    users[uid]['coupon_applied'] = coupon_applied
+    
+    try:
+        save_json(DB_FILES['users'], users)
+        logger.info(f"✅ کوپن {coupon_code} در دیتابیس کاربر {user_id} ذخیره شد (تخفیف: {coupon_discount}%)")
+        return True
     except Exception as e:
-        logger.error(f"❌ [save_coupon_to_user_db] خطا: {e}")
+        logger.error(f"❌ خطا در ذخیره کوپن در دیتابیس: {e}")
+        return False
 
 def load_coupon_from_user_db(user_id: int) -> dict:
     """بازیابی کوپن از دیتابیس کاربر"""
@@ -6771,18 +6934,82 @@ def load_coupon_from_user_db(user_id: int) -> dict:
     
     return result
 
-def clear_coupon_from_user_db(user_id: int):
-    """پاک کردن کوپن از دیتابیس کاربر"""
+def clear_coupon_from_user_db(user_id: int, force: bool = False) -> bool:
+    """پاک کردن کوپن از دیتابیس کاربر با بررسی‌های امنیتی
+    
+    Args:
+        user_id: شناسه کاربر
+        force: اگر True باشد، بدون بررسی وضعیت کوپن پاک می‌شود
+        
+    Returns:
+        bool: True اگر کوپن پاک شد، False اگر پاک نشد
+    """
+    uid = str(user_id)
+    
+    # ✅ بررسی وجود کاربر
+    if uid not in users:
+        logger.warning(f"⚠️ کاربر {user_id} در دیتابیس یافت نشد")
+        return False
+    
+    # ✅ بررسی اینکه آیا اصلاً کوپنی دارد
+    current_coupon = users[uid].get('coupon_code')
+    if not current_coupon and not users[uid].get('coupon_applied'):
+        logger.debug(f"کاربر {user_id} کوپنی ندارد")
+        return False
+    
+    # ✅ بررسی وضعیت کوپن (اگر force=False)
+    if not force and current_coupon:
+        if current_coupon in COUPONS:
+            coupon = COUPONS[current_coupon]
+            coupon_status = coupon.get('status', 'inactive')
+            expiry = coupon.get('expiry_date')
+            
+            # بررسی فعال بودن
+            if coupon_status == 'active':
+                # بررسی تاریخ انقضا
+                if expiry:
+                    try:
+                        expiry_date = datetime.fromisoformat(expiry)
+                        if expiry_date > datetime.now():
+                            logger.info(f"⏳ کوپن {current_coupon} هنوز فعال است (تا {expiry}) - پاک نشد")
+                            return False
+                        else:
+                            logger.info(f"⌛ کوپن {current_coupon} منقضی شده - در حال پاک کردن")
+                    except ValueError:
+                        logger.warning(f"⚠️ تاریخ نامعتبر برای کوپن {current_coupon}: {expiry}")
+                else:
+                    logger.info(f"⏳ کوپن {current_coupon} فعال است (بدون تاریخ انقضا) - پاک نشد")
+                    return False
+            else:
+                logger.info(f"🚫 کوپن {current_coupon} غیرفعال است - در حال پاک کردن")
+        else:
+            logger.warning(f"⚠️ کوپن {current_coupon} در لیست کوپن‌ها نیست - در حال پاک کردن")
+    
+    # ✅ ذخیره مقادیر قبلی برای لاگ
+    old_coupon = users[uid].get('coupon_code')
+    old_discount = users[uid].get('coupon_discount', 0)
+    
+    # ✅ پاک کردن کوپن
+    users[uid]['coupon_code'] = None
+    users[uid]['coupon_discount'] = 0
+    users[uid]['coupon_applied'] = False
+    
+    # ✅ پاک کردن از user_states نیز
+    if user_id in user_states:
+        user_states[user_id].pop('coupon_code', None)
+        user_states[user_id].pop('coupon_discount', None)
+        user_states[user_id].pop('coupon_applied', None)
+    
+    # ✅ ذخیره‌سازی
     try:
-        uid = str(user_id)
-        if uid in users:
-            users[uid]['coupon_code'] = None
-            users[uid]['coupon_discount'] = 0
-            users[uid]['coupon_applied'] = False
-            save_json(DB_FILES['users'], users)
-            logger.info(f"🗑️ [clear_coupon_from_user_db] کوپن کاربر {user_id} از دیتابیس پاک شد")
+        save_json(DB_FILES['users'], users)
+        logger.info(f"✅ کوپن کاربر {user_id} پاک شد:")
+        logger.info(f"  - کد قبلی: {old_coupon}")
+        logger.info(f"  - تخفیف قبلی: {old_discount}%")
+        return True
     except Exception as e:
-        logger.error(f"❌ [clear_coupon_from_user_db] خطا: {e}")
+        logger.error(f"❌ خطا در ذخیره‌سازی پس از پاک کردن کوپن: {e}")
+        return False
 @dp.callback_query(F.data == "admin_price_settings")
 async def admin_price_settings(callback: CallbackQuery):
     """نمایش تنظیمات قیمت"""
@@ -7949,19 +8176,35 @@ def load_coupon_from_user(user_id: int) -> dict:
     }    
         
 def backup_database():
-    """بکاپ گیری کامل از دیتابیس با تمام تنظیمات و IP Limit"""
+    """بکاپ گیری کامل از دیتابیس با تمام تنظیمات، IP Limit، alert_cache و alert_settings"""
     backup_dir = os.path.join(DATA_DIR, 'backups')
     os.makedirs(backup_dir, exist_ok=True)
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # ==================== 1. آماده‌سازی configs_pool ====================
+    # ✅ افزودن ready_packages و test_service به configs_pool
+    configs_pool['ready_packages'] = READY_PACKAGES
+    configs_pool['test_service'] = TEST_SERVICE_STATUS
+    
+    # ✅ اطمینان از وجود alert_settings در configs_pool
+    alert_settings = configs_pool.get('alert_settings', {})
+    if alert_settings:
+        logger.info(f"🔔 alert_settings در configs_pool یافت شد: {len(alert_settings.get('volume_thresholds', []))} volume thresholds, {len(alert_settings.get('expiry_warnings', []))} expiry warnings")
+    else:
+        logger.warning("⚠️ alert_settings در configs_pool یافت نشد")
+    
+    # ==================== 2. لاگ force_join_settings ====================
     force_settings = configs_pool.get('force_join_settings', {})
     logger.info(f"🔍 در حال بکاپ - force_join_settings: {force_settings}")
     logger.info(f"🔍 تعداد کانال‌ها: {len(force_settings.get('channels', []))}")
-    configs_pool['ready_packages'] = READY_PACKAGES
-    configs_pool['test_service'] = TEST_SERVICE_STATUS
+    
+    # ==================== 3. لاگ اینباندهای دسته‌ها ====================
     for cat in READY_PACKAGES.get('categories', []):
         inbound_ids = cat.get('inbound_ids', [])
         logger.info(f"📡 بکاپ - دسته {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
+    
+    # ==================== 4. آماده‌سازی سفارشات با ip_limit ====================
     orders_with_ip = {}
     for oid, order in orders.items():
         if isinstance(order, dict):
@@ -7971,6 +8214,26 @@ def backup_database():
             orders_with_ip[oid] = order
         else:
             orders_with_ip[oid] = order
+    
+    # ==================== 5. بارگذاری alert_cache.json ====================
+    alert_cache = {}
+    alert_cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
+    if os.path.exists(alert_cache_file):
+        try:
+            with open(alert_cache_file, 'r', encoding='utf-8') as f:
+                alert_cache = json.load(f)
+            logger.info(f"🔔 alert_cache.json بارگذاری شد:")
+            logger.info(f"  - volume_alerts: {len(alert_cache.get('volume_alerts', {}))}")
+            logger.info(f"  - expiry_alerts: {len(alert_cache.get('expiry_alerts', {}))}")
+            logger.info(f"  - history: {len(alert_cache.get('history', {}))}")
+            logger.info(f"  - service_info: {len(alert_cache.get('service_info', {}))}")
+        except Exception as e:
+            logger.error(f"❌ خطا در خواندن alert_cache.json: {e}")
+            alert_cache = {}
+    else:
+        logger.warning("⚠️ فایل alert_cache.json یافت نشد - بکاپ بدون alert_cache خواهد بود")
+    
+    # ==================== 6. دریافت آمار ====================
     try:
         stats = get_global_stats()
     except Exception as e:
@@ -7986,6 +8249,8 @@ def backup_database():
             'today_orders': 0,
             'today_revenue': 0
         }
+    
+    # ==================== 7. ساخت بکاپ کامل ====================
     full_backup = {
         'users': users,
         'orders': orders_with_ip,
@@ -8002,40 +8267,127 @@ def backup_database():
         'user_inbound_selection': USER_INBOUND_SELECTION,
         'user_test_usage': USER_TEST_USAGE,
         'shop_status': SHOP_STATUS,
+        'alert_cache': alert_cache,
+        'alert_settings': alert_settings,  # ✅ اضافه کردن alert_settings جداگانه
         'backup_info': {
             'timestamp': timestamp,
             'date': datetime.now().isoformat(),
             'stats': stats,
-            'version': '3.0'
+            'version': '3.2'  # ✅ نسخه جدید
         }
     }
     
+    # ==================== 8. ذخیره بکاپ ====================
     backup_file = os.path.join(backup_dir, f'full_backup_{timestamp}.json')
     if save_json(backup_file, full_backup):
         logger.info(f"✅ بکاپ کامل در {backup_file} ذخیره شد")
+        
+        # ==================== 9. بررسی فایل بکاپ ذخیره شده ====================
         try:
             with open(backup_file, 'r', encoding='utf-8') as f:
                 saved_data = json.load(f)
+                
+                # بررسی اجزای اصلی
                 saved_force = saved_data.get('configs', {}).get('force_join_settings', {})
                 saved_ready = saved_data.get('ready_packages', {})
                 saved_test = saved_data.get('test_service', {})
                 saved_orders = saved_data.get('orders', {})
+                saved_alert_cache = saved_data.get('alert_cache', {})
+                saved_alert_settings = saved_data.get('alert_settings', {})
+                saved_alert_settings_in_configs = saved_data.get('configs', {}).get('alert_settings', {})
                 
+                # شمارش سفارشات با ip_limit
                 orders_with_ip_count = sum(1 for o in saved_orders.values() if isinstance(o, dict) and 'ip_limit' in o)
                 
+                # لاگ بررسی
                 logger.info(f"🔍 بررسی فایل بکاپ:")
+                logger.info(f"  - کاربران: {len(saved_data.get('users', {}))}")
+                logger.info(f"  - سفارشات: {len(saved_orders)}")
+                logger.info(f"  - سفارشات با ip_limit: {orders_with_ip_count}/{len(saved_orders)}")
                 logger.info(f"  - force_join_settings: {saved_force}")
                 logger.info(f"  - ready_packages: {len(saved_ready.get('categories', []))} دسته")
                 logger.info(f"  - test_service: {saved_test.get('inbound_ids', [])}")
-                logger.info(f"  - سفارشات با ip_limit: {orders_with_ip_count}/{len(saved_orders)}")
+                logger.info(f"  - alert_settings (جداگانه): {saved_alert_settings}")
+                logger.info(f"  - alert_settings (در configs): {saved_alert_settings_in_configs}")
+                logger.info(f"  - alert_cache:")
+                logger.info(f"    • volume_alerts: {len(saved_alert_cache.get('volume_alerts', {}))}")
+                logger.info(f"    • expiry_alerts: {len(saved_alert_cache.get('expiry_alerts', {}))}")
+                logger.info(f"    • history: {len(saved_alert_cache.get('history', {}))}")
+                logger.info(f"    • service_info: {len(saved_alert_cache.get('service_info', {}))}")
+                logger.info(f"  - blacklist: {saved_data.get('blacklist', {}).get('count', 0)} کاربر")
+                logger.info(f"  - user_inbound_selection: {len(saved_data.get('user_inbound_selection', {}))} کاربر")
+                logger.info(f"  - user_test_usage: {len(saved_data.get('user_test_usage', {}))} کاربر")
+                logger.info(f"  - shop_status: {saved_data.get('shop_status', {}).get('open', 'unknown')}")
+                logger.info(f"  - version: {saved_data.get('backup_info', {}).get('version', 'unknown')}")
+                
+                # بررسی کامل بودن
+                required_keys = ['users', 'orders', 'configs', 'alert_cache', 'ready_packages', 'test_service']
+                missing_keys = [k for k in required_keys if k not in saved_data]
+                if missing_keys:
+                    logger.warning(f"⚠️ کلیدهای گمشده در بکاپ: {missing_keys}")
+                else:
+                    logger.info(f"✅ بکاپ کامل است - همه {len(required_keys)} کلید اصلی موجود است")
+                    
         except Exception as e:
             logger.warning(f"⚠️ خطا در بررسی فایل بکاپ: {e}")
         
+        # ==================== 10. پاکسازی بکاپ‌های قدیمی ====================
         _cleanup_old_backups(backup_dir, keep=7)
+        
+        return True
     else:
         logger.error("❌ خطا در ذخیره بکاپ")
+        return False
+
+def load_alert_cache() -> dict:
+    """بارگذاری alert_cache از فایل JSON"""
+    alert_cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
+    
+    if not os.path.exists(alert_cache_file):
+        logger.warning("⚠️ فایل alert_cache.json یافت نشد")
+        return {}
+    
+    try:
+        with open(alert_cache_file, 'r', encoding='utf-8') as f:
+            alert_cache = json.load(f)
+        
+        logger.info(f"✅ alert_cache.json بارگذاری شد:")
+        logger.info(f"  - volume_alerts: {len(alert_cache.get('volume_alerts', {}))}")
+        logger.info(f"  - expiry_alerts: {len(alert_cache.get('expiry_alerts', {}))}")
+        logger.info(f"  - history: {len(alert_cache.get('history', {}))}")
+        logger.info(f"  - service_info: {len(alert_cache.get('service_info', {}))}")
+        
+        return alert_cache
+    except Exception as e:
+        logger.error(f"❌ خطا در خواندن alert_cache.json: {e}")
+        return {}
 
 
+def save_alert_cache(alert_cache: dict) -> bool:
+    """ذخیره alert_cache در فایل JSON"""
+    if not alert_cache:
+        logger.warning("⚠️ alert_cache خالی است - ذخیره انجام نشد")
+        return False
+    
+    alert_cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
+    
+    try:
+        # ایجاد دایرکتوری اگر وجود ندارد
+        os.makedirs(os.path.dirname(alert_cache_file), exist_ok=True)
+        
+        with open(alert_cache_file, 'w', encoding='utf-8') as f:
+            json.dump(alert_cache, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"✅ alert_cache.json ذخیره شد:")
+        logger.info(f"  - volume_alerts: {len(alert_cache.get('volume_alerts', {}))}")
+        logger.info(f"  - expiry_alerts: {len(alert_cache.get('expiry_alerts', {}))}")
+        logger.info(f"  - history: {len(alert_cache.get('history', {}))}")
+        logger.info(f"  - service_info: {len(alert_cache.get('service_info', {}))}")
+        
+        return True
+    except Exception as e:
+        logger.error(f"❌ خطا در ذخیره alert_cache.json: {e}")
+        return False
 def _cleanup_old_backups(backup_dir: str, keep: int = 5, filename: str = 'full_backup_'):
     """نگه داشتن فقط N بکاپ آخر برای هر نوع فایل"""
     try:
@@ -8126,7 +8478,7 @@ def optimize_storage():
 
 
 def restore_backup(backup_file: str) -> bool:
-    """بازگردانی بکاپ"""
+    """بازگردانی بکاپ کامل"""
     global users, orders, referrals, configs_pool, feedbacks, chats, BLACKLIST
     
     if not os.path.exists(backup_file):
@@ -8134,8 +8486,18 @@ def restore_backup(backup_file: str) -> bool:
         return False
     
     try:
+        # ==================== 1. بارگذاری فایل بکاپ ====================
         data = load_json(backup_file)
         
+        if not data:
+            logger.error(f"❌ فایل بکاپ {backup_file} خالی یا نامعتبر است")
+            return False
+        
+        # ==================== 2. بررسی نسخه بکاپ ====================
+        backup_version = data.get('backup_info', {}).get('version', 'unknown')
+        logger.info(f"📦 نسخه بکاپ: {backup_version}")
+        
+        # ==================== 3. بازیابی داده‌های اصلی ====================
         users = data.get('users', {})
         orders = data.get('orders', {})
         referrals = data.get('referrals', {})
@@ -8143,19 +8505,85 @@ def restore_backup(backup_file: str) -> bool:
         feedbacks = data.get('feedback', {})
         chats = data.get('chats', {})
         
+        # ==================== 4. بازیابی BLACKLIST ====================
         blacklist_data = data.get('blacklist', {})
         BLACKLIST = set(blacklist_data.get('users', []))
+        
+        # ==================== 5. بازیابی alert_cache ====================
+        alert_cache = data.get('alert_cache', {})
+        if alert_cache:
+            if save_alert_cache(alert_cache):
+                logger.info(f"✅ alert_cache.json با موفقیت بازگردانی شد")
+            else:
+                logger.error(f"❌ خطا در بازگردانی alert_cache.json")
+        else:
+            logger.warning("⚠️ alert_cache در فایل بکاپ یافت نشد")
+        
+        # ==================== 6. بازیابی alert_settings ====================
+        alert_settings = data.get('alert_settings', {})
+        if not alert_settings:
+            # تلاش برای یافتن در configs_pool
+            alert_settings = configs_pool.get('alert_settings', {})
+        
+        if alert_settings:
+            configs_pool['alert_settings'] = alert_settings
+            logger.info(f"✅ alert_settings با موفقیت بازگردانی شد")
+        else:
+            logger.warning("⚠️ alert_settings در فایل بکاپ یافت نشد")
+        
+        # ==================== 7. بازیابی ready_packages و test_service ====================
+        global READY_PACKAGES, TEST_SERVICE_STATUS
+        
+        ready_packages = data.get('ready_packages', {})
+        if ready_packages:
+            READY_PACKAGES = ready_packages
+            logger.info(f"✅ ready_packages بازگردانی شد: {len(ready_packages.get('categories', []))} دسته")
+        
+        test_service = data.get('test_service', {})
+        if test_service:
+            TEST_SERVICE_STATUS = test_service
+            logger.info(f"✅ test_service بازگردانی شد")
+        
+        # ==================== 8. بازیابی سایر داده‌ها ====================
+        global USER_INBOUND_SELECTION, USER_TEST_USAGE, SHOP_STATUS
+        
+        user_inbound_selection = data.get('user_inbound_selection', {})
+        if user_inbound_selection:
+            USER_INBOUND_SELECTION = user_inbound_selection
+            logger.info(f"✅ user_inbound_selection بازگردانی شد: {len(user_inbound_selection)} کاربر")
+        
+        user_test_usage = data.get('user_test_usage', {})
+        if user_test_usage:
+            USER_TEST_USAGE = user_test_usage
+            logger.info(f"✅ user_test_usage بازگردانی شد: {len(user_test_usage)} کاربر")
+        
+        shop_status = data.get('shop_status', {})
+        if shop_status:
+            SHOP_STATUS = shop_status
+            logger.info(f"✅ shop_status بازگردانی شد: {'باز' if shop_status.get('open') else 'بسته'}")
+        
+        # ==================== 9. ذخیره همه داده‌ها ====================
         save_all()
         
+        # ==================== 10. لاگ نهایی ====================
         logger.info(f"✅ بکاپ با موفقیت بازگردانی شد")
         logger.info(f"  📊 کاربران: {len(users)}")
         logger.info(f"  📊 سفارشات: {len(orders)}")
         logger.info(f"  📊 مسدود شده‌ها: {len(BLACKLIST)}")
+        logger.info(f"  🔔 alert_cache: {'بازگردانی شد' if alert_cache else 'یافت نشد'}")
+        logger.info(f"  ⚙️ alert_settings: {'بازگردانی شد' if alert_settings else 'یافت نشد'}")
+        logger.info(f"  📦 ready_packages: {len(READY_PACKAGES.get('categories', []))} دسته")
+        logger.info(f"  🧪 test_service: {'بازگردانی شد' if test_service else 'یافت نشد'}")
+        logger.info(f"  📡 user_inbound_selection: {len(USER_INBOUND_SELECTION)} کاربر")
+        logger.info(f"  🧪 user_test_usage: {len(USER_TEST_USAGE)} کاربر")
+        logger.info(f"  🏪 shop_status: {'بازگردانی شد' if shop_status else 'یافت نشد'}")
         
         return True
         
     except Exception as e:
         logger.error(f"❌ خطا در بازگردانی بکاپ: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
 def format_size(size_bytes: int) -> str:
@@ -10234,6 +10662,15 @@ async def xui_get_client_info(email: str) -> Optional[dict]:
                     if data.get("success"):
                         obj = data.get("obj", {})
                         client = obj.get("client", obj)
+                        
+                        # دیباگ نوع داده
+                        logger.debug(f"🔍 نوع client برای {email}: {type(client)}")
+                        logger.debug(f"🔍 محتوای client: {client}")
+                        
+                        # اگر client دیکشنری نیست، برگردان None
+                        if not isinstance(client, dict):
+                            logger.warning(f"⚠️ client برای {email} دیکشنری نیست: {type(client)}")
+                            return None
                         
                         expiry = client.get('expiryTime', 0)
                         if expiry > 0:
@@ -12320,7 +12757,8 @@ async def ai_chat_start(callback: CallbackQuery):
 
 <b>{premium_emoji('note','📋')} چه سوالاتی می‌توانید بپرسید؟</b>
 • نحوه خرید کانفیگ و قیمت‌ها
-• راهنمای اتصال با دستگاه های مختلف با لینک دانلود اپ های رسمی
+• راهنمای اتصال با دستگاه های مختلف
+• لینک دانلود اپلیکیشن رسمی
 • حل مشکلات اتصال VPN
 • راهنمای شارژ حساب و پرداخت
 • پرسیدن سوال در رابطه با سرعت و پایداری
@@ -12339,7 +12777,8 @@ Welcome to AI Support!
 
 <b>{premium_emoji('note','📋')} What can you ask?</b>
 • How to purchase configs and pricing
-• Connection guide for different devices with official app download links
+• Connection guide for different devices 
+• official app download links
 • VPN connection issues
 • Balance recharge and payment guide
 • Questions about speed and stability
@@ -12459,21 +12898,118 @@ async def admin_reset_verification(callback: CallbackQuery):
         pass
     
     
-async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_markup: InlineKeyboardMarkup = None):
-    """ویرایش امن پیام با مدیریت خطای message not modified"""
+async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = ParseMode.HTML):
+    """ویرایش امن پیام با پشتیبانی از انواع پیام و HTML"""
     try:
-        if text and reply_markup:
-            await callback.message.edit_text(text, reply_markup=reply_markup)
-        elif reply_markup:
-            await callback.message.edit_reply_markup(reply_markup=reply_markup)
-        elif text:
-            await callback.message.edit_text(text)
+        message = callback.message
+        
+        # بررسی نوع پیام
+        has_caption = any([
+            message.photo,
+            message.document,
+            message.video,
+            message.audio,
+            message.animation,
+        ])
+        
+        if has_caption:
+            # پیام با caption (عکس/فایل/ویدیو)
+            if text:
+                await message.edit_caption(
+                    caption=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
+            elif reply_markup:
+                await message.edit_reply_markup(reply_markup=reply_markup)
+                
+        elif message.text:
+            # پیام متنی
+            if text and reply_markup:
+                await message.edit_text(
+                    text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
+            elif reply_markup:
+                await message.edit_reply_markup(reply_markup=reply_markup)
+            elif text:
+                await message.edit_text(
+                    text,
+                    parse_mode=parse_mode
+                )
+        else:
+            # نوع نامشخص - حذف و ارسال جدید
+            try:
+                await message.delete()
+            except:
+                pass
+            
+            if text:
+                await message.answer(
+                    text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
+                
     except Exception as e:
-        if "message is not modified" in str(e):
+        error_str = str(e)
+        
+        if "message is not modified" in error_str:
             logger.debug(f"Message not modified for user {callback.from_user.id}")
+            return
+        
+        elif "there is no text in the message to edit" in error_str:
+            logger.warning(f"⚠️ پیام قابل ویرایش نیست، حذف و ارسال جدید...")
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            
+            if text:
+                try:
+                    await callback.message.answer(
+                        text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                except Exception as e2:
+                    logger.error(f"خطا در ارسال پیام جدید: {e2}")
+            return
+        
+        elif "message to edit not found" in error_str:
+            logger.warning(f"⚠️ پیام یافت نشد، ارسال پیام جدید...")
+            if text:
+                try:
+                    await callback.message.answer(
+                        text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                except Exception as e2:
+                    logger.error(f"خطا در ارسال پیام جدید: {e2}")
+            return
+        
+        elif "message can't be edited" in error_str:
+            logger.warning(f"⚠️ پیام قابل ویرایش نیست (ممکن است قدیمی باشد)")
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            
+            if text:
+                try:
+                    await callback.message.answer(
+                        text,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                except Exception as e2:
+                    logger.error(f"خطا در ارسال پیام جدید: {e2}")
+            return
+        
         else:
             logger.error(f"Error in safe_edit_message: {e}")
-            raise
         
         
 def get_purchase_keyboard(volume: int, days: int, lang: str = "fa") -> InlineKeyboardMarkup:
@@ -12584,11 +13120,14 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="💬 چت‌ها", callback_data="admin_chats"),
-                InlineKeyboardButton(text="📦 مدیریت کانفیگ", callback_data="admin_configs")
+                InlineKeyboardButton(text="📦 مدیریت کانفیگ", callback_data="admin_configs"),
+                InlineKeyboardButton(text="🔄 بررسی هشدارها", callback_data="admin_check_alerts")
             ],
             [
                 InlineKeyboardButton(text="🏷️ مدیریت کوپن‌ها", callback_data="admin_coupons"),
                 InlineKeyboardButton(text="📊 آمار کوپن‌ها", callback_data="admin_coupons_stats"),
+                InlineKeyboardButton(text="⚠️ تنظیمات هشدار", callback_data="admin_alert_settings")
+                
             ],
             [
                 InlineKeyboardButton(text="📊 آمار", callback_data="admin_stats"),
@@ -12634,17 +13173,21 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📦 ready Package", callback_data="admin_ready_packages")
             ],
             [
-                InlineKeyboardButton(text="health report test🧪", callback_data="test_health_report"),
-                InlineKeyboardButton(text="disk warning test🧪", callback_data="test_disk_warning"),
-                InlineKeyboardButton(text="weekly report test🧪", callback_data="test_weekly_report"),
+                InlineKeyboardButton(text="🧪 health report test", callback_data="test_health_report"),
+                InlineKeyboardButton(text="🧪 disk warning test", callback_data="test_disk_warning"),
+                InlineKeyboardButton(text="🧪 weekly report test", callback_data="test_weekly_report"),
             ],
             [
                 InlineKeyboardButton(text="💬 Chats", callback_data="admin_chats"),
-                InlineKeyboardButton(text="📦 Configs", callback_data="admin_configs")
+                InlineKeyboardButton(text="📦 Configs", callback_data="admin_configs"),
+                InlineKeyboardButton(text="🔄 Alert check ", callback_data="admin_check_alerts")
+
             ],
             [
                 InlineKeyboardButton(text="🏷️ Coupon Management", callback_data="admin_coupons"),
-                InlineKeyboardButton(text="📊 Coupon status", callback_data="admin_coupons_stats"),
+                InlineKeyboardButton(text="📊 Coupon Status", callback_data="admin_coupons_stats"),
+                InlineKeyboardButton(text="⚠️ Alert Settings", callback_data="admin_alert_settings")
+                
             ],
             [
                 InlineKeyboardButton(text="📊 Stats", callback_data="admin_stats"),
@@ -12672,7 +13215,7 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⚠️ Reset DB", callback_data="admin_reset_db")
             ],
             [
-                InlineKeyboardButton(text="🚨 amirgensi backup", callback_data="admin_emergency_backup", style="danger")
+                InlineKeyboardButton(text="🚨 Emergency Backup", callback_data="admin_emergency_backup", style="danger")
             ],
                 
             [
@@ -13446,18 +13989,25 @@ def add_coupon_fields_to_user(user_id: int):
     uid = str(user_id)
     if uid in users:
         modified = False
+        
         if 'coupon_code' not in users[uid]:
             users[uid]['coupon_code'] = None
             modified = True
+        
         if 'coupon_discount' not in users[uid]:
             users[uid]['coupon_discount'] = 0
             modified = True
+        
         if 'coupon_applied' not in users[uid]:
             users[uid]['coupon_applied'] = False
             modified = True
+        
         if modified:
-            save_json(DB_FILES['users'], users)
-            logger.info(f"✅ فیلدهای کوپن به کاربر {user_id} اضافه شد")
+            try:
+                save_json(DB_FILES['users'], users)
+                logger.info(f"✅ فیلدهای کوپن به کاربر {user_id} اضافه شد")
+            except Exception as e:
+                logger.error(f"❌ خطا در ذخیره فیلدهای کوپن: {e}")
             
             
 
@@ -14565,13 +15115,47 @@ async def buy_specific_package(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
 
-def fully_remove_coupon_from_user(user_id: int):
-    """حذف کامل کوپن از وضعیت کاربر (زمانی که کاربر خودش کوپن را لغو می‌کند)"""
+def fully_remove_coupon_from_user(user_id: int) -> bool:
+    """حذف کامل کوپن از وضعیت کاربر و دیتابیس
+    
+    Args:
+        user_id: شناسه کاربر
+        
+    Returns:
+        bool: True اگر موفق بود، False اگر خطا داشت
+    """
+    uid = str(user_id)
+    removed = False
+    
+    # ✅ 1. حذف از user_states
     if user_id in user_states:
         user_states[user_id].pop('coupon_code', None)
         user_states[user_id].pop('coupon_discount', None)
         user_states[user_id].pop('coupon_applied', None)
-        logger.info(f"🏷️ کوپن از وضعیت کاربر {user_id} حذف شد")
+        logger.info(f"🏷️ کوپن از user_states کاربر {user_id} حذف شد")
+        removed = True
+    
+    # ✅ 2. حذف از دیتابیس users
+    if uid in users:
+        old_coupon = users[uid].get('coupon_code')
+        old_discount = users[uid].get('coupon_discount', 0)
+        
+        users[uid]['coupon_code'] = None
+        users[uid]['coupon_discount'] = 0
+        users[uid]['coupon_applied'] = False
+        
+        try:
+            save_json(DB_FILES['users'], users)
+            logger.info(f"🏷️ کوپن از دیتابیس کاربر {user_id} حذف شد: {old_coupon} (تخفیف: {old_discount}%)")
+            removed = True
+        except Exception as e:
+            logger.error(f"❌ خطا در ذخیره‌سازی پس از حذف کوپن: {e}")
+            return False
+    
+    if not removed:
+        logger.debug(f"کاربر {user_id} کوپنی برای حذف نداشت")
+    
+    return removed
 
 def release_coupon(user_id: int) -> bool:
     """آزادسازی کوپن در صورت لغو سفارش (برگشت به حالت قبل)"""
@@ -16457,6 +17041,573 @@ Click on a package to edit or delete:
         await callback.answer()
     except:
         pass
+ 
+ 
+ 
+# ============================================
+# هندلرهای تنظیمات هشدار
+# ============================================
+
+@dp.callback_query(F.data == "admin_alert_settings")
+async def admin_alert_settings(callback: CallbackQuery):
+    """نمایش تنظیمات سیستم هشدار"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    global alert_system_settings
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    # بارگذاری تنظیمات از دیتابیس
+    if 'alert_settings' in configs_pool and isinstance(configs_pool['alert_settings'], dict):
+        alert_system_settings.update(configs_pool['alert_settings'])
+    
+    enabled = alert_system_settings.get('enabled', True)
+    volume_thresholds = alert_system_settings.get('volume_thresholds', [10, 5, 1])
+    expiry_warnings = alert_system_settings.get('expiry_warnings', [7, 3, 1])
+    
+    # وضعیت سیستم
+    system_status = "🟢 فعال" if alert_system and alert_system.enabled else "🔴 غیرفعال"
+    log_status = "🟢 متصل" if alert_system and alert_system.log_system else "🔴 قطع"
+    cache_status = "🟢 فعال" if alert_system else "🔴 غیرفعال"
+    
+    if lang == "fa":
+        text = f"""
+⚠️ <b>تنظیمات هشدار سرویس</b>
+
+━━━━━━━━━━━━━━━━━━━━━━
+⚙️ <b>وضعیت سیستم:</b> {system_status}
+📊 <b>آستانه‌های حجم:</b> {volume_thresholds}٪
+📅 <b>آستانه‌های انقضا:</b> {expiry_warnings} روز
+📝 <b>سیستم لاگ:</b> {log_status}
+💾 <b>کش:</b> {cache_status}
+━━━━━━━━━━━━━━━━━━━━━━
+
+📌 <b>نکته:</b> هر آستانه فقط یکبار به کاربر اطلاع داده می‌شود.
+
+<b>عملیات:</b>
+"""
+    else:
+        text = f"""
+⚠️ <b>Alert Settings</b>
+
+━━━━━━━━━━━━━━━━━━━━━━
+⚙️ <b>System Status:</b> {'🟢 Enabled' if enabled else '🔴 Disabled'}
+📊 <b>Volume Thresholds:</b> {volume_thresholds}%
+📅 <b>Expiry Thresholds:</b> {expiry_warnings} days
+📝 <b>Log System:</b> {log_status}
+💾 <b>Cache:</b> {cache_status}
+━━━━━━━━━━━━━━━━━━━━━━
+
+📌 <b>Note:</b> Each threshold is sent only once.
+
+<b>Actions:</b>
+"""
+    
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"🔘 {'غیرفعال کردن' if enabled else 'فعال کردن'}" if lang == "fa" else f"🔘 {'Disable' if enabled else 'Enable'}",
+            callback_data="admin_alert_toggle"
+        )],
+        [
+            InlineKeyboardButton(
+                text="📊 آستانه حجم" if lang == "fa" else "📊 Volume",
+                callback_data="admin_alert_volume"
+            ),
+            InlineKeyboardButton(
+                text="📅 آستانه انقضا" if lang == "fa" else "📅 Expiry",
+                callback_data="admin_alert_expiry"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔄 بررسی دستی" if lang == "fa" else "🔄 Check Now",
+                callback_data="admin_check_alerts"
+            ),
+            InlineKeyboardButton(
+                text="🧹 پاک کردن کش" if lang == "fa" else "🧹 Clear Cache",
+                callback_data="admin_clear_alert_cache"
+            )
+        ],
+        [InlineKeyboardButton(
+            text="🗑️ پاک کردن تاریخچه" if lang == "fa" else "🗑️ Clear History",
+            callback_data="admin_clear_alert_history"
+        )],
+        [InlineKeyboardButton(
+            text="🔙 برگشت به پنل ادمین" if lang == "fa" else "🔙 Back to Admin",
+            callback_data="admin_panel"
+        )]
+    ]
+    
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            logger.error(f"خطا در ویرایش پیام تنظیمات: {e}")
+    
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_alert_toggle")
+async def admin_alert_toggle(callback: CallbackQuery):
+    """فعال/غیرفعال کردن سیستم هشدار"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    global alert_system_settings
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    # تغییر وضعیت
+    new_status = not alert_system_settings.get('enabled', True)
+    alert_system_settings['enabled'] = new_status
+    
+    # اعمال به سیستم
+    if alert_system:
+        alert_system.enabled = new_status
+    
+    # ذخیره در دیتابیس
+    configs_pool['alert_settings'] = alert_system_settings
+    save_all()
+    
+    # لاگ تغییر
+    if alert_system and alert_system.log_system:
+        await alert_system.log_system.log_admin_action(
+            callback.from_user.id,
+            f"{'فعال' if new_status else 'غیرفعال'} کردن سیستم هشدار",
+            details=f"وضعیت جدید: {'فعال' if new_status else 'غیرفعال'}"
+        )
+    
+    await callback.answer(
+        f"✅ سیستم هشدار {'فعال' if new_status else 'غیرفعال'} شد!" if lang == "fa" else f"✅ Alert system {'enabled' if new_status else 'disabled'}!",
+        show_alert=True
+    )
+    
+    await admin_alert_settings(callback)
+
+
+# ============================================
+# هندلرهای تغییر آستانه‌ها
+# ============================================
+
+@dp.callback_query(F.data == "admin_alert_volume")
+async def admin_alert_volume_settings(callback: CallbackQuery):
+    """تنظیم آستانه‌های حجم - ۲ آستانه + اتمام خودکار"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    global alert_system_settings
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    current = alert_system_settings.get('volume_thresholds', [10, 5])
+    
+    if lang == "fa":
+        text = f"""
+📊 <b>تنظیم آستانه‌های هشدار حجم</b>
+
+آستانه‌های فعلی: <code>{current}</code>٪
+
+📌 <b>نکته:</b>
+• ۲ آستانه اول توسط شما تنظیم می‌شود
+• آستانه سوم (اتمام حجم) خودکار است
+
+گزینه‌های پیشنهادی:
+"""
+    else:
+        text = f"""
+📊 <b>Volume Alert Thresholds</b>
+
+Current: <code>{current}</code>%
+
+📌 <b>Note:</b>
+• First 2 thresholds are set by you
+• Third threshold (volume exhausted) is automatic
+
+Presets:
+"""
+    
+    # ✅ فقط ۲ آستانه
+    presets = [
+        ([10, 5], "استاندارد", "Standard"),
+        ([20, 10], "زودهنگام", "Early"),
+        ([15, 5], "متوسط", "Medium"),
+        ([5, 2], "دیرهنگام", "Late"),
+    ]
+    
+    buttons = []
+    for thresholds, fa_label, en_label in presets:
+        label = f"📊 {thresholds[0]}٪ - {thresholds[1]}٪ - ۰٪ (اتمام) ({fa_label if lang == 'fa' else en_label})"
+        callback_data = f"alert_volume_set_{thresholds[0]}_{thresholds[1]}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
+    
+    buttons.append([InlineKeyboardButton(
+        text="🔙 برگشت به تنظیمات" if lang == "fa" else "🔙 Back to Settings",
+        callback_data="admin_alert_settings"
+    )])
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("alert_volume_set_"))
+async def alert_volume_set(callback: CallbackQuery):
+    """اعمال آستانه حجم انتخاب شده"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    global alert_system_settings
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    # استخراج آستانه‌ها (۲ تا)
+    parts = callback.data.split("_")[3:]
+    thresholds = [int(p) for p in parts]
+    
+    # ✅ ذخیره فقط ۲ آستانه
+    alert_system_settings['volume_thresholds'] = thresholds
+    
+    # اعمال به سیستم
+    if alert_system:
+        alert_system.volume_thresholds = thresholds
+    
+    # ذخیره در دیتابیس
+    configs_pool['alert_settings'] = alert_system_settings
+    save_all()
+    
+    # لاگ تغییر
+    if alert_system and alert_system.log_system:
+        await alert_system.log_system.log_admin_action(
+            callback.from_user.id,
+            "تغییر آستانه‌های حجم",
+            details=f"آستانه‌های جدید: {thresholds}% + اتمام خودکار"
+        )
+    
+    await callback.answer(
+        f"✅ آستانه‌های حجم به {thresholds}٪ + اتمام خودکار تغییر کرد!" if lang == "fa" else f"✅ Volume thresholds set to {thresholds}% + auto exhaust!",
+        show_alert=True
+    )
+    
+    await admin_alert_settings(callback)
+
+
+@dp.callback_query(F.data == "admin_alert_expiry")
+async def admin_alert_expiry_settings(callback: CallbackQuery):
+    """تنظیم آستانه‌های انقضا - ۲ آستانه + انقضای خودکار"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    global alert_system_settings
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    current = alert_system_settings.get('expiry_warnings', [3, 1])
+    
+    if lang == "fa":
+        text = f"""
+📅 <b>تنظیم آستانه‌های هشدار انقضا</b>
+
+آستانه‌های فعلی: <code>{current}</code> روز
+
+📌 <b>نکته:</b>
+• ۲ آستانه اول توسط شما تنظیم می‌شود
+• آستانه سوم (انقضای کامل) خودکار است
+
+گزینه‌های پیشنهادی:
+"""
+    else:
+        text = f"""
+📅 <b>Expiry Alert Thresholds</b>
+
+Current: <code>{current}</code> days
+
+📌 <b>Note:</b>
+• First 2 thresholds are set by you
+• Third threshold (expired) is automatic
+
+Presets:
+"""
+    
+    # ✅ فقط ۲ آستانه
+    presets = [
+        ([3, 1], "استاندارد", "Standard"),
+        ([7, 2], "زودهنگام", "Early"),
+        ([2, 1], "دیرهنگام", "Late"),
+        ([5, 2], "متوسط", "Medium"),
+    ]
+    
+    buttons = []
+    for thresholds, fa_label, en_label in presets:
+        label = f"📅 {thresholds[0]} روز - {thresholds[1]} روز - منقضی ({fa_label if lang == 'fa' else en_label})"
+        callback_data = f"alert_expiry_set_{thresholds[0]}_{thresholds[1]}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
+    
+    buttons.append([InlineKeyboardButton(
+        text="🔙 برگشت به تنظیمات" if lang == "fa" else "🔙 Back to Settings",
+        callback_data="admin_alert_settings"
+    )])
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("alert_expiry_set_"))
+async def alert_expiry_set(callback: CallbackQuery):
+    """اعمال آستانه انقضا انتخاب شده"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    global alert_system_settings
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    # استخراج آستانه‌ها (۲ تا)
+    parts = callback.data.split("_")[3:]
+    thresholds = [int(p) for p in parts]
+    
+    # ✅ ذخیره فقط ۲ آستانه
+    alert_system_settings['expiry_warnings'] = thresholds
+    
+    # اعمال به سیستم
+    if alert_system:
+        alert_system.expiry_warnings = thresholds
+    
+    # ذخیره در دیتابیس
+    configs_pool['alert_settings'] = alert_system_settings
+    save_all()
+    
+    # لاگ تغییر
+    if alert_system and alert_system.log_system:
+        await alert_system.log_system.log_admin_action(
+            callback.from_user.id,
+            "تغییر آستانه‌های انقضا",
+            details=f"آستانه‌های جدید: {thresholds} روز + انقضای خودکار"
+        )
+    
+    await callback.answer(
+        f"✅ آستانه‌های انقضا به {thresholds} روز + انقضای خودکار تغییر کرد!" if lang == "fa" else f"✅ Expiry thresholds set to {thresholds} days + auto expire!",
+        show_alert=True
+    )
+    
+    await admin_alert_settings(callback)
+
+
+# ============================================
+# بررسی دستی هشدارها
+# ============================================
+
+@dp.callback_query(F.data == "admin_check_alerts")
+async def admin_check_alerts(callback: CallbackQuery):
+    """بررسی دستی هشدارها"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    if not alert_system:
+        await callback.answer(
+            "❌ سیستم هشدار راه‌اندازی نشده!" if lang == "fa" else "❌ Alert system not initialized!",
+            show_alert=True
+        )
+        return
+    
+    await callback.answer(
+        "⏳ در حال بررسی..." if lang == "fa" else "⏳ Checking...",
+        show_alert=False
+    )
+    
+    try:
+        # ارسال پیام موقت
+        temp_msg = await callback.message.answer(
+            "⏳ در حال بررسی سرویس‌ها..." if lang == "fa" else "⏳ Checking services..."
+        )
+        
+        # اجرای بررسی
+        await alert_system.check_all_services()
+        
+        # لاگ بررسی دستی
+        if alert_system.log_system:
+            await alert_system.log_system.log_admin_action(
+                callback.from_user.id,
+                "بررسی دستی هشدارها",
+                details="اجرای دستی بررسی سرویس‌ها"
+            )
+        
+        # به‌روزرسانی پیام موقت
+        await temp_msg.edit_text(
+            "✅ بررسی هشدارها انجام شد!" if lang == "fa" else "✅ Alert check completed!"
+        )
+        
+        # حذف پیام موقت بعد از 3 ثانیه
+        await asyncio.sleep(3)
+        try:
+            await temp_msg.delete()
+        except:
+            pass
+        
+    except Exception as e:
+        logger.error(f"خطا در بررسی دستی: {e}", exc_info=True)
+        try:
+            await callback.message.answer(
+                f"❌ خطا در بررسی: {str(e)}" if lang == "fa" else f"❌ Error: {str(e)}"
+            )
+        except:
+            pass
+
+
+# ============================================
+# پاک کردن کش هشدارها
+# ============================================
+
+@dp.callback_query(F.data == "admin_clear_alert_cache")
+async def admin_clear_alert_cache(callback: CallbackQuery):
+    """پاک کردن کش موقت هشدارها (تاریخچه حفظ می‌شود)"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    if not alert_system:
+        await callback.answer(
+            "❌ سیستم هشدار راه‌اندازی نشده!" if lang == "fa" else "❌ Alert system not initialized!",
+            show_alert=True
+        )
+        return
+    
+    try:
+        # پاک کردن کش موقت
+        alert_system.clear_cache()
+        
+        # لاگ
+        if alert_system.log_system:
+            await alert_system.log_system.log_admin_action(
+                callback.from_user.id,
+                "پاک کردن کش موقت هشدارها",
+                details="تاریخچه کامل حفظ شد"
+            )
+        
+        await callback.answer(
+            "✅ کش موقت پاک شد (تاریخچه حفظ شد)!" if lang == "fa" else "✅ Temp cache cleared (history preserved)!",
+            show_alert=True
+        )
+        
+        await admin_alert_settings(callback)
+        
+    except Exception as e:
+        logger.error(f"خطا در پاک کردن کش: {e}", exc_info=True)
+        await callback.answer(
+            f"❌ خطا: {str(e)}" if lang == "fa" else f"❌ Error: {str(e)}",
+            show_alert=True
+        )
+
+
+# ============================================
+# پاک کردن کامل تاریخچه
+# ============================================
+
+@dp.callback_query(F.data == "admin_clear_alert_history")
+async def admin_clear_alert_history(callback: CallbackQuery):
+    """پاک کردن کامل تاریخچه هشدارها (با تایید)"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    if not alert_system:
+        await callback.answer(
+            "❌ سیستم هشدار راه‌اندازی نشده!" if lang == "fa" else "❌ Alert system not initialized!",
+            show_alert=True
+        )
+        return
+    
+    # نمایش تایید
+    if lang == "fa":
+        text = """
+🗑️ <b>پاک کردن کامل تاریخچه هشدار</b>
+
+⚠️ <b>هشدار جدی:</b>
+این عمل تمام تاریخچه هشدارها را پاک می‌کند.
+پس از این کار، <b>ممکن است هشدارهای تکراری</b> برای کاربران ارسال شود!
+
+❓ آیا مطمئن هستید؟
+"""
+        confirm_text = "✅ بله، پاک کن"
+        cancel_text = "❌ انصراف"
+    else:
+        text = """
+🗑️ <b>Clear All Alert History</b>
+
+⚠️ <b>Serious Warning:</b>
+This will clear all alert history.
+After this, <b>duplicate alerts may be sent</b> to users!
+
+❓ Are you sure?
+"""
+        confirm_text = "✅ Yes, clear it"
+        cancel_text = "❌ Cancel"
+    
+    buttons = [
+        [InlineKeyboardButton(
+            text=confirm_text,
+            callback_data="admin_confirm_clear_history"
+        )],
+        [InlineKeyboardButton(
+            text=cancel_text,
+            callback_data="admin_alert_settings"
+        )]
+    ]
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_confirm_clear_history")
+async def admin_confirm_clear_history(callback: CallbackQuery):
+    """تایید پاک کردن کامل تاریخچه"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    if not alert_system:
+        await callback.answer(
+            "❌ سیستم هشدار راه‌اندازی نشده!" if lang == "fa" else "❌ Alert system not initialized!",
+            show_alert=True
+        )
+        return
+    
+    # پاک کردن کامل
+    alert_system.clear_all_history()
+    
+    # لاگ
+    if alert_system.log_system:
+        await alert_system.log_system.log_admin_action(
+            callback.from_user.id,
+            "پاک کردن کامل تاریخچه هشدارها",
+            details="تمام تاریخچه و کش پاک شد"
+        )
+    
+    await callback.answer(
+        "✅ تاریخچه کامل پاک شد!" if lang == "fa" else "✅ History cleared!",
+        show_alert=True
+    )
+    
+    await admin_alert_settings(callback)
+
+
+
+        
+        
 @dp.callback_query(F.data.startswith("admin_category_inbounds_"))
 async def admin_category_inbounds(callback: CallbackQuery):
     """تنظیم اینباندهای اختصاصی برای دسته (با صفحه پیشرفته)"""
@@ -22183,18 +23334,65 @@ async def admin_custom_balance(callback: CallbackQuery):
 async def approve_receipt(callback: CallbackQuery):
     """تایید رسید با امکان انتخاب اینباند - با تشخیص تمدید"""
     logger.critical(f"🔴 approve_receipt CALLED! data={callback.data}")
+    
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
+    
     try:
         oid = int(callback.data.split("_")[2])
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش سفارش", show_alert=True)
         return
+    
     order = orders.get(str(oid))
     if not order:
         return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
     
+    # ✅✅✅ بررسی وضعیت قبلی سفارش - مهمترین بخش برای جلوگیری از دوبار پردازش
+    current_status = order.get('status')
+    
+    # اگر قبلاً تایید شده باشد
+    if current_status == 'approved':
+        logger.warning(f"⚠️ سفارش #{oid} قبلاً تایید شده است! جلوگیری از تایید مجدد")
+        await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    # اگر قبلاً رد شده باشد
+    if current_status in ['rejected', 'cancelled', 'deleted']:
+        logger.warning(f"⚠️ سفارش #{oid} قبلاً رد/لغو شده است! وضعیت: {current_status}")
+        await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    # بررسی وجود کانفیگ برای سفارشات خرید
+    if order.get('config_link') or order.get('email'):
+        if current_status not in ['pending', 'pending_balance_charge', 'awaiting_payment']:
+            logger.warning(f"⚠️ سفارش #{oid} قبلاً پردازش شده و کانفیگ ساخته شده است!")
+            await callback.answer("⚠️ این سفارش قبلاً پردازش شده است!", show_alert=True)
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            return
+    
     order_type = order.get('type', 'purchase')
+    
+    
+    # ==================== بخش شارژ حساب ====================
+    if order_type == 'balance_charge':
+        # ✅ صدا زدن مستقیم تابع approve_balance با پارامترهای لازم
+        # به جای تغییر callback.data، مستقیم تابع را صدا بزنید
+        await approve_balance(callback, order_id=oid)
+        return
+    
+    # ==================== بخش خرید معمولی ====================
     if order_type == 'purchase':
         uid = order['user_id']
         vol = order.get('volume', 0)
@@ -22208,6 +23406,7 @@ async def approve_receipt(callback: CallbackQuery):
         lang = user_info.get('lang', 'fa')
         
         logger.info(f"📝 تایید سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
+        
         inbounds = await xui_get_inbounds()
         active_inbounds = [i for i in inbounds if i.get('enable', True)]
         inbound_buttons = []
@@ -22229,6 +23428,7 @@ async def approve_receipt(callback: CallbackQuery):
                 callback_data=f"select_inbound_{oid}_{inbound_id}",
                 style="primary" if is_selected else None
             )])
+        
         buttons = []
         
         if inbound_buttons:
@@ -22247,6 +23447,7 @@ async def approve_receipt(callback: CallbackQuery):
             callback_data=f"select_inbound_{oid}_default",
             style="primary" if default_id and selected_inbound == default_id else None
         )])
+        
         if is_extend:
             approve_label = f"🔄 {'تایید و تمدید' if lang == 'fa' else 'Approve & Extend'}"
         else:
@@ -22269,6 +23470,7 @@ async def approve_receipt(callback: CallbackQuery):
             text=f"🔙 {'برگشت به لیست سفارشات' if lang == 'fa' else 'Back to Orders'}",
             callback_data="admin_orders"
         )])
+        
         category_name = order.get('category_name')
         package_id = order.get('package_id')
         category_id = order.get('category_id')
@@ -22290,6 +23492,7 @@ async def approve_receipt(callback: CallbackQuery):
                                 order_info += f" ({pkg.get('volume')}GB)"
                                 break
                         break
+        
         extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
         parent_info = f"\n🆔 سفارش اصلی: #{parent_order_id}" if is_extend else ""
         
@@ -22313,69 +23516,43 @@ async def approve_receipt(callback: CallbackQuery):
 💡 نکته: اگر اینباندی انتخاب نکنید، از اینباند پیش‌فرض استفاده می‌شود.
 """
         
+        # ✅ ویرایش پیام ادمین با تشخیص نوع
         try:
-            await callback.message.edit_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode=ParseMode.HTML
-            )
+            if callback.message.photo:
+                await callback.message.edit_caption(
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+                )
+            elif callback.message.text:
+                await callback.message.edit_text(
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+                )
+            else:
+                await callback.message.delete()
+                await callback.message.answer(
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+                )
         except Exception as e:
+            logger.warning(f"⚠️ خطا در ویرایش پیام: {e}")
             try:
                 await callback.message.delete()
             except:
                 pass
             await callback.message.answer(
                 text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
             )
         
         await callback.answer("✅ لطفاً اینباند مورد نظر را انتخاب کنید")
         return
-    elif order_type == 'balance_charge':
-        uid = order['user_id']
-        amount = order.get('amount', 0)
-        
-        logger.info(f"💰 تایید شارژ حساب #{oid} - کاربر: {uid} - مبلغ: {amount:,} تومان")
-        
-        try:
-            add_balance(uid, amount)
-            update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            
-            if log_system:
-                await log_system.log_balance_charge_approved(oid, uid, amount)
-            
-            CustomLogger.log_event('BALANCE_CHARGE_APPROVED', f'شارژ حساب #{oid} تایید شد - مبلغ: {amount:,} تومان', uid)
-            
-            try:
-                user_lang = get_user(uid).get('lang', 'fa')
-                await bot.send_message(
-                    uid,
-                    f"{premium_emoji('success','✅')} {'شارژ {0:,} تومان تایید شد!'.format(amount) if user_lang=='fa' else f'{amount:,} Toman approved!'}"
-                )
-            except Exception as e:
-                logger.error(f"خطا در ارسال پیام تایید شارژ به کاربر {uid}: {e}")
-            
-            try:
-                await callback.message.edit_caption(
-                    caption=f"{callback.message.caption}\n\n✅ تایید شد - مبلغ {amount:,} تومان",
-                    parse_mode=ParseMode.HTML
-                )
-            except Exception as e:
-                await callback.message.edit_text(
-                    f"✅ شارژ حساب #{oid} تایید شد!\n💰 مبلغ: {amount:,} تومان"
-                )
-            
-            logger.info(f"✅ شارژ حساب #{oid} با موفقیت تایید شد")
-            await callback.answer("✅ شارژ حساب تایید شد")
-            
-        except Exception as e:
-            logger.error(f"❌ خطا در تایید شارژ حساب #{oid}: {e}")
-            if log_system:
-                await log_system.log_error(e, "approve_receipt_balance", uid)
-            await callback.answer("❌ خطا در تایید شارژ", show_alert=True)
-        
-        return
+    
+    # ==================== بخش بسته آماده ====================
     elif order_type == 'ready_package' or order_type == 'category_purchase':
         uid = order['user_id']
         vol = order.get('volume', 0)
@@ -22391,6 +23568,7 @@ async def approve_receipt(callback: CallbackQuery):
         user_info = get_user(uid)
         user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
         lang = user_info.get('lang', 'fa')
+        
         icon = "📦"
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
@@ -22399,6 +23577,7 @@ async def approve_receipt(callback: CallbackQuery):
         
         cat_name_escaped = html.escape(category_name)
         logger.info(f"📦 تایید بسته آماده #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - دسته: {category_name} - تمدید: {is_extend}")
+        
         user_inbounds = get_user_inbound(uid)
         if user_inbounds:
             if isinstance(user_inbounds, list):
@@ -22407,6 +23586,7 @@ async def approve_receipt(callback: CallbackQuery):
                 selected_inbounds = [user_inbounds]
         else:
             selected_inbounds = []
+        
         inbounds = await xui_get_inbounds()
         active_inbounds = [i for i in inbounds if i.get('enable', True)]
         inbound_names = {}
@@ -22416,6 +23596,7 @@ async def approve_receipt(callback: CallbackQuery):
             protocol = html.escape(ib.get('protocol', '').upper())
             port = ib.get('port', '')
             inbound_names[inbound_id_ib] = f"{remark} - {protocol}:{port}"
+        
         inbound_display_text = ""
         if selected_inbounds:
             inbound_display_text = "✅ اینباندهای انتخاب شده:\n"
@@ -22431,11 +23612,13 @@ async def approve_receipt(callback: CallbackQuery):
                     inbound_display_text += f"  • {ib_name}\n"
             else:
                 inbound_display_text = "❌ هیچ اینباندی انتخاب نشده - از پیش‌فرض استفاده می‌شود"
+        
         buttons = []
         buttons.append([InlineKeyboardButton(
             text="📡 انتخاب اینباند" if lang == "fa" else "📡 Select Inbound",
             callback_data=f"select_user_inbound_{uid}_{oid}"
         )])
+        
         if is_extend:
             approve_label = f"🔄 {'تایید و تمدید' if lang == 'fa' else 'Approve & Extend'}"
         else:
@@ -22458,6 +23641,7 @@ async def approve_receipt(callback: CallbackQuery):
             text=f"🔙 {'برگشت به لیست سفارشات' if lang == 'fa' else 'Back to Orders'}",
             callback_data="admin_orders"
         )])
+        
         extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
         parent_info = f"\n🆔 سفارش اصلی: #{parent_order_id}" if is_extend else ""
         
@@ -22481,29 +23665,45 @@ async def approve_receipt(callback: CallbackQuery):
 💡 برای تغییر اینباندها، روی دکمه «انتخاب اینباند» کلیک کنید.
 """
         
+        # ✅ ویرایش پیام ادمین با تشخیص نوع
         try:
-            await callback.message.edit_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode=ParseMode.HTML
-            )
+            if callback.message.photo:
+                await callback.message.edit_caption(
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+                )
+            elif callback.message.text:
+                await callback.message.edit_text(
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+                )
+            else:
+                await callback.message.delete()
+                await callback.message.answer(
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+                )
         except Exception as e:
+            logger.warning(f"⚠️ خطا در ویرایش پیام: {e}")
             try:
                 await callback.message.delete()
             except:
                 pass
             await callback.message.answer(
                 text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
             )
         
         await callback.answer("✅ لطفاً عملیات مورد نظر را انتخاب کنید")
         return
+    
     else:
         logger.warning(f"⚠️ نوع سفارش نامشخص برای #{oid}: {order_type}")
-        return await callback.answer("❌ نوع سفارش نامشخص", show_alert=True)    
-    
+        return await callback.answer("❌ نوع سفارش نامشخص", show_alert=True)
     
 @dp.callback_query(F.data.startswith("select_user_inbound_"))
 async def select_user_inbound(callback: CallbackQuery):
@@ -23483,21 +24683,86 @@ async def confirm_approve_package(callback: CallbackQuery):
     if not order:
         return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
     
+    # ✅✅✅ بررسی وضعیت قبلی سفارش - مهمترین بخش برای جلوگیری از دوبار پردازش
+    current_status = order.get('status')
+    
+    # اگر قبلاً تایید شده باشد
+    if current_status == 'approved':
+        logger.warning(f"⚠️ سفارش #{oid} قبلاً تایید شده است! جلوگیری از تایید مجدد")
+        await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    # اگر قبلاً رد شده باشد
+    if current_status in ['rejected', 'cancelled', 'deleted']:
+        logger.warning(f"⚠️ سفارش #{oid} قبلاً رد/لغو شده است! وضعیت: {current_status}")
+        await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    # ✅✅✅ بررسی تمدید قبلاً انجام شده
+    if order.get('is_extend'):
+        if order.get('new_volume') and order.get('new_days'):
+            logger.warning(f"⚠️ تمدید سفارش #{oid} قبلاً انجام شده است! (new_volume={order.get('new_volume')}, new_days={order.get('new_days')})")
+            await callback.answer("⚠️ این تمدید قبلاً انجام شده است!", show_alert=True)
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            return
+    
+    # ✅✅✅ بررسی وجود کانفیگ برای خرید جدید
+    if not order.get('is_extend'):
+        if order.get('config_link') or order.get('email'):
+            logger.warning(f"⚠️ سفارش #{oid} قبلاً پردازش شده و کانفیگ ساخته شده است!")
+            await callback.answer("⚠️ این سفارش قبلاً پردازش شده است!", show_alert=True)
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            return
+    
+    # ✅✅✅ بررسی parent_order_id برای تمدید
+    parent_order_id = order.get('parent_order_id')
+    if parent_order_id:
+        # بررسی اینکه آیا سفارش تمدید دیگری برای همین parent وجود دارد
+        for existing_oid, existing_order in orders.items():
+            if str(existing_oid) != str(oid):  # خودش نباشد
+                if existing_order.get('is_extend') and existing_order.get('parent_order_id') == parent_order_id:
+                    if existing_order.get('status') == 'approved':
+                        if existing_order.get('new_volume') and existing_order.get('new_days'):
+                            logger.warning(f"⚠️ سرویس #{parent_order_id} قبلاً با سفارش #{existing_oid} تمدید شده است!")
+                            await callback.answer(f"⚠️ این سرویس قبلاً با سفارش #{existing_oid} تمدید شده است!", show_alert=True)
+                            try:
+                                await callback.message.delete()
+                            except:
+                                pass
+                            return
+    
+    # ==================== ادامه کد اصلی ====================
     uid = order['user_id']
     vol = order.get('volume', 0)
     days = order.get('days', 30)
     price = order.get('price', 0)
     ip_limit = order.get('ip_limit', 0)
-    parent_order_id = order.get('parent_order_id')
     is_extend = parent_order_id is not None
     user_state = user_states.get(uid, {})
+    
     if not is_extend:
         is_extend = user_state.get('is_extend', False)
         if is_extend:
             parent_order_id = user_state.get('extend_order_id')
             logger.info(f"🔄 [confirm_approve_package] تمدید از user_states تشخیص داده شد: order_id={parent_order_id}")
+    
     payment_method = order.get('payment_method', 'unknown')
     order_type = order.get('type', 'purchase')
+    
     PAYMENT_METHODS = {
         'card': {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'},
         'awaiting_payment': {'label': '💳 کارت به کارت', 'emoji': '💳', 'type': 'card'},
@@ -23510,7 +24775,9 @@ async def confirm_approve_package(callback: CallbackQuery):
         'free_coupon_extend': {'label': '🎁 کوپن تخفیف (تمدید)', 'emoji': '🎁', 'type': 'free_extend'},
         'test': {'label': '🧪 تست رایگان', 'emoji': '🧪', 'type': 'test'},
     }
+    
     payment_info = PAYMENT_METHODS.get(payment_method, {'label': '❓ نامشخص', 'emoji': '❓', 'type': 'unknown'})
+    
     if payment_method == 'unknown' or not payment_method:
         user_state_payment = user_states.get(uid, {})
         payment_type_from_state = user_state_payment.get('payment_type', '')
@@ -23523,6 +24790,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             payment_info = {'label': '📦 بسته آماده', 'emoji': '📦', 'type': 'ready_package'}
         elif payment_type_from_state == 'test':
             payment_info = {'label': '🧪 تست رایگان', 'emoji': '🧪', 'type': 'test'}
+    
     if is_extend:
         if payment_info['type'] == 'balance':
             payment_info = {'label': '🔄 موجودی (تمدید)', 'emoji': '🔄', 'type': 'balance_extend'}
@@ -23536,6 +24804,8 @@ async def confirm_approve_package(callback: CallbackQuery):
     payment_type = payment_info['type']
     
     logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_method} → {payment_type} ({payment_label})")
+    
+    # ✅ انتخاب اینباندها
     selected_inbounds = get_user_inbound(uid)
     
     if not selected_inbounds:
@@ -23543,6 +24813,7 @@ async def confirm_approve_package(callback: CallbackQuery):
         logger.info(f"📡 [confirm_approve_package] اینباندها از سفارش: {selected_inbounds}")
     else:
         logger.info(f"📡 [confirm_approve_package] اینباندهای انتخاب شده از user_inbound_selection: {selected_inbounds}")
+    
     if not selected_inbounds:
         category_id = order.get('category_id')
         if category_id:
@@ -23556,10 +24827,12 @@ async def confirm_approve_package(callback: CallbackQuery):
                         if cat_inbound:
                             selected_inbounds = cat_inbound if isinstance(cat_inbound, list) else [cat_inbound]
                     break
+    
     if not selected_inbounds:
         default_ids = configs_pool.get('default_inbound_ids', [])
         if default_ids:
             selected_inbounds = default_ids
+    
     if not isinstance(selected_inbounds, list):
         selected_inbounds = [selected_inbounds] if selected_inbounds else []
     
@@ -23579,16 +24852,27 @@ async def confirm_approve_package(callback: CallbackQuery):
     logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی انتخاب شده: {selected_inbounds}")
     logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_label}")
     
-    await callback.message.edit_text(f"⏳ در حال پردازش بسته #{oid}...")
+    await safe_edit_message(
+    callback,
+    f"⏳ در حال پردازش بسته #{oid}...",
+    reply_markup=None
+    )
+    
+    # ✅ اول وضعیت را تغییر بده
     update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
     await check_referral_bonus(uid)
     coupon_consumed = consume_coupon(uid)
+    
     if coupon_consumed:
         logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
     else:
         logger.info(f"ℹ️ کوپنی برای سفارش #{oid} وجود نداشت یا قبلاً مصرف شده")
+    
+    # ==================== بخش تمدید ====================
     if is_extend and parent_order_id:
         logger.info(f"🔄 [confirm_approve_package] شروع تمدید سرویس #{parent_order_id} با بسته #{oid}")
+        
         parent_order = orders.get(str(parent_order_id))
         if parent_order:
             old_volume = parent_order.get('volume', 0)
@@ -23603,6 +24887,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             old_days = 0
             old_email = ''
             old_inbound = []
+        
         current_inbounds = []
         if old_email:
             current_inbounds = await get_client_inbounds(old_email)
@@ -23614,23 +24899,21 @@ async def confirm_approve_package(callback: CallbackQuery):
             if not isinstance(current_inbounds, list):
                 current_inbounds = [current_inbounds] if current_inbounds else []
             logger.info(f"📡 [confirm_approve_package] اینباندهای فعلی از user_inbound_selection: {current_inbounds}")
+        
         final_inbounds = selected_inbounds.copy()
-        inbounds_to_detach = []
-        for inbound_id in current_inbounds:
-            if inbound_id and inbound_id not in final_inbounds:
-                inbounds_to_detach.append(inbound_id)
-                logger.info(f"➖ [confirm_approve_package] اینباند {inbound_id} باید حذف شود")
         
         logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی (فقط انتخاب شده توسط ادمین): {final_inbounds}")
+        
         if final_inbounds:
             save_user_inbound_selection(uid, final_inbounds)
             logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی برای کاربر {uid} ذخیره شد: {final_inbounds}")
+        
         success = await extend_service(
             parent_order_id, 
             uid, 
             vol, 
             days,
-            final_inbounds,  # ✅ فقط اینباندهای انتخاب شده
+            final_inbounds,
             ip_limit
         )
         
@@ -23638,6 +24921,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             updated_parent = orders.get(str(parent_order_id))
             new_volume = updated_parent.get('volume', 0) if updated_parent else old_volume + vol
             new_days = updated_parent.get('days', 0) if updated_parent else old_days + days
+            
             update_order(oid, 
                         new_volume=new_volume,
                         new_days=new_days,
@@ -23648,11 +24932,13 @@ async def confirm_approve_package(callback: CallbackQuery):
                         payment_type=payment_type,
                         payment_label=payment_label,
                         inbound_id=final_inbounds)
+            
             if uid in user_states:
                 user_states[uid].pop('is_extend', None)
                 user_states[uid].pop('extend_order_id', None)
                 user_states[uid].pop('current_volume', None)
                 user_states[uid].pop('current_days', None)
+            
             await send_admin_notification('extend', {
                 'user_id': uid,
                 'volume': vol,
@@ -23672,20 +24958,19 @@ async def confirm_approve_package(callback: CallbackQuery):
                 'category_name': category_name,
                 'inbound_ids': final_inbounds
             })
+            
             try:
                 await callback.message.delete()
             except:
                 pass
+            
             if lang == "fa":
-                success_text = f"""
-✅ <b>سرویس با موفقیت تمدید شد!</b>
-"""
+                success_text = "✅ <b>سرویس با موفقیت تمدید شد!</b>"
             else:
-                success_text = f"""
-✅ <b>Service extended successfully!</b>
-"""
+                success_text = "✅ <b>Service extended successfully!</b>"
             
             await bot.send_message(uid, success_text, parse_mode=ParseMode.HTML)
+            
             await callback.message.answer(
                 f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد!\n{payment_emoji} {payment_label}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -23732,6 +25017,8 @@ async def confirm_approve_package(callback: CallbackQuery):
             )
             await callback.answer("❌ خطا در تمدید", show_alert=True)
             return
+    
+    # ==================== بخش خرید جدید ====================
     if SENAI_PANEL_ENABLED:
         email = f"user{uid}_{int(datetime.now().timestamp())}"
         sub = await xui_create_client_with_inbound(email, vol, days, user_name, uid, selected_inbounds, ip_limit=ip_limit)
@@ -24178,6 +25465,7 @@ async def reject_balance(callback: CallbackQuery):
 async def reject_receipt(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔ محدود!", show_alert=True)
+    
     parts = callback.data.split("_")
     if len(parts) < 2:
         await callback.answer("❌ فرمت داده نامعتبر", show_alert=True)
@@ -24198,12 +25486,56 @@ async def reject_receipt(callback: CallbackQuery):
     order = orders.get(str(order_id))
     if not order:
         await callback.answer("❌ سفارش یافت نشد", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
         return
     
+    # ✅ بررسی وضعیت فعلی سفارش
+    current_status = order.get('status')
+    
+    # اگر سفارش قبلاً تایید شده باشد
+    if current_status == 'approved':
+        await callback.answer(
+            "⚠️ این سفارش قبلاً تایید شده است!\nبرای رد کردن، ابتدا باید کانفیگ حذف شود.",
+            show_alert=True
+        )
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    # اگر سفارش قبلاً رد شده باشد
+    if current_status in ['rejected', 'cancelled', 'deleted']:
+        await callback.answer("⚠️ این سفارش قبلاً رد شده است!", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    # ✅ بررسی اینکه آیا کانفیگ ساخته شده است
+    if order.get('config_link') or order.get('email'):
+        await callback.answer(
+            "⚠️ این سفارش قبلاً پردازش شده و کانفیگ ساخته شده است!\nبرای رد کردن، ابتدا کانفیگ را از پنل حذف کنید.",
+            show_alert=True
+        )
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    # ✅ حالا می‌توانیم رد کنیم
     update_order(order_id, status='rejected')
+    
     if log_system:
         await log_system.log_order_rejected(order_id, order['user_id'], "فیش نامعتبر")
+    
     CustomLogger.log_event('ORDER_REJECTED', f'سفارش #{order_id} توسط ادمین رد شد', order['user_id'])
+    
     try:
         user_lang = get_user(order['user_id']).get('lang', 'fa')
         if user_lang == 'fa':
@@ -24214,21 +25546,29 @@ async def reject_receipt(callback: CallbackQuery):
             await bot.send_message(order['user_id'], f"{premium_emoji('fail','❌')} Your order #{order_id} has been rejected")
     except:
         pass
+    
+    # ✅ حذف پیام از چت ادمین
     try:
-        await callback.message.edit_caption(
-            caption=f"{callback.message.caption}\n\n❌ <b>رد شد</b>",
-            parse_mode=ParseMode.HTML
-        )
-    except:
+        await callback.message.delete()
+    except Exception as e:
+        logger.error(f"خطا در حذف پیام: {e}")
         try:
-            await callback.message.edit_text(
-                f"{callback.message.text}\n\n❌ <b>رد شد</b>",
-                parse_mode=ParseMode.HTML
-            )
+            if callback.message.photo:
+                await callback.message.edit_caption(
+                    caption=f"{callback.message.caption}\n\n❌ <b>رد شد - {datetime.now().strftime('%H:%M:%S')}</b>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=None
+                )
+            else:
+                await callback.message.edit_text(
+                    f"{callback.message.text}\n\n❌ <b>رد شد - {datetime.now().strftime('%H:%M:%S')}</b>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=None
+                )
         except:
             pass
     
-    await callback.answer("✅ سفارش رد شد")
+    await callback.answer("✅ سفارش رد شد و پیام حذف گردید")
 
 @dp.callback_query(F.data == "admin_close_msg")
 async def admin_close_msg(callback: CallbackQuery):
@@ -28906,6 +30246,7 @@ async def handle_admin_special_states(message: Message, user_state: dict):
     if text.startswith('/use_coupon'):
         await use_coupon(message)
         return
+    
     if text.startswith('/blacklist'):
         await cmd_blacklist(message)
         return
@@ -28918,6 +30259,7 @@ async def handle_admin_special_states(message: Message, user_state: dict):
     if text.startswith('/cleanup_backups'):
         await cmd_cleanup_backups(message)
         return
+    
     if text.startswith('/test_keyboard'):
         await cmd_test_keyboard(message)
         return
@@ -29010,8 +30352,12 @@ async def handle_admin_special_states(message: Message, user_state: dict):
                 "/help - نمایش این راهنما"
             )
             return
-    if user_state.get('awaiting_config'):
+    if user_state.get('awaiting_custom_payment_receipt_amount'):
+            await custom_payment_receipt_amount(message)
+            return
+    elif user_state.get('awaiting_config'):
         await admin_get_config(message)
+    
     elif user_state.get('awaiting_broadcast'):
         await admin_broadcast_send(message)
     elif user_state.get('awaiting_chat_reply'):
@@ -29128,6 +30474,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
+    version = "v1.4.5"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
@@ -29135,16 +30482,20 @@ async def admin_panel(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     logger.info("ادمین وارد پنل مدیریت شد")
+    
+    
+    panel_text = f"{premium_emoji('admin', '👑')} {'پنل ادمین' if lang=='fa' else 'Admin Panel'} {version}"
+    
     try:
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
             await callback.message.delete()
             await callback.message.answer(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.0'}",
+                panel_text,
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
             await callback.message.edit_text(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.0'}",
+                panel_text,
                 reply_markup=get_admin_keyboard(lang)
             )
     except Exception as e:
@@ -29155,7 +30506,7 @@ async def admin_panel(callback: CallbackQuery):
             except:
                 pass
             await callback.message.answer(
-                f"{premium_emoji('admin', '👑')} {'پنل ادمین v1.3.0' if lang=='fa' else 'Admin Panel v1.3.0'}",
+                panel_text,
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
@@ -31658,25 +33009,56 @@ async def view_balance(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
 
 @dp.callback_query(F.data.startswith("approve_balance_"))
-async def approve_balance(callback: CallbackQuery):
-    """تایید افزایش موجودی - با حفظ کوپن کاربر در دیتابیس"""
+async def approve_balance(callback: CallbackQuery, order_id: int = None):
+    """تایید افزایش موجودی - با حفظ کوپن کاربر در دیتابیس و ثبت لاگ کامل"""
     if callback.from_user.id != ADMIN_ID_INT:
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    order_id = int(callback.data.split("_")[2])
+    
+    # ✅ اگر order_id پاس داده شده، از آن استفاده کن
+    if order_id is None:
+        try:
+            order_id = int(callback.data.split("_")[2])
+        except (ValueError, IndexError):
+            await callback.answer("❌ خطا در پردازش سفارش", show_alert=True)
+            return
+    
     order = orders.get(str(order_id))
     
     if not order:
         await callback.answer("❌ سفارش یافت نشد", show_alert=True)
         return
     
+    # ✅✅✅ بررسی وضعیت قبلی سفارش
+    if order.get('status') == 'approved':
+        logger.warning(f"⚠️ سفارش #{order_id} قبلاً تایید شده است!")
+        await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
+    if order.get('status') in ['rejected', 'cancelled', 'deleted']:
+        logger.warning(f"⚠️ سفارش #{order_id} قبلاً رد/لغو شده است!")
+        await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        return
+    
     user_id = order['user_id']
-    amount = order['amount']
+    amount = order.get('amount', 0)
+    
+    # ✅ دریافت کوپن کاربر
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
+    
+    # اگر کوپن در user_states نیست، از دیتابیس لود کن
     if not coupon_applied or not coupon_code:
         coupon_data = load_coupon_from_user_db(user_id)
         if coupon_data.get('coupon_applied'):
@@ -31691,68 +33073,150 @@ async def approve_balance(callback: CallbackQuery):
             logger.info(f"🏷️ [approve_balance] کوپن {coupon_code} از دیتابیس برای کاربر {user_id} بازیابی شد")
     
     logger.info(f"🔍 [approve_balance] کوپن کاربر {user_id}: code={coupon_code}, applied={coupon_applied}")
-    new_balance = add_balance(user_id, amount)
-    update_order(order_id, status='approved')
-    if coupon_applied and coupon_code:
-        coupon = COUPONS.get(coupon_code)
-        if coupon and coupon.get('status') == 'active':
-            if user_id not in coupon.get('used_by', []):
-                user_states[user_id] = {
-                    'coupon_code': coupon_code,
-                    'coupon_discount': coupon_discount if coupon_discount else 0,
-                    'coupon_applied': True
-                }
-                save_coupon_to_user_db(user_id)
-                logger.info(f"🏷️ [approve_balance] کوپن {coupon_code} برای کاربر {user_id} در دیتابیس ذخیره شد")
+    
+    try:
+        # ✅ اول وضعیت را تغییر بده
+        update_order(order_id, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        
+        # ✅ بعد شارژ کن
+        new_balance = add_balance(user_id, amount)
+        
+        # ✅ مدیریت کوپن
+        if coupon_applied and coupon_code:
+            coupon = COUPONS.get(coupon_code)
+            if coupon and coupon.get('status') == 'active':
+                if user_id not in coupon.get('used_by', []):
+                    # حفظ کوپن
+                    save_coupon_to_user_db(user_id)
+                    logger.info(f"🏷️ [approve_balance] کوپن {coupon_code} برای کاربر {user_id} در دیتابیس ذخیره شد")
+                else:
+                    logger.warning(f"⚠️ [approve_balance] کوپن {coupon_code} قبلاً توسط کاربر {user_id} مصرف شده است")
+                    clear_coupon_from_user_db(user_id)
+                    if user_id in user_states:
+                        user_states[user_id].pop('coupon_code', None)
+                        user_states[user_id].pop('coupon_discount', None)
+                        user_states[user_id].pop('coupon_applied', None)
             else:
-                logger.warning(f"⚠️ [approve_balance] کوپن {coupon_code} قبلاً توسط کاربر {user_id} مصرف شده است")
+                logger.warning(f"⚠️ [approve_balance] کوپن {coupon_code} نامعتبر است")
                 clear_coupon_from_user_db(user_id)
                 if user_id in user_states:
                     user_states[user_id].pop('coupon_code', None)
                     user_states[user_id].pop('coupon_discount', None)
                     user_states[user_id].pop('coupon_applied', None)
         else:
-            logger.warning(f"⚠️ [approve_balance] کوپن {coupon_code} نامعتبر است")
+            logger.info(f"ℹ️ [approve_balance] کاربر {user_id} کوپن فعالی ندارد")
             clear_coupon_from_user_db(user_id)
-            if user_id in user_states:
-                user_states[user_id].pop('coupon_code', None)
-                user_states[user_id].pop('coupon_discount', None)
-                user_states[user_id].pop('coupon_applied', None)
-    else:
-        logger.info(f"ℹ️ [approve_balance] کاربر {user_id} کوپن فعالی ندارد")
-        clear_coupon_from_user_db(user_id)
-    user_lang = get_user(user_id).get('lang', 'fa')
-    await send_sticker(user_id, 'balance_added', '💰')
-    
-    try:
-        coupon_msg = ""
-        if coupon_applied and coupon_code:
-            coupon = COUPONS.get(coupon_code)
-            if coupon and coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    coupon_msg = f"\n\n🏷️ کوپن شما ({html.escape(coupon_code)}) همچنان معتبر است."
-        await bot.send_message(user_id, 
-            f"{premium_emoji('success', '✅')} {'درخواست شارژ شما تایید شد!' if user_lang == 'fa' else 'Your balance request approved!'}\n"
-            f"{premium_emoji('wallet', '💰')} {amount:,} {'تومان اضافه شد' if user_lang == 'fa' else 'Toman added'}\n"
-            f"{premium_emoji('wallet', '💰')} {'موجودی جدید' if user_lang == 'fa' else 'New balance'}: {new_balance:,} {'تومان' if user_lang == 'fa' else 'Toman'}{coupon_msg}"
-        )
+        
+        # ✅✅✅ ثبت لاگ تایید شارژ حساب
+        if log_system:
+            await log_system.log_balance_charge_approved(order_id, user_id, amount)
+            logger.info(f"📝 لاگ تایید شارژ حساب #{order_id} ثبت شد")
+        
+        # ✅ ثبت لاگ عمومی
+        CustomLogger.log_event('BALANCE_CHARGE_APPROVED', 
+            f'شارژ حساب #{order_id} تایید شد - کاربر: {user_id} - مبلغ: {amount:,} تومان', 
+            user_id)
+        
+        # ✅ ارسال استیکر
+        await send_sticker(user_id, 'balance_added', '💰')
+        
+        # ✅ ارسال پیام به کاربر
+        user_lang = get_user(user_id).get('lang', 'fa')
+        
+        try:
+            coupon_msg = ""
+            if coupon_applied and coupon_code:
+                coupon = COUPONS.get(coupon_code)
+                if coupon and coupon.get('status') == 'active':
+                    if user_id not in coupon.get('used_by', []):
+                        coupon_msg = f"\n\n🏷️ کوپن شما ({html.escape(coupon_code)}) همچنان معتبر است."
+            
+            await bot.send_message(
+                user_id,
+                f"{premium_emoji('success', '✅')} {'درخواست شارژ شما تایید شد!' if user_lang == 'fa' else 'Your balance request approved!'}\n"
+                f"{premium_emoji('wallet', '💰')} {amount:,} {'تومان اضافه شد' if user_lang == 'fa' else 'Toman added'}\n"
+                f"{premium_emoji('wallet', '💰')} {'موجودی جدید' if user_lang == 'fa' else 'New balance'}: {new_balance:,} {'تومان' if user_lang == 'fa' else 'Toman'}"
+                f"{coupon_msg}",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"خطا در ارسال پیام تایید شارژ: {e}")
+        
+        # ✅ لاگ تغییر موجودی
+        if log_system:
+            await log_system.log_balance_change(
+                user_id, 
+                amount, 
+                new_balance, 
+                "add", 
+                admin_id=callback.from_user.id,
+                details=f"شارژ حساب (سفارش #{order_id})"
+            )
+        
+        # ✅ ویرایش پیام ادمین
+        try:
+            success_text = (
+                f"✅ <b>شارژ حساب #{order_id} تایید شد!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 مبلغ: {amount:,} تومان\n"
+                f"👤 کاربر: {user_id}\n"
+                f"💰 موجودی جدید: {new_balance:,} تومان\n"
+                f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            
+            if callback.message.photo:
+                await callback.message.edit_caption(
+                    caption=success_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=None
+                )
+            elif callback.message.document:
+                await callback.message.edit_caption(
+                    caption=success_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=None
+                )
+            elif callback.message.text:
+                await callback.message.edit_text(
+                    success_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=None
+                )
+            else:
+                await callback.message.delete()
+                await bot.send_message(
+                    callback.message.chat.id,
+                    success_text,
+                    parse_mode=ParseMode.HTML
+                )
+        except Exception as e:
+            logger.warning(f"⚠️ خطا در ویرایش پیام ادمین: {e}")
+            try:
+                await callback.message.delete()
+            except:
+                pass
+        
+        logger.info(f"✅ شارژ حساب #{order_id} تایید شد - کاربر: {user_id}, مبلغ: {amount:,} تومان")
+        
+        # ✅ فقط callback.answer
+        await callback.answer("✅ شارژ انجام شد" if lang == 'fa' else "✅ Balance added", show_alert=True)
+        
+        final_state = user_states.get(user_id, {})
+        logger.info(f"🔍 [approve_balance] وضعیت نهایی کاربر {user_id}: {final_state}")
+        
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام تایید شارژ: {e}")
-    if log_system:
-        await log_system.log_balance_change(
-            user_id, 
-            amount, 
-            new_balance, 
-            "add", 
-            admin_id=callback.from_user.id
-        )
-    
-    logger.info(f"شارژ حساب #{order_id} تایید شد - کاربر: {user_id}, مبلغ: {amount}")
-    await callback.answer("✅ شارژ انجام شد" if lang == 'fa' else "✅ Balance added", show_alert=True)
-    final_state = user_states.get(user_id, {})
-    logger.info(f"🔍 [approve_balance] وضعیت نهایی کاربر {user_id}: {final_state}")
-    await admin_balance(callback)
-
+        logger.error(f"❌ خطا در تایید شارژ: {e}")
+        
+        # برگشت وضعیت در صورت خطا
+        if order.get('status') == 'approved':
+            update_order(order_id, status='pending_balance_charge')
+            logger.warning(f"⚠️ وضعیت سفارش #{order_id} به pending_balance_charge برگشت")
+        
+        # ✅ ثبت لاگ خطا
+        if log_system:
+            await log_system.log_error(e, "approve_balance", user_id)
+        
+        await callback.answer("❌ خطا در تایید شارژ", show_alert=True)
 
 
 @dp.callback_query(F.data == "admin_configs")
@@ -33767,6 +35231,8 @@ async def main():
 
     ensure_data_directory()
     await init_http_session()
+    # بعد از بخش tasks و قبل از start polling
+    
     load_all_data()
     await init_ai()
     logger.info("=" * 60)
@@ -33813,7 +35279,13 @@ async def main():
         logger.info("دریافت اطلاعات ربات از Telegram API...")
         bot_info = await bot.get_me()
         logger.info(f"اطلاعات ربات دریافت شد: {bot_info.first_name} (@{bot_info.username})")
-        
+        logger.info("🧪 راه‌اندازی سیستم هشدار...")
+        await init_alert_system()
+        if alert_system and log_system:
+            alert_system.log_system = log_system
+            logger.info("✅ سیستم لاگ به سیستم هشدار متصل شد")
+        elif alert_system and not log_system:
+            logger.warning("⚠️ سیستم لاگ در دسترس نیست، هشدارها لاگ نمیشوند")
         if log_system:
             try:
                 await log_system.log_bot_start(bot_info, ADMIN_ID_INT)
@@ -34719,6 +36191,106 @@ async def cmd_stats(message: Message):
         logger.error(f"خطا در ارسال آمار به ادمین: {e}", exc_info=True)
 
 
+# راه‌اندازی سیستم هشدار
+
+from alert_system import AlertSystem
+
+alert_system = None
+
+alert_system_settings = {
+    'enabled': True,
+    'volume_thresholds': [10, 5],      # ✅ فقط ۲ آستانه (سومی خودکار: اتمام)
+    'expiry_warnings': [3, 1],         # ✅ فقط ۲ آستانه (سومی خودکار: انقضا)
+    'test_volume_thresholds': [10],    # ✅ تست: فقط ۱ آستانه + اتمام خودکار
+    'test_expiry_warnings': [0.25],    # ✅ تست: فقط ۶ ساعت + انقضای خودکار
+    'cooldown_minutes': 120,
+}
+
+
+async def init_alert_system():
+    """راه‌اندازی سیستم هشدار با بارگذاری تنظیمات"""
+    global alert_system, alert_system_settings, log_system
+    
+    try:
+        logger.info("🧪 راه‌اندازی سیستم هشدار سرویس...")
+        
+        # بارگذاری تنظیمات از دیتابیس
+        if 'alert_settings' in configs_pool and isinstance(configs_pool['alert_settings'], dict):
+            saved_settings = configs_pool['alert_settings']
+            alert_system_settings.update(saved_settings)
+            logger.info(f"⚙️ تنظیمات هشدار از دیتابیس بارگذاری شد: {alert_system_settings}")
+        else:
+            logger.info("⚙️ استفاده از تنظیمات پیشفرض هشدار")
+        
+        # تعیین مسیر فایل کش
+        cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
+        
+        # ایجاد نمونه سیستم هشدار با log_system
+        alert_system = AlertSystem(
+            bot=bot,
+            orders_getter=get_valid_orders,
+            user_getter=get_user,
+            extract_email_func=extract_email_from_sub_link,
+            cache_file=cache_file,
+            log_system=log_system
+        )
+        
+        # ✅ اعمال تنظیمات بارگذاری شده
+        alert_system.update_settings(alert_system_settings)
+        
+        # شروع کارگر پسزمینه
+        asyncio.create_task(alert_system.run_alert_worker())
+        
+        logger.info("✅ سیستم هشدار با موفقیت راهاندازی شد")
+        logger.info(f"📊 آستانههای حجم: {alert_system.volume_thresholds}٪ + اتمام خودکار")
+        logger.info(f"📅 آستانههای انقضا: {alert_system.expiry_warnings} روز + انقضای خودکار")
+        
+        return alert_system
+        
+    except Exception as e:
+        logger.error(f"❌ خطا در راهاندازی سیستم هشدار: {e}", exc_info=True)
+        return None
+
+@dp.message(Command("check_alerts"))
+async def cmd_check_alerts(message: Message):
+    """بررسی دستی هشدارها (فقط ادمین)"""
+    if message.from_user.id != ADMIN_ID_INT:
+        return
+    
+    if not alert_system:
+        await message.reply("❌ سیستم هشدار راه‌اندازی نشده است!")
+        return
+    
+    await message.reply("⏳ در حال بررسی سرویس‌ها...")
+    await alert_system.check_all_services()
+    await message.reply("✅ بررسی هشدارها انجام شد!")
+
+@dp.message(Command("clear_alert_cache"))
+async def cmd_clear_alert_cache(message: Message):
+    """پاک کردن کش هشدارها (فقط ادمین)"""
+    if message.from_user.id != ADMIN_ID_INT:
+        return
+    
+    if not alert_system:
+        await message.reply("❌ سیستم هشدار راه‌اندازی نشده است!")
+        return
+    
+    parts = message.text.split()
+    order_id = None
+    if len(parts) > 1:
+        try:
+            order_id = int(parts[1])
+        except:
+            pass
+    
+    alert_system.clear_cache(order_id)
+    
+    if order_id:
+        await message.reply(f"✅ کش هشدارهای سفارش #{order_id} پاک شد!")
+    else:
+        await message.reply("✅ همه کش هشدارها پاک شد!")
+        
+        
 if __name__ == "__main__":
     async def run():
         """تابع اجرای اصلی با مدیریت خطا"""
