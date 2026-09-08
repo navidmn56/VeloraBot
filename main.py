@@ -14030,10 +14030,19 @@ async def use_coupon(message: Message):
             "<code>/use_coupon coupon_code</code>\n\n"
             "Example: <code>/use_coupon Summer2025</code>\n\n"
             "⚠️ Note: Coupon code is <b>case-sensitive</b>!",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                    callback_data="back_to_main",
+                    style="primary"
+                )]
+            ])
         )
         return
+    
     code = parts[1].strip()
+    
     if code not in COUPONS:
         code_upper = code.upper()
         code_lower = code.lower()
@@ -14055,7 +14064,14 @@ async def use_coupon(message: Message):
                 f"❌ Coupon code <code>{code}</code> not found!\n"
                 f"💡 Did you mean <code>{suggestion}</code>?\n\n"
                 f"⚠️ Coupon code is <b>case-sensitive</b>!",
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                        callback_data="back_to_main",
+                        style="primary"
+                    )]
+                ])
             )
             return
         
@@ -14064,28 +14080,52 @@ async def use_coupon(message: Message):
             f"⚠️ کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!" if lang == "fa" else
             f"❌ Coupon <code>{code}</code> not found!\n\n"
             f"⚠️ Coupon code is <b>case-sensitive</b>!",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                    callback_data="back_to_main",
+                    style="primary"
+                )]
+            ])
         )
         return
     
     coupon = COUPONS[code]
     logger.info(f"🔍 [use_coupon] کوپن {code} پیدا شد - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
+    
+    # ✅ دکمه بازگشت مشترک
+    back_button = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+            callback_data="back_to_main",
+            style="primary"
+        )]
+    ])
+    
     if user_id in coupon.get('used_by', []):
         clear_coupon_from_user_db(user_id)
         await message.reply(
             "❌ شما قبلاً از این کوپن استفاده کرده‌اید!" if lang == "fa" else "❌ You have already used this coupon!",
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
+            reply_markup=back_button
         )
         fully_remove_coupon_from_user(user_id)
         return
+    
     if coupon.get('status') != 'active':
         status_text = {
             'used': '❌ این کوپن به پایان رسیده است!',
             'expired': '❌ این کوپن منقضی شده است!'
         }.get(coupon.get('status'), '❌ این کوپن فعال نیست!')
         
-        await message.reply(status_text if lang == "fa" else "❌ This coupon is not active!")
+        await message.reply(
+            status_text if lang == "fa" else "❌ This coupon is not active!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=back_button
+        )
         return
+    
     expiry_date = coupon.get('expiry_date')
     if expiry_date:
         try:
@@ -14093,22 +14133,33 @@ async def use_coupon(message: Message):
             if expiry < datetime.now():
                 coupon['status'] = 'expired'
                 save_coupons(COUPONS)
-                await message.reply("❌ این کوپن منقضی شده است!" if lang == "fa" else "❌ This coupon has expired!")
+                await message.reply(
+                    "❌ این کوپن منقضی شده است!" if lang == "fa" else "❌ This coupon has expired!",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=back_button
+                )
                 return
         except:
             pass
+    
     usage_limit = coupon.get('usage_limit', 0)
     used_count = coupon.get('used_count', 0)
     
     if usage_limit > 0 and used_count >= usage_limit:
         coupon['status'] = 'used'
         save_coupons(COUPONS)
-        await message.reply("❌ این کوپن به حداکثر تعداد استفاده رسیده است!" if lang == "fa" else "❌ This coupon has reached its usage limit!")
+        await message.reply(
+            "❌ این کوپن به حداکثر تعداد استفاده رسیده است!" if lang == "fa" else "❌ This coupon has reached its usage limit!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=back_button
+        )
         return
+    
     discount = coupon.get('discount', 0)
     remaining = usage_limit - used_count if usage_limit > 0 else 'نامحدود'
+    
     user_states[user_id] = {
-        'coupon_code': code,  # ✅ کد اصلی بدون تغییر
+        'coupon_code': code,
         'coupon_discount': discount,
         'coupon_applied': True
     }
@@ -14116,6 +14167,21 @@ async def use_coupon(message: Message):
     logger.info(f"✅ [use_coupon] کوپن {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد")
     logger.info(f"🔍 [use_coupon] user_states[{user_id}] = {user_states[user_id]}")
     debug_coupon_state(user_id, "use_coupon_end")
+    
+    # ✅✅✅ دکمه‌های موفقیت - خرید سرویس + بازگشت
+    success_buttons = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
+            callback_data="buy_service",
+            style= "success"
+        )],
+        [InlineKeyboardButton(
+            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+            callback_data="back_to_main",
+            style= "danger"
+        )]
+    ])
+    
     if lang == "fa":
         await message.reply(
             f"{premium_emoji('success','✅')} <b>کوپن با موفقیت اعمال شد!</b>\n\n"
@@ -14123,10 +14189,9 @@ async def use_coupon(message: Message):
             f"{premium_emoji('discount','💳')} تخفیف: {discount}%\n"
             f"{premium_emoji('count','🔢')} تعداد دفعات باقیمانده: {remaining}\n\n"
             f"{premium_emoji('shopping_cart','🛒')} این تخفیف در خرید بعدی شما اعمال خواهد شد.\n"
-            f"{premium_emoji('light','💡')} برای خرید از منوی اصلی اقدام کنید.\n"
-            f"{premium_emoji('info','💡')} برای مشاهده وضعیت کوپن میتوانید از حساب کاربری خود اقدام کنید.\n\n"
-            f"{premium_emoji('danger','⚠️')} توجه: کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!",
-            parse_mode=ParseMode.HTML
+            f"{premium_emoji('light','💡')} برای خرید از دکمه زیر استفاده کنید.\n\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=success_buttons
         )
     else:
         await message.reply(
@@ -14135,11 +14200,11 @@ async def use_coupon(message: Message):
             f"{premium_emoji('discount','💳')} Discount: {discount}%\n"
             f"{premium_emoji('count','🔢')} Remaining uses: {remaining}\n\n"
             f"{premium_emoji('shopping_cart','🛒')} This discount will be applied to your next purchase.\n"
-            f"{premium_emoji('light','💡')} Use the main menu to purchase.\n"
-            f"{premium_emoji('info','💡')} To check coupon status you can visit My Account.\n\n"
-            f"{premium_emoji('danger','⚠️')} Note: Coupon code is <b>case-sensitive</b>!",
-            parse_mode=ParseMode.HTML
+            f"{premium_emoji('light','💡')} Use the button below to purchase.\n\n",
+            parse_mode=ParseMode.HTML,
+            reply_markup=success_buttons
         )
+    
     save_coupon_to_user_db(user_id)
 @dp.callback_query(F.data == "test_weekly_report")
 async def test_weekly_report(callback: CallbackQuery):
@@ -24307,10 +24372,25 @@ async def cancel_coupon(callback: CallbackQuery):
     if not user_state.get('coupon_applied'):
         await callback.answer("❌ شما کوپن فعالی ندارید!" if lang == "fa" else "❌ You have no active coupon!", show_alert=True)
         return
+    
+    # ✅✅✅ حذف کامل از همه جا
+    coupon_code = user_state.get('coupon_code')
+    
+    # حذف از user_states
     if user_id in user_states:
         user_states[user_id].pop('coupon_code', None)
         user_states[user_id].pop('coupon_discount', None)
         user_states[user_id].pop('coupon_applied', None)
+    
+    # حذف از دیتابیس
+    uid = str(user_id)
+    if uid in users:
+        users[uid]['coupon_code'] = None
+        users[uid]['coupon_discount'] = 0
+        users[uid]['coupon_applied'] = False
+        save_json(DB_FILES['users'], users)
+    
+    logger.info(f"🗑️ کوپن {coupon_code} توسط کاربر {user_id} لغو شد")
     
     await callback.answer("✅ کوپن با موفقیت لغو شد!" if lang == "fa" else "✅ Coupon cancelled successfully!", show_alert=True)
     await back_to_main(callback)
@@ -25715,11 +25795,12 @@ async def my_configs(callback: CallbackQuery):
         if o.get('user_id') == user_id
         and o.get('status') in ("approved", "inactive")
         and o.get('config_link')
-]
+    ]
     if log_system:
         asyncio.create_task(log_system.log_user_action(user_id, "مشاهده کانفیگ‌ها", f"تعداد: {len(configs_list)}"))
     
     logger.info(f"📁 کاربر {user_id} کانفیگ‌های خود را مشاهده می‌کند - تعداد: {len(configs_list)}")
+    
     if not configs_list:
         if lang == "fa":
             await send_sticker(user_id, 'order_rejected', '😭')
@@ -25727,10 +25808,9 @@ async def my_configs(callback: CallbackQuery):
 
 {premium_emoji('config', '📁')} <b>کانفیگ‌های شما</b>
 
-
 <tg-emoji emoji-id="5240241223632954241">🚫</tg-emoji> شما هیچ کانفیگ فعالی ندارید.
 
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> برای خرید کانفیگ از منوی اصلی اقدام کنید.
+<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> برای خرید کانفیگ از دکمه زیر استفاده کنید.
 """
         else:
             await send_sticker(user_id, 'order_rejected', '😭')
@@ -25738,24 +25818,42 @@ async def my_configs(callback: CallbackQuery):
 
 {premium_emoji('config', '📁')} <b>My Configs</b>
 
-
 <tg-emoji emoji-id="5240241223632954241">🚫</tg-emoji> You have no active configs.
 
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> Purchase a config from the main menu.
+<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> Purchase a config using the button below.
 """
+        
+        # ✅✅✅ دکمه‌های خرید + بازگشت
+        no_config_buttons = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
+                callback_data="buy_service",
+                style="success"  # ✅ استایل سبز
+            )],
+            [InlineKeyboardButton(
+                text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                callback_data="back_to_main",
+                style="danger"  # ✅ استایل قرمز
+            )]
+        ])
         
         try:
             await callback.message.delete()
         except Exception as e:
             logger.debug(f"نتوانست پیام قبلی را حذف کند: {e}")
         
-        await callback.message.answer(text, reply_markup=get_back_only_keyboard(lang), parse_mode=ParseMode.HTML)
+        await callback.message.answer(
+            text, 
+            reply_markup=no_config_buttons, 
+            parse_mode=ParseMode.HTML
+        )
         
         try:
             await callback.answer()
         except Exception as e:
             logger.warning(f"خطا در callback.answer: {e}")
         return
+    
     configs_list.sort(key=lambda x: x.get('date', ''), reverse=True)
     buttons = []
     buttons.append([InlineKeyboardButton(
@@ -30474,7 +30572,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.4.5"
+    version = "v1.4.6"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
