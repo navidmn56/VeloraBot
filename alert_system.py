@@ -342,6 +342,11 @@ class AlertSystem:
         if not isinstance(expiry_time, (int, float)) or expiry_time == 0:
             return
         
+        # ✅ تشخیص "Start After First Use" - مقدار منفی = هنوز استفاده نشده
+        if expiry_time < 0:
+            logger.debug(f"Order #{order_id}: Start After First Use - not started yet")
+            return  # ⏭️ هنوز شروع نشده - بررسی نمیشود
+        
         try:
             if expiry_time > 10000000000:
                 expiry_date = datetime.fromtimestamp(expiry_time / 1000)
