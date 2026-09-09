@@ -159,19 +159,19 @@ class AlertSystem:
                 await asyncio.sleep(60)
     
     async def check_all_services(self):
-        """بررسی تمام سرویس‌ها"""
+        """بررسی تمام سرویسها"""
         async with self._lock:
             try:
                 valid_orders = self.get_orders()
                 if not valid_orders:
                     return
                 
+                # ✅ فقط config_link لازم است
                 approved_orders = [
                     o for o in valid_orders.values() 
                     if isinstance(o, dict) 
-                    and o.get('status') == 'approved' 
-                    and o.get('config_link')
-                    and o.get('is_active_in_panel', True)
+                    and o.get('config_link')  # فقط config_link
+                    and o.get('user_id')  # و user_id
                 ]
                 
                 logger.debug(f"🔍 Checking {len(approved_orders)} services")
@@ -193,29 +193,32 @@ class AlertSystem:
                         from main import xui_get_client_info, xui_get_client_traffic
                         
                         client_info = await xui_get_client_info(email)
-                        await asyncio.sleep(2)
                         
                         if not client_info or not isinstance(client_info, dict):
                             continue
                         
-                        if not client_info.get('enable', True):
-                            continue
+                        # ❌ حذف enable check - همیشه بررسی کن
+                        # if not client_info.get('enable', True):
+                        #     continue
                         
+                        # تشخیص تمدید
                         await self._check_service_renewal(order, client_info)
                         
+                        # دریافت ترافیک
                         traffic_data = await xui_get_client_traffic(email)
                         
                         if traffic_data and not isinstance(traffic_data, dict):
                             traffic_data = None
                         
+                        # ✅ همیشه بررسی حجم و انقضا
                         await self._check_volume_alert(order, client_info, traffic_data)
                         await self._check_expiry_alert(order, client_info)
                         
                     except Exception as e:
-                        logger.error(f"Error checking service #{order_id}: {e}", exc_info=True)
+                        logger.error(f"Error checking service #{order_id}: {e}")
                         
             except Exception as e:
-                logger.error(f"Error in check_all_services: {e}", exc_info=True)
+                logger.error(f"Error in check_all_services: {e}")
     
     async def _check_service_renewal(self, order: dict, client_info: dict):
         """تشخیص تمدید سرویس"""
