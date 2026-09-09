@@ -17,32 +17,26 @@ class AlertSystem:
         self.get_orders = orders_getter
         self.get_user = user_getter
         self.extract_email = extract_email_func
-        self.log_system = log_system  # سیستم لاگ
+        self.log_system = log_system
         
-        # فایل کش
         self.cache_file = cache_file
         
-        # کش‌ها
         self.volume_alert_cache = {}
         self.expiry_alert_cache = {}
         self.sent_alerts_history = {}
-        
-        # کش اطلاعات سرویس برای تشخیص تمدید
         self.service_info_cache = {}
         
-        # بارگذاری از فایل
         self._load_cache_from_disk()
         
-        # تنظیمات
-        self.check_interval = 600  # هر ۱۰ دقیقه
-        self.cooldown_minutes = 120  # دیگر استفاده نمی‌شود (فقط یکبار ارسال)
+        self.check_interval = 300
+        self.cooldown_minutes = 120
         self.enabled = True
         
-        # آستانه‌ها - فقط ۲ آستانه + اتمام خودکار
-        self.volume_thresholds = [10, 5]      # سومی خودکار: ۰٪ = تمام شده
-        self.expiry_warnings = [3, 1]         # سومی خودکار: ۰ = منقضی شده
-        self.test_volume_thresholds = [10]    # تست: فقط ۱۰٪ + اتمام
-        self.test_expiry_warnings = [0.25]    # تست: فقط ۶ ساعت + انقضا
+        # ✅ آستانه‌ها
+        self.volume_thresholds = [10, 5]
+        self.expiry_warnings = [3, 1]
+        self.test_volume_thresholds = [30]
+        self.test_expiry_warnings = [0.25]
         
         self._lock = asyncio.Lock()
     
@@ -66,11 +60,11 @@ class AlertSystem:
                     self.sent_alerts_history = data.get('history', {})
                     self.service_info_cache = data.get('service_info', {})
                     
-                    logger.info(f"✅ کش هشدارها بارگذاری شد: {len(self.volume_alert_cache)} حجم، {len(self.expiry_alert_cache)} انقضا")
+                    logger.info(f"✅ Cache loaded: {len(self.volume_alert_cache)} volume, {len(self.expiry_alert_cache)} expiry")
             else:
-                logger.info("📝 فایل کش وجود ندارد، شروع با کش خالی")
+                logger.info("📝 Cache file not found, starting empty")
         except Exception as e:
-            logger.error(f"❌ خطا در بارگذاری کش: {e}")
+            logger.error(f"❌ Error loading cache: {e}")
             self.volume_alert_cache = {}
             self.expiry_alert_cache = {}
             self.sent_alerts_history = {}
@@ -102,7 +96,7 @@ class AlertSystem:
             os.replace(temp_file, self.cache_file)
             
         except Exception as e:
-            logger.error(f"❌ خطا در ذخیره کش: {e}")
+            logger.error(f"❌ Error saving cache: {e}")
     
     async def _log_alert(self, alert_type: str, order: dict, details: str):
         """ارسال لاگ هشدار به کانال لاگ"""
@@ -115,36 +109,36 @@ class AlertSystem:
             is_test = order.get('is_test', False) or order.get('type') == 'test'
             
             type_emoji = "🧪" if is_test else "📡"
-            type_text = "سرویس تست" if is_test else "سرویس عادی"
+            type_text = "Test" if is_test else "Normal"
             
             if alert_type == 'volume':
                 emoji = "⚠️"
-                title = "هشدار مصرف حجم"
+                title = "Volume Warning"
             elif alert_type == 'volume_exhausted':
                 emoji = "❌"
-                title = "اتمام حجم سرویس"
+                title = "Volume Exhausted"
             elif alert_type == 'expiry':
                 emoji = "⏰"
-                title = "هشدار انقضا"
-            else:  # expired
+                title = "Expiry Warning"
+            else:
                 emoji = "❌"
-                title = "سرویس منقضی شد"
+                title = "Service Expired"
             
             text = f"""
 {emoji} <b>{title}</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-🆔 <b>سفارش:</b> #{order_id}
-{type_emoji} <b>نوع سرویس:</b> {type_text}
-📄 <b>جزئیات:</b> {details}
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+🆔 <b>Order:</b> #{order_id}
+{type_emoji} <b>Type:</b> {type_text}
+📄 <b>Details:</b> {details}
 """
             await self.log_system.send_log(text)
         except Exception as e:
-            logger.error(f"خطا در ارسال لاگ هشدار: {e}")
+            logger.error(f"Error sending alert log: {e}")
     
     async def run_alert_worker(self):
         """کارگر پس‌زمینه"""
-        logger.info("🧪 سیستم هشدار راه‌اندازی شد (ارسال یکبار برای هر آستانه)")
+        logger.info("🧪 Alert system started (one-time per threshold)")
         
         self._save_cache_to_disk()
         
@@ -157,10 +151,10 @@ class AlertSystem:
                 await asyncio.sleep(self.check_interval)
             except asyncio.CancelledError:
                 self._save_cache_to_disk()
-                logger.info("سیستم هشدار متوقف شد")
+                logger.info("Alert system stopped")
                 break
             except Exception as e:
-                logger.error(f"خطا در سیستم هشدار: {e}", exc_info=True)
+                logger.error(f"Error in alert system: {e}", exc_info=True)
                 self._save_cache_to_disk()
                 await asyncio.sleep(60)
     
@@ -180,7 +174,7 @@ class AlertSystem:
                     and o.get('is_active_in_panel', True)
                 ]
                 
-                logger.debug(f"🔍 بررسی {len(approved_orders)} سرویس")
+                logger.debug(f"🔍 Checking {len(approved_orders)} services")
                 
                 for order in approved_orders:
                     order_id = order.get('order_id')
@@ -190,7 +184,6 @@ class AlertSystem:
                         continue
                     
                     try:
-                        # استخراج ایمیل از config_link
                         email = self.extract_email(order.get('config_link', ''))
                         if not email:
                             email = order.get('email')
@@ -208,27 +201,24 @@ class AlertSystem:
                         if not client_info.get('enable', True):
                             continue
                         
-                        # تشخیص تمدید سرویس
                         await self._check_service_renewal(order, client_info)
                         
-                        # دریافت ترافیک
                         traffic_data = await xui_get_client_traffic(email)
                         
                         if traffic_data and not isinstance(traffic_data, dict):
                             traffic_data = None
                         
-                        # بررسی حجم و انقضا
                         await self._check_volume_alert(order, client_info, traffic_data)
                         await self._check_expiry_alert(order, client_info)
                         
                     except Exception as e:
-                        logger.error(f"خطا در بررسی سرویس #{order_id}: {e}", exc_info=True)
+                        logger.error(f"Error checking service #{order_id}: {e}", exc_info=True)
                         
             except Exception as e:
-                logger.error(f"خطا در check_all_services: {e}", exc_info=True)
+                logger.error(f"Error in check_all_services: {e}", exc_info=True)
     
     async def _check_service_renewal(self, order: dict, client_info: dict):
-        """تشخیص تمدید سرویس و پاک کردن کش - فقط وقتی حجم یا زمان بیشتر شده"""
+        """تشخیص تمدید سرویس"""
         order_id = order.get('order_id')
         
         current_total = client_info.get('totalGB', 0)
@@ -256,23 +246,23 @@ class AlertSystem:
             changes = []
             
             if is_volume_increased:
-                changes.append(f"📦 حجم: {self._format_bytes(prev_total)} → {self._format_bytes(current_total)}")
+                changes.append(f"📦 Volume: {self._format_bytes(prev_total)} → {self._format_bytes(current_total)}")
             
             if is_expiry_extended:
                 prev_date = self._format_timestamp(prev_expiry)
                 current_date = self._format_timestamp(current_expiry)
-                changes.append(f"⏱ انقضا: {prev_date} → {current_date}")
+                changes.append(f"⏱ Expiry: {prev_date} → {current_date}")
             
             changes_text = "\n".join(changes)
             
-            logger.info(f"🔄 سرویس #{order_id} تمدید شد:\n{changes_text}")
+            logger.info(f"🔄 Service #{order_id} renewed:\n{changes_text}")
             
             if self.log_system:
                 text = f"""
-🔄 <b>تمدید سرویس</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{order.get('user_id')}</code>
-🆔 <b>سفارش:</b> #{order_id}
+🔄 <b>Service Renewed</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{order.get('user_id')}</code>
+🆔 <b>Order:</b> #{order_id}
 {changes_text}
 """
                 await self.log_system.send_log(text)
@@ -298,9 +288,9 @@ class AlertSystem:
             self._save_cache_to_disk()
 
     def _format_bytes(self, bytes_value: int) -> str:
-        """فرمت بایت به صورت خوانا"""
+        """فرمت بایت"""
         if bytes_value == 0:
-            return "نامحدود"
+            return "Unlimited"
         
         gb = bytes_value / (1024**3)
         if gb >= 1:
@@ -310,7 +300,7 @@ class AlertSystem:
             return f"{mb:.0f} MB"
 
     def _format_timestamp(self, timestamp: int) -> str:
-        """فرمت timestamp به تاریخ خوانا"""
+        """فرمت timestamp"""
         try:
             if timestamp > 10000000000:
                 dt = datetime.fromtimestamp(timestamp / 1000)
@@ -318,10 +308,10 @@ class AlertSystem:
                 dt = datetime.fromtimestamp(timestamp)
             return dt.strftime('%Y-%m-%d %H:%M')
         except:
-            return "نامشخص"
+            return "Unknown"
     
     def _clear_order_cache(self, order_id: int):
-        """پاک کردن کش یک سفارش خاص"""
+        """پاک کردن کش یک سفارش"""
         self.volume_alert_cache = {
             k: v for k, v in self.volume_alert_cache.items() 
             if not k.startswith(f"vol_{order_id}_")
@@ -338,10 +328,10 @@ class AlertSystem:
                not k.startswith(f"exp_{order_id}_")
         }
         
-        logger.info(f"🔄 کش هشدارهای سفارش #{order_id} بعد از تمدید پاک شد")
+        logger.info(f"🔄 Cache cleared for order #{order_id}")
     
     async def _check_expiry_alert(self, order: dict, client_info: dict):
-        """بررسی هشدار انقضا - ۲ آستانه + انقضای خودکار"""
+        """بررسی هشدار انقضا"""
         order_id = order.get('order_id')
         is_test = order.get('is_test', False) or order.get('type') == 'test'
         
@@ -366,22 +356,20 @@ class AlertSystem:
         label = None
         alert_type = 'expiry'
         
-        # ✅ بررسی انقضای کامل
+        # ✅ English labels
         if hours_left <= 0:
-            label = "منقضی شده"
+            label = "expired"
             alert_type = 'expired'
         elif is_test:
-            # تست: فقط ۶ ساعت
             if hours_left <= 6:
-                label = "۶ ساعت"
+                label = "6h"
         else:
-            # سرویس عادی: استفاده از تنظیمات (۲ آستانه)
-            thresholds_sorted = sorted(self.expiry_warnings, reverse=True)
+            thresholds_sorted = sorted(self.expiry_warnings)
             
             for threshold in thresholds_sorted:
                 threshold_hours = threshold * 24
                 if hours_left <= threshold_hours:
-                    label = f"{int(threshold)} روز"
+                    label = f"{int(threshold)}d"
                     break
         
         if not label:
@@ -389,21 +377,21 @@ class AlertSystem:
         
         cache_key = f"exp_{order_id}_{label}"
         
-        # ✅ فقط یکبار ارسال می‌شود
         if self._should_send_once(cache_key):
             sent_successfully = await self._notify_expiry(order, days_left, hours_left, is_test, label)
             
             if sent_successfully:
                 self._record_alert(cache_key, self.expiry_alert_cache, alert_type, order_id)
-                logger.info(f"📨 هشدار انقضا ({label}) برای سفارش #{order_id} ارسال شد")
+                logger.info(f"📨 Expiry alert ({label}) sent for order #{order_id}")
                 
-                details = "سرویس منقضی شده" if label == "منقضی شده" else f"{label} مانده به انقضا"
+                details = "expired" if label == "expired" else f"{label} remaining"
                 await self._log_alert(alert_type, order, details)
             else:
-                logger.warning(f"⚠️ هشدار انقضا ({label}) برای سفارش #{order_id} ارسال نشد")
+                logger.warning(f"⚠️ Expiry alert ({label}) not sent for order #{order_id}")
+
 
     async def _check_volume_alert(self, order: dict, client_info: dict, traffic_data: Optional[dict]):
-        """بررسی هشدار حجم - ۲ آستانه + اتمام خودکار"""
+        """بررسی هشدار حجم"""
         order_id = order.get('order_id')
         is_test = order.get('is_test', False) or order.get('type') == 'test'
         
@@ -430,21 +418,19 @@ class AlertSystem:
         label = None
         alert_type = 'volume'
         
-        # ✅ بررسی اتمام کامل حجم
+        # ✅ English labels
         if remaining_gb <= 0 or remaining_percent <= 0:
-            label = "تمام شده"
+            label = "exhausted"
             alert_type = 'volume_exhausted'
         elif is_test:
-            # تست: فقط ۱۰٪
-            if remaining_percent <= 10:
-                label = "۱۰٪"
+            if remaining_percent <= 30:
+                label = "30%"
         else:
-            # سرویس عادی: استفاده از تنظیمات (۲ آستانه)
             thresholds_sorted = sorted(self.volume_thresholds)
             
             for threshold in thresholds_sorted:
                 if remaining_percent <= threshold:
-                    label = f"{threshold}٪"
+                    label = f"{threshold}%"
                     break
         
         if not label:
@@ -452,7 +438,6 @@ class AlertSystem:
         
         cache_key = f"vol_{order_id}_{label}"
         
-        # ✅ فقط یکبار ارسال می‌شود
         if self._should_send_once(cache_key):
             sent_successfully = await self._notify_volume(
                 order, used_gb, total_gb, remaining_gb, 
@@ -461,19 +446,19 @@ class AlertSystem:
             
             if sent_successfully:
                 self._record_alert(cache_key, self.volume_alert_cache, alert_type, order_id)
-                logger.info(f"📨 هشدار حجم {label} برای سفارش #{order_id} ارسال شد")
+                logger.info(f"📨 Volume alert ({label}) sent for order #{order_id}")
                 
-                if label == "تمام شده":
-                    details = f"حجم تمام شده ({used_gb:.2f}GB از {total_gb:.2f}GB)"
+                if label == "exhausted":
+                    details = f"Volume exhausted ({used_gb:.2f}GB of {total_gb:.2f}GB)"
                 else:
-                    details = f"{label} باقی‌مانده ({used_gb:.2f}GB از {total_gb:.2f}GB)"
+                    details = f"{label} remaining ({used_gb:.2f}GB of {total_gb:.2f}GB)"
                 
                 await self._log_alert(alert_type, order, details)
             else:
-                logger.warning(f"⚠️ هشدار حجم {label} برای سفارش #{order_id} ارسال نشد")
+                logger.warning(f"⚠️ Volume alert ({label}) not sent for order #{order_id}")
     
     def _should_send_once(self, cache_key: str) -> bool:
-        """بررسی ارسال - فقط یکبار برای هر آستانه"""
+        """بررسی ارسال"""
         if cache_key in self.volume_alert_cache:
             return False
         
@@ -486,7 +471,7 @@ class AlertSystem:
         return True
     
     def _record_alert(self, cache_key: str, cache: dict, alert_type: str, order_id: int):
-        """ثبت هشدار موفق در کش"""
+        """ثبت هشدار"""
         now = datetime.now()
         
         cache[cache_key] = now
@@ -507,8 +492,6 @@ class AlertSystem:
         
         self._save_cache_to_disk()
     
-
-
     async def _notify_volume(self, order: dict, used_gb: float, total_gb: float, 
                             remaining_gb: float, remaining_percent: float, 
                             threshold_label: str, is_test: bool) -> bool:
@@ -523,8 +506,8 @@ class AlertSystem:
         total_display = self._format_volume(total_gb)
         remaining_display = self._format_volume(remaining_gb)
         
-        if threshold_label == "تمام شده":
-            # پیام اتمام حجم
+        # ✅ Check English label
+        if threshold_label == "exhausted":
             if is_test:
                 text = (
                     f"❌ <b>حجم تست تمام شد</b>\n\n"
@@ -538,7 +521,6 @@ class AlertSystem:
                     f"💡 Purchase a full service to continue."
                 )
                 
-                # ✅ تست: دکمه خرید سرویس
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
@@ -561,7 +543,6 @@ class AlertSystem:
                     f"💡 You can renew your service from 'My Configs'."
                 )
                 
-                # ✅ عادی: دکمه تمدید
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
@@ -570,7 +551,6 @@ class AlertSystem:
                     )]
                 ])
         else:
-            # پیام هشدار عادی
             if is_test:
                 text = (
                     f"⚠️ <b>هشدار مصرف تست</b>\n\n"
@@ -586,7 +566,6 @@ class AlertSystem:
                     f"💡 Purchase a full service to continue."
                 )
                 
-                # ✅ تست: دکمه خرید سرویس
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
@@ -611,7 +590,6 @@ class AlertSystem:
                     f"💡 You can renew your service from 'My Configs'."
                 )
                 
-                # ✅ عادی: دکمه تمدید
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
@@ -622,14 +600,12 @@ class AlertSystem:
         
         try:
             await self.bot.send_message(user_id, text, parse_mode="HTML", reply_markup=keyboard)
-            logger.info(f"📨 هشدار حجم {threshold_label} برای سفارش #{order_id} ارسال شد")
+            logger.info(f"📨 Volume alert {threshold_label} sent for order #{order_id}")
             return True
         except Exception as e:
-            logger.error(f"❌ خطا در ارسال هشدار حجم به کاربر {user_id}: {e}")
+            logger.error(f"❌ Error sending volume alert to user {user_id}: {e}")
             return False
     
-    
-
     async def _notify_expiry(self, order: dict, days_left: int, hours_left: float, 
                             is_test: bool, notify_label: str) -> bool:
         """ارسال هشدار انقضا"""
@@ -639,7 +615,8 @@ class AlertSystem:
         user = self.get_user(user_id)
         lang = user.get('lang', 'fa') if user else 'fa'
         
-        if notify_label == "منقضی شده":
+        # ✅ Check English label
+        if notify_label == "expired":
             time_left = "منقضی شده" if lang == 'fa' else "Expired"
         elif days_left > 0:
             time_left = f"{days_left} روز" if lang == 'fa' else f"{days_left} days"
@@ -649,7 +626,7 @@ class AlertSystem:
             minutes_left = max(0, int(hours_left * 60))
             time_left = f"{minutes_left} دقیقه" if lang == 'fa' else f"{minutes_left} minutes"
         
-        if notify_label == "منقضی شده":
+        if notify_label == "expired":
             if is_test:
                 text = (
                     f"❌ <b>سرویس تست منقضی شد</b>\n\n"
@@ -663,7 +640,6 @@ class AlertSystem:
                     f"💡 Purchase a full service to continue."
                 )
                 
-                # ✅ تست: دکمه خرید سرویس
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
@@ -684,7 +660,6 @@ class AlertSystem:
                     f"💡 You can renew your service from 'My Configs'."
                 )
                 
-                # ✅ عادی: دکمه تمدید
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
@@ -708,7 +683,6 @@ class AlertSystem:
                     f"💡 Purchase a full service to continue."
                 )
                 
-                # ✅ تست: دکمه خرید سرویس
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
@@ -731,7 +705,6 @@ class AlertSystem:
                     f"💡 You can renew your service from 'My Configs'."
                 )
                 
-                # ✅ عادی: دکمه تمدید
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
@@ -742,10 +715,10 @@ class AlertSystem:
         
         try:
             await self.bot.send_message(user_id, text, parse_mode="HTML", reply_markup=keyboard)
-            logger.info(f"📨 هشدار انقضا ({notify_label}) برای سفارش #{order_id} ارسال شد")
+            logger.info(f"📨 Expiry alert {notify_label} sent for order #{order_id}")
             return True
         except Exception as e:
-            logger.error(f"❌ خطا در ارسال هشدار انقضا به کاربر {user_id}: {e}")
+            logger.error(f"❌ Error sending expiry alert to user {user_id}: {e}")
             return False
     
     def _format_volume(self, gb: float) -> str:
@@ -759,21 +732,21 @@ class AlertSystem:
             return "0 MB"
     
     def clear_cache(self, order_id: Optional[int] = None):
-        """پاک کردن کش (برای ارسال مجدد هشدارها)"""
+        """پاک کردن کش"""
         if order_id:
             self._clear_order_cache(order_id)
-            logger.info(f"🧹 کش سفارش #{order_id} پاک شد")
+            logger.info(f"🧹 Cache cleared for order #{order_id}")
         else:
             self.volume_alert_cache.clear()
             self.expiry_alert_cache.clear()
             self.sent_alerts_history.clear()
             self.service_info_cache.clear()
-            logger.info("🧹 تمام کش هشدارها پاک شد")
+            logger.info("🧹 All alert cache cleared")
         
         self._save_cache_to_disk()
     
     def clear_all_history(self):
-        """پاک کردن کامل تاریخچه"""
+        """پاک کردن کامل"""
         self.volume_alert_cache.clear()
         self.expiry_alert_cache.clear()
         self.sent_alerts_history.clear()
@@ -783,20 +756,20 @@ class AlertSystem:
             if os.path.exists(self.cache_file):
                 os.remove(self.cache_file)
         except Exception as e:
-            logger.error(f"خطا در حذف فایل کش: {e}")
+            logger.error(f"Error deleting cache file: {e}")
         
         self._save_cache_to_disk()
-        logger.info("🗑️ تمام تاریخچه هشدارها پاک شد")
+        logger.info("🗑️ All alert history cleared")
     
     def update_settings(self, settings: dict):
         """به‌روزرسانی تنظیمات"""
         if 'volume_thresholds' in settings:
             self.volume_thresholds = settings['volume_thresholds']
-            logger.info(f"📊 آستانه‌های حجم: {self.volume_thresholds}٪ + اتمام خودکار")
+            logger.info(f"📊 Volume thresholds: {self.volume_thresholds}% + auto exhaust")
         
         if 'expiry_warnings' in settings:
             self.expiry_warnings = settings['expiry_warnings']
-            logger.info(f"📅 آستانه‌های انقضا: {self.expiry_warnings} روز + انقضای خودکار")
+            logger.info(f"📅 Expiry thresholds: {self.expiry_warnings} days + auto expire")
         
         if 'test_volume_thresholds' in settings:
             self.test_volume_thresholds = settings['test_volume_thresholds']
@@ -807,4 +780,4 @@ class AlertSystem:
         if 'enabled' in settings:
             self.enabled = settings['enabled']
         
-        logger.info(f"⚙️ تنظیمات سیستم هشدار به‌روزرسانی شد")
+        logger.info(f"⚙️ Alert settings updated")
