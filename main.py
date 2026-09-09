@@ -15768,13 +15768,45 @@ def get_admin_users_keyboard(page: int = 0, lang: str = "fa") -> InlineKeyboardM
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def get_language_keyboard() -> InlineKeyboardMarkup:
+def get_language_keyboard(user_id: int = None) -> InlineKeyboardMarkup:
+    """ساخت کیبورد انتخاب زبان با نمایش زبان فعال"""
+    
+    # ✅ تشخیص زبان فعلی کاربر
+    current_lang = 'fa'  # پیش‌فرض فارسی
+    
+    if user_id:
+        user = get_user(user_id)
+        if user:
+            current_lang = user.get('lang', 'fa')
+    
+    # ✅ تعیین style بر اساس زبان فعال
+    fa_style = "primary" if current_lang == 'fa' else None
+    en_style = "primary" if current_lang == 'en' else None
+    
+    # ✅ متن دکمه با علامت ✓ برای زبان فعال
+    fa_text = "🇮🇷 فارسی ✓" if current_lang == 'fa' else "🇮🇷 فارسی"
+    en_text = "🇬🇧 English ✓" if current_lang == 'en' else "🇬🇧 English"
+    
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🇮🇷 فارسی", callback_data="set_lang_fa"),
-            InlineKeyboardButton(text="🇬🇧 English", callback_data="set_lang_en")
+            InlineKeyboardButton(
+                text=fa_text,
+                callback_data="set_lang_fa",
+                style=fa_style  # ✅ primary اگر فارسی فعال است
+            ),
+            InlineKeyboardButton(
+                text=en_text,
+                callback_data="set_lang_en",
+                style=en_style  # ✅ primary اگر انگلیسی فعال است
+            )
         ],
-        [InlineKeyboardButton(text=f"🔙 برگشت", callback_data="back_to_main", style="danger")]
+        [
+            InlineKeyboardButton(
+                text="🔙 برگشت",
+                callback_data="back_to_main",
+                style="danger"
+            )
+        ]
     ])
 
 def get_cancel_reply_keyboard(lang: str = "fa") -> ReplyKeyboardMarkup:
@@ -26414,8 +26446,15 @@ async def invite_friends(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
 @dp.callback_query(F.data == "change_language")
 async def change_language(callback: CallbackQuery):
-    logger.debug(f"کاربر {callback.from_user.id} در حال تغییر زبان")
-    await callback.message.edit_text("<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> زبان خود را انتخاب کنید / Select your language:", reply_markup=get_language_keyboard())
+    user_id = callback.from_user.id
+    logger.debug(f"کاربر {user_id} در حال تغییر زبان")
+    
+    # ✅ پاس دادن user_id برای تشخیص زبان فعال
+    await callback.message.edit_text(
+        "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> زبان خود را انتخاب کنید / Select your language:",
+        reply_markup=get_language_keyboard(user_id)  # ← user_id
+    )
+    
     try:
         await callback.answer()
     except Exception as e:
@@ -26426,15 +26465,38 @@ async def set_lang_fa(callback: CallbackQuery):
     user_id = callback.from_user.id
     update_user(user_id, 'lang', 'fa')
     logger.info(f"زبان کاربر {user_id} به فارسی تغییر کرد")
+    
     await callback.answer("✅ زبان به فارسی تغییر کرد", show_alert=True)
+    
+    # ✅ به‌روزرسانی کیبورد با زبان جدید
+    try:
+        await callback.message.edit_text(
+            "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> زبان خود را انتخاب کنید / Select your language:",
+            reply_markup=get_language_keyboard(user_id)  # ← نمایش فارسی فعال
+        )
+    except:
+        pass
+    
     await back_to_main(callback)
+
 
 @dp.callback_query(F.data == "set_lang_en")
 async def set_lang_en(callback: CallbackQuery):
     user_id = callback.from_user.id
     update_user(user_id, 'lang', 'en')
     logger.info(f"زبان کاربر {user_id} به انگلیسی تغییر کرد")
+    
     await callback.answer("✅ Language changed to English", show_alert=True)
+    
+    # ✅ به‌روزرسانی کیبورد با زبان جدید
+    try:
+        await callback.message.edit_text(
+            "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> زبان خود را انتخاب کنید / Select your language:",
+            reply_markup=get_language_keyboard(user_id)  # ← نمایش انگلیسی فعال
+        )
+    except:
+        pass
+    
     await back_to_main(callback)
 def create_chat(user_id: int, feedback_id: int) -> int:
     """ایجاد چت جدید"""
