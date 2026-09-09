@@ -17122,16 +17122,22 @@ async def admin_alert_settings(callback: CallbackQuery):
     global alert_system_settings
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
-    # بارگذاری تنظیمات از دیتابیس
+    # ✅ بارگذاری تنظیمات از دیتابیس
     if 'alert_settings' in configs_pool and isinstance(configs_pool['alert_settings'], dict):
         alert_system_settings.update(configs_pool['alert_settings'])
     
-    enabled = alert_system_settings.get('enabled', True)
-    volume_thresholds = alert_system_settings.get('volume_thresholds', [10, 5, 1])
-    expiry_warnings = alert_system_settings.get('expiry_warnings', [7, 3, 1])
+    # ✅ اگر alert_system وجود دارد، از تنظیمات واقعی آن استفاده کن
+    if alert_system:
+        enabled = alert_system.enabled
+        volume_thresholds = alert_system.volume_thresholds
+        expiry_warnings = alert_system.expiry_warnings
+    else:
+        enabled = alert_system_settings.get('enabled', True)
+        volume_thresholds = alert_system_settings.get('volume_thresholds', [10, 5])
+        expiry_warnings = alert_system_settings.get('expiry_warnings', [3, 1])
     
     # وضعیت سیستم
-    system_status = "🟢 فعال" if alert_system and alert_system.enabled else "🔴 غیرفعال"
+    system_status = "🟢 فعال" if enabled else "🔴 غیرفعال"
     log_status = "🟢 متصل" if alert_system and alert_system.log_system else "🔴 قطع"
     cache_status = "🟢 فعال" if alert_system else "🔴 غیرفعال"
     
@@ -17141,13 +17147,15 @@ async def admin_alert_settings(callback: CallbackQuery):
 
 ━━━━━━━━━━━━━━━━━━━━━━
 ⚙️ <b>وضعیت سیستم:</b> {system_status}
-📊 <b>آستانه‌های حجم:</b> {volume_thresholds}٪
-📅 <b>آستانه‌های انقضا:</b> {expiry_warnings} روز
+📊 <b>آستانه‌های حجم:</b> {volume_thresholds}٪ + اتمام خودکار
+📅 <b>آستانه‌های انقضا:</b> {expiry_warnings} روز + انقضای خودکار
 📝 <b>سیستم لاگ:</b> {log_status}
 💾 <b>کش:</b> {cache_status}
 ━━━━━━━━━━━━━━━━━━━━━━
 
-📌 <b>نکته:</b> هر آستانه فقط یکبار به کاربر اطلاع داده می‌شود.
+📌 <b>نکته:</b>
+• هر آستانه فقط یکبار ارسال می‌شود
+• اتمام حجم و انقضای کامل خودکار است
 
 <b>عملیات:</b>
 """
@@ -17157,13 +17165,15 @@ async def admin_alert_settings(callback: CallbackQuery):
 
 ━━━━━━━━━━━━━━━━━━━━━━
 ⚙️ <b>System Status:</b> {'🟢 Enabled' if enabled else '🔴 Disabled'}
-📊 <b>Volume Thresholds:</b> {volume_thresholds}%
-📅 <b>Expiry Thresholds:</b> {expiry_warnings} days
+📊 <b>Volume Thresholds:</b> {volume_thresholds}% + auto exhaust
+📅 <b>Expiry Thresholds:</b> {expiry_warnings} days + auto expire
 📝 <b>Log System:</b> {log_status}
 💾 <b>Cache:</b> {cache_status}
 ━━━━━━━━━━━━━━━━━━━━━━
 
-📌 <b>Note:</b> Each threshold is sent only once.
+📌 <b>Note:</b>
+• Each threshold is sent only once
+• Volume exhaust and expiry are automatic
 
 <b>Actions:</b>
 """
@@ -30572,7 +30582,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.4.6"
+    version = "v1.4.7"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
@@ -36289,7 +36299,7 @@ async def cmd_stats(message: Message):
         logger.error(f"خطا در ارسال آمار به ادمین: {e}", exc_info=True)
 
 
-# راه‌اندازی سیستم هشدار
+
 
 from alert_system import AlertSystem
 
@@ -36299,7 +36309,7 @@ alert_system_settings = {
     'enabled': True,
     'volume_thresholds': [10, 5],      # ✅ فقط ۲ آستانه (سومی خودکار: اتمام)
     'expiry_warnings': [3, 1],         # ✅ فقط ۲ آستانه (سومی خودکار: انقضا)
-    'test_volume_thresholds': [10],    # ✅ تست: فقط ۱ آستانه + اتمام خودکار
+    'test_volume_thresholds': [30],    # ✅ تست: فقط ۱ آستانه + اتمام خودکار
     'test_expiry_warnings': [0.25],    # ✅ تست: فقط ۶ ساعت + انقضای خودکار
     'cooldown_minutes': 120,
 }
