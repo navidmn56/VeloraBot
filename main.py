@@ -557,7 +557,65 @@ def save_coupons(coupons: dict):
         return False
 
 COUPONS = load_coupons()
+def is_coupon_valid_for_user(coupon_code: str, user_id: int) -> tuple:
+    """
+    بررسی اعتبار کوپن برای کاربر
+    Returns:
+        (is_valid: bool, reason: str)
+    """
+    if not coupon_code:
+        return False, "کوپن خالی است"
+    
+    coupon = COUPONS.get(coupon_code)
+    if not coupon:
+        return False, "کوپن در دیتابیس نیست"
+    
+    # بررسی وضعیت
+    if coupon.get('status') != 'active':
+        return False, f"وضعیت: {coupon.get('status')}"
+    
+    # بررسی تاریخ انقضا
+    expiry_date = coupon.get('expiry_date')
+    if expiry_date:
+        try:
+            expiry = datetime.fromisoformat(expiry_date)
+            if expiry < datetime.now():
+                return False, "منقضی شده"
+        except:
+            pass
+    
+    coupon_type = coupon.get('coupon_type', 'normal')
+    
+    if coupon_type == 'admin_special':
+        # بررسی قفل بودن
+        locked_user_id = coupon.get('locked_user_id')
+        if locked_user_id and locked_user_id != user_id:
+            return False, f"قفل شده برای کاربر {locked_user_id}"
+        
+        # بررسی تعداد استفاده
+        user_usage = coupon.get('user_usage', {})
+        user_used_count = user_usage.get(str(user_id), 0)
+        max_usage = coupon.get('usage_limit', 1)
+        
+        if user_used_count >= max_usage:
+            return False, f"به حداکثر رسیده ({user_used_count}/{max_usage})"
+        
+        return True, f"معتبر ({user_used_count}/{max_usage})"
+    else:
+        # کوپن معمولی
+        if user_id in coupon.get('used_by', []):
+            return False, "قبلاً استفاده شده"
+        
+        return True, "معتبر"
 
+
+def get_coupon_discount_for_user(coupon_code: str, user_id: int) -> int:
+    """دریافت درصد تخفیف کوپن برای کاربر (اگر معتبر باشد)"""
+    is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+    if not is_valid:
+        return 0
+    coupon = COUPONS.get(coupon_code)
+    return coupon.get('discount', 0) if coupon else 0
 
 
 
@@ -5891,20 +5949,16 @@ async def cmd_start(message: Message):
         coupon_applied = coupon_data.get('coupon_applied', False)
         
         if coupon_applied and coupon_code:
-            coupon = COUPONS.get(coupon_code)
-            if coupon and coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    user_states[user_id] = {
-                        'coupon_code': coupon_code,
-                        'coupon_discount': coupon_discount if coupon_discount else 0,
-                        'coupon_applied': True
-                    }
-                    logger.info(f"🏷️ کوپن {coupon_code} در user_states کاربر {user_id} ذخیره شد")
-                else:
-                    logger.warning(f"⚠️ کوپن {coupon_code} قبلاً مصرف شده است")
-                    clear_coupon_from_user_db(user_id)
+            is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+            if is_valid:
+                user_states[user_id] = {
+                    'coupon_code': coupon_code,
+                    'coupon_discount': coupon_discount if coupon_discount else 0,
+                    'coupon_applied': True
+                }
+                logger.info(f"🏷️ کوپن {coupon_code} در user_states کاربر {user_id} ذخیره شد")
             else:
-                logger.warning(f"⚠️ کوپن {coupon_code} نامعتبر است")
+                logger.warning(f"⚠️ کوپن {coupon_code} نامعتبر: {reason}")
                 clear_coupon_from_user_db(user_id)
         else:
             user_state = user_states.get(user_id, {})
@@ -6714,12 +6768,28 @@ def get_user(user_id: int, username: str = None) -> dict:
                     logger.warning(f"⚠️ کوپن {coupon_code} به حداکثر استفاده رسیده - از کاربر {user_id} پاک می‌شود")
             
             # ✅ 5. بررسی استفاده قبلی کاربر
+            # ✅ 5. بررسی استفاده قبلی کاربر - با در نظر گرفتن نوع کوپن
             if coupon_valid:
-                if user_id in coupon.get('used_by', []):
-                    coupon_valid = False
-                    invalid_reason = "قبلاً توسط کاربر استفاده شده"
-                    logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده - پاک می‌شود")
-        
+                coupon_type = coupon.get('coupon_type', 'normal')
+                
+                if coupon_type == 'admin_special':
+                    # ✅✅✅ کوپن ادمین: بررسی تعداد استفاده کاربر
+                    user_usage = coupon.get('user_usage', {})
+                    user_used_count = user_usage.get(str(user_id), 0)
+                    max_usage = coupon.get('usage_limit', 1)
+                    
+                    if user_used_count >= max_usage:
+                        coupon_valid = False
+                        invalid_reason = f"به حداکثر استفاده رسیده ({user_used_count}/{max_usage})"
+                        logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن ادمین {coupon_code} رسیده - پاک می‌شود")
+                    else:
+                        logger.info(f"✅ کوپن ادمین {coupon_code} همچنان معتبر است ({user_used_count}/{max_usage})")
+                else:
+                    # ✅ کوپن معمولی: بررسی استفاده قبلی
+                    if user_id in coupon.get('used_by', []):
+                        coupon_valid = False
+                        invalid_reason = "قبلاً توسط کاربر استفاده شده"
+                        logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده - پاک می‌شود")        
         if coupon_valid:
             # ✅ کوپن معتبر است - لود به user_states
             if user_id not in user_states:
@@ -6787,6 +6857,7 @@ def load_coupon_to_user_states(user_id: int) -> bool:
     # بررسی اعتبار کوپن
     if coupon_code in COUPONS:
         coupon = COUPONS[coupon_code]
+        coupon_type = coupon.get('coupon_type', 'normal')
         
         # بررسی وضعیت
         if coupon.get('status') != 'active':
@@ -6804,10 +6875,27 @@ def load_coupon_to_user_states(user_id: int) -> bool:
             except:
                 pass
         
-        # بررسی استفاده قبلی
-        if user_id in coupon.get('used_by', []):
-            logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده")
-            return False
+        # ✅✅✅ بررسی استفاده قبلی بر اساس نوع کوپن
+        if coupon_type == 'admin_special':
+            # ✅ برای کوپن ادمین: بررسی user_usage
+            user_usage = coupon.get('user_usage', {})
+            user_used_count = user_usage.get(str(user_id), 0)
+            max_usage = coupon.get('usage_limit', 1)
+            
+            if user_used_count >= max_usage:
+                logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن ادمین {coupon_code} رسیده ({user_used_count}/{max_usage})")
+                return False
+            
+            # بررسی قفل بودن به کاربر
+            locked_user_id = coupon.get('locked_user_id')
+            if locked_user_id and locked_user_id != user_id:
+                logger.warning(f"⚠️ کوپن ادمین {coupon_code} برای کاربر دیگری قفل شده")
+                return False
+        else:
+            # ✅ برای کوپن معمولی: بررسی used_by
+            if user_id in coupon.get('used_by', []):
+                logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده")
+                return False
     
     # لود به user_states
     if user_id not in user_states:
@@ -6907,27 +6995,21 @@ def load_coupon_from_user_db(user_id: int) -> dict:
         coupon_discount = user.get('coupon_discount', 0)
         
         if coupon_applied and coupon_code:
-            coupon = COUPONS.get(coupon_code)
-            if coupon and coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    logger.info(f"📁 [load_coupon_from_user_db] کوپن {coupon_code} از دیتابیس کاربر بازیابی شد")
-                    return {
-                        'coupon_code': coupon_code,
-                        'coupon_discount': coupon_discount,
-                        'coupon_applied': True
-                    }
-                else:
-                    logger.warning(f"⚠️ [load_coupon_from_user_db] کوپن {coupon_code} قبلاً مصرف شده است")
-                    users[uid]['coupon_code'] = None
-                    users[uid]['coupon_discount'] = 0
-                    users[uid]['coupon_applied'] = False
-                    save_json(DB_FILES['users'], users)
+            is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+            if is_valid:
+                logger.info(f"📁 [load_coupon_from_user_db] کوپن {coupon_code} از دیتابیس کاربر بازیابی شد - {reason}")
+                return {
+                    'coupon_code': coupon_code,
+                    'coupon_discount': coupon_discount,
+                    'coupon_applied': True
+                }
             else:
-                logger.warning(f"⚠️ [load_coupon_from_user_db] کوپن {coupon_code} نامعتبر است")
+                logger.warning(f"⚠️ [load_coupon_from_user_db] کوپن {coupon_code} نامعتبر: {reason}")
                 users[uid]['coupon_code'] = None
                 users[uid]['coupon_discount'] = 0
                 users[uid]['coupon_applied'] = False
                 save_json(DB_FILES['users'], users)
+            
                 
     except Exception as e:
         logger.error(f"❌ [load_coupon_from_user_db] خطا: {e}")
@@ -8145,23 +8227,16 @@ def load_coupon_from_user(user_id: int) -> dict:
             coupon_discount = user.get('coupon_discount', 0)
             
             if coupon_applied and coupon_code:
-                coupon = COUPONS.get(coupon_code)
-                if coupon and coupon.get('status') == 'active':
-                    if user_id not in coupon.get('used_by', []):
-                        logger.info(f"📁 [load_coupon_from_user] کوپن {coupon_code} از دیتابیس کاربر بازیابی شد")
-                        return {
-                            'coupon_code': coupon_code,
-                            'coupon_discount': coupon_discount,
-                            'coupon_applied': True
-                        }
-                    else:
-                        logger.warning(f"⚠️ [load_coupon_from_user] کوپن {coupon_code} قبلاً مصرف شده است")
-                        users[uid]['coupon_code'] = None
-                        users[uid]['coupon_discount'] = 0
-                        users[uid]['coupon_applied'] = False
-                        save_json(DB_FILES['users'], users)
+                is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+                if is_valid:
+                    logger.info(f"📁 [load_coupon_from_user_db] کوپن {coupon_code} از دیتابیس کاربر بازیابی شد - {reason}")
+                    return {
+                        'coupon_code': coupon_code,
+                        'coupon_discount': coupon_discount,
+                        'coupon_applied': True
+                    }
                 else:
-                    logger.warning(f"⚠️ [load_coupon_from_user] کوپن {coupon_code} نامعتبر است")
+                    logger.warning(f"⚠️ [load_coupon_from_user_db] کوپن {coupon_code} نامعتبر: {reason}")
                     users[uid]['coupon_code'] = None
                     users[uid]['coupon_discount'] = 0
                     users[uid]['coupon_applied'] = False
@@ -9627,7 +9702,7 @@ openrouter_client = None
 openrouter_models_status = {}  # ذخیره وضعیت مدل‌ها
 user_ai_requests = {}  # شمارش درخواست‌های روزانه کاربران
 AI_REQUEST_LIMIT = configs_pool.get('openrouter_settings', {}).get('daily_limit', 10) if 'configs_pool' in dir() else 10
-import aiohttp
+
 import json
 
 class GeminiClient:
@@ -12853,14 +12928,12 @@ async def exit_ai_chat(callback: CallbackQuery):
         logger.warning(f"⚠️ [exit_ai_chat] کوپنی برای کاربر {user_id} یافت نشد")
     is_admin = (user_id == ADMIN_ID_INT)
     
-    coupon_message = ""
-    if coupon_applied and coupon_code:
-        coupon_message = f"\n\n🏷️ کوپن شما ({coupon_code}) همچنان معتبر است."
+    
     
     if lang == "fa":
-        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی{coupon_message}"
+        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
     else:
-        text = f"{premium_emoji('rocket', '🚀')} Main Menu{coupon_message}"
+        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
     
     await callback.message.edit_text(
         text,
@@ -13494,7 +13567,7 @@ async def admin_coupons(callback: CallbackQuery):
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_coupon_create'))
 async def admin_coupon_create_process(message: Message):
-    """پردازش مراحل ایجاد کوپن - بدون تغییر حروف"""
+    """پردازش مراحل ایجاد کوپن"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
     
@@ -13513,6 +13586,74 @@ async def admin_coupon_create_process(message: Message):
         return
     
     try:
+        # ✅ مرحله 0: انتخاب نوع کوپن
+        if step == 'type':
+            text_lower = message.text.strip().lower()
+            
+            if text_lower in ['1', 'معمولی', 'normal', 'n']:
+                coupon_data['coupon_type'] = 'normal'
+                user_states[admin_id] = {
+                    'awaiting_coupon_create': True,
+                    'step': 'code',
+                    'coupon_data': coupon_data
+                }
+                if lang == "fa":
+                    await message.reply(
+                        "✅ <b>کوپن معمولی انتخاب شد</b>\n\n"
+                        "✏️ <b>مرحله ۱ از ۴ - کد کوپن</b>\n\n"
+                        "📝 لطفاً <b>کد کوپن</b> را وارد کنید:\n"
+                        "(حداقل ۳ کاراکتر، حروف و اعداد انگلیسی)\n\n"
+                        "برای لغو /cancel را بفرستید",
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await message.reply(
+                        "✅ <b>Normal coupon selected</b>\n\n"
+                        "✏️ <b>Step 1 of 4 - Coupon Code</b>\n\n"
+                        "📝 Enter <b>coupon code</b>:\n"
+                        "(min 3 chars, English letters/numbers)\n\n"
+                        "Send /cancel to abort",
+                        parse_mode=ParseMode.HTML
+                    )
+            elif text_lower in ['2', 'ادمین', 'admin', 'special', 'a']:
+                coupon_data['coupon_type'] = 'admin_special'
+                user_states[admin_id] = {
+                    'awaiting_coupon_create': True,
+                    'step': 'code',
+                    'coupon_data': coupon_data
+                }
+                if lang == "fa":
+                    await message.reply(
+                        "✅ <b>کوپن ادمین (اختصاصی) انتخاب شد</b>\n\n"
+                        "✏️ <b>مرحله ۱ از ۴ - کد کوپن</b>\n\n"
+                        "📝 لطفاً <b>کد کوپن</b> را وارد کنید:\n"
+                        "(حداقل ۳ کاراکتر، حروف و اعداد انگلیسی)\n\n"
+                        "⚠️ این کوپن فقط برای <b>اولین کاربری</b> که کد را وارد کند کار می‌کند!\n\n"
+                        "برای لغو /cancel را بفرستید",
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await message.reply(
+                        "✅ <b>Admin (Private) coupon selected</b>\n\n"
+                        "✏️ <b>Step 1 of 4 - Coupon Code</b>\n\n"
+                        "📝 Enter <b>coupon code</b>:\n"
+                        "(min 3 chars, English letters/numbers)\n\n"
+                        "⚠️ This coupon only works for the <b>first user</b> who enters it!\n\n"
+                        "Send /cancel to abort",
+                        parse_mode=ParseMode.HTML
+                    )
+            else:
+                await message.reply(
+                    "❌ لطفاً یکی از گزینه‌های زیر را انتخاب کنید:\n\n"
+                    "1️⃣ کوپن معمولی\n"
+                    "2️⃣ کوپن ادمین (اختصاصی)" if lang == "fa" else
+                    "❌ Please choose one of the options:\n\n"
+                    "1️⃣ Normal coupon\n"
+                    "2️⃣ Admin (Private) coupon"
+                )
+            return
+        
+        # ✅ مرحله code
         if step == 'code':
             code = message.text.strip().replace(' ', '')
             
@@ -13523,6 +13664,7 @@ async def admin_coupon_create_process(message: Message):
             if not code.isalnum():
                 await message.reply("❌ کد کوپن باید فقط شامل حروف و اعداد انگلیسی باشد!" if lang == "fa" else "❌ Coupon code must contain only English letters and numbers!")
                 return
+            
             if code in COUPONS:
                 await message.reply(f"❌ کد {code} قبلاً استفاده شده است!" if lang == "fa" else f"❌ Code {code} already exists!")
                 return
@@ -13546,13 +13688,14 @@ async def admin_coupon_create_process(message: Message):
             else:
                 await message.reply(
                     "✏️ <b>Step 2 of 4 - Discount Percentage</b>\n\n"
-                    "📝 Please enter <b>discount percentage</b>:\n"
+                    "📝 Enter <b>discount percentage</b>:\n"
                     "(1 to 100)\n\n"
                     "Example: <code>20</code>\n\n"
                     "Send /cancel to abort",
                     parse_mode=ParseMode.HTML
                 )
         
+        # ✅ مرحله discount
         elif step == 'discount':
             discount = int(message.text.replace(',', '').replace(' ', '').strip())
             
@@ -13561,31 +13704,62 @@ async def admin_coupon_create_process(message: Message):
                 return
             
             coupon_data['discount'] = discount
-            user_states[admin_id] = {
-                'awaiting_coupon_create': True,
-                'step': 'usage_limit',
-                'coupon_data': coupon_data
-            }
             
-            if lang == "fa":
-                await message.reply(
-                    "✏️ <b>مرحله ۳ از ۴ - تعداد استفاده</b>\n\n"
-                    "📝 لطفاً <b>تعداد دفعات استفاده</b> را وارد کنید:\n"
-                    "(۱ تا ۱۰۰۰، ۰ = نامحدود)\n\n"
-                    "مثال: <code>10</code>\n\n"
-                    "برای لغو /cancel را بفرستید",
-                    parse_mode=ParseMode.HTML
-                )
+            # ✅ برای کوپن ادمین، مرحله usage_limit متفاوت است
+            if coupon_data.get('coupon_type') == 'admin_special':
+                user_states[admin_id] = {
+                    'awaiting_coupon_create': True,
+                    'step': 'usage_limit',
+                    'coupon_data': coupon_data
+                }
+                
+                if lang == "fa":
+                    await message.reply(
+                        "✏️ <b>مرحله ۳ از ۴ - تعداد استفاده برای کاربر</b>\n\n"
+                        "📝 این کوپن فقط برای <b>اولین کاربری</b> که کد را وارد کند کار می‌کند.\n\n"
+                        "لطفاً بگویید آن کاربر <b>چند بار</b> می‌تواند از این کوپن استفاده کند:\n"
+                        "(۱ تا ۱۰۰)\n\n"
+                        "مثال: <code>3</code>\n\n"
+                        "برای لغو /cancel را بفرستید",
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await message.reply(
+                        "✏️ <b>Step 3 of 4 - Usage Limit for User</b>\n\n"
+                        "📝 This coupon only works for the <b>first user</b> who enters it.\n\n"
+                        "How many times can that user use this coupon?\n"
+                        "(1 to 100)\n\n"
+                        "Example: <code>3</code>\n\n"
+                        "Send /cancel to abort",
+                        parse_mode=ParseMode.HTML
+                    )
             else:
-                await message.reply(
-                    "✏️ <b>Step 3 of 4 - Usage Limit</b>\n\n"
-                    "📝 Please enter <b>usage limit</b>:\n"
-                    "(1 to 1000, 0 = unlimited)\n\n"
-                    "Example: <code>10</code>\n\n"
-                    "Send /cancel to abort",
-                    parse_mode=ParseMode.HTML
-                )
+                user_states[admin_id] = {
+                    'awaiting_coupon_create': True,
+                    'step': 'usage_limit',
+                    'coupon_data': coupon_data
+                }
+                
+                if lang == "fa":
+                    await message.reply(
+                        "✏️ <b>مرحله ۳ از ۴ - تعداد استفاده</b>\n\n"
+                        "📝 لطفاً <b>تعداد دفعات استفاده</b> را وارد کنید:\n"
+                        "(۱ تا ۱۰۰۰، ۰ = نامحدود)\n\n"
+                        "مثال: <code>10</code>\n\n"
+                        "برای لغو /cancel را بفرستید",
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await message.reply(
+                        "✏️ <b>Step 3 of 4 - Usage Limit</b>\n\n"
+                        "📝 Enter <b>usage limit</b>:\n"
+                        "(1 to 1000, 0 = unlimited)\n\n"
+                        "Example: <code>10</code>\n\n"
+                        "Send /cancel to abort",
+                        parse_mode=ParseMode.HTML
+                    )
         
+        # ✅ مرحله usage_limit
         elif step == 'usage_limit':
             usage_limit = int(message.text.replace(',', '').replace(' ', '').strip())
             
@@ -13595,6 +13769,11 @@ async def admin_coupon_create_process(message: Message):
             
             if usage_limit > 1000:
                 await message.reply("❌ تعداد استفاده نمی‌تواند بیشتر از ۱۰۰۰ باشد!" if lang == "fa" else "❌ Usage limit cannot exceed 1000!")
+                return
+            
+            # ✅ برای کوپن ادمین حداقل 1
+            if coupon_data.get('coupon_type') == 'admin_special' and usage_limit < 1:
+                await message.reply("❌ تعداد استفاده برای کوپن ادمین باید حداقل ۱ باشد!" if lang == "fa" else "❌ Admin coupon usage limit must be at least 1!")
                 return
             
             coupon_data['usage_limit'] = usage_limit
@@ -13616,13 +13795,14 @@ async def admin_coupon_create_process(message: Message):
             else:
                 await message.reply(
                     "✏️ <b>Step 4 of 4 - Expiry Days</b>\n\n"
-                    "📝 Please enter <b>expiry days</b>:\n"
+                    "📝 Enter <b>expiry days</b>:\n"
                     "(1 to 365, 0 = unlimited)\n\n"
                     "Example: <code>30</code>\n\n"
                     "Send /cancel to abort",
                     parse_mode=ParseMode.HTML
                 )
         
+        # ✅ مرحله expiry_days
         elif step == 'expiry_days':
             expiry_days = int(message.text.replace(',', '').replace(' ', '').strip())
             
@@ -13639,14 +13819,23 @@ async def admin_coupon_create_process(message: Message):
             coupon_data['status'] = 'active'
             coupon_data['used_count'] = 0
             coupon_data['used_by'] = []
+            
+            # ✅ فیلدهای مخصوص کوپن ادمین
+            if coupon_data.get('coupon_type') == 'admin_special':
+                coupon_data['locked_user_id'] = None  # اولین کاربری که استفاده کند
+                coupon_data['user_usage'] = {}  # تعداد استفاده هر کاربر
+            
             if expiry_days > 0:
                 expiry_date = datetime.now() + timedelta(days=expiry_days)
                 coupon_data['expiry_date'] = expiry_date.isoformat()
             else:
                 coupon_data['expiry_date'] = None
+            
             code = coupon_data.get('code', '')
             discount = coupon_data.get('discount', 0)
             usage_limit = coupon_data.get('usage_limit', 0)
+            coupon_type = coupon_data.get('coupon_type', 'normal')
+            
             COUPONS[code] = coupon_data
             save_coupons(COUPONS)
             
@@ -13655,32 +13844,58 @@ async def admin_coupon_create_process(message: Message):
             limit_text = f"{usage_limit} بار" if usage_limit > 0 else "نامحدود"
             
             if lang == "fa":
+                if coupon_type == 'admin_special':
+                    type_display = "👑 کوپن ادمین (اختصاصی)"
+                    special_note = (
+                        "\n⚠️ <b>توجه ویژه:</b>\n"
+                        "این کوپن فقط برای <b>اولین کاربری</b> که کد را وارد کند کار می‌کند.\n"
+                        f"آن کاربر می‌تواند <b>{usage_limit} بار</b> از این کوپن استفاده کند.\n"
+                        "سایر کاربران نمی‌توانند از این کوپن استفاده کنند.\n"
+                    )
+                else:
+                    type_display = "🔵 کوپن معمولی"
+                    special_note = ""
+                
                 text = f"""
 ✅ <b>کوپن با موفقیت ایجاد شد!</b>
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🏷️ کد: <code>{code}</code>
+📋 نوع: {type_display}
 💳 درصد تخفیف: {discount}%
 🔢 تعداد استفاده: {limit_text}
 📅 مدت اعتبار: {expiry_text}
 📊 وضعیت: 🟢 فعال
 ━━━━━━━━━━━━━━━━━━━━━━
-
+{special_note}
 ⚠️ توجه: کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!
 🔗 لینک استفاده: <code>/use_coupon {code}</code>
 """
             else:
+                if coupon_type == 'admin_special':
+                    type_display = "👑 Admin (Private) Coupon"
+                    special_note = (
+                        "\n⚠️ <b>Special Note:</b>\n"
+                        "This coupon only works for the <b>first user</b> who enters it.\n"
+                        f"That user can use it <b>{usage_limit} times</b>.\n"
+                        "Other users cannot use this coupon.\n"
+                    )
+                else:
+                    type_display = "🔵 Normal Coupon"
+                    special_note = ""
+                
                 text = f"""
 ✅ <b>Coupon created successfully!</b>
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🏷️ Code: <code>{code}</code>
+📋 Type: {type_display}
 💳 Discount: {discount}%
 🔢 Usage limit: {limit_text}
 📅 Expiry: {expiry_text}
 📊 Status: 🟢 Active
 ━━━━━━━━━━━━━━━━━━━━━━
-
+{special_note}
 ⚠️ Note: Coupon code is <b>case-sensitive</b>!
 🔗 Use link: <code>/use_coupon {code}</code>
 """
@@ -13704,7 +13919,7 @@ async def admin_coupon_create_process(message: Message):
         
 @dp.callback_query(F.data == "admin_coupon_create")
 async def admin_coupon_create_start(callback: CallbackQuery):
-    """شروع ایجاد کوپن جدید"""
+    """شروع ایجاد کوپن جدید - انتخاب نوع"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -13712,40 +13927,55 @@ async def admin_coupon_create_start(callback: CallbackQuery):
     
     user_states[callback.from_user.id] = {
         'awaiting_coupon_create': True,
-        'step': 'code',
+        'step': 'type',  # ✅ شروع از مرحله نوع
         'coupon_data': {}
     }
     
     if lang == "fa":
         text = """
-✏️ <b>ایجاد کوپن جدید - مرحله ۱ از ۴</b>
+🎫 <b>ایجاد کوپن جدید - انتخاب نوع</b>
 
-📝 لطفاً <b>کد کوپن</b> را وارد کنید:
-(حداقل ۳ کاراکتر، حروف و اعداد انگلیسی)
+لطفاً <b>نوع کوپن</b> را انتخاب کنید:
 
-💡 <b>توصیه:</b> از حروف <b>بزرگ</b> استفاده کنید تا کاربران راحت‌تر وارد کنند.
-مثال: <code>SUMMER2025</code>
+1️⃣ <b>کوپن معمولی</b>
+   • برای همه کاربران
+   • قابل استفاده توسط چند نفر
 
-⚠️ توجه: کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!
+2️⃣ <b>کوپن ادمین (اختصاصی)</b> 👑
+   • فقط برای <b>اولین کاربری</b> که کد را وارد کند
+   • آن کاربر می‌تواند چند بار استفاده کند
+   • سایر کاربران نمی‌توانند استفاده کنند
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+📝 پاسخ خود را با عدد (<code>1</code> یا <code>2</code>) وارد کنید:
 
 برای لغو /cancel را بفرستید
 """
     else:
         text = """
-✏️ <b>Create New Coupon - Step 1 of 4</b>
+🎫 <b>Create New Coupon - Choose Type</b>
 
-📝 Please enter <b>Coupon Code</b>:
-(Minimum 3 characters, English letters and numbers)
+Please choose the <b>coupon type</b>:
 
-💡 <b>Recommendation:</b> Use <b>uppercase</b> letters for easier entry.
-Example: <code>SUMMER2025</code>
+1️⃣ <b>Normal Coupon</b>
+   • For all users
+   • Can be used by multiple people
 
-⚠️ Note: Coupon code is <b>case-sensitive</b>!
+2️⃣ <b>Admin (Private) Coupon</b> 👑
+   • Only for the <b>first user</b> who enters it
+   • That user can use it multiple times
+   • Other users cannot use it
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+📝 Enter your choice as a number (<code>1</code> or <code>2</code>):
 
 Send /cancel to abort
 """
     
     await callback.message.answer(text, parse_mode=ParseMode.HTML)
+    
     try:
         await callback.answer()
     except:
@@ -13792,10 +14022,20 @@ Please select the coupon to delete:
     for code, data in sorted_coupons[:20]:
         status_emoji = "🟢" if data.get('status') == 'active' else "🔴" if data.get('status') == 'used' else "⚫"
         discount = data.get('discount', 0)
-        used = data.get('used_count', 0)
-        limit = data.get('usage_limit', '∞')
+        usage_limit = data.get('usage_limit', 0)
+        coupon_type = data.get('coupon_type', 'normal')
         
-        label = f"{status_emoji} {code} - {discount}% - {used}/{limit}"
+        # ✅✅✅ نمایش متفاوت برای کوپن ادمین
+        if coupon_type == 'admin_special':
+            user_usage = data.get('user_usage', {})
+            total_used = sum(user_usage.values())
+            limit_display = usage_limit if usage_limit > 0 else '∞'
+            label = f"{status_emoji} 👑 {code} - {discount}% - {total_used}/{limit_display}"
+        else:
+            used_count = data.get('used_count', 0)
+            limit_display = usage_limit if usage_limit > 0 else '∞'
+            label = f"{status_emoji} {code} - {discount}% - {used_count}/{limit_display}"
+        
         buttons.append([InlineKeyboardButton(
             text=label[:55],
             callback_data=f"admin_coupon_delete_confirm_{code}",
@@ -13833,6 +14073,53 @@ async def admin_coupon_delete_confirm(callback: CallbackQuery):
         return
     
     coupon = COUPONS[code]
+    coupon_type = coupon.get('coupon_type', 'normal')
+    usage_limit = coupon.get('usage_limit', 0)
+    limit_display = usage_limit if usage_limit > 0 else '∞'
+    
+    # ✅✅✅ محاسبه تعداد استفاده بر اساس نوع کوپن
+    if coupon_type == 'admin_special':
+        user_usage = coupon.get('user_usage', {})
+        total_used = sum(user_usage.values())
+        usage_display = f"{total_used}/{limit_display}"
+        coupon_type_display = "👑 کوپن ادمین" if lang == "fa" else "👑 Admin Coupon"
+        
+        # جزئیات استفاده
+        usage_details = ""
+        if user_usage:
+            for uid, cnt in user_usage.items():
+                usage_details += f"\n   • کاربر {uid}: {cnt} بار"
+    else:
+        used_count = coupon.get('used_count', 0)
+        usage_display = f"{used_count}/{limit_display}"
+        coupon_type_display = "🔵 کوپن معمولی" if lang == "fa" else "🔵 Normal Coupon"
+        usage_details = ""
+    
+    # وضعیت
+    status_map = {
+        'active': '🟢 فعال' if lang == "fa" else '🟢 Active',
+        'used': '🔴 استفاده شده' if lang == "fa" else '🔴 Used',
+        'expired': '⚫ منقضی شده' if lang == "fa" else '⚫ Expired'
+    }
+    status_display = status_map.get(coupon.get('status', 'active'), coupon.get('status', 'نامشخص'))
+    
+    # تاریخ ایجاد
+    created_at = coupon.get('created_at', 'نامشخص')
+    if created_at and created_at != 'نامشخص':
+        try:
+            created_at = created_at[:16].replace('T', ' ')
+        except:
+            pass
+    
+    # تاریخ انقضا
+    expiry_date = coupon.get('expiry_date')
+    expiry_display = "نامحدود" if lang == "fa" else "Unlimited"
+    if expiry_date:
+        try:
+            expiry_dt = datetime.fromisoformat(expiry_date)
+            expiry_display = expiry_dt.strftime('%Y-%m-%d %H:%M')
+        except:
+            pass
     
     if lang == "fa":
         text = f"""
@@ -13840,10 +14127,12 @@ async def admin_coupon_delete_confirm(callback: CallbackQuery):
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🏷️ کد: <code>{code}</code>
+📋 نوع: {coupon_type_display}
 💳 تخفیف: {coupon.get('discount', 0)}%
-🔢 تعداد استفاده: {coupon.get('used_count', 0)}/{coupon.get('usage_limit', '∞')}
-📊 وضعیت: {coupon.get('status', 'نامشخص')}
-📅 تاریخ ایجاد: {coupon.get('created_at', 'نامشخص')[:16]}
+🔢 تعداد استفاده: {usage_display}{usage_details}
+📊 وضعیت: {status_display}
+📅 تاریخ ایجاد: {created_at}
+⏰ تاریخ انقضا: {expiry_display}
 ━━━━━━━━━━━━━━━━━━━━━━
 
 ⚠️ آیا از حذف این کوپن اطمینان دارید؟
@@ -13869,10 +14158,12 @@ async def admin_coupon_delete_confirm(callback: CallbackQuery):
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🏷️ Code: <code>{code}</code>
+📋 Type: {coupon_type_display}
 💳 Discount: {coupon.get('discount', 0)}%
-🔢 Usage: {coupon.get('used_count', 0)}/{coupon.get('usage_limit', '∞')}
-📊 Status: {coupon.get('status', 'Unknown')}
-📅 Created: {coupon.get('created_at', 'Unknown')[:16]}
+🔢 Usage: {usage_display}{usage_details}
+📊 Status: {status_display}
+📅 Created: {created_at}
+⏰ Expires: {expiry_display}
 ━━━━━━━━━━━━━━━━━━━━━━
 
 ⚠️ Are you sure you want to delete this coupon?
@@ -13937,7 +14228,7 @@ async def admin_coupon_delete_execute(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "admin_coupons_list")
 async def admin_coupons_list(callback: CallbackQuery):
-    """لیست کوپن‌ها با نمایش دقیق کد (حساس به حروف)"""
+    """لیست کوپن‌ها با نمایش دقیق کد"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -13951,6 +14242,7 @@ async def admin_coupons_list(callback: CallbackQuery):
         ]
         await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
         return
+    
     sorted_coupons = sorted(COUPONS.items(), key=lambda x: x[1].get('created_at', ''), reverse=True)
     
     if lang == "fa":
@@ -13960,8 +14252,9 @@ async def admin_coupons_list(callback: CallbackQuery):
     
     for code, data in sorted_coupons[:20]:
         status_emoji = "🟢" if data.get('status') == 'active' else "🔴" if data.get('status') == 'used' else "⚫"
-        expiry = data.get('expiry_date', 'نامحدود')
-        if expiry and expiry != 'نامحدود':
+        
+        expiry = data.get('expiry_date')
+        if expiry:
             try:
                 expiry_date = datetime.fromisoformat(expiry)
                 if expiry_date < datetime.now():
@@ -13969,7 +14262,24 @@ async def admin_coupons_list(callback: CallbackQuery):
             except:
                 pass
         
-        text += f"{status_emoji} <code>{code}</code> - {data.get('discount', 0)}% - {data.get('used_count', 0)}/{data.get('usage_limit', '∞')}\n"
+        coupon_type = data.get('coupon_type', 'normal')
+        discount = data.get('discount', 0)
+        usage_limit = data.get('usage_limit', 0)
+        
+        # ✅✅✅ نمایش متفاوت برای کوپن ادمین
+        if coupon_type == 'admin_special':
+            # برای کوپن ادمین: مجموع استفاده‌ها
+            user_usage = data.get('user_usage', {})
+            total_used = sum(user_usage.values())
+            limit_display = usage_limit if usage_limit > 0 else '∞'
+            
+            # نمایش 👑 برای کوپن ادمین
+            text += f"{status_emoji} 👑 <code>{code}</code> - {discount}% - {total_used}/{limit_display}\n"
+        else:
+            # برای کوپن معمولی
+            used_count = data.get('used_count', 0)
+            limit_display = usage_limit if usage_limit > 0 else '∞'
+            text += f"{status_emoji} <code>{code}</code> - {discount}% - {used_count}/{limit_display}\n"
     
     if len(COUPONS) > 20:
         text += f"\n... و {len(COUPONS) - 20} کوپن دیگر"
@@ -14013,7 +14323,7 @@ def add_coupon_fields_to_user(user_id: int):
 
 @dp.message(Command("use_coupon"))
 async def use_coupon(message: Message):
-    """اعتبارسنجی و اعمال کوپن - حساس به بزرگ و کوچکی حروف"""
+    """اعتبارسنجی و اعمال کوپن"""
     user_id = message.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
     
@@ -14034,8 +14344,7 @@ async def use_coupon(message: Message):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-                    callback_data="back_to_main",
-                    style="primary"
+                    callback_data="back_to_main"
                 )]
             ])
         )
@@ -14068,8 +14377,7 @@ async def use_coupon(message: Message):
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-                        callback_data="back_to_main",
-                        style="primary"
+                        callback_data="back_to_main"
                     )]
                 ])
             )
@@ -14084,24 +14392,120 @@ async def use_coupon(message: Message):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-                    callback_data="back_to_main",
-                    style="primary"
+                    callback_data="back_to_main"
                 )]
             ])
         )
         return
     
     coupon = COUPONS[code]
-    logger.info(f"🔍 [use_coupon] کوپن {code} پیدا شد - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
+    coupon_type = coupon.get('coupon_type', 'normal')
     
-    # ✅ دکمه بازگشت مشترک
+    # ✅ دکمه بازگشت
     back_button = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-            callback_data="back_to_main",
-            style="primary"
+            callback_data="back_to_main"
         )]
     ])
+    
+    # ==================== بررسی کوپن ادمین ====================
+    if coupon_type == 'admin_special':
+        locked_user_id = coupon.get('locked_user_id')
+        
+        if locked_user_id is None:
+            # ✅ اولین کاربر - قفل می‌شود
+            coupon['locked_user_id'] = user_id
+            save_coupons(COUPONS)
+            logger.info(f"🔒 کوپن ادمین {code} برای کاربر {user_id} قفل شد (اولین کاربر)")
+        elif locked_user_id != user_id:
+            # ❌ کاربر دیگری - رد می‌شود
+            logger.warning(f"⛔ کاربر {user_id} تلاش کرد از کوپن ادمین {code} استفاده کند (قفل: {locked_user_id})")
+            await message.reply(
+                f"❌ <b>این کوپن اختصاصی است!</b>\n\n"
+                f"👤 این کوپن فقط برای کاربر دیگری فعال شده است و شما نمی‌توانید از آن استفاده کنید."
+                if lang == "fa" else
+                f"❌ <b>This coupon is private!</b>\n\n"
+                f"👤 This coupon is only active for another user. You cannot use it.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=back_button
+            )
+            return
+        
+        # ✅ بررسی تعداد استفاده کاربر
+        user_usage = coupon.get('user_usage', {})
+        user_used_count = user_usage.get(str(user_id), 0)
+        max_usage = coupon.get('usage_limit', 1)
+        
+        if user_used_count >= max_usage:
+            logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن ادمین {code} رسیده ({user_used_count}/{max_usage})")
+            await message.reply(
+                f"❌ <b>شما به حداکثر استفاده از این کوپن رسیده‌اید!</b>\n\n"
+                f"🔢 استفاده شده: {user_used_count}/{max_usage}"
+                if lang == "fa" else
+                f"❌ <b>You have reached the maximum usage of this coupon!</b>\n\n"
+                f"🔢 Used: {user_used_count}/{max_usage}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=back_button
+            )
+            return
+        
+        # ✅ محاسبه remaining
+        remaining = max_usage - user_used_count
+        remaining_text = f"{remaining} بار"
+        
+        # ✅ اعمال کوپن
+        discount = coupon.get('discount', 0)
+        
+        user_states[user_id] = {
+            'coupon_code': code,
+            'coupon_discount': discount,
+            'coupon_applied': True
+        }
+        
+        logger.info(f"✅ [use_coupon] کوپن ادمین {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد (استفاده {user_used_count + 1}/{max_usage})")
+        
+        save_coupon_to_user_db(user_id)
+        
+        # ✅ دکمه‌های موفقیت
+        success_buttons = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
+                callback_data="buy_service",
+                style = "success"
+            )],
+            [InlineKeyboardButton(
+                text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                callback_data="back_to_main"
+            )]
+        ])
+        
+        if lang == "fa":
+            await message.reply(
+                f"{premium_emoji('success','✅')} <b>کوپن ادمین با موفقیت اعمال شد!</b>\n\n"
+                f"{premium_emoji('label','🏷️')} کد: <code>{code}</code>\n"
+                f"{premium_emoji('discount','💳')} تخفیف: {discount}%\n"
+                f"{premium_emoji('count','🔢')} تعداد دفعات باقیمانده برای شما: {remaining_text}\n\n"
+                f"👑 این کوپن <b>اختصاصی</b> است و فقط شما می‌توانید استفاده کنید.\n"
+                f"{premium_emoji('shopping_cart','🛒')} برای خرید از دکمه زیر استفاده کنید.\n\n",
+                parse_mode=ParseMode.HTML,
+                reply_markup=success_buttons
+            )
+        else:
+            await message.reply(
+                f"{premium_emoji('success','✅')} <b>Admin coupon applied successfully!</b>\n\n"
+                f"{premium_emoji('label','🏷️')} Code: <code>{code}</code>\n"
+                f"{premium_emoji('discount','💳')} Discount: {discount}%\n"
+                f"{premium_emoji('count','🔢')} Remaining uses for you: {remaining_text}\n\n"
+                f"👑 This coupon is <b>private</b> and only you can use it.\n"
+                f"{premium_emoji('shopping_cart','🛒')} Use the button below to purchase.\n\n",
+                parse_mode=ParseMode.HTML,
+                reply_markup=success_buttons
+            )
+        return
+    
+    # ==================== کوپن معمولی (کد قبلی) ====================
+    logger.info(f"🔍 [use_coupon] کوپن معمولی {code} پیدا شد - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
     
     if user_id in coupon.get('used_by', []):
         clear_coupon_from_user_db(user_id)
@@ -14165,20 +14569,18 @@ async def use_coupon(message: Message):
     }
     
     logger.info(f"✅ [use_coupon] کوپن {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد")
-    logger.info(f"🔍 [use_coupon] user_states[{user_id}] = {user_states[user_id]}")
-    debug_coupon_state(user_id, "use_coupon_end")
     
-    # ✅✅✅ دکمه‌های موفقیت - خرید سرویس + بازگشت
+    save_coupon_to_user_db(user_id)
+    
     success_buttons = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
             callback_data="buy_service",
-            style= "success"
+            style = "success"
         )],
         [InlineKeyboardButton(
             text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-            callback_data="back_to_main",
-            style= "danger"
+            callback_data="back_to_main"
         )]
     ])
     
@@ -14204,8 +14606,6 @@ async def use_coupon(message: Message):
             parse_mode=ParseMode.HTML,
             reply_markup=success_buttons
         )
-    
-    save_coupon_to_user_db(user_id)
 @dp.callback_query(F.data == "test_weekly_report")
 async def test_weekly_report(callback: CallbackQuery):
     """تست دستی گزارش هفتگی با جزئیات کامل"""
@@ -14632,12 +15032,12 @@ async def show_ready_packages_menu(target):
 
 @dp.callback_query(F.data == "show_ready_categories")
 async def show_ready_categories(callback: CallbackQuery):
-    """نمایش دسته‌بندی‌های بسته‌های آماده"""
+    """نمایش دسته‌بندی‌های بسته‌های آماده - با پشتیبانی از دو زبان"""
     user_id = callback.from_user.id
     
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
-        await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
+        await callback.answer("⛔ دسترسی مسدود شده" if get_user(user_id).get('lang', 'fa') == 'fa' else "⛔ Access blocked", show_alert=True)
         return
     
     if not await check_membership(user_id):
@@ -14653,10 +15053,22 @@ async def show_ready_categories(callback: CallbackQuery):
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
-    if not coupon_applied or not coupon_code:
-        for code, coupon in COUPONS.items():
-            if coupon.get('status') == 'active' and user_id not in coupon.get('used_by', []):
-                pass
+    
+    # ✅✅✅ بررسی اعتبار کوپن با تابع کمکی
+    if coupon_applied and coupon_code:
+        is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+        if not is_valid:
+            logger.warning(f"⚠️ [show_ready_categories] کوپن {coupon_code} نامعتبر: {reason}")
+            coupon_applied = False
+            coupon_code = None
+            coupon_discount = 0
+            # پاک کردن از user_states
+            if user_id in user_states:
+                user_states[user_id].pop('coupon_code', None)
+                user_states[user_id].pop('coupon_discount', None)
+                user_states[user_id].pop('coupon_applied', None)
+        else:
+            logger.info(f"✅ [show_ready_categories] کوپن {coupon_code} معتبر: {reason}")
     
     logger.info(f"🔍 [show_ready_categories] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
     
@@ -14696,9 +15108,18 @@ async def show_ready_categories(callback: CallbackQuery):
         return
     
     categories.sort(key=lambda x: x.get('order', 999))
+    
+    # ✅✅✅ متن کوپن با پشتیبانی از دو زبان
     coupon_text = ""
     if coupon_applied and coupon_code:
-        coupon_text = f"\n\n🏷️ <b>کوپن فعال:</b> {coupon_code} ({coupon_discount}%)"
+        if lang == "fa":
+            coupon_text = f"\n\n🏷️ <b>کوپن فعال:</b> {coupon_code} ({coupon_discount}%)"
+        else:
+            coupon_text = f"\n\n🏷️ <b>Active Coupon:</b> {coupon_code} ({coupon_discount}%)"
+        
+        # ✅ حفظ کوپن در user_states
+        if user_id not in user_states:
+            user_states[user_id] = {}
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount
@@ -14706,6 +15127,7 @@ async def show_ready_categories(callback: CallbackQuery):
     else:
         logger.warning(f"⚠️ [show_ready_categories] کوپنی برای کاربر {user_id} یافت نشد")
     
+    # ✅✅✅ متن اصلی با پشتیبانی از دو زبان
     if lang == "fa":
         text = f"""
 {premium_emoji('config', '📦')} <b>انتخاب بسته آماده</b>
@@ -14727,17 +15149,25 @@ Please select a package:{coupon_text}
         active_packages = [p for p in cat.get('packages', []) if p.get('is_active', True)]
         package_count = len(active_packages)
         
+        # ✅✅✅ متن دکمه با پشتیبانی از دو زبان
+        if lang == "fa":
+            button_text = f"{icon} {name} ({package_count} بسته)"
+        else:
+            button_text = f"{icon} {name} ({package_count} packages)"
+        
         buttons.append([InlineKeyboardButton(
-            text=f"{icon} {name} ({package_count} بسته)" if lang == "fa" else f"{icon} {name} ({package_count} packages)",
+            text=button_text,
             callback_data=f"show_category_packages_{cat.get('id')}",
             style="primary"
         )])
     
+    # ✅✅✅ دکمه بازگشت با پشتیبانی از دو زبان
     buttons.append([InlineKeyboardButton(
         text=f"{premium_emoji('back', '🔙')} بازگشت به منوی اصلی" if lang == "fa" else f"{premium_emoji('back', '🔙')} Back to Main Menu",
         callback_data="back_to_main",
         style="danger"
     )])
+    
     try:
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -15011,13 +15441,37 @@ async def buy_specific_package(callback: CallbackQuery):
     if coupon_applied and coupon_code:
         coupon = COUPONS.get(coupon_code)
         if coupon and coupon.get('status') == 'active':
-            if user_id not in coupon.get('used_by', []):
+            coupon_type = coupon.get('coupon_type', 'normal')
+            
+            # ✅✅✅ بررسی نوع کوپن
+            coupon_valid = False
+            
+            if coupon_type == 'admin_special':
+                # ✅ برای کوپن ادمین: بررسی locked_user_id و user_usage
+                locked_user_id = coupon.get('locked_user_id')
+                user_usage = coupon.get('user_usage', {})
+                user_used_count = user_usage.get(str(user_id), 0)
+                max_usage = coupon.get('usage_limit', 1)
+                
+                if locked_user_id == user_id and user_used_count < max_usage:
+                    coupon_valid = True
+                    logger.info(f"✅ کوپن ادمین {coupon_code} معتبر است ({user_used_count}/{max_usage})")
+                else:
+                    logger.warning(f"⚠️ کوپن ادمین {coupon_code} نامعتبر - locked={locked_user_id}, usage={user_used_count}/{max_usage}")
+            else:
+                # ✅ برای کوپن معمولی: بررسی used_by
+                if user_id not in coupon.get('used_by', []):
+                    coupon_valid = True
+                else:
+                    logger.warning(f"⚠️ کوپن معمولی {coupon_code} قبلاً مصرف شده")
+            
+            if coupon_valid:
                 discount_percent = coupon.get('discount', 0)
                 if discount_percent > 0:
                     final_price = original_price - (original_price * discount_percent // 100)
                     logger.info(f"🏷️ تخفیف {discount_percent}% روی بسته {package_id} اعمال شد: {original_price:,} → {final_price:,}")
             else:
-                logger.warning(f"⚠️ کوپن {coupon_code} قبلاً توسط کاربر {user_id} مصرف شده است")
+                # ✅ کوپن نامعتبر - پاک کن
                 if user_id in user_states:
                     user_states[user_id].pop('coupon_code', None)
                     user_states[user_id].pop('coupon_discount', None)
@@ -15100,7 +15554,10 @@ async def buy_specific_package(callback: CallbackQuery):
     
     discount_text = ""
     if discount_percent > 0 and final_price != original_price:
-        discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
+        if lang == "fa":
+            discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
+        else:
+            discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>Discounted Price:</b> {final_price:,} Toman ({discount_percent}% off)"    
     extend_text = ""
     if is_extend and extend_order_id:
         extend_text = f"""
@@ -15234,65 +15691,128 @@ def release_coupon(user_id: int) -> bool:
         return False
     
     coupon = COUPONS[code]
-    if user_id in coupon.get('used_by', []):
-        clear_coupon_from_user_db(user_id)
-        logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
-        return False
+    coupon_type = coupon.get('coupon_type', 'normal')
     
-    logger.info(f"🏷️ کوپن {code} برای کاربر {user_id} آزاد شد (لغو سفارش)")
-    return True
+    # ✅✅✅ بررسی بر اساس نوع کوپن
+    if coupon_type == 'admin_special':
+        # برای کوپن ادمین: بررسی user_usage
+        user_usage = coupon.get('user_usage', {})
+        user_used_count = user_usage.get(str(user_id), 0)
+        max_usage = coupon.get('usage_limit', 1)
+        
+        if user_used_count >= max_usage:
+            logger.info(f"🏷️ کوپن ادمین {code} به حداکثر رسیده ({user_used_count}/{max_usage})، قابل آزادسازی نیست")
+            clear_coupon_from_user_db(user_id)
+            return False
+        
+        logger.info(f"🏷️ کوپن ادمین {code} برای کاربر {user_id} آزاد شد (لغو سفارش) - استفاده: {user_used_count}/{max_usage}")
+        return True
+    else:
+        # برای کوپن معمولی: بررسی used_by
+        if user_id in coupon.get('used_by', []):
+            clear_coupon_from_user_db(user_id)
+            logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
+            return False
+        
+        logger.info(f"🏷️ کوپن معمولی {code} برای کاربر {user_id} آزاد شد (لغو سفارش)")
+        return True
 
 def consume_coupon(user_id: int) -> bool:
-    """مصرف کوپن - با پاک کردن از دیتابیس"""
-    user_state = user_states.get(user_id, {})
+    """مصرف کوپن - با پشتیبانی از کوپن ادمین"""
+    uid = str(user_id)
     
-    if not user_state.get('coupon_applied'):
-        logger.info(f"ℹ️ [consume_coupon] کاربر {user_id} کوپن فعالی ندارد")
+    coupon_code = None
+    if user_id in user_states:
+        coupon_code = user_states[user_id].get('coupon_code')
+    
+    if not coupon_code and uid in users:
+        coupon_code = users[uid].get('coupon_code')
+    
+    if not coupon_code:
         return False
     
-    code = user_state.get('coupon_code')
-    if not code or code not in COUPONS:
-        logger.warning(f"⚠️ [consume_coupon] کوپن {code} در دیتابیس یافت نشد")
+    coupon = COUPONS.get(coupon_code)
+    if not coupon:
+        logger.warning(f"⚠️ [consume_coupon] کوپن {coupon_code} در دیتابیس یافت نشد")
+        fully_remove_coupon_from_user(user_id)
         return False
     
-    coupon = COUPONS[code]
-    logger.info(f"🔍 [consume_coupon] کوپن {code} - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
+    coupon_type = coupon.get('coupon_type', 'normal')
+    
+    # ✅✅✅ کوپن ادمین - فقط برای کاربر قفل شده
+    if coupon_type == 'admin_special':
+        locked_user_id = coupon.get('locked_user_id')
+        
+        if locked_user_id != user_id:
+            logger.warning(f"⚠️ [consume_coupon] کاربر {user_id} نمی‌تواند از کوپن ادمین {coupon_code} استفاده کند")
+            fully_remove_coupon_from_user(user_id)
+            return False
+        
+        # ✅ به‌روزرسانی شمارش استفاده کاربر
+        user_usage = coupon.get('user_usage', {})
+        user_usage[str(user_id)] = user_usage.get(str(user_id), 0) + 1
+        coupon['user_usage'] = user_usage
+        
+        # ✅ به‌روزرسانی used_by
+        used_by = coupon.get('used_by', [])
+        if user_id not in used_by:
+            used_by.append(user_id)
+        coupon['used_by'] = used_by
+        
+        max_usage = coupon.get('usage_limit', 1)
+        current_usage = user_usage[str(user_id)]
+        
+        save_coupons(COUPONS)
+        
+        # ✅✅✅✅✅ اصلاح اصلی: فقط اگر به حداکثر رسید، پاک کن
+        if current_usage >= max_usage:
+            coupon['status'] = 'used'
+            save_coupons(COUPONS)
+            logger.info(f"🔴 کوپن ادمین {coupon_code} به حداکثر رسید ({current_usage}/{max_usage}) - پاک می‌شود")
+            fully_remove_coupon_from_user(user_id)
+        else:
+            # ✅✅✅ کوپن هنوز اعتبار داره - فقط از user_states نگهدار، از دیتابیس پاک نکن
+            logger.info(f"✅ کوپن ادمین {coupon_code} مصرف شد ({current_usage}/{max_usage}) - همچنان معتبر است")
+            
+            # ✅ دوباره در user_states ذخیره کن (چون fully_remove صدا زده نشد، ولی مطمئن شو)
+            if user_id not in user_states:
+                user_states[user_id] = {}
+            
+            user_states[user_id]['coupon_code'] = coupon_code
+            user_states[user_id]['coupon_applied'] = True
+            user_states[user_id]['coupon_discount'] = coupon.get('discount', 0)
+            
+            # ✅ دیتابیس کاربر هم نگهدار
+            if uid in users:
+                users[uid]['coupon_code'] = coupon_code
+                users[uid]['coupon_discount'] = coupon.get('discount', 0)
+                users[uid]['coupon_applied'] = True
+                save_json(DB_FILES['users'], users)
+        
+        logger.info(f"✅ [consume_coupon] کوپن ادمین {coupon_code} - کاربر: {user_id} ({current_usage}/{max_usage})")
+        return True
+    
+    # ✅ کوپن معمولی
     if user_id in coupon.get('used_by', []):
-        logger.info(f"🏷️ [consume_coupon] کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده است")
+        logger.warning(f"⚠️ [consume_coupon] کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده")
         fully_remove_coupon_from_user(user_id)
-        clear_coupon_from_user_db(user_id)
         return False
-    if coupon.get('status') != 'active':
-        logger.warning(f"⚠️ [consume_coupon] کوپن {code} دیگر فعال نیست (وضعیت: {coupon.get('status')})")
-        fully_remove_coupon_from_user(user_id)
-        clear_coupon_from_user_db(user_id)
-        return False
-    expiry_date = coupon.get('expiry_date')
-    if expiry_date:
-        try:
-            expiry = datetime.fromisoformat(expiry_date)
-            if expiry < datetime.now():
-                coupon['status'] = 'expired'
-                save_coupons(COUPONS)
-                logger.info(f"🏷️ [consume_coupon] کوپن {code} منقضی شده است")
-                fully_remove_coupon_from_user(user_id)
-                clear_coupon_from_user_db(user_id)
-                return False
-        except:
-            pass
+    
+    used_by = coupon.get('used_by', [])
+    used_by.append(user_id)
+    coupon['used_by'] = used_by
     coupon['used_count'] = coupon.get('used_count', 0) + 1
-    if user_id not in coupon.get('used_by', []):
-        coupon['used_by'].append(user_id)
+    
     usage_limit = coupon.get('usage_limit', 0)
     if usage_limit > 0 and coupon['used_count'] >= usage_limit:
         coupon['status'] = 'used'
-        logger.info(f"🏷️ [consume_coupon] کوپن {code} به حداکثر مصرف ({usage_limit} بار) رسید و غیرفعال شد")
     
     save_coupons(COUPONS)
-    fully_remove_coupon_from_user(user_id)
-    clear_coupon_from_user_db(user_id)
     
-    logger.info(f"✅ [consume_coupon] کوپن {code} توسط کاربر {user_id} با موفقیت مصرف شد (تعداد مصرف: {coupon['used_count']})")
+    # ✅ کوپن معمولی: همیشه پاک کن (چون هر کاربر فقط یک بار می‌تونه استفاده کنه)
+    fully_remove_coupon_from_user(user_id)
+    
+    logger.info(f"✅ [consume_coupon] کوپن معمولی {coupon_code} مصرف شد - کاربر: {user_id}")
     return True
 
 
@@ -15311,13 +15831,31 @@ def release_coupon_on_cancel(user_id: int) -> bool:
         return False
     
     coupon = COUPONS[code]
-    if user_id in coupon.get('used_by', []):
-        clear_coupon_from_user_db(user_id)
-        logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
-        return False
+    coupon_type = coupon.get('coupon_type', 'normal')
+    
+    # ✅✅✅ بررسی بر اساس نوع کوپن
+    if coupon_type == 'admin_special':
+        # برای کوپن ادمین: بررسی user_usage
+        user_usage = coupon.get('user_usage', {})
+        user_used_count = user_usage.get(str(user_id), 0)
+        max_usage = coupon.get('usage_limit', 1)
+        
+        if user_used_count >= max_usage:
+            logger.info(f"🏷️ کوپن ادمین {code} به حداکثر رسیده ({user_used_count}/{max_usage})، قابل آزادسازی نیست")
+            return False
+    else:
+        # برای کوپن معمولی: بررسی used_by
+        if user_id in coupon.get('used_by', []):
+            clear_coupon_from_user_db(user_id)
+            logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
+            return False
+    
+    # بررسی وضعیت
     if coupon.get('status') != 'active':
         logger.info(f"🏷️ کوپن {code} دیگر فعال نیست (وضعیت: {coupon.get('status')})")
         return False
+    
+    # آزادسازی
     user_states[user_id]['coupon_applied'] = True
     user_states[user_id]['coupon_code'] = code
     user_states[user_id]['coupon_discount'] = coupon.get('discount', 0)
@@ -19970,24 +20508,14 @@ async def buy_service(callback: CallbackQuery):
     final_price = original_price
     
     if coupon_applied and coupon_code:
-        coupon = COUPONS.get(coupon_code)
-        if coupon and coupon.get('status') == 'active':
-            if user_id not in coupon.get('used_by', []):
-                discount_percent = coupon_discount
-                if discount_percent > 0:
-                    final_price = original_price - (original_price * discount_percent // 100)
-                    logger.info(f"🏷️ [buy_service] تخفیف {discount_percent}% اعمال شد: {original_price:,} → {final_price:,}")
-                else:
-                    logger.warning(f"⚠️ [buy_service] درصد تخفیف صفر است: {discount_percent}")
-            else:
-                logger.warning(f"⚠️ [buy_service] کوپن {coupon_code} قبلاً توسط کاربر {user_id} مصرف شده است")
-                if user_id in user_states:
-                    user_states[user_id].pop('coupon_code', None)
-                    user_states[user_id].pop('coupon_discount', None)
-                    user_states[user_id].pop('coupon_applied', None)
-                coupon_applied = False
+        is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+        if is_valid:
+            discount_percent = coupon_discount
+            if discount_percent > 0:
+                final_price = original_price - (original_price * discount_percent // 100)
+                logger.info(f"🏷️ [buy_service] تخفیف {discount_percent}% اعمال شد: {original_price:,} → {final_price:,}")
         else:
-            logger.warning(f"⚠️ [buy_service] کوپن {coupon_code} نامعتبر است")
+            logger.warning(f"⚠️ [buy_service] کوپن نامعتبر: {reason}")
             if user_id in user_states:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
@@ -20022,8 +20550,12 @@ async def buy_service(callback: CallbackQuery):
         logger.info(f"📦 [buy_service] بسته آماده: {category_name} - قیمت ثابت: {final_price:,} تومان")
         
         discount_text = ""
+        
         if discount_percent > 0 and final_price != original_price:
-            discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
+            if lang == "fa":
+                discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
+            else:
+                discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>Discounted Price:</b> {final_price:,} Toman ({discount_percent}% off)"
         user_states[user_id] = {
             'payment_type': 'ready_package',
             'category_id': category_id,
@@ -20179,8 +20711,10 @@ async def buy_service(callback: CallbackQuery):
         logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
     discount_text = ""
     if discount_percent > 0 and final_price != original_price:
-        discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
-    
+        if lang == "fa":
+            discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>قیمت با تخفیف:</b> {final_price:,} تومان (تخفیف {discount_percent}%)"
+        else:
+            discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>Discounted Price:</b> {final_price:,} Toman ({discount_percent}% off)"    
     if lang == "fa":
         text = f"""
 {premium_emoji('rocket', '🛒')} <b>خرید سرویس</b>
@@ -21302,18 +21836,16 @@ async def cancel_order_direct(callback: CallbackQuery):
         save_coupon_to_user_db(user_id)
     is_admin = (user_id == ADMIN_ID_INT)
     
-    coupon_message = ""
-    if coupon_applied and coupon_code:
-        coupon_message = f"\n\n🏷️ کوپن شما ({coupon_code}) همچنان معتبر است."
+    
     
     if lang == "fa":
         await callback.message.edit_text(
-            f"{premium_emoji('rocket', '🚀')} منوی اصلی{coupon_message}",
+            f"{premium_emoji('rocket', '🚀')} منوی اصلی",
             reply_markup=get_main_keyboard(is_admin, lang)
         )
     else:
         await callback.message.edit_text(
-            f"{premium_emoji('rocket', '🚀')} Main Menu{coupon_message}",
+            f"{premium_emoji('rocket', '🚀')} Main Menu",
             reply_markup=get_main_keyboard(is_admin, lang)
         )
     
@@ -21688,13 +22220,17 @@ async def pay_balance(callback: CallbackQuery):
         coupon_applied = full_state.get('coupon_applied', False)
         
         if coupon_applied and coupon_code:
-            coupon = COUPONS.get(coupon_code)
-            if coupon and coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    discount_percent = full_state.get('coupon_discount', 0)
-                    if discount_percent > 0:
-                        final_price = original_price - (original_price * discount_percent // 100)
-                        logger.info(f"🏷️ [pay_balance] تخفیف {discount_percent}% اعمال شد: {original_price:,} → {final_price:,}")
+            is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+            if is_valid:
+                discount_percent = full_state.get('coupon_discount', 0)
+                if discount_percent > 0:
+                    final_price = original_price - (original_price * discount_percent // 100)
+            else:
+                logger.warning(f"⚠️ [pay_balance] کوپن نامعتبر: {reason}")
+                if user_id in user_states:
+                    user_states[user_id].pop('coupon_code', None)
+                    user_states[user_id].pop('coupon_discount', None)
+                    user_states[user_id].pop('coupon_applied', None)
         
         volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
         logger.info(f"🛒 [pay_balance] خرید سفارشی: {volume_display}/{days} روز - قیمت: {final_price:,} تومان")
@@ -24340,17 +24876,17 @@ You have an active coupon:
 """
             buttons = [
                 [InlineKeyboardButton(
-                    text=f"{premium_emoji('cancel', '❌')} {'لغو کوپن' if lang == 'fa' else 'Cancel Coupon'}",
+                    text=f"{'لغو کوپن' if lang == 'fa' else 'Cancel Coupon'}",
                     callback_data="cancel_coupon",
                     style="danger"
                 )],
                 [InlineKeyboardButton(
-                    text=f"{premium_emoji('rocket', '🛒')} {'خرید سرویس' if lang == 'fa' else 'Buy Service'}",
+                    text=f"{'خرید سرویس' if lang == 'fa' else 'Buy Service'}",
                     callback_data="buy_service",
                     style="success"
                 )],
                 [InlineKeyboardButton(
-                    text=f"{premium_emoji('back', '🔙')} {'برگشت' if lang == 'fa' else 'Back'}",
+                    text=f"{'برگشت' if lang == 'fa' else 'Back'}",
                     callback_data="back_to_main"
                 )]
             ]
@@ -26159,13 +26695,16 @@ async def my_account(callback: CallbackQuery):
     user_id = callback.from_user.id
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
-        await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
+        lang = get_user(user_id).get('lang', 'fa')
+        await callback.answer("⛔ دسترسی مسدود شده" if lang == 'fa' else "⛔ Access blocked", show_alert=True)
         return
+    
     can_purchase, msg = can_user_purchase(user_id)
     if not can_purchase:
         lang = get_user(user_id).get('lang', 'fa')
         await callback.answer(msg if lang == "fa" else "⚠️ Your account is pending admin approval.", show_alert=True)
         return
+    
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
     ref_count = len([r for r in referrals.values() if r.get('referrer') == user_id])
@@ -26176,38 +26715,88 @@ async def my_account(callback: CallbackQuery):
     purchase_orders = [o for o in real_orders if o.get('type') in ['purchase', 'ready_package', 'category_purchase']]
     approved_purchases = [o for o in purchase_orders if o.get('status') == 'approved']
     total_purchases = len(approved_purchases)
+    
     active_configs = [
         o for o in approved_purchases 
         if o.get('config_link') is not None
         and o.get('config_link') != ''
     ]
-    expired_configs = [
-        o for o in approved_purchases 
-        if o.get('config_link') is None or o.get('config_link') == ''
-    ]
+    
     extend_orders = [
         o for o in user_orders 
         if o.get('is_extend', False) or o.get('parent_order_id') is not None
     ]
     approved_extends = [o for o in extend_orders if o.get('status') == 'approved']
     total_extends = len(approved_extends)
+    
     pending_orders = [o for o in purchase_orders if o.get('status') == 'pending']
     rejected_orders = [o for o in purchase_orders if o.get('status') == 'rejected']
     awaiting_payment_orders = [o for o in purchase_orders if o.get('status') == 'awaiting_payment']
-    active_tests = [o for o in test_orders if o.get('status') == 'approved' and o.get('config_link')]
     total_tests = len(test_orders)
+    
+    # ✅✅✅ بررسی کوپن - با پشتیبانی از کوپن ادمین
     coupon_info = ""
+    coupon_is_valid = False
     user_state = user_states.get(user_id, {})
-    if user_state.get('coupon_applied'):
-        coupon_code = user_state.get('coupon_code', '')
+    
+    # اگر کوپن در user_states نبود، از دیتابیس لود کن
+    if not user_state.get('coupon_applied'):
+        coupon_data = load_coupon_from_user_db(user_id)
+        if coupon_data.get('coupon_applied'):
+            # اضافه کردن به user_states
+            if user_id not in user_states:
+                user_states[user_id] = {}
+            user_states[user_id]['coupon_code'] = coupon_data.get('coupon_code')
+            user_states[user_id]['coupon_discount'] = coupon_data.get('coupon_discount')
+            user_states[user_id]['coupon_applied'] = True
+            user_state = user_states[user_id]
+            logger.info(f"🏷️ [my_account] کوپن از دیتابیس به user_states لود شد")
+    
+    # ✅ حالا بررسی اعتبار با تابع کمکی
+    if user_state.get('coupon_applied') and user_state.get('coupon_code'):
+        coupon_code = user_state.get('coupon_code')
         coupon_discount = user_state.get('coupon_discount', 0)
-        coupon_info = f"\n{premium_emoji('gift', '🏷️')} کوپن فعال: <code>{html.escape(coupon_code)}</code> ({coupon_discount}%)"
+        
+        is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+        
+        if is_valid:
+            coupon_is_valid = True
+            coupon_obj = COUPONS.get(coupon_code)
+            coupon_type = coupon_obj.get('coupon_type', 'normal') if coupon_obj else 'normal'
+            
+            if coupon_type == 'admin_special':
+                # ✅ کوپن ادمین: نمایش تعداد استفاده
+                user_usage = coupon_obj.get('user_usage', {})
+                user_used_count = user_usage.get(str(user_id), 0)
+                max_usage = coupon_obj.get('usage_limit', 1)
+                
+                if lang == "fa":
+                    coupon_info = f"\n{premium_emoji('gift', '🏷️')} <b>کوپن ادمین فعال:</b> <code>{html.escape(coupon_code)}</code> ({coupon_discount}%)"
+                    coupon_info += f"\n📊 استفاده شده: {user_used_count}/{max_usage}"
+                else:
+                    coupon_info = f"\n{premium_emoji('gift', '🏷️')} <b>Active Admin Coupon:</b> <code>{html.escape(coupon_code)}</code> ({coupon_discount}%)"
+                    coupon_info += f"\n📊 Used: {user_used_count}/{max_usage}"
+            else:
+                # ✅ کوپن معمولی
+                if lang == "fa":
+                    coupon_info = f"\n{premium_emoji('gift', '🏷️')} <b>کوپن فعال:</b> <code>{html.escape(coupon_code)}</code> ({coupon_discount}%)"
+                else:
+                    coupon_info = f"\n{premium_emoji('gift', '🏷️')} <b>Active Coupon:</b> <code>{html.escape(coupon_code)}</code> ({coupon_discount}%)"
+        else:
+            # ❌ کوپن نامعتبر - پاک کن
+            logger.warning(f"⚠️ [my_account] کوپن {coupon_code} نامعتبر: {reason}")
+            if user_id in user_states:
+                user_states[user_id].pop('coupon_code', None)
+                user_states[user_id].pop('coupon_discount', None)
+                user_states[user_id].pop('coupon_applied', None)
+            clear_coupon_from_user_db(user_id)
+    
     user_name_raw = user.get('name', f'کاربر_{user_id}')
     user_name_escaped = html.escape(user_name_raw)
-    
     join_date_escaped = html.escape(user.get('join_date', 'نامشخص'))
     
     logger.debug(f"کاربر {user_id} حساب کاربری خود را مشاهده می‌کند - کل خریدها: {total_purchases}, کانفیگ فعال: {len(active_configs)}")
+    
     if lang == "fa":
         text = f"""
 {premium_emoji('user1', '👤')} <b>حساب کاربری</b>
@@ -26247,15 +26836,19 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('fail', '🚫')} <b>Rejected:</b> {len(rejected_orders)}
 {premium_emoji('hourglass', '⏳')} <b>Awaiting Payment:</b> {len(awaiting_payment_orders)}
 """
-    buttons = [
-        [InlineKeyboardButton(
-            text=f"🏷️ {'اعمال کوپن' if lang == 'fa' else 'Apply Coupon'}",
-            callback_data="apply_coupon",
-            style="primary"
-        )]
-    ]
     
-    if user_state.get('coupon_applied'):
+    buttons = []
+    
+    # ✅✅✅ دکمه‌ها با پشتیبانی از کوپن ادمین
+    if coupon_is_valid:
+        # کوپن فعال داره
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🏷️ {'وضعیت کوپن' if lang=='fa' else 'Coupon Status'}",
+                callback_data="coupon_status",
+                style="primary"
+            )
+        ])
         buttons.append([
             InlineKeyboardButton(
                 text=f"❌ {'لغو کوپن' if lang == 'fa' else 'Cancel Coupon'}",
@@ -26263,10 +26856,13 @@ async def my_account(callback: CallbackQuery):
                 style="danger"
             )
         ])
+    else:
+        # کوپن نداره
         buttons.append([
             InlineKeyboardButton(
-                text=f"🏷️ {'وضعیت کوپن' if lang=='fa' else 'Coupon Status'}",
-                callback_data="coupon_status"
+                text=f"🏷️ {'اعمال کوپن' if lang == 'fa' else 'Apply Coupon'}",
+                callback_data="apply_coupon",
+                style="primary"
             )
         ])
     
@@ -26305,7 +26901,7 @@ async def my_account(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "coupon_status")
 async def coupon_status(callback: CallbackQuery):
-    """نمایش وضعیت کوپن کاربر"""
+    """نمایش وضعیت کوپن کاربر - با پشتیبانی از کوپن ادمین"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
     
@@ -26313,6 +26909,20 @@ async def coupon_status(callback: CallbackQuery):
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied')
+    
+    # ✅ اگر در user_states نبود، از دیتابیس لود کن
+    if not coupon_applied or not coupon_code:
+        coupon_data = load_coupon_from_user_db(user_id)
+        if coupon_data.get('coupon_applied'):
+            if user_id not in user_states:
+                user_states[user_id] = {}
+            user_states[user_id]['coupon_code'] = coupon_data.get('coupon_code')
+            user_states[user_id]['coupon_discount'] = coupon_data.get('coupon_discount')
+            user_states[user_id]['coupon_applied'] = True
+            coupon_code = coupon_data.get('coupon_code')
+            coupon_discount = coupon_data.get('coupon_discount')
+            coupon_applied = True
+            logger.info(f"🏷️ [coupon_status] کوپن {coupon_code} از دیتابیس به user_states لود شد")
     
     if not coupon_applied or not coupon_code:
         if lang == "fa":
@@ -26323,77 +26933,205 @@ async def coupon_status(callback: CallbackQuery):
         await callback.message.edit_text(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 برگشت" if lang == "fa" else "🔙 Back", callback_data="back_to_main")]
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت به حساب کاربری" if lang == "fa" else "🔙 Back to My Account",
+                    callback_data="my_account"
+                )]
             ])
         )
         await callback.answer()
         return
+    
     coupon = COUPONS.get(coupon_code)
     if not coupon:
         if lang == "fa":
             text = "❌ کوپن شما معتبر نیست. لطفاً دوباره اعمال کنید."
         else:
             text = "❌ Your coupon is invalid. Please apply again."
+        
         if user_id in user_states:
             user_states[user_id].pop('coupon_code', None)
             user_states[user_id].pop('coupon_discount', None)
             user_states[user_id].pop('coupon_applied', None)
+        clear_coupon_from_user_db(user_id)
         
         await callback.message.edit_text(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 برگشت" if lang == "fa" else "🔙 Back", callback_data="back_to_main")]
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت به حساب کاربری" if lang == "fa" else "🔙 Back to My Account",
+                    callback_data="my_account"
+                )]
             ])
         )
         await callback.answer()
         return
-    used_count = coupon.get('used_count', 0)
-    usage_limit = coupon.get('usage_limit', 0)
-    remaining = usage_limit - used_count if usage_limit > 0 else "نامحدود"
-    is_used = user_id in coupon.get('used_by', [])
     
-    if lang == "fa":
-        text = f"""
+    # ✅✅✅ بررسی اعتبار کوپن با تابع کمکی
+    is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+    
+    if not is_valid:
+        # ❌ کوپن نامعتبر - پاک کن
+        logger.warning(f"⚠️ [coupon_status] کوپن {coupon_code} نامعتبر: {reason}")
+        
+        if user_id in user_states:
+            user_states[user_id].pop('coupon_code', None)
+            user_states[user_id].pop('coupon_discount', None)
+            user_states[user_id].pop('coupon_applied', None)
+        clear_coupon_from_user_db(user_id)
+        
+        if lang == "fa":
+            text = f"❌ کوپن شما معتبر نیست.\n\n📝 دلیل: {reason}"
+        else:
+            text = f"❌ Your coupon is invalid.\n\n📝 Reason: {reason}"
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🏷️ اعمال کوپن جدید" if lang == "fa" else "🏷️ Apply New Coupon",
+                    callback_data="apply_coupon",
+                    style="primary"
+                )],
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت به حساب کاربری" if lang == "fa" else "🔙 Back to My Account",
+                    callback_data="my_account"
+                )]
+            ])
+        )
+        await callback.answer()
+        return
+    
+    # ✅✅✅ حالا کوپن معتبره - بررسی نوع کوپن
+    coupon_type = coupon.get('coupon_type', 'normal')
+    
+    if coupon_type == 'admin_special':
+        # ==================== کوپن ادمین ====================
+        user_usage = coupon.get('user_usage', {})
+        user_used_count = user_usage.get(str(user_id), 0)
+        max_usage = coupon.get('usage_limit', 1)
+        remaining = max_usage - user_used_count
+        
+        expiry_date = coupon.get('expiry_date')
+        expiry_display = "نامحدود" if lang == "fa" else "Unlimited"
+        if expiry_date:
+            try:
+                expiry_dt = datetime.fromisoformat(expiry_date)
+                expiry_display = expiry_dt.strftime('%Y-%m-%d %H:%M') if lang == "fa" else expiry_dt.strftime('%Y-%m-%d %H:%M')
+            except:
+                pass
+        
+        if lang == "fa":
+            text = f"""
+👑 <b>وضعیت کوپن ادمین شما</b>
+
+   ━━━━━━━━━━━━━━━━━━━━
+{premium_emoji('note','📝')} کد: <code>{coupon_code}</code>
+{premium_emoji('card','💳')} تخفیف: {coupon_discount}%
+{premium_emoji('cubes','🔢')} استفاده شده: {user_used_count}/{max_usage}
+{premium_emoji('star','🎁')} دفعات باقیمانده: {remaining}
+{premium_emoji('amar','📊')} وضعیت: 🟢 فعال
+{premium_emoji('calendar','📅')} انقضا: {expiry_display}
+   ━━━━━━━━━━━━━━━━━━━━
+
+{premium_emoji('admin','👑')} این یک <b>کوپن اختصاصی ادمین</b> است.
+{premium_emoji('light','💡')} شما می‌توانید {remaining} بار دیگر از این کوپن استفاده کنید.
+"""
+        else:
+            text = f"""
+👑 <b>Your Admin Coupon Status</b>
+
+   ━━━━━━━━━━━━━━━━━━━━
+{premium_emoji('note','📝')} Code: <code>{coupon_code}</code>
+{premium_emoji('card','💳')} Discount: {coupon_discount}%
+{premium_emoji('cubes','🔢')} Used: {user_used_count}/{max_usage}
+{premium_emoji('star','🎁')} Remaining uses: {remaining}
+{premium_emoji('amar','📊')} Status: 🟢 Active
+{premium_emoji('calendar','📅')} Expires: {expiry_display}
+   ━━━━━━━━━━━━━━━━━━━━
+
+{premium_emoji('admin','👑')} This is a <b>private admin coupon</b>.
+{premium_emoji('light','💡')} You can use this coupon {remaining} more times.
+"""
+        
+        buttons = [
+            [InlineKeyboardButton(
+                text="❌ لغو کوپن" if lang == "fa" else "❌ Cancel Coupon",
+                callback_data="cancel_coupon",
+                style="danger"
+            )],
+            [InlineKeyboardButton(
+                text="🔙 بازگشت به حساب کاربری" if lang == "fa" else "🔙 Back to My Account",
+                callback_data="my_account"
+            )]
+        ]
+    else:
+        # ==================== کوپن معمولی ====================
+        used_count = coupon.get('used_count', 0)
+        usage_limit = coupon.get('usage_limit', 0)
+        remaining = usage_limit - used_count if usage_limit > 0 else "نامحدود"
+        is_used = user_id in coupon.get('used_by', [])
+        
+        expiry_date = coupon.get('expiry_date')
+        expiry_display = "نامحدود" if lang == "fa" else "Unlimited"
+        if expiry_date:
+            try:
+                expiry_dt = datetime.fromisoformat(expiry_date)
+                expiry_display = expiry_dt.strftime('%Y-%m-%d %H:%M')
+            except:
+                pass
+        
+        if lang == "fa":
+            text = f"""
 🏷️ <b>وضعیت کوپن شما</b>
 
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 {premium_emoji('note','📝')} کد: <code>{coupon_code}</code>
 {premium_emoji('card','💳')} تخفیف: {coupon_discount}%
 {premium_emoji('cubes','🔢')} دفعات باقیمانده: {remaining}
 {premium_emoji('amar','📊')} وضعیت: {'🟢 فعال' if not is_used else '🔴 استفاده شده'}
-━━━━━━━━━━━━━━━━━━━━━━
+{premium_emoji('calendar','📅')} انقضا: {expiry_display}
+   ━━━━━━━━━━━━━━━━━━━━
 
 {premium_emoji('light','💡')} این کوپن در خرید بعدی شما اعمال می‌شود.
-{premium_emoji('danger','⚠️')} در صورت لغو سفارش، کوپن <b>باقی می‌ماند</b>.
 """
-        buttons = [
-            [InlineKeyboardButton(text="❌ لغو کوپن" if not is_used else "❌ غیرفعال", callback_data="cancel_coupon", style="danger" if not is_used else None)],
-            [InlineKeyboardButton(text="🔙 برگشت", callback_data="back_to_main")]
-        ]
-    else:
-        text = f"""
+        else:
+            text = f"""
 🏷️ <b>Your Coupon Status</b>
 
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 {premium_emoji('note','📝')} Code: <code>{coupon_code}</code>
 {premium_emoji('card','💳')} Discount: {coupon_discount}%
 {premium_emoji('cubes','🔢')} Remaining uses: {remaining}
 {premium_emoji('amar','📊')} Status: {'🟢 Active' if not is_used else '🔴 Used'}
-━━━━━━━━━━━━━━━━━━━━━━
+{premium_emoji('calendar','📅')} Expires: {expiry_display}
+   ━━━━━━━━━━━━━━━━━━━━
 
 {premium_emoji('light','💡')} This coupon will be applied to your next purchase.
-{premium_emoji('danger','⚠️')} If you cancel the order, the coupon <b>remains</b> valid.
 """
+        
         buttons = [
-            [InlineKeyboardButton(text="❌ Cancel Coupon" if not is_used else "❌ Inactive", callback_data="cancel_coupon", style="danger" if not is_used else None)],
-            [InlineKeyboardButton(text="🔙 Back", callback_data="back_to_main")]
+            [InlineKeyboardButton(
+                text="❌ لغو کوپن" if not is_used else "❌ غیرفعال",
+                callback_data="cancel_coupon" if not is_used else "noop",
+                style="danger" if not is_used else None
+            )],
+            [InlineKeyboardButton(
+                text="🔙 بازگشت به حساب کاربری" if lang == "fa" else "🔙 Back to My Account",
+                callback_data="my_account"
+            )]
         ]
     
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode=ParseMode.HTML
+    )
+    
     try:
         await callback.answer()
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"خطا در callback.answer: {e}")
 @dp.callback_query(F.data == "invite_friends")
 async def invite_friends(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -26902,12 +27640,10 @@ async def cancel_increase_balance(callback: CallbackQuery):
     logger.info(f"🔍 [cancel_increase_balance] وضعیت نهایی: {after_state}")
     is_admin = (user_id == ADMIN_ID_INT)
     
-    coupon_message = ""
-    if coupon_applied and coupon_code:
-        coupon_message = f"\n\n🏷️ کوپن شما ({coupon_code}) همچنان معتبر است."
+    
     
     await callback.message.answer(
-        f"{premium_emoji('rocket', '🚀')} {'منوی اصلی' if lang=='fa' else 'Main Menu'}{coupon_message}",
+        f"{premium_emoji('rocket', '🚀')} {'منوی اصلی' if lang=='fa' else 'Main Menu'}",
         reply_markup=get_main_keyboard(is_admin, lang),
         parse_mode=ParseMode.HTML
     )
@@ -29944,12 +30680,10 @@ async def process_ai_chat_message(message: Message):
             }
             logger.info(f"🏷️ [process_ai_chat_message] کوپن {coupon_code} حفظ شد")
         
-        coupon_message = ""
-        if coupon_applied and coupon_code:
-            coupon_message = f"\n\n🏷️ کوپن شما ({coupon_code}) همچنان معتبر است."
+        
         
         await message.reply(
-            f"✅ از چت AI خارج شدید.{coupon_message}" if lang == "fa" else f"✅ Exited AI chat.{coupon_message}",
+            f"✅ از چت AI خارج شدید." if lang == "fa" else f"✅ Exited AI chat.",
             reply_markup=get_main_keyboard(user_id == ADMIN_ID_INT, lang)
         )
         return
@@ -30169,12 +30903,10 @@ async def process_balance_amount(message: Message):
         await message.reply("❌ عملیات لغو شد" if lang == "fa" else "❌ Operation cancelled", reply_markup=ReplyKeyboardRemove())
         is_admin = (user_id == ADMIN_ID_INT)
         
-        coupon_message = ""
-        if coupon_applied and coupon_code:
-            coupon_message = f"\n\n{premium_emoji('gift', '🏷️')} کوپن شما ({coupon_code}) همچنان معتبر است."
+        
         
         await message.answer(
-            f"{premium_emoji('rocket', '🚀')} {'منوی اصلی' if lang=='fa' else 'Main Menu'}{coupon_message}",
+            f"{premium_emoji('rocket', '🚀')} {'منوی اصلی' if lang=='fa' else 'Main Menu'}",
             reply_markup=get_main_keyboard(is_admin, lang)
         )
         return
@@ -30644,7 +31376,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.4.7"
+    version = "v1.5.11"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
@@ -33253,26 +33985,18 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
         
         # ✅ مدیریت کوپن
         if coupon_applied and coupon_code:
-            coupon = COUPONS.get(coupon_code)
-            if coupon and coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    # حفظ کوپن
-                    save_coupon_to_user_db(user_id)
-                    logger.info(f"🏷️ [approve_balance] کوپن {coupon_code} برای کاربر {user_id} در دیتابیس ذخیره شد")
-                else:
-                    logger.warning(f"⚠️ [approve_balance] کوپن {coupon_code} قبلاً توسط کاربر {user_id} مصرف شده است")
-                    clear_coupon_from_user_db(user_id)
-                    if user_id in user_states:
-                        user_states[user_id].pop('coupon_code', None)
-                        user_states[user_id].pop('coupon_discount', None)
-                        user_states[user_id].pop('coupon_applied', None)
+            is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
+            if is_valid:
+                save_coupon_to_user_db(user_id)
+                logger.info(f"🏷️ [approve_balance] کوپن {coupon_code} برای کاربر {user_id} در دیتابیس ذخیره شد - {reason}")
             else:
-                logger.warning(f"⚠️ [approve_balance] کوپن {coupon_code} نامعتبر است")
+                logger.warning(f"⚠️ [approve_balance] کوپن {coupon_code} نامعتبر: {reason}")
                 clear_coupon_from_user_db(user_id)
                 if user_id in user_states:
                     user_states[user_id].pop('coupon_code', None)
                     user_states[user_id].pop('coupon_discount', None)
                     user_states[user_id].pop('coupon_applied', None)
+                    
         else:
             logger.info(f"ℹ️ [approve_balance] کاربر {user_id} کوپن فعالی ندارد")
             clear_coupon_from_user_db(user_id)
