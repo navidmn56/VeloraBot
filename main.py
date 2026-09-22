@@ -14,6 +14,7 @@ import hashlib
 from typing import Dict, Optional, List, Union
 import shutil
 import secrets
+from typing import List, Dict, Optional, Tuple
 import psutil
 from google import genai
 from google.genai import types
@@ -25,6 +26,7 @@ from io import BytesIO
 from typing import Dict, Optional
 from urllib import response
 import aiohttp
+import unicodedata
 import qrcode
 from yarl import URL
 from aiogram import Bot, Dispatcher, F, types
@@ -8661,6 +8663,1057 @@ def restore_backup(backup_file: str) -> bool:
         logger.error(traceback.format_exc())
         return False
 
+
+
+
+"""
+Advanced User Search System for Telegram Bot
+Supports: ID (English/Persian/Arabic), Username, Telegram Username, Name (multi-lang), Coupon
+"""
+
+import re
+import html
+import time
+import logging
+import unicodedata
+from datetime import datetime
+from typing import List, Dict, Optional, Tuple, Any
+
+from aiogram import F
+from aiogram.filters import Command
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# تنظیمات
+# ============================================================
+
+SEARCH_RESULTS_PER_PAGE = 8
+SEARCH_CACHE_TTL_SECONDS = 600  # ۱۰ دقیقه
+
+# Cache: {admin_id: {"results": [...], "query": str, "page": int, "ts": float}}
+SEARCH_RESULTS_CACHE: Dict[int, Dict[str, Any]] = {}
+
+
+# ============================================================
+# نرمال‌سازی متن
+# ============================================================
+
+# نگاشت اعداد فارسی/عربی به انگلیسی
+_DIGIT_MAP = str.maketrans({
+    '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+    '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+    '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+    '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+})
+
+# نگاشت حروف عربی به فارسی
+_LETTER_MAP = str.maketrans({
+    'ي': 'ی', 'ى': 'ی', 'ﻯ': 'ی', 'ﻰ': 'ی',
+    'ك': 'ک', 'ﻙ': 'ک', 'ﻚ': 'ک',
+    'ة': 'ه', 'ۀ': 'ه',
+})
+
+# حذف اعراب و علائم ترکیبی
+_DIACRITICS_RE = re.compile(r'[\u064B-\u065F\u0670\u06D6-\u06ED]')
+
+
+def normalize_text(text: Any) -> str:
+    """
+    نرمال‌سازی کامل متن:
+    - اعداد فارسی/عربی به انگلیسی
+    - ي/ى→ی  ك→ک  ة→ه
+    - حذف اعراب
+    - NFKC normalization
+    - حذف نیم‌فاصله (تبدیل به فاصله)
+    - یکسان‌سازی فاصله‌ها
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+
+    # NFKC برای یکسان‌سازی کاراکترهای ترکیبی
+    text = unicodedata.normalize("NFKC", text)
+
+    # تبدیل اعداد
+    text = text.translate(_DIGIT_MAP)
+
+    # تبدیل حروف
+    text = text.translate(_LETTER_MAP)
+
+    # حذف اعراب
+    text = _DIACRITICS_RE.sub("", text)
+
+    # نیم‌فاصله → فاصله
+    text = text.replace("\u200c", " ").replace("\u200f", "").replace("\u200e", "")
+
+    # یکسان‌سازی فاصله‌ها
+    text = " ".join(text.split())
+
+    return text.strip()
+
+
+def strip_decorations(text: str) -> str:
+    """
+    حذف تزئینات یونیکد از نام، بدون آسیب به حروف فارسی/عربی/لاتین و اعداد.
+    """
+    if not text:
+        return ""
+
+    # کاراکترهای مجاز: حروف لاتین، اعداد، _، فاصله، حروف فارسی/عربی
+    cleaned = re.sub(
+        r"[^\w\s\u0600-\u06FF\u200c]",
+        "",
+        text,
+        flags=re.UNICODE,
+    )
+
+    # حذف `_` چون بخشی از تزئینات رایج در نام‌هاست
+    cleaned = cleaned.replace("_", " ")
+
+    # یکسان‌سازی فاصله‌ها
+    cleaned = " ".join(cleaned.split())
+
+    return cleaned.strip()
+
+
+def strip_decorations_keep_us(text: str) -> str:
+    """نسخه‌ای که `_` را نگه می‌دارد (برای username)."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"[^\w\s\u0600-\u06FF]", "", text, flags=re.UNICODE)
+    cleaned = " ".join(cleaned.split())
+    return cleaned.strip()
+
+
+def clean_username(raw: Any) -> str:
+    """حذف @ و کاراکترهای غیرمجاز از username."""
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if s.startswith("@"):
+        s = s[1:]
+    # فقط حروف، اعداد و _
+    s = re.sub(r"[^\w]", "", s, flags=re.UNICODE)
+    return s
+
+
+def safe_str(value: Any) -> str:
+    """تبدیل امن به رشته."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+# ============================================================
+# استخراج آیدی عددی
+# ============================================================
+
+def extract_numeric_id(query: str) -> Optional[int]:
+    """
+    استخراج آیدی عددی از query (پس از نرمال‌سازی اعداد).
+    فقط اگر query *کاملاً* عدد باشد (بدون حروف دیگر) ID برمی‌گرداند.
+    برای جستجوی partial در مرحله بعد از str(user_id) استفاده می‌شود.
+    """
+    normalized = normalize_text(query)
+    if not normalized:
+        return None
+    # اگر کل query عدد است
+    if normalized.isdigit():
+        try:
+            return int(normalized)
+        except ValueError:
+            return None
+    return None
+
+
+# ============================================================
+# هسته اصلی سرچ
+# ============================================================
+
+# اولویت‌ها (هرچه بزرگ‌تر، مهم‌تر)
+SCORE_EXACT_ID = 1_000_000
+SCORE_EXACT_USERNAME = 900_000
+SCORE_EXACT_TG_USERNAME = 880_000
+SCORE_EXACT_NAME = 800_000
+SCORE_USERNAME_STARTSWITH = 500_000
+SCORE_NAME_STARTSWITH = 400_000
+SCORE_ID_STARTSWITH = 350_000
+SCORE_USERNAME_CONTAINS = 200_000
+SCORE_NAME_CONTAINS = 150_000
+SCORE_ID_CONTAINS = 100_000
+SCORE_COUPON_EXACT = 90_000
+SCORE_COUPON_STARTSWITH = 60_000
+SCORE_COUPON_CONTAINS = 30_000
+
+
+def _match_field(
+    value_raw: Any,
+    query_raw: str,
+    *,
+    case_sensitive: bool,
+    exact_score: int,
+    startswith_score: int,
+    contains_score: int,
+    mode: str,  # "raw" or "normalized"
+) -> Tuple[int, List[str]]:
+    """
+    تطبیق یک فیلد با query.
+    مقادیر: (score, reasons)
+    """
+    if value_raw is None:
+        return 0, []
+
+    value = safe_str(value_raw)
+    if not value.strip():
+        return 0, []
+
+    if mode == "normalized":
+        value_norm = normalize_text(value)
+        query_norm = normalize_text(query_raw)
+    else:
+        value_norm = value
+        query_norm = query_raw
+
+    if not query_norm:
+        return 0, []
+
+    if not case_sensitive:
+        value_cmp = value_norm.lower()
+        query_cmp = query_norm.lower()
+    else:
+        value_cmp = value_norm
+        query_cmp = query_norm
+
+    score = 0
+    reasons: List[str] = []
+
+    if value_cmp == query_cmp:
+        score = exact_score
+        reasons.append("exact")
+    elif value_cmp.startswith(query_cmp):
+        score = startswith_score
+        reasons.append("startswith")
+    elif query_cmp in value_cmp:
+        score = contains_score
+        reasons.append("contains")
+
+    return score, reasons
+
+
+def advanced_search_users(
+    query: str,
+    *,
+    search_in: str = "all",
+    exact_match: bool = False,
+    case_sensitive: bool = False,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    """
+    جستجوی پیشرفته در کاربران.
+
+    Args:
+        query: عبارت جستجو
+        search_in: یکی از "all" | "name" | "username" | "id" | "coupon"
+        exact_match: اگر True، فقط تطابق‌های دقیق برگردانده می‌شوند
+        case_sensitive: حساس به حروف بزرگ/کوچک
+        limit: حداکثر تعداد نتایج
+
+    Returns:
+        لیست dict با کلیدهای user_id, name, username, telegram_username, balance,
+        coupon_code, match_score, match_reasons, user_data
+    """
+    # ---------- اعتبارسنجی ----------
+    if not isinstance(query, str):
+        query = safe_str(query)
+    query = query.strip()
+    if not query:
+        return []
+
+    valid_search_in = {"all", "name", "username", "id", "coupon"}
+    if search_in not in valid_search_in:
+        search_in = "all"
+
+    do_name = search_in in ("all", "name")
+    do_username = search_in in ("all", "username")
+    do_id = search_in in ("all", "id")
+    do_coupon = search_in in ("all", "coupon")
+
+    # ---------- آماده‌سازی query ----------
+    query_norm = normalize_text(query)
+    query_for_decoration = strip_decorations(query_norm)
+
+    # query به عنوان username (بعد از حذف @)
+    query_as_username = clean_username(query)
+
+    # query به عنوان ID (فقط اگر کاملاً عدد باشد)
+    query_id_exact = extract_numeric_id(query)
+    query_id_str = str(query_id_exact) if query_id_exact is not None else ""
+    # اگر query کاملاً عدد نبود، برای partial ID از خود query_norm استفاده می‌کنیم
+    query_digits = re.sub(r"\D", "", query_norm) if query_norm else ""
+
+    results: List[Dict[str, Any]] = []
+
+    # ---------- حلقه روی کاربران ----------
+    for uid_key, user_data in users.items():
+        try:
+            if not isinstance(user_data, dict):
+                continue
+
+            # اطلاعات امن
+            user_id = user_data.get("id")
+            if user_id is None:
+                try:
+                    user_id = int(uid_key)
+                except (TypeError, ValueError):
+                    continue
+            try:
+                user_id_int = int(user_id)
+            except (TypeError, ValueError):
+                continue
+
+            name_raw = user_data.get("name") or ""
+            username_raw = user_data.get("username") or ""
+            tg_username_raw = user_data.get("telegram_username") or ""
+            coupon_raw = user_data.get("coupon_code") or ""
+            balance = user_data.get("balance", 0) or 0
+
+            total_score = 0
+            reasons: List[str] = []
+            exact_hit = False
+
+            # ============================================
+            # 1) ID
+            # ============================================
+            if do_id and query_digits:
+                user_id_str = str(user_id_int)
+
+                # exact ID
+                if query_id_exact is not None and user_id_int == query_id_exact:
+                    total_score += SCORE_EXACT_ID
+                    reasons.append("exact_id")
+                    exact_hit = True
+                # partial ID
+                elif query_digits in user_id_str:
+                    if user_id_str.startswith(query_digits):
+                        total_score += SCORE_ID_STARTSWITH
+                        reasons.append("id_startswith")
+                    else:
+                        total_score += SCORE_ID_CONTAINS
+                        reasons.append("id_contains")
+
+            # ============================================
+            # 2) Username (جداگانه) — case-insensitive همیشه
+            #    چون username تلگرام inherently case-insensitive است
+            # ============================================
+            if do_username:
+                # تجزیه و تحلیل هر دو فیلد به صورت جداگانه
+                for field_name, field_value, exact_sc, start_sc, cont_sc in [
+                    ("username", username_raw, SCORE_EXACT_USERNAME,
+                     SCORE_USERNAME_STARTSWITH, SCORE_USERNAME_CONTAINS),
+                    ("telegram_username", tg_username_raw, SCORE_EXACT_TG_USERNAME,
+                     SCORE_USERNAME_STARTSWITH, SCORE_USERNAME_CONTAINS),
+                ]:
+                    cleaned = clean_username(field_value)
+                    if not cleaned:
+                        continue
+
+                    # username همیشه case-insensitive
+                    cleaned_cmp = cleaned.lower()
+                    query_cmp = query_as_username.lower() if query_as_username else ""
+                    if not query_cmp:
+                        continue
+
+                    if cleaned_cmp == query_cmp:
+                        total_score += exact_sc
+                        reasons.append(f"exact_{field_name}")
+                        exact_hit = True
+                    elif cleaned_cmp.startswith(query_cmp):
+                        total_score += start_sc
+                        reasons.append(f"{field_name}_startswith")
+                    elif query_cmp in cleaned_cmp:
+                        total_score += cont_sc
+                        reasons.append(f"{field_name}_contains")
+
+            # ============================================
+            # 3) Name (نرمال + بدون تزئینات)
+            # ============================================
+            if do_name:
+                # الف) تطبیق دقیق روی نام نرمال‌شده
+                name_norm = normalize_text(name_raw)
+                name_decor = strip_decorations(name_norm)
+
+                if not case_sensitive:
+                    name_norm_cmp = name_norm.lower()
+                    name_decor_cmp = name_decor.lower()
+                    query_norm_cmp = query_norm.lower()
+                    query_decor_cmp = query_for_decoration.lower()
+                else:
+                    name_norm_cmp = name_norm
+                    name_decor_cmp = name_decor
+                    query_norm_cmp = query_norm
+                    query_decor_cmp = query_for_decoration
+
+                matched_name = False
+
+                if name_norm_cmp and query_norm_cmp and name_norm_cmp == query_norm_cmp:
+                    total_score += SCORE_EXACT_NAME
+                    reasons.append("exact_name")
+                    exact_hit = True
+                    matched_name = True
+                elif (name_decor_cmp and query_decor_cmp
+                      and name_decor_cmp == query_decor_cmp):
+                    # مثل ★Navid★ == Navid
+                    total_score += SCORE_EXACT_NAME - 1
+                    reasons.append("exact_name_clean")
+                    exact_hit = True
+                    matched_name = True
+
+                if not matched_name:
+                    # startswith روی نام نرمال‌شده
+                    if (name_norm_cmp and query_norm_cmp
+                            and name_norm_cmp.startswith(query_norm_cmp)):
+                        total_score += SCORE_NAME_STARTSWITH
+                        reasons.append("name_startswith")
+                    elif (name_decor_cmp and query_decor_cmp
+                          and name_decor_cmp.startswith(query_decor_cmp)):
+                        total_score += SCORE_NAME_STARTSWITH - 1
+                        reasons.append("name_startswith_clean")
+                    # contains روی نام نرمال‌شده
+                    elif (name_norm_cmp and query_norm_cmp
+                          and query_norm_cmp in name_norm_cmp):
+                        total_score += SCORE_NAME_CONTAINS
+                        reasons.append("name_contains")
+                    elif (name_decor_cmp and query_decor_cmp
+                          and query_decor_cmp in name_decor_cmp):
+                        total_score += SCORE_NAME_CONTAINS - 1
+                        reasons.append("name_contains_clean")
+
+                # ب) تطبیق چندکلمه‌ای: همه کلمات query در نام ظاهر شوند
+                if not matched_name:
+                    query_words = [
+                        w for w in query_decor_cmp.split() if w
+                    ]
+                    name_words = set(name_decor_cmp.split())
+                    if len(query_words) > 1:
+                        if all(
+                            any(qw in nw for nw in name_words)
+                            for qw in query_words
+                        ):
+                            total_score += SCORE_NAME_CONTAINS // 2
+                            reasons.append("name_all_words")
+
+            # ============================================
+            # 4) Coupon
+            # ============================================
+            if do_coupon:
+                coupon_str = safe_str(coupon_raw)
+                if coupon_str:
+                    c_cmp = coupon_str if case_sensitive else coupon_str.lower()
+                    q_cmp = query if case_sensitive else query.lower()
+                    c_cmp_norm = normalize_text(c_cmp)
+                    q_cmp_norm = normalize_text(q_cmp)
+                    if c_cmp_norm == q_cmp_norm:
+                        total_score += SCORE_COUPON_EXACT
+                        reasons.append("coupon_exact")
+                        exact_hit = True
+                    elif c_cmp_norm.startswith(q_cmp_norm):
+                        total_score += SCORE_COUPON_STARTSWITH
+                        reasons.append("coupon_startswith")
+                    elif q_cmp_norm in c_cmp_norm:
+                        total_score += SCORE_COUPON_CONTAINS
+                        reasons.append("coupon_contains")
+
+            # ============================================
+            # فیلتر نهایی
+            # ============================================
+            if total_score <= 0:
+                continue
+
+            # exact_match: فقط تطابق دقیق
+            if exact_match and not exact_hit:
+                continue
+
+            results.append({
+                "user_id": user_id_int,
+                "name": safe_str(name_raw),
+                "name_norm": normalize_text(name_raw),
+                "name_clean": strip_decorations(normalize_text(name_raw)),
+                "username": safe_str(username_raw),
+                "username_clean": clean_username(username_raw),
+                "telegram_username": safe_str(tg_username_raw),
+                "telegram_username_clean": clean_username(tg_username_raw),
+                "balance": balance,
+                "coupon_code": safe_str(coupon_raw),
+                "join_date": safe_str(user_data.get("join_date", "")),
+                "match_score": total_score,
+                "match_reasons": reasons,
+                "user_data": user_data,
+            })
+
+        except Exception as e:
+            # داده کاربر خراب است — رد کن، کل سرچ را نکش
+            logger.warning(f"Search: skipping broken user {uid_key}: {e}")
+            continue
+
+    # ---------- مرتب‌سازی ----------
+    results.sort(key=lambda r: r["match_score"], reverse=True)
+
+    return results[:limit]
+
+
+def search_users_simple(query: str, limit: int = 50) -> List[Dict[str, Any]]:
+    return advanced_search_users(query, search_in="all", limit=limit)
+
+
+def search_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+    uid = str(user_id)
+    if uid not in users:
+        return None
+    ud = users[uid]
+    if not isinstance(ud, dict):
+        return None
+    return {
+        "user_id": user_id,
+        "name": safe_str(ud.get("name")),
+        "username": safe_str(ud.get("username")),
+        "telegram_username": safe_str(ud.get("telegram_username")),
+        "balance": ud.get("balance", 0) or 0,
+        "user_data": ud,
+    }
+
+
+# ============================================================
+# Cache مدیریت
+# ============================================================
+
+def _cache_get(admin_id: int) -> Optional[Dict[str, Any]]:
+    entry = SEARCH_RESULTS_CACHE.get(admin_id)
+    if not entry:
+        return None
+    if time.time() - entry.get("ts", 0) > SEARCH_CACHE_TTL_SECONDS:
+        SEARCH_RESULTS_CACHE.pop(admin_id, None)
+        return None
+    return entry
+
+
+def _cache_set(admin_id: int, results: List[Dict], query: str) -> None:
+    SEARCH_RESULTS_CACHE[admin_id] = {
+        "results": results,
+        "query": query,
+        "page": 0,
+        "ts": time.time(),
+    }
+
+
+def _cache_update_page(admin_id: int, page: int) -> Optional[Dict[str, Any]]:
+    entry = _cache_get(admin_id)
+    if not entry:
+        return None
+    entry["page"] = page
+    entry["ts"] = time.time()  # تمدید TTL
+    return entry
+
+
+def cleanup_expired_search_cache() -> int:
+    """پاکسازی cacheهای منقضی — می‌توانی در تسک دوره‌ای صدا بزنی."""
+    now = time.time()
+    expired = [
+        aid for aid, e in SEARCH_RESULTS_CACHE.items()
+        if now - e.get("ts", 0) > SEARCH_CACHE_TTL_SECONDS
+    ]
+    for aid in expired:
+        SEARCH_RESULTS_CACHE.pop(aid, None)
+    return len(expired)
+
+
+# ============================================================
+# UI: ساخت متن و کیبورد
+# ============================================================
+
+def _reason_to_display(reason: str, lang: str = "fa") -> str:
+    """تبدیل دلیل به متن خوانا."""
+    mapping_fa = {
+        "exact_id": "🎯 آیدی دقیق",
+        "id_startswith": "🆔 آیدی شروع",
+        "id_contains": "🆔 آیدی شامل",
+        "exact_username": "🎯 یوزرنیم دقیق",
+        "username_startswith": "📛 یوزرنیم شروع",
+        "username_contains": "📛 یوزرنیم شامل",
+        "exact_telegram_username": "🎯 تلگرام دقیق",
+        "telegram_username_startswith": "📛 تلگرام شروع",
+        "telegram_username_contains": "📛 تلگرام شامل",
+        "exact_name": "🎯 نام دقیق",
+        "exact_name_clean": "🎯 نام دقیق",
+        "name_startswith": "👤 نام شروع",
+        "name_startswith_clean": "👤 نام شروع",
+        "name_contains": "👤 نام شامل",
+        "name_contains_clean": "👤 نام شامل",
+        "name_all_words": "👤 همه کلمات",
+        "coupon_exact": "🎟 کوپن دقیق",
+        "coupon_startswith": "🎟 کوپن شروع",
+        "coupon_contains": "🎟 کوپن شامل",
+    }
+    mapping_en = {
+        "exact_id": "🎯 Exact ID",
+        "id_startswith": "🆔 ID starts",
+        "id_contains": "🆔 ID contains",
+        "exact_username": "🎯 Exact username",
+        "username_startswith": "📛 Username starts",
+        "username_contains": "📛 Username contains",
+        "exact_telegram_username": "🎯 Exact telegram",
+        "telegram_username_startswith": "📛 Telegram starts",
+        "telegram_username_contains": "📛 Telegram contains",
+        "exact_name": "🎯 Exact name",
+        "exact_name_clean": "🎯 Exact name",
+        "name_startswith": "👤 Name starts",
+        "name_startswith_clean": "👤 Name starts",
+        "name_contains": "👤 Name contains",
+        "name_contains_clean": "👤 Name contains",
+        "name_all_words": "👤 All words",
+        "coupon_exact": "🎟 Exact coupon",
+        "coupon_startswith": "🎟 Coupon starts",
+        "coupon_contains": "🎟 Coupon contains",
+    }
+    return (mapping_fa if lang == "fa" else mapping_en).get(reason, reason)
+
+
+def _format_one_user(user: Dict[str, Any], lang: str = "fa") -> str:
+    uid = user["user_id"]
+    name = html.escape(safe_str(user.get("name"))[:32] or "—")
+
+    # انتخاب username نمایش
+    uname_display = ""
+    uname = user.get("username_clean") or ""
+    tg_uname = user.get("telegram_username_clean") or ""
+    if uname:
+        uname_display = f"@{html.escape(uname)}"
+    elif tg_uname:
+        uname_display = f"@{html.escape(tg_uname)}"
+
+    balance = user.get("balance", 0) or 0
+    coupon = user.get("coupon_code") or ""
+    reasons = user.get("match_reasons") or []
+
+    # حداکثر ۲ دلیل نمایش بده
+    reasons_disp = " | ".join(
+        _reason_to_display(r, lang) for r in reasons[:2]
+    )
+
+    lines = [f"👤 <b>{name}</b>"]
+    line2 = f"🆔 <code>{uid}</code>"
+    if uname_display:
+        line2 += f" | 📛 {uname_display}"
+    lines.append(line2)
+
+    line3 = f"💰 {balance:,}"
+    if coupon:
+        line3 += f" | 🎟 <code>{html.escape(safe_str(coupon))}</code>"
+    lines.append(line3)
+
+    if reasons_disp:
+        lines.append(reasons_disp)
+
+    return "\n".join(lines)
+
+
+def format_search_results_text(
+    results: List[Dict[str, Any]],
+    page: int = 0,
+    query: str = "",
+    lang: str = "fa",
+) -> str:
+    total = len(results)
+    total_pages = (total + SEARCH_RESULTS_PER_PAGE - 1) // SEARCH_RESULTS_PER_PAGE \
+        if total > 0 else 1
+
+    # clamp
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * SEARCH_RESULTS_PER_PAGE
+    end = min(start + SEARCH_RESULTS_PER_PAGE, total)
+    page_items = results[start:end]
+
+    if lang == "fa":
+        header = (
+            f"🔍 <b>نتایج جستجو</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 جستجو: <code>{html.escape(query)}</code>\n"
+            f"📊 نتایج: <b>{total}</b> کاربر\n"
+            f"📄 صفحه: {page + 1} از {total_pages}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+    else:
+        header = (
+            f"🔍 <b>Search Results</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 Query: <code>{html.escape(query)}</code>\n"
+            f"📊 Results: <b>{total}</b> users\n"
+            f"📄 Page: {page + 1} of {total_pages}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+
+    if not page_items:
+        return header + ("❌ نتیجه‌ای یافت نشد" if lang == "fa"
+                         else "❌ No results found")
+
+    body_parts = []
+    for i, u in enumerate(page_items, start=start + 1):
+        body_parts.append(f"<b>{i}.</b>\n{_format_one_user(u, lang)}")
+
+    return header + "\n\n".join(body_parts)
+
+
+def get_search_results_keyboard(
+    results: List[Dict[str, Any]],
+    page: int = 0,
+    lang: str = "fa",
+    orders_dict: dict = None,
+) -> InlineKeyboardMarkup:
+    total = len(results)
+    total_pages = (total + SEARCH_RESULTS_PER_PAGE - 1) // SEARCH_RESULTS_PER_PAGE \
+        if total > 0 else 1
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * SEARCH_RESULTS_PER_PAGE
+    end = min(start + SEARCH_RESULTS_PER_PAGE, total)
+    page_items = results[start:end]
+
+    buttons: List[List[InlineKeyboardButton]] = []
+
+    # ✅ اگه orders_dict پاس نشده، سعی کن از گلوبال بگیری
+    if orders_dict is None:
+        try:
+            orders_dict = orders  # از متغیر گلوبال
+        except NameError:
+            orders_dict = {}
+
+    for u in page_items:
+        uid = u["user_id"]
+        name = safe_str(u.get("name"))
+        name_button = strip_decorations(normalize_text(name))[:20] or f"ID {uid}"
+        balance = u.get("balance", 0) or 0
+
+        # ✅ محاسبه تعداد سفارشات تایید شده
+        orders_count = 0
+        if orders_dict:
+            orders_count = len([
+                o for o in orders_dict.values()
+                if isinstance(o, dict)
+                and o.get("user_id") == uid
+                and o.get("status") == "approved"
+            ])
+
+        # ✅ انتخاب ایموجی بر اساس امتیاز تطبیق
+        score = u.get("match_score", 0)
+        if score >= SCORE_EXACT_ID:
+            emoji = "🎯"
+        elif score >= SCORE_EXACT_NAME:
+            emoji = "✅"
+        elif score >= SCORE_NAME_STARTSWITH:
+            emoji = "👤"
+        else:
+            emoji = "👤"
+
+        # ✅ دکمه دقیقاً مثل get_admin_users_keyboard
+        label = f"{emoji} {name_button} - {balance:,} T ({orders_count})"
+        buttons.append([InlineKeyboardButton(
+            text=label[:60],
+            callback_data=f"search_result_{uid}",
+        )])
+
+    # Pagination
+    if total_pages > 1:
+        nav: List[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(
+                text="◀️ قبلی" if lang == "fa" else "◀️ Prev",
+                callback_data=f"search_page_{page - 1}",
+            ))
+        nav.append(InlineKeyboardButton(
+            text=f"📄 {page + 1}/{total_pages}",
+            callback_data="noop",
+        ))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(
+                text="بعدی ▶️" if lang == "fa" else "Next ▶️",
+                callback_data=f"search_page_{page + 1}",
+            ))
+        if nav:
+            buttons.append(nav)
+
+    # Actions
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔍 سرچ جدید" if lang == "fa" else "🔍 New Search",
+            callback_data="search_new",
+        ),
+        InlineKeyboardButton(
+            text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
+            callback_data="admin_users",
+        ),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ============================================================
+# Handlers
+# ============================================================
+
+def register_search_handlers(dp, admin_id_int: int, get_user_func, get_lang_func=None):
+    """
+    ثبت handlerها.
+    """
+    def _admin_ok(user_id: int) -> bool:
+        return user_id == admin_id_int
+
+    def _get_lang(user_id: int) -> str:
+        if get_lang_func:
+            return get_lang_func(user_id)
+        u = get_user_func(user_id) or {}
+        return u.get("lang", "fa")
+
+    @dp.callback_query(F.data == "admin_search_users")
+    async def admin_search_start(cb: CallbackQuery):
+        if not _admin_ok(cb.from_user.id):
+            return await cb.answer("⛔", show_alert=True)
+
+        lang = _get_lang(cb.from_user.id)
+
+        # استفاده از user_states برای سازگاری با کد فعلی
+        user_states[cb.from_user.id] = {
+            "awaiting_user_search": True,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        if lang == "fa":
+            text = (
+                "🔍 <b>جستجوی پیشرفته کاربران</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🆔 <b>آیدی عددی</b> — <code>796066403</code>\n"
+                "📛 <b>یوزرنیم</b> — <code>@my_name_is_navid</code>\n"
+                "👤 <b>نام</b> — <code>Navid</code> یا <code>محمد</code>\n"
+                "🏷️ <b>کوپن</b> — <code>SUMMER2025</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "📝 لطفاً عبارت خود را بفرستید.\n"
+                "❌ برای لغو /cancel را بزنید."
+            )
+        else:
+            text = (
+                "🔍 <b>Advanced User Search</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "🆔 <b>Numeric ID</b> — <code>796066403</code>\n"
+                "📛 <b>Username</b> — <code>@my_name_is_navid</code>\n"
+                "👤 <b>Name</b> — <code>Navid</code> or <code>محمد</code>\n"
+                "🏷️ <b>Coupon</b> — <code>SUMMER2025</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "📝 Send your query.\n"
+                "❌ Send /cancel to abort."
+            )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🔙 برگشت" if lang == "fa" else "🔙 Back",
+                callback_data="admin_users",
+            )
+        ]])
+
+        try:
+            await cb.message.edit_text(text, reply_markup=kb,
+                                       parse_mode="HTML")
+        except Exception:
+            try:
+                await cb.message.answer(text, reply_markup=kb,
+                                        parse_mode="HTML")
+            except Exception:
+                pass
+
+        try:
+            await cb.answer()
+        except Exception:
+            pass
+
+    @dp.message(F.text)
+    async def admin_search_input(msg: Message):
+        # ✅✅✅ چک‌های امنیتی داخل تابع
+        # اینجا چک می‌کنیم که آیا این پیام مربوط به سرچ ادمین هست یا نه
+        if msg.from_user.id != admin_id_int:
+            return  # نه ادمین، برو handler بعدی
+        
+        if not user_states.get(msg.from_user.id, {}).get("awaiting_user_search"):
+            return  # ادمین در حالت سرچ نیست، برو handler بعدی
+        
+        # ✅ از اینجا به بعد، پیام قطعاً مربوط به سرچ ادمین هست
+        admin_id = msg.from_user.id
+        lang = _get_lang(admin_id)
+        query_raw = (msg.text or "").strip()
+
+        # ✅ هندل کردن /cancel
+        if query_raw == "/cancel":
+            user_states.pop(admin_id, None)
+            return await msg.reply(
+                "❌ سرچ لغو شد" if lang == "fa" else "❌ Search cancelled",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🔙 پنل" if lang == "fa" else "🔙 Panel",
+                        callback_data="admin_panel",
+                    )
+                ]]),
+            )
+
+        # ✅ بررسی خالی نبودن
+        if not query_raw:
+            return await msg.reply(
+                "❌ لطفاً یک عبارت بفرستید" if lang == "fa"
+                else "❌ Please send a query"
+            )
+
+        # ✅ بررسی حداقل ۲ کاراکتر
+        if len(query_raw) < 2:
+            return await msg.reply(
+                "❌ حداقل ۲ کاراکتر" if lang == "fa"
+                else "❌ Minimum 2 characters"
+            )
+
+        # ✅ حالا query معتبر هست - user_states رو پاک کن
+        # (تا اگر پیام بعدی هم اومد، به عنوان query جدید پردازش نشه)
+        user_states.pop(admin_id, None)
+
+        # ✅ انجام سرچ
+        results = advanced_search_users(query_raw, search_in="all", limit=200)
+        _cache_set(admin_id, results, query_raw)
+
+        # ✅ اگر نتیجه‌ای نبود
+        if not results:
+            if lang == "fa":
+                text = (
+                    f"🔍 <b>نتیجه‌ای یافت نشد</b>\n\n"
+                    f"📝 جستجو: <code>{html.escape(query_raw)}</code>\n\n"
+                    f"💡 آیدی/یوزرنیم را بررسی کنید یا بخشی از نام را وارد کنید."
+                )
+            else:
+                text = (
+                    f"🔍 <b>No Results</b>\n\n"
+                    f"📝 Query: <code>{html.escape(query_raw)}</code>\n\n"
+                    f"💡 Check ID/username or enter part of the name."
+                )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🔍 سرچ جدید" if lang == "fa" else "🔍 New Search",
+                    callback_data="admin_search_users",
+                )],
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
+                    callback_data="admin_users",
+                )],
+            ])
+            return await msg.reply(text, reply_markup=kb, parse_mode="HTML")
+
+        # ✅ نمایش نتایج
+        text = format_search_results_text(results, page=0,
+                                        query=query_raw, lang=lang)
+        kb = get_search_results_keyboard(results, page=0, lang=lang)
+        await msg.reply(text, reply_markup=kb, parse_mode="HTML")
+
+    @dp.callback_query(F.data.startswith("search_page_"))
+    async def admin_search_page(cb: CallbackQuery):
+        if not _admin_ok(cb.from_user.id):
+            return await cb.answer("⛔", show_alert=True)
+
+        admin_id = cb.from_user.id
+        lang = _get_lang(admin_id)
+
+        try:
+            page = int(cb.data.split("_")[2])
+        except (ValueError, IndexError):
+            return await cb.answer("❌", show_alert=True)
+
+        entry = _cache_get(admin_id)
+        if not entry:
+            return await cb.answer(
+                "❌ منقضی شده، دوباره سرچ کنید" if lang == "fa"
+                else "❌ Expired, search again",
+                show_alert=True,
+            )
+
+        results = entry["results"]
+        query = entry["query"]
+        total_pages = (len(results) + SEARCH_RESULTS_PER_PAGE - 1) \
+            // SEARCH_RESULTS_PER_PAGE
+        if page < 0 or page >= total_pages:
+            return await cb.answer("❌ صفحه نامعتبر", show_alert=True)
+
+        _cache_update_page(admin_id, page)
+
+        text = format_search_results_text(results, page=page,
+                                          query=query, lang=lang)
+        kb = get_search_results_keyboard(results, page=page, lang=lang)
+        try:
+            await cb.message.edit_text(text, reply_markup=kb,
+                                       parse_mode="HTML")
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                logger.error(f"search page edit failed: {e}")
+
+        try:
+            await cb.answer()
+        except Exception:
+            pass
+
+    @dp.callback_query(F.data == "search_new")
+    async def admin_search_new(cb: CallbackQuery):
+        await admin_search_start(cb)
+
+    @dp.callback_query(F.data.startswith("search_result_"))
+    async def admin_search_result(cb: CallbackQuery):
+        """نمایش پروفایل کاربر از نتایج جستجو"""
+        if cb.from_user.id != ADMIN_ID_INT:
+            return await cb.answer("⛔", show_alert=True)
+
+        try:
+            user_id = int(cb.data.split("_")[2])
+        except (ValueError, IndexError):
+            return await cb.answer("❌", show_alert=True)
+
+        # ✅ ساخت یک آبجکت fake شبیه CallbackQuery با data اصلاح شده
+        # این آبجکت فقط برای صدا زدن admin_user_detail استفاده می‌شه
+        class FakeCallback:
+            def __init__(self, original_cb, new_data):
+                self._original = original_cb
+                self.data = new_data
+            
+            def __getattr__(self, name):
+                # هر چیزی که FakeCallback نداره از آبجکت اصلی می‌گیره
+                return getattr(self._original, name)
+            
+            async def answer(self, *args, **kwargs):
+                return await self._original.answer(*args, **kwargs)
+        
+        fake_cb = FakeCallback(cb, f"admin_user_{user_id}_0")
+        
+        # ✅ حالا admin_user_detail رو با آبجکت fake صدا بزن
+        await admin_user_detail(fake_cb)
+
+    return {
+        "start": admin_search_start,
+        "input": admin_search_input,
+        "page": admin_search_page,
+        "new": admin_search_new,
+        "result": admin_search_result,
+    }
+    
+    
 def format_size(size_bytes: int) -> str:
     """تبدیل حجم به فرمت خوانا با واحد مناسب
     
@@ -8799,9 +9852,14 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
         inbound_id = order.get('inbound_id')
         if inbound_id:
             if isinstance(inbound_id, list):
-                inbound_info = f"📡 اینباندها: {len(inbound_id)} عدد"
+                count = len(inbound_id)
             else:
-                inbound_info = f"📡 اینباند: {inbound_id}"
+                count = 1
+
+            if lang == "fa":
+                inbound_info = f"📦 تعداد کانفیگ‌ها: {count} عدد"
+            else:
+                inbound_info = f"📦 Number of configurations: {count}"
     volume_display = format_volume(volume, is_test=is_test)
     
     if ip_limit == 0:
@@ -8814,12 +9872,9 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
     
     if is_test:
         if lang == "fa":
-            caption += f"\n\n{ip_display}\n\n🧪 <b>این یک سرویس تست رایگان است.</b>\n💡 برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+            caption += f"\n🧪 <b>این یک سرویس تست رایگان است.</b>\n💡 برای خرید سرویس کامل از منوی اصلی اقدام کنید."
         else:
-            caption += f"\n\n{ip_display}\n\n🧪 <b>This is a free test service.</b>\n💡 To purchase full service, use the main menu."
-    else:
-        caption += f"\n\n{ip_display}"
-    
+            caption += f"\n🧪 <b>This is a free test service.</b>\n💡 To purchase full service, use the main menu."
     if inbound_info:
         caption += f"\n\n{inbound_info}"
     
@@ -9508,10 +10563,6 @@ async def xui_create_client_with_inbound(
                     comment_parts.append(user_name)
                 if user_id:
                     comment_parts.append(f"(ID:{user_id})")  # ✅ فرمت قدیمی: نام (ID:123)
-                if volume_gb == 0:
-                    comment_parts.append("نامحدود")
-                if ip_limit > 0:
-                    comment_parts.append(f"IP:{ip_limit}")
                 comment_text = " ".join(comment_parts) if comment_parts else email
                 
                 if len(comment_text) > 100:
@@ -10996,16 +12047,12 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
     if lang == "fa":
         return f"""
 {status}
-
-{ip_display}
 {volume_info}
 {premium_emoji('hourglass','⏳')} اعتبار: {days_left}
 """
     else:
         return f"""
 {status}
-
-{ip_display}
 {volume_info}
 {premium_emoji('hourglass','⏳')} Expiry: {days_left}
 """
@@ -11489,11 +12536,28 @@ async def get_test_service(callback: CallbackQuery):
 💡 To purchase full service, use the main menu.
 """
             
+            success_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
+                        callback_data="buy_service",
+                        style="success"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔙 منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                        callback_data="back_to_main",
+                        style="danger"
+                    )
+                ]
+            ])
+
             await bot.send_message(
                 user_id,
                 success_text,
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_back_only_keyboard(lang)
+                reply_markup=success_keyboard
             )
             
             
@@ -15528,6 +16592,7 @@ async def buy_specific_package(callback: CallbackQuery):
         'discount_percent': discount_percent,
         'inbound_ids': category_inbound_ids,
         'category_name': category.get('name'),
+        'category_name_en': category.get('name_en', category.get('name')),
         'is_ready_package': True,
         'category_icon': category.get('icon', '📦'),
         'current_page': 'package_payment',
@@ -15614,7 +16679,7 @@ async def buy_specific_package(callback: CallbackQuery):
         [
             InlineKeyboardButton(
                 text=f"🔙 {'بازگشت به بسته‌ها' if lang=='fa' else 'Back to Packages'}",
-                callback_data="show_ready_categories_keep_coupon",
+                callback_data=f"show_category_packages_{category_id}",
                 style="danger"
             )
         ]
@@ -16257,53 +17322,60 @@ async def pay_ready_package_card(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
 
 def get_admin_users_keyboard(page: int = 0, lang: str = "fa") -> InlineKeyboardMarkup:
-    """ساخت کیبورد لیست کاربران با نمایش تعداد سفارشات در پرانتز"""
     user_list = list(users.values())
-    per_page = 10  # تعداد کاربران در هر صفحه
-    
+    per_page = 10
+
     start = page * per_page
     end = start + per_page
     total_pages = (len(user_list) + per_page - 1) // per_page
     valid_orders = get_valid_orders()
-    
+
     buttons = []
+
+    # 🔍 دکمه سرچ (همیشه اول)
+    buttons.append([InlineKeyboardButton(
+        text="🔍 جستجوی پیشرفته کاربران" if lang == "fa"
+             else "🔍 Advanced Search",
+        callback_data="admin_search_users",
+        style="primary",
+    )])
+
     for u in user_list[start:end]:
-        user_id = u.get('id')
-        name = u.get('name', 'کاربر' if lang == 'fa' else 'User')[:20]
-        balance = u.get('balance', 0)
-        orders_count = len([o for o in valid_orders.values() 
-                           if o.get('user_id') == user_id and o.get('status') == 'approved'])
+        user_id = u.get("id")
+        name = u.get("name", "کاربر")[:20]
+        balance = u.get("balance", 0)
+        orders_count = len([
+            o for o in valid_orders.values()
+            if o.get("user_id") == user_id and o.get("status") == "approved"
+        ])
         buttons.append([InlineKeyboardButton(
             text=f"👤 {name} - {balance:,} T ({orders_count})",
-            callback_data=f"admin_user_{user_id}_0"
+            callback_data=f"admin_user_{user_id}_0",
         )])
+
     if total_pages > 1:
         nav = []
         if page > 0:
             nav.append(InlineKeyboardButton(
-                text="◀ قبلی" if lang == 'fa' else "◀ Previous",
-                callback_data=f"admin_users_page_{page-1}"
+                text="◀ قبلی" if lang == "fa" else "◀ Prev",
+                callback_data=f"admin_users_page_{page-1}",
             ))
-        
         nav.append(InlineKeyboardButton(
-            text=f"{page+1}/{total_pages}",
-            callback_data="noop"
+            text=f"{page+1}/{total_pages}", callback_data="noop",
         ))
-        
         if end < len(user_list):
             nav.append(InlineKeyboardButton(
-                text="بعدی ▶" if lang == 'fa' else "Next ▶",
-                callback_data=f"admin_users_page_{page+1}"
+                text="بعدی ▶" if lang == "fa" else "Next ▶",
+                callback_data=f"admin_users_page_{page+1}",
             ))
-        
         if nav:
             buttons.append(nav)
+
     buttons.append([InlineKeyboardButton(
-        text=f"🔙 {'برگشت' if lang=='fa' else 'Back'}",
-        callback_data="admin_panel",
-        style="danger"
+        text="🔙 برگشت" if lang == "fa" else "🔙 Back",
+        callback_data="admin_panel", style="danger",
     )])
-    
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_language_keyboard(user_id: int = None) -> InlineKeyboardMarkup:
@@ -21294,7 +22366,14 @@ async def pay_card(callback: CallbackQuery):
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
         inbound_ids = full_state.get('inbound_ids', [])
-        category_name = full_state.get('category_name', '')
+        category_name = (
+            full_state.get('category_name', '')
+            if lang == 'fa'
+            else full_state.get(
+                'category_name_en',
+                full_state.get('category_name', '')
+            )
+        )
         category_id = full_state.get('category_id')
         package_id = full_state.get('package_id')
         ip_limit = full_state.get('ip_limit', 0)
@@ -21815,9 +22894,15 @@ async def cancel_order_direct(callback: CallbackQuery):
                 )
             
             if lang == "fa":
-                await callback.answer("✅ سفارش با موفقیت لغو شد", show_alert=True)
+                await callback.answer(
+                    f"✅ سفارش #{order_id} با موفقیت لغو شد",
+                    show_alert=True
+                )
             else:
-                await callback.answer("✅ Order cancelled successfully", show_alert=True)
+                await callback.answer(
+                    f"✅ Order #{order_id} cancelled successfully",
+                    show_alert=True
+                )
         else:
             if lang == "fa":
                 await callback.answer("❌ این سفارش قابل لغو نیست", show_alert=True)
@@ -22199,7 +23284,14 @@ async def pay_balance(callback: CallbackQuery):
         final_price = full_state.get('price', 0)
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
-        category_name = full_state.get('category_name', '')
+        category_name = (
+            full_state.get('category_name', '')
+            if lang == 'fa'
+            else full_state.get(
+                'category_name_en',
+                full_state.get('category_name', '')
+            )
+        )
         category_id = full_state.get('category_id')
         package_id = full_state.get('package_id')
         order_type = "ready_package"
@@ -24050,45 +25142,45 @@ async def approve_receipt(callback: CallbackQuery):
         
         logger.info(f"📝 تایید سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
         
+        # ✅ مثل بسته‌های آماده: نمایش اینباندهای انتخاب شده فعلی کاربر
+        user_inbounds = get_user_inbound(uid)
+        if isinstance(user_inbounds, list):
+            selected_inbounds = user_inbounds
+        elif user_inbounds:
+            selected_inbounds = [user_inbounds]
+        else:
+            selected_inbounds = []
+        
         inbounds = await xui_get_inbounds()
         active_inbounds = [i for i in inbounds if i.get('enable', True)]
-        inbound_buttons = []
-        selected_inbound = get_user_inbound(uid)
+        inbound_names = {}
+        for ib in active_inbounds:
+            inbound_id_ib = ib.get('id')
+            remark = html.escape(ib.get('remark', f'ID:{inbound_id_ib}'))
+            protocol = html.escape(ib.get('protocol', '').upper())
+            port = ib.get('port', '')
+            inbound_names[inbound_id_ib] = f"{remark} - {protocol}:{port}"
         
-        for inbound in active_inbounds:
-            inbound_id = inbound.get('id')
-            remark = html.escape(inbound.get('remark', f'Inbound {inbound_id}'))
-            protocol = html.escape(inbound.get('protocol', 'unknown'))
-            port = inbound.get('port')
-            
-            if not inbound_id:
-                continue
-            
-            is_selected = (inbound_id == selected_inbound)
-            label = f"{'✅' if is_selected else '  '} {remark} - {protocol.upper()}:{port}"
-            inbound_buttons.append([InlineKeyboardButton(
-                text=label[:55],
-                callback_data=f"select_inbound_{oid}_{inbound_id}",
-                style="primary" if is_selected else None
-            )])
+        inbound_display_text = ""
+        if selected_inbounds:
+            inbound_display_text = "✅ اینباندهای انتخاب شده:\n"
+            for ib_id in selected_inbounds:
+                ib_name = inbound_names.get(ib_id, f"ID: {ib_id}")
+                inbound_display_text += f"  • {ib_name}\n"
+        else:
+            default_ids = configs_pool.get('default_inbound_ids', [])
+            if default_ids:
+                inbound_display_text = "📌 اینباندهای پیش‌فرض:\n"
+                for ib_id in default_ids:
+                    ib_name = inbound_names.get(ib_id, f"ID: {ib_id}")
+                    inbound_display_text += f"  • {ib_name}\n"
+            else:
+                inbound_display_text = "❌ هیچ اینباندی انتخاب نشده - از پیش‌فرض استفاده می‌شود"
         
         buttons = []
-        
-        if inbound_buttons:
-            buttons.extend(inbound_buttons)
-        else:
-            buttons.append([InlineKeyboardButton(
-                text="⚠️ هیچ اینباند فعالی یافت نشد" if lang == "fa" else "⚠️ No active inbounds found",
-                callback_data="noop",
-                style="danger"
-            )])
-        
-        default_id = configs_pool.get('default_inbound_id')
-        default_text = html.escape(str(default_id)) if default_id else 'تنظیم نشده'
         buttons.append([InlineKeyboardButton(
-            text=f"📌 {'استفاده از اینباند پیش‌فرض' if lang == 'fa' else 'Use Default Inbound'} ({default_text})",
-            callback_data=f"select_inbound_{oid}_default",
-            style="primary" if default_id and selected_inbound == default_id else None
+            text="📡 انتخاب اینباند" if lang == "fa" else "📡 Select Inbound",
+            callback_data=f"select_user_inbound_{uid}_{oid}"
         )])
         
         if is_extend:
@@ -24127,14 +25219,6 @@ async def approve_receipt(callback: CallbackQuery):
                     break
             cat_name_escaped = html.escape(category_name)
             order_info = f"{icon} بسته آماده: {cat_name_escaped}"
-            if package_id:
-                for cat in READY_PACKAGES.get('categories', []):
-                    if cat.get('id') == category_id:
-                        for pkg in cat.get('packages', []):
-                            if pkg.get('id') == package_id:
-                                order_info += f" ({pkg.get('volume')}GB)"
-                                break
-                        break
         
         extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
         parent_info = f"\n🆔 سفارش اصلی: #{parent_order_id}" if is_extend else ""
@@ -24152,14 +25236,12 @@ async def approve_receipt(callback: CallbackQuery):
 📊 نوع سفارش: {extend_status}{parent_info}
 ━━━━━━━━━━━━━━━━━━━━━━
 
-<b>انتخاب اینباند:</b>
-لطفاً اینباندی که برای این کاربر می‌خواهید استفاده شود را انتخاب کنید:
-(اینباند انتخاب شده با ✅ مشخص شده است)
+<b>اینباندها:</b>
+{inbound_display_text}
 
-💡 نکته: اگر اینباندی انتخاب نکنید، از اینباند پیش‌فرض استفاده می‌شود.
-"""
+💡 برای تغییر اینباندها، روی دکمه «انتخاب اینباند» کلیک کنید.
+    """
         
-        # ✅ ویرایش پیام ادمین با تشخیص نوع
         try:
             if callback.message.photo:
                 await callback.message.edit_caption(
@@ -24192,9 +25274,9 @@ async def approve_receipt(callback: CallbackQuery):
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
             )
         
-        await callback.answer("✅ لطفاً اینباند مورد نظر را انتخاب کنید")
+        await callback.answer("✅ لطفاً اینباندها را انتخاب کنید")
         return
-    
+        
     # ==================== بخش بسته آماده ====================
     elif order_type == 'ready_package' or order_type == 'category_purchase':
         uid = order['user_id']
@@ -25325,6 +26407,441 @@ async def set_package_inbound(callback: CallbackQuery):
     
 
 
+async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict:
+    """
+    پاکسازی دیتابیس سفارشات از سفارش‌های بی‌استفاده
+    
+    سفارش‌های حذف شده:
+    - status: deleted → همیشه حذف می‌شه (چه قدیم چه جدید)
+    - status: cancelled → فقط اگه قدیمی‌تر از days باشه
+    - status: rejected → فقط اگه قدیمی‌تر از days باشه
+    - status: awaiting_payment → فقط اگه قدیمی‌تر از days باشه و receipt نداشته باشه
+    
+    سفارش‌های حفظ شده:
+    - approved (همیشه)
+    - inactive (همیشه)
+    - pending/pending_balance_charge (همیشه)
+    
+    Args:
+        days: سفارش‌های cancelled/rejected قدیمی‌تر از این تعداد روز حذف می‌شن
+        dry_run: اگه True باشه، فقط گزارش می‌ده بدون پاک کردن
+    
+    Returns:
+        dict: آمار پاکسازی
+    """
+    import time
+    from datetime import datetime, timedelta
+    
+    global orders
+    
+    logger.info("=" * 60)
+    logger.info(f"🧹 شروع پاکسازی دیتابیس سفارشات (days={days}, dry_run={dry_run})")
+    
+    start_time = time.time()
+    cutoff_date = datetime.now() - timedelta(days=days)
+    
+    # آمار
+    stats = {
+        'total_before': len(orders),
+        'deleted_removed': 0,           # status=deleted
+        'cancelled_removed': 0,         # status=cancelled (قدیمی)
+        'rejected_removed': 0,          # status=rejected (قدیمی)
+        'awaiting_payment_removed': 0,  # awaiting_payment بدون receipt (قدیمی)
+        'empty_removed': 0,             # سفارش‌های خالی/خراب
+        'total_removed': 0,
+        'total_after': 0,
+        'kept_approved': 0,
+        'kept_inactive': 0,
+        'kept_pending': 0,
+        'kept_rejected': 0, 
+        'kept_other': 0,
+        'removed_order_ids': [],
+        'errors': []
+    }
+    
+    to_delete = []
+    
+    for oid, order in list(orders.items()):
+        try:
+            # بررسی معتبر بودن
+            if not isinstance(order, dict):
+                to_delete.append((oid, 'empty', order))
+                stats['empty_removed'] += 1
+                continue
+            
+            # اگه order_id نداره، خرابه
+            if 'order_id' not in order:
+                to_delete.append((oid, 'empty', order))
+                stats['empty_removed'] += 1
+                continue
+            
+            status = order.get('status', '')
+            
+            # ─────────────────────────────────────────
+            # 1. سفارش‌های deleted → همیشه حذف
+            # ─────────────────────────────────────────
+            if status == 'deleted':
+                to_delete.append((oid, 'deleted', order))
+                stats['deleted_removed'] += 1
+                continue
+            
+            # ─────────────────────────────────────────
+            # 2. سفارش‌های cancelled قدیمی
+            # ─────────────────────────────────────────
+            if status == 'cancelled':
+                updated = order.get('updated_at') or order.get('created_at') or order.get('date', '')
+                if _is_older_than(updated, cutoff_date, days):
+                    to_delete.append((oid, 'cancelled', order))
+                    stats['cancelled_removed'] += 1
+                else:
+                    stats['kept_other'] += 1
+                continue
+            
+            
+            # ─────────────────────────────────────────
+            # 3. سفارش‌های rejected → همیشه حفظ
+            # ─────────────────────────────────────────
+            if status == 'rejected':
+                stats['kept_rejected'] += 1
+                continue
+            
+            # ─────────────────────────────────────────
+            # 4. awaiting_payment قدیمی و بدون فیش
+            # ─────────────────────────────────────────
+            if status == 'awaiting_payment':
+                has_receipt = bool(order.get('receipt_photo_id'))
+                updated = order.get('updated_at') or order.get('created_at') or order.get('date', '')
+                
+                if not has_receipt and _is_older_than(updated, cutoff_date, days):
+                    to_delete.append((oid, 'awaiting_payment', order))
+                    stats['awaiting_payment_removed'] += 1
+                else:
+                    stats['kept_other'] += 1
+                continue
+            
+            # ─────────────────────────────────────────
+            # 5. سفارش‌های approved → همیشه حفظ
+            # ─────────────────────────────────────────
+            if status == 'approved':
+                stats['kept_approved'] += 1
+                continue
+            
+            # ─────────────────────────────────────────
+            # 6. سفارش‌های inactive → همیشه حفظ
+            # ─────────────────────────────────────────
+            if status == 'inactive':
+                stats['kept_inactive'] += 1
+                continue
+            
+            # ─────────────────────────────────────────
+            # 7. pending / pending_balance_charge → همیشه حفظ
+            # ─────────────────────────────────────────
+            if status in ['pending', 'pending_balance_charge']:
+                stats['kept_pending'] += 1
+                continue
+            
+            # ─────────────────────────────────────────
+            # 8. بقیه وضعیت‌ها
+            # ─────────────────────────────────────────
+            stats['kept_other'] += 1
+            
+        except Exception as e:
+            logger.error(f"❌ خطا در بررسی سفارش {oid}: {e}")
+            stats['errors'].append(f"#{oid}: {str(e)[:50]}")
+    
+    # ─────────────────────────────────────────
+    # اجرای حذف
+    # ─────────────────────────────────────────
+    stats['total_removed'] = len(to_delete)
+    
+    if not dry_run:
+        # بکاپ قبل از حذف
+        if stats['total_removed'] > 0:
+            try:
+                backup_file = os.path.join(
+                    DATA_DIR, 
+                    'backups', 
+                    f'orders_before_cleanup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+                )
+                os.makedirs(os.path.dirname(backup_file), exist_ok=True)
+                
+                backup_data = {
+                    'orders': {oid: order for oid, _, order in to_delete},
+                    'backup_info': {
+                        'timestamp': datetime.now().isoformat(),
+                        'reason': f'پاکسازی {stats["total_removed"]} سفارش',
+                        'days_threshold': days,
+                        'stats': stats
+                    }
+                }
+                
+                with open(backup_file, 'w', encoding='utf-8') as f:
+                    json.dump(backup_data, f, ensure_ascii=False, indent=2)
+                
+                logger.info(f"💾 بکاپ سفارش‌های حذف‌شده در: {backup_file}")
+                stats['backup_file'] = backup_file
+            except Exception as e:
+                logger.error(f"❌ خطا در گرفتن بکاپ: {e}")
+                stats['errors'].append(f"Backup error: {str(e)[:50]}")
+        
+        # حذف واقعی
+        for oid, reason, order in to_delete:
+            try:
+                del orders[oid]
+                stats['removed_order_ids'].append({
+                    'order_id': oid,
+                    'reason': reason,
+                    'user_id': order.get('user_id'),
+                    'status': order.get('status'),
+                    'type': order.get('type'),
+                    'date': order.get('date', ''),
+                })
+            except Exception as e:
+                logger.error(f"❌ خطا در حذف سفارش {oid}: {e}")
+                stats['errors'].append(f"Delete #{oid}: {str(e)[:50]}")
+        
+        # ذخیره دیتابیس
+        try:
+            save_json(DB_FILES['orders'], orders)
+            logger.info(f"💾 دیتابیس سفارشات ذخیره شد")
+        except Exception as e:
+            logger.error(f"❌ خطا در ذخیره دیتابیس: {e}")
+            stats['errors'].append(f"Save error: {str(e)[:50]}")
+    
+    stats['total_after'] = len(orders)
+    elapsed = time.time() - start_time
+    
+    # ─────────────────────────────────────────
+    # گزارش
+    # ─────────────────────────────────────────
+    logger.info("-" * 60)
+    logger.info(f"🧹 نتیجه پاکسازی سفارشات:")
+    logger.info(f"   📊 قبل: {stats['total_before']} | بعد: {stats['total_after']}")
+    logger.info(f"   🗑 حذف شده: {stats['total_removed']}")
+    logger.info(f"     ├─ deleted: {stats['deleted_removed']}")
+    logger.info(f"     ├─ cancelled: {stats['cancelled_removed']}")
+    logger.info(f"     ├─ rejected: {stats['rejected_removed']}")
+    logger.info(f"     ├─ awaiting_payment: {stats['awaiting_payment_removed']}")
+    logger.info(f"     └─ empty: {stats['empty_removed']}")
+    logger.info(f"   ✅ حفظ شده:")
+    logger.info(f"     ├─ approved: {stats['kept_approved']}")
+    logger.info(f"     ├─ inactive: {stats['kept_inactive']}")
+    logger.info(f"     ├─ pending: {stats['kept_pending']}")
+    logger.info(f"     └─ other: {stats['kept_other']}")
+    logger.info(f"   ⏱ زمان: {elapsed:.2f} ثانیه")
+    logger.info("=" * 60)
+    
+    return stats
+
+
+def _is_older_than(date_str: str, cutoff: datetime, days: int) -> bool:
+    """بررسی اینکه تاریخ قدیمی‌تر از cutoff هست یا نه"""
+    if not date_str:
+        # اگه تاریخ نداره، فرض می‌کنیم قدیمیه
+        return True
+    
+    try:
+        # تلاش برای parse کردن تاریخ‌های مختلف
+        date_clean = str(date_str).replace(' ', 'T').split('.')[0]
+        
+        # اگه فقط تاریخ داره (2026-07-28)
+        if 'T' not in date_clean:
+            date_clean += 'T00:00:00'
+        
+        updated_dt = datetime.fromisoformat(date_clean)
+        
+        # اگه timezone داره، حذفش کن
+        if updated_dt.tzinfo:
+            updated_dt = updated_dt.replace(tzinfo=None)
+        
+        return updated_dt < cutoff
+        
+    except Exception as e:
+        logger.debug(f"⚠️ خطا در parse تاریخ '{date_str}': {e}")
+        # اگه نتونستیم parse کنیم، فرض می‌کنیم قدیمیه
+        return True
+    
+    
+@dp.message(Command("cleanup_orders"))
+async def cmd_cleanup_orders(message: Message):
+    """پاکسازی دیتابیس سفارشات (فقط ادمین)"""
+    if message.from_user.id != ADMIN_ID_INT:
+        return
+    
+    parts = message.text.split()
+    dry_run = '--dry' in parts or 'dry' in parts
+    days = 15  # ✅ پیش‌فرض 15 روز
+    
+    # استخراج days اگه داده شده
+    for part in parts:
+        if part.isdigit():
+            days = int(part)
+            break
+    
+    status_msg = await message.reply(
+        f"⏳ در حال پاکسازی (days={days}, dry_run={dry_run})..."
+    )
+    
+    try:
+        result = await cleanup_orders_database(days=days, dry_run=dry_run)
+        
+        # ساخت گزارش
+        text = f"""
+🧹 <b>پاکسازی دیتابیس سفارشات</b>
+{'⚠️ (حالت تست - چیزی حذف نشد)' if dry_run else ''}
+
+━━━━━━━━━━━━━━━━━━━━━━
+📊 <b>قبل:</b> {result['total_before']} سفارش
+📊 <b>بعد:</b> {result['total_after']} سفارش
+🗑 <b>حذف شده:</b> {result['total_removed']}
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>🗑 حذف شده:</b>
+• 🔴 deleted: {result['deleted_removed']}
+• 🟠 cancelled: {result['cancelled_removed']}
+• 🟣 awaiting_payment: {result['awaiting_payment_removed']}
+• ⚫ empty: {result['empty_removed']}
+━━━━━━━━━━━━━━━━━━━━━━
+
+<b>✅ حفظ شده:</b>
+• ✅ approved: {result['kept_approved']}
+• 🔵 inactive: {result['kept_inactive']}
+• ⏳ pending: {result['kept_pending']}
+• 🟡 rejected: {result['kept_rejected']}
+• 📦 other: {result['kept_other']}
+━━━━━━━━━━━━━━━━━━━━━━
+
+{f"⚠️ <b>خطاها:</b> {len(result['errors'])}" if result['errors'] else "✅ بدون خطا"}
+{f"💾 <b>بکاپ:</b> <code>{os.path.basename(result.get('backup_file', ''))}</code>" if result.get('backup_file') else ""}
+"""
+        
+        buttons = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔙 برگشت به پنل",
+                callback_data="admin_panel"
+            )]
+        ])
+        
+        await status_msg.edit_text(text, reply_markup=buttons, parse_mode=ParseMode.HTML)
+        
+        # ارسال لیست سفارش‌های حذف‌شده
+        # ✅ ارسال لیست سفارش‌های حذف‌شده - همیشه به صورت فایل
+        if result['removed_order_ids'] and not dry_run:
+            try:
+                from io import BytesIO
+                from aiogram.types import BufferedInputFile
+                
+                # ساخت محتوای فایل
+                lines = [
+                    "=" * 70,
+                    "📋 گزارش سفارش‌های حذف شده",
+                    "=" * 70,
+                    f"🕐 تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"📊 تعداد کل: {len(result['removed_order_ids'])}",
+                    f"⏱ آستانه: {days} روز",
+                    "",
+                    "📊 تقسیم بر اساس دلیل حذف:",
+                    f"  • deleted: {result['deleted_removed']}",
+                    f"  • cancelled: {result['cancelled_removed']}",
+                    f"  • rejected: {result['rejected_removed']}",
+                    f"  • awaiting_payment: {result['awaiting_payment_removed']}",
+                    f"  • empty: {result['empty_removed']}",
+                    "",
+                    "=" * 70,
+                    "📋 لیست تفصیلی سفارش‌ها:",
+                    "=" * 70,
+                    "",
+                ]
+                
+                for i, item in enumerate(result['removed_order_ids'], 1):
+                    lines.append(
+                        f"{i}. سفارش #{item['order_id']}\n"
+                        f"   👤 کاربر: {item['user_id']}\n"
+                        f"   📊 وضعیت: {item['status']}\n"
+                        f"   📦 نوع: {item['type']}\n"
+                        f"   🗑 دلیل حذف: {item['reason']}\n"
+                        f"   📅 تاریخ: {item['date']}\n"
+                        f"   {'─' * 60}\n"
+                    )
+                
+                # اضافه کردن آمار نهایی
+                lines.append("")
+                lines.append("=" * 70)
+                lines.append("📊 آمار کلی:")
+                lines.append("=" * 70)
+                lines.append(f"📊 کل قبل: {result['total_before']}")
+                lines.append(f"📊 کل بعد: {result['total_after']}")
+                lines.append(f"🗑 حذف شده: {result['total_removed']}")
+                lines.append("")
+                lines.append("✅ حفظ شده:")
+                lines.append(f"  • approved: {result['kept_approved']}")
+                lines.append(f"  • inactive: {result['kept_inactive']}")
+                lines.append(f"  • pending: {result['kept_pending']}")
+                lines.append(f"  • rejected: {result.get('kept_rejected', 0)}")
+                lines.append(f"  • other: {result['kept_other']}")
+                lines.append("")
+                lines.append(f"🕐 پایان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                lines.append("=" * 70)
+                
+                # تبدیل به bytes
+                file_content = "\n".join(lines)
+                file_buffer = BytesIO()
+                file_buffer.write(file_content.encode('utf-8'))
+                file_buffer.seek(0)
+                
+                # نام فایل با تاریخ
+                filename = f"removed_orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                input_file = BufferedInputFile(
+                    file_buffer.read(),
+                    filename=filename
+                )
+                
+                # کپشن
+                caption = (
+                    f"📋 <b>گزارش حذف سفارش‌ها</b>\n\n"
+                    f"🗑 حذف شده: <b>{result['total_removed']}</b>\n"
+                    f"📊 قبل: {result['total_before']} → بعد: {result['total_after']}\n"
+                    f"📁 فایل: <code>{filename}</code>"
+                )
+                
+                # ارسال فایل
+                await message.answer_document(
+                    document=input_file,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML
+                )
+                
+                logger.info(f"📨 فایل گزارش ({len(result['removed_order_ids'])} سفارش) ارسال شد")
+                
+            except Exception as e:
+                logger.error(f"❌ خطا در ارسال فایل گزارش: {e}", exc_info=True)
+                # fallback: ارسال به صورت متن اگه فایل کار نکرد
+                try:
+                    fallback_text = f"❌ خطا در ارسال فایل. تعداد حذف شده: {result['total_removed']}"
+                    await message.answer(fallback_text)
+                except:
+                    pass
+        
+        # لاگ
+        if log_system:
+            await log_system.log_admin_action(
+                message.from_user.id,
+                "پاکسازی دیتابیس سفارشات",
+                details=(
+                    f"days={days} | dry_run={dry_run} | "
+                    f"حذف: {result['total_removed']} | "
+                    f"باقی: {result['total_after']}"
+                )
+            )
+        
+    except Exception as e:
+        logger.error(f"❌ خطا در پاکسازی سفارشات: {e}", exc_info=True)
+        await status_msg.edit_text(
+            f"❌ خطا در پاکسازی:\n<code>{str(e)[:200]}</code>",
+            parse_mode=ParseMode.HTML
+        )
+        
+
 @dp.callback_query(F.data.startswith("confirm_approve_package_"))
 async def confirm_approve_package(callback: CallbackQuery):
     """تایید نهایی بسته آماده - با تشخیص کامل تمدید و جایگزینی اینباندها"""
@@ -25621,7 +27138,7 @@ async def confirm_approve_package(callback: CallbackQuery):
                 await callback.message.delete()
             except:
                 pass
-            
+            await send_sticker(uid, 'order_approved', '✅')
             if lang == "fa":
                 success_text = "✅ <b>سرویس با موفقیت تمدید شد!</b>"
             else:
@@ -25850,6 +27367,14 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
     if not order:
         return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
     
+    # ✅ جلوگیری از تایید مجدد
+    if order.get('status') == 'approved':
+        await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
+        return
+    if order.get('status') in ['rejected', 'cancelled', 'deleted']:
+        await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
+        return
+    
     uid = order['user_id']
     vol = order.get('volume', 0)
     days = order.get('days', 30)
@@ -25858,8 +27383,13 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
     is_extend = parent_order_id is not None
     
     user_info = get_user(uid)
-    user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
+    raw_name = user_info.get('name', f'کاربر_{uid}')
+    # ✅ پاکسازی اسم برای کامنت پنل
+    user_name_panel = raw_name
+    # ✅ escape اسم برای پیام HTML ادمین
+    user_name = html.escape(raw_name)
     lang = user_info.get('lang', 'fa')
+    
     await send_sticker(uid, 'order_approved', '✅')
     
     logger.info(f"📝 تایید نهایی سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
@@ -25877,15 +27407,47 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                     "دریافت پاداش رفرال",
                     f"به دلیل خرید اولین سرویس"
                 )
+    
+    # ============================================================
+    # بخش تمدید
+    # ============================================================
     if is_extend and parent_order_id:
-        await callback.message.edit_text(f"⏳ در حال تمدید سرویس #{parent_order_id}...")
+        await safe_edit_message(
+            callback,
+            f"⏳ در حال تمدید سرویس #{parent_order_id}..."
+        )
         
-        success = await extend_service(parent_order_id, uid, vol, days)
+        # ✅ try/except برای extend_service
+        try:
+            success = await extend_service(parent_order_id, uid, vol, days)
+        except Exception as e:
+            logger.error(f"❌ خطا در extend_service: {e}", exc_info=True)
+            success = False
         
         if success:
             if uid in user_states:
                 user_states[uid].pop('is_extend', None)
                 user_states[uid].pop('extend_order_id', None)
+                user_states[uid].pop('current_volume', None)
+                user_states[uid].pop('current_days', None)
+            
+            # ✅✅✅ پیام ساده به کاربر برای تمدید موفق
+            try:
+                if lang == "fa":
+                    await bot.send_message(
+                        uid,
+                        "✅ سرویس شما با موفقیت تمدید شد."
+                    )
+                else:
+                    await bot.send_message(
+                        uid,
+                        "✅ Your service has been extended successfully."
+                    )
+                logger.info(f"📨 پیام تایید تمدید به کاربر {uid} ارسال شد")
+            except Exception as e:
+                logger.error(f"❌ خطا در ارسال پیام به کاربر {uid}: {e}")
+            
+            # پیام به ادمین
             if lang == "fa":
                 success_text = f"""
 ✅ <b>سرویس با موفقیت تمدید شد!</b>
@@ -25911,15 +27473,15 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
 ✅ User's service has been extended.
 """
             
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback,
                 success_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
                         callback_data="admin_orders"
                     )]
-                ]),
-                parse_mode=ParseMode.HTML
+                ])
             )
             
             logger.info(f"✅ تمدید سفارش #{oid} با موفقیت انجام شد - سفارش اصلی: #{parent_order_id}")
@@ -25929,7 +27491,23 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
             
-            await callback.message.edit_text(
+            # ✅ اطلاع به کاربر در صورت خطا
+            try:
+                if lang == "fa":
+                    await bot.send_message(
+                        uid,
+                        "❌ خطا در تمدید سرویس. مبلغ به موجودی شما برگشت داده شد."
+                    )
+                else:
+                    await bot.send_message(
+                        uid,
+                        "❌ Error extending service. Amount has been refunded to your balance."
+                    )
+            except:
+                pass
+            
+            await safe_edit_message(
+                callback,
                 f"❌ خطا در تمدید سرویس. موجودی کاربر برگشت داده شد." if lang == "fa" else "❌ Error extending service. Balance refunded.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
@@ -25940,14 +27518,22 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             )
             await callback.answer("❌ خطا در تمدید", show_alert=True)
             return
+    
+    # ============================================================
+    # بخش خرید جدید
+    # ============================================================
     if SENAI_PANEL_ENABLED:
-        await callback.message.edit_text(f"⏳ در حال ساخت کلاینت برای سفارش #{oid}...")
+        await safe_edit_message(
+            callback,
+            f"⏳ در حال ساخت کلاینت برای سفارش #{oid}..."
+        )
         
         email = f"user{uid}_{int(datetime.now().timestamp())}"
         inbound_id = get_user_inbound(uid)
         ip_limit = order.get('ip_limit', 0)
         
-        sub = await xui_create_client_with_inbound(email, vol, days, user_name, uid, inbound_id, ip_limit=ip_limit)
+        # ✅ استفاده از اسم پاکسازی شده برای پنل
+        sub = await xui_create_client_with_inbound(email, vol, days, user_name_panel, uid, inbound_id, ip_limit=ip_limit)
         
         if sub:
             update_order(oid, config_link=sub, email=email, payment_method='card')
@@ -25982,15 +27568,15 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
 🔗 لینک: {sub[:40]}...
 """
             
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback,
                 success_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
                         callback_data="admin_orders"
                     )]
-                ]),
-                parse_mode=ParseMode.HTML
+                ])
             )
             
             logger.info(f"✅ سفارش #{oid} با موفقیت تایید شد - کلاینت ساخته شد")
@@ -26007,7 +27593,8 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                     uid
                 )
             
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback,
                 f"❌ خطا در ساخت کلاینت برای سفارش #{oid}\n"
                 f"💰 موجودی کاربر برگشت داده شد.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -26034,7 +27621,8 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             'price': price
         }
         
-        await callback.message.edit_text(
+        await safe_edit_message(
+            callback,
             f"⏳ منتظر کانفیگ از ادمین برای سفارش #{oid}...\n"
             f"👤 کاربر: {user_name} ({uid})\n"
             f"📦 {vol}GB / {days} روز",
@@ -26499,118 +28087,225 @@ async def show_all_my_configs(callback: CallbackQuery):
     """نمایش همه کانفیگ‌های کاربر به صورت یکجا"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
+
     valid_orders = get_valid_orders()
+
     configs_list = [
         o for o in valid_orders.values()
         if o.get('user_id') == user_id
         and o.get('status') in ("approved", "inactive")
         and o.get('config_link')
     ]
-    
+
     if not configs_list:
         await callback.answer(
-            "❌ شما هیچ کانفیگ فعالی ندارید" if lang == "fa" else "❌ You have no active configs",
+            "❌ شما هیچ کانفیگ فعالی ندارید"
+            if lang == "fa"
+            else "❌ You have no active configs",
             show_alert=True
         )
         return
-    configs_list.sort(key=lambda x: x.get('date', ''), reverse=True)
+
+    # جدیدترین کانفیگ‌ها اول
+    configs_list.sort(
+        key=lambda x: x.get('date', ''),
+        reverse=True
+    )
+
+    # ─────────────────────────────────────
+    # Header
+    # ─────────────────────────────────────
     if lang == "fa":
         text = f"""
-📋 <b>همه کانفیگ‌های شما</b>
+📂 <b>کانفیگ‌های شما</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 تعداد: {len(configs_list)}
-🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📊 <b>تعداد کانفیگ‌ها:</b> {len(configs_list)}
+🕐 {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
 ━━━━━━━━━━━━━━━━━━━━━━
-
 """
     else:
         text = f"""
-📋 <b>All Your Configs</b>
+📂 <b>Your Configurations</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-📊 Count: {len(configs_list)}
-🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📊 <b>Total Configs:</b> {len(configs_list)}
+🕐 {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
 ━━━━━━━━━━━━━━━━━━━━━━
-
 """
+
+    # ─────────────────────────────────────
+    # Configs
+    # ─────────────────────────────────────
     for i, c in enumerate(configs_list, 1):
+
         order_id = c.get('order_id', '?')
         volume = c.get('volume', '?')
         days = c.get('days', '?')
         price = c.get('price', 0)
         config_link = c.get('config_link', '')
-        is_test = c.get('type') == 'test'
+
         sub_link = c.get('sub_link', '')
+
+        # نام کانفیگ
         if sub_link:
             label = sub_link.split('/')[-1]
             if len(label) > 25:
                 label = label[:22] + '...'
         else:
             email = c.get('email', '')
-            label = email if email else f"کانفیگ-{order_id}"
-        type_label = "🧪 تست" if is_test else "💰 خرید"
-        price_display = "رایگان" if is_test else f"{price:,} تومان"
+            label = email if email else f"Config-{order_id}"
+
+        # قیمت
+        is_test = c.get('type') == 'test'
+
+        if is_test:
+            price_display_fa = "رایگان"
+            price_display_en = "Free"
+        else:
+            price_display_fa = f"{price:,} تومان"
+            price_display_en = f"{price:,} Toman"
+
+        # ─────────────────────────────────
+        # Persian
+        # ─────────────────────────────────
         if lang == "fa":
             text += f"""
-🔹 <b>#{i} - {label}</b> [{type_label}]
-📦 {volume}GB | ⏱ {days} روز | 💰 {price_display}
+🔹 <b>#{i} | {label}</b>
+
+📦 حجم: <b>{volume}GB</b>
+⏱ مدت: <b>{days} روز</b>
+💰 قیمت: <b>{price_display_fa}</b>
+
+🔗 <b>لینک اتصال:</b>
 <code>{config_link}</code>
+
 ━━━━━━━━━━━━━━━━━━━━━━
 """
+
+        # ─────────────────────────────────
+        # English
+        # ─────────────────────────────────
         else:
             text += f"""
-🔹 <b>#{i} - {label}</b> [{type_label}]
-📦 {volume}GB | ⏱ {days} days | 💰 {price_display}
+🔹 <b>#{i} | {label}</b>
+
+📦 Volume: <b>{volume}GB</b>
+⏱ Duration: <b>{days} days</b>
+💰 Price: <b>{price_display_en}</b>
+
+🔗 <b>Connection Link:</b>
 <code>{config_link}</code>
+
 ━━━━━━━━━━━━━━━━━━━━━━
 """
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="📁 بازگشت به لیست کانفیگ‌ها" if lang == "fa" else "📁 Back to Configs List",
-            callback_data="my_configs",
-            style="primary"
-        )]
-    ])
+
+    # ─────────────────────────────────────
+    # Keyboard
+    # ─────────────────────────────────────
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "📁 بازگشت به کانفیگ‌های من"
+                        if lang == "fa"
+                        else "📁 Back to My Configs"
+                    ),
+                    callback_data="my_configs",
+                    style="primary"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=(
+                        "🔙 بازگشت به منوی اصلی"
+                        if lang == "fa"
+                        else "🔙 Back to Main Menu"
+                    ),
+                    callback_data="back_to_main",
+                    style="danger"
+                )
+            ]
+        ]
+    )
+
+    # ─────────────────────────────────────
+    # Long message → TXT file
+    # ─────────────────────────────────────
     if len(text) > 4000:
+
         from io import BytesIO
         from aiogram.types import BufferedInputFile
-        
+
         file_buffer = BytesIO()
         file_buffer.write(text.encode('utf-8'))
         file_buffer.seek(0)
-        
-        filename = f"configs_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        input_file = BufferedInputFile(file_buffer.read(), filename=filename)
-        
+
+        filename = (
+            f"configs_{user_id}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+
+        input_file = BufferedInputFile(
+            file_buffer.read(),
+            filename=filename
+        )
+
         if lang == "fa":
-            caption = f"📋 همه کانفیگ‌های شما\n📊 تعداد: {len(configs_list)}"
+            caption = (
+                f"📂 <b>کانفیگ‌های شما</b>\n"
+                f"📊 تعداد: <b>{len(configs_list)}</b>"
+            )
         else:
-            caption = f"📋 All Your Configs\n📊 Count: {len(configs_list)}"
-        
+            caption = (
+                f"📂 <b>Your Configurations</b>\n"
+                f"📊 Total: <b>{len(configs_list)}</b>"
+            )
+
         try:
             await callback.message.delete()
-        except:
+        except Exception:
             pass
-        
+
         await callback.message.answer_document(
             document=input_file,
             caption=caption,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard
         )
+
+    # ─────────────────────────────────────
+    # Normal message
+    # ─────────────────────────────────────
     else:
         try:
-            await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+            await callback.message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML
+            )
+
         except Exception as e:
+            logger.warning(
+                f"خطا در ویرایش لیست کانفیگ‌ها: {e}"
+            )
+
             try:
                 await callback.message.delete()
-            except:
+            except Exception:
                 pass
-            await callback.message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
-    
+
+            await callback.message.answer(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML
+            )
+
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(
+            f"خطا در callback.answer: {e}"
+        )
         
 @dp.callback_query(F.data.startswith("view_config_"))
 async def view_single_config(callback: CallbackQuery):
@@ -30107,6 +31802,85 @@ async def cmd_rebuild_single(message: Message):
             )
     else:
         await message.reply(f"❌ {result.get('error', 'خطا')}")
+
+
+async def _handle_admin_search_message(message: Message, query: str, lang: str) -> bool:
+    """
+    پردازش پیام سرچ ادمین
+    Returns:
+        True اگر پیام پردازش شد، False اگر باید به handler بعدی بره
+    """
+    user_id = message.from_user.id
+    
+    # ✅ اگه /cancel
+    if query == "/cancel":
+        user_states.pop(user_id, None)
+        await message.reply(
+            "❌ سرچ لغو شد" if lang == "fa" else "❌ Search cancelled",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🔙 پنل" if lang == "fa" else "🔙 Panel",
+                    callback_data="admin_panel",
+                )
+            ]]),
+        )
+        return True
+    
+    # ✅ بررسی خالی
+    if not query:
+        await message.reply(
+            "❌ لطفاً یک عبارت بفرستید" if lang == "fa"
+            else "❌ Please send a query"
+        )
+        return True
+    
+    # ✅ بررسی حداقل کاراکتر
+    if len(query) < 2:
+        await message.reply(
+            "❌ حداقل ۲ کاراکتر" if lang == "fa"
+            else "❌ Minimum 2 characters"
+        )
+        return True
+    
+    # ✅ پاک کردن state
+    user_states.pop(user_id, None)
+    
+    # ✅ سرچ
+    results = advanced_search_users(query, search_in="all", limit=200)
+    _cache_set(user_id, results, query)
+    
+    if not results:
+        if lang == "fa":
+            text = (
+                f"🔍 <b>نتیجه‌ای یافت نشد</b>\n\n"
+                f"📝 جستجو: <code>{html.escape(query)}</code>\n\n"
+                f"💡 آیدی/یوزرنیم را بررسی کنید یا بخشی از نام را وارد کنید."
+            )
+        else:
+            text = (
+                f"🔍 <b>No Results</b>\n\n"
+                f"📝 Query: <code>{html.escape(query)}</code>\n\n"
+                f"💡 Check ID/username or enter part of the name."
+            )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔍 سرچ جدید" if lang == "fa" else "🔍 New Search",
+                callback_data="admin_search_users",
+            )],
+            [InlineKeyboardButton(
+                text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
+                callback_data="admin_users",
+            )],
+        ])
+        await message.reply(text, reply_markup=kb, parse_mode="HTML")
+        return True
+    
+    text = format_search_results_text(results, page=0, query=query, lang=lang)
+    kb = get_search_results_keyboard(results, page=0, lang=lang)
+    await message.reply(text, reply_markup=kb, parse_mode="HTML")
+    return True
+
+
 @dp.message(F.text)
 async def handle_text_messages(message: Message):
     """هندلر یکپارچه برای تمام پیام‌های متنی"""
@@ -30114,6 +31888,14 @@ async def handle_text_messages(message: Message):
     user_id = message.from_user.id
     user_state = user_states.get(user_id, {})
     lang = get_user(user_id).get('lang', 'fa')
+    if user_id == ADMIN_ID_INT and user_state.get("awaiting_user_search"):
+        handled = await _handle_admin_search_message(
+            message, 
+            (message.text or "").strip(), 
+            lang
+        )
+        if handled:
+            return
     CustomLogger.log_event('MESSAGE', f'پیام: {message.text[:50]}', user_id)
     if user_state.get('ai_chat_mode'):
         await process_ai_chat_message(message)
@@ -31043,21 +32825,29 @@ async def cmd_help_admin(message: Message):
     
     await message.reply(
         "📋 <b>راهنمای کامل دستورات ادمین</b>\n\n"
+        
         "📊 <b>آمار و وضعیت:</b>\n"
         "/stats - آمار کلی ربات\n"
         "/dbstatus - وضعیت فایل‌های دیتابیس\n"
         "/checkdata - بررسی محتوای دیتابیس\n"
-        "/aistatus - وضعیت هوش مصنوعی\n\n"
+        "/aistatus - وضعیت هوش مصنوعی\n"
+        "/check_storage - بررسی وضعیت ذخیره‌سازی\n\n"
         
         "💾 <b>ذخیره و بکاپ:</b>\n"
         "/save - ذخیره دستی دیتابیس + گرفتن بکاپ\n"
         "/check_backup - بررسی آخرین بکاپ\n"
-        "/cleanup_backups - پاکسازی بکاپ‌های قدیمی\n\n"
+        "/cleanup_backups - پاکسازی بکاپ‌های قدیمی\n"
+        "/emergency_backup - بکاپ اضطراری از پنل\n\n"
+        
+        "🧹 <b>پاکسازی دیتابیس:</b>\n"
+        "/cleanup_orders - پاکسازی سفارشات بی‌استفاده (پیش‌فرض: 15 روز)\n"
+        "/cleanup_orders [روز] - پاکسازی با روز دلخواه\n"
+        "/cleanup_orders dry - گزارش تست بدون حذف\n"
+        "مثال: <code>/cleanup_orders 30 dry</code>\n\n"
         
         "🏷️ <b>مدیریت کوپن:</b>\n"
         "/check_coupon - بررسی کوپن خود\n"
         "/check_user_coupon [آیدی] - بررسی کوپن کاربر\n"
-        "/coupon - وضعیت کوپن فعال شما\n"
         "/use_coupon [کد] - اعمال کوپن تخفیف\n\n"
         
         "🤖 <b>هوش مصنوعی:</b>\n"
@@ -31071,11 +32861,15 @@ async def cmd_help_admin(message: Message):
         "/check_packages - بررسی وضعیت بسته‌های آماده\n"
         "/test_keyboard - تست کیبورد خرید (دیباگ)\n\n"
         
-        "🔧 <b>دیباگ و بررسی:</b>\n"
-        "/check_storage - بررسی وضعیت ذخیره‌سازی\n\n"
+        "🔗 <b>لینک‌ها:</b>\n"
+        "/rebuild_links - بازسازی لینک‌های ساب در دیتابیس\n"
+        "/rebuild_single [شماره سفارش] - بازسازی لینک یک سفارش\n\n"
         
         "🚫 <b>مدیریت لیست سیاه:</b>\n"
         "/blacklist - مشاهده لیست سیاه\n\n"
+        
+        "⚙️ <b>پنل ادمین:</b>\n"
+        "از دستور /start و دکمه «👑 پنل ادمین» استفاده کنید\n\n"
         
         "🛠️ <b>عمومی:</b>\n"
         "/cancel - لغو عملیات جاری\n"
@@ -31106,7 +32900,9 @@ async def handle_admin_special_states(message: Message, user_state: dict):
     if text.startswith('/emergency_backup'):
         await cmd_emergency_backup(message)
         return
-    
+    if text.startswith('/cleanup_orders'):
+        await cmd_cleanup_orders(message)
+        return
     if text.startswith('/testai'):
         await cmd_test_ai(message)
         return
@@ -31225,6 +33021,12 @@ async def handle_admin_special_states(message: Message, user_state: dict):
                 "/check_backup - بررسی آخرین بکاپ\n"
                 "/cleanup_backups - پاکسازی بکاپ‌های قدیمی\n\n"
                 
+                "🧹 <b>پاکسازی دیتابیس:</b>\n"
+                "/cleanup_orders - پاکسازی سفارشات بی‌استفاده (پیش‌فرض: 15 روز)\n"
+                "/cleanup_orders [روز] - پاکسازی با روز دلخواه\n"
+                "/cleanup_orders dry - گزارش تست بدون حذف\n"
+                "مثال: <code>/cleanup_orders 30 dry</code>\n\n"
+        
                 "🏷️ <b>مدیریت کوپن:</b>\n"
                 "/check_coupon - بررسی کوپن خود\n"
                 "/check_user_coupon [آیدی] - بررسی کوپن کاربر\n"
@@ -31376,7 +33178,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.5.11"
+    version = "v1.6.14"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
@@ -31449,7 +33251,7 @@ async def admin_orders(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔄 بروزرسانی" if lang=="fa" else "🔄 Refresh", callback_data="admin_orders")],
             [InlineKeyboardButton(text="🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data="admin_panel")]
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_message(callback, text, reply_markup=keyboard)
         try:
             await callback.answer()
         except Exception as e:
@@ -31498,7 +33300,7 @@ async def admin_orders(callback: CallbackQuery):
         text += f"<code>🕐 {datetime.now().strftime('%H:%M:%S')}</code>"
         text += f"\n\n✅ Only orders with receipt sent are shown."
     
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await safe_edit_message(callback, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     try:
         await callback.answer()
     except Exception as e:
@@ -36128,6 +37930,13 @@ async def main():
     # بعد از بخش tasks و قبل از start polling
     
     load_all_data()
+    register_search_handlers(
+        dp=dp,
+        admin_id_int=ADMIN_ID_INT,
+        get_user_func=get_user,
+        get_lang_func=lambda uid: get_user(uid).get("lang", "fa"),
+    )
+    logger.info("✅ Search handlers registered successfully")
     await init_ai()
     logger.info("=" * 60)
     logger.info("در حال راه‌اندازی ربات...")
