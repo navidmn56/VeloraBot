@@ -3946,17 +3946,76 @@ async def admin_shop_message_save(message: Message):
     await message.reply(
         f"✅ پیام فروش با موفقیت بروزرسانی شد!" if lang == "fa" else "✅ Shop message updated successfully!"
     )
-    class FakeCallback:
-        def __init__(self, message, data):
-            self.from_user = message.from_user
-            self.message = message
-            self.data = data
-        
-        async def answer(self, *args, **kwargs):
-            pass
     
-    fake_callback = FakeCallback(message, "admin_shop_settings")
-    await admin_shop_settings(fake_callback)
+    # ✅ به جای FakeCallback، مستقیم پیام تنظیمات رو بفرست
+    is_open = is_shop_open()
+    manual_approval = configs_pool.get('manual_approval_settings', {})
+    enabled = manual_approval.get('enabled', False)
+    
+    status_text = "🟢 باز" if is_open else "🔴 بسته"
+    approval_status = "🟢 فعال" if enabled else "🔴 غیرفعال"
+    
+    if lang == "fa":
+        text = f"""
+🛒 <b>مدیریت فروشگاه</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+📊 وضعیت فروش: {status_text}
+🔒 تایید دستی کاربران جدید: {approval_status}
+{premium_emoji('note', '📝')} پیام نمایشی:
+{SHOP_STATUS.get('message', '')}
+🕐 آخرین بروزرسانی: {SHOP_STATUS.get('last_updated', 'N/A')}
+━━━━━━━━━━━━━━━━━━━━━
+
+با کلیک روی دکمه‌های زیر می‌توانید تنظیمات را تغییر دهید:
+"""
+    else:
+        text = f"""
+🛒 <b>Shop Management</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+📊 Shop Status: {status_text}
+🔒 Manual Approval for New Users: {approval_status}
+{premium_emoji('note', '📝')} Display Message:
+{SHOP_STATUS.get('message', '')}
+🕐 Last Updated: {SHOP_STATUS.get('last_updated', 'N/A')}
+━━━━━━━━━━━━━━━━━━━━━
+
+Click the buttons below to change settings:
+"""
+    
+    buttons = [
+        [InlineKeyboardButton(
+            text="🔒 بستن فروش" if lang == "fa" and is_open else "🔓 باز کردن فروش" if lang == "fa" else "🔒 Close Shop" if is_open else "🔓 Open Shop",
+            callback_data="admin_toggle_shop",
+            style="danger" if is_open else "success"
+        )],
+        [InlineKeyboardButton(
+            text=f"🔘 {'غیرفعال کردن' if enabled else 'فعال کردن'} تایید دستی کاربران جدید" if lang == "fa" else f"🔘 {'Disable' if enabled else 'Enable'} Manual Approval for New Users",
+            callback_data="admin_toggle_manual_approval",
+            style="danger" if enabled else "success"
+        )],
+        [InlineKeyboardButton(
+            text="📋 لیست کاربران در انتظار تایید" if lang == "fa" else "📋 Pending Approval Users",
+            callback_data="admin_pending_users",
+            style="primary"
+        )],
+        [InlineKeyboardButton(
+            text="✏️ ویرایش پیام" if lang == "fa" else "✏️ Edit Message",
+            callback_data="admin_shop_message"
+        )],
+        [InlineKeyboardButton(
+            text="🔙 برگشت" if lang == "fa" else "🔙 Back",
+            callback_data="admin_panel"
+        )]
+    ]
+    
+    # ✅ ارسال پیام جدید به جای ویرایش پیام قبلی
+    await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode=ParseMode.HTML
+    )
 
 @dp.callback_query(F.data.startswith("confirm_approve_user_"))
 async def confirm_approve_user(callback: CallbackQuery):
@@ -10446,8 +10505,19 @@ class PanelRateLimiter:
             
             self.last_request_time = time.time()
 panel_rate_limiter = PanelRateLimiter(requests_per_minute=30)
-async def check_shop_status_and_notify(user_id: int, callback: CallbackQuery = None) -> bool:
+
+
+async def check_shop_status_and_notify(
+    user_id: int, 
+    callback: CallbackQuery = None,
+    short_alert: bool = False  # ✅ جدید
+) -> bool:
     """بررسی وضعیت فروش و ارسال پیام در صورت بسته بودن
+    
+    Args:
+        user_id: آیدی کاربر
+        callback: کال‌بک کوئری
+        short_alert: اگه True باشه، فقط alert کوتاه نشون می‌ده (بدون ادیت/حذف پیام)
     
     Returns:
         True اگر فروش باز است، False اگر بسته است
@@ -10458,18 +10528,89 @@ async def check_shop_status_and_notify(user_id: int, callback: CallbackQuery = N
     lang = get_user(user_id).get('lang', 'fa')
     message = get_shop_status_message(lang)
     
+    # ✅ حالت short_alert: فقط alert، هیچ پیامی ادیت/حذف نمی‌شه
+    if callback and short_alert:
+        # ساخت متن alert: عنوان + دلیل (اگه کوتاه بود)
+        title = "🛒 فروش موقتاً بسته است" if lang == "fa" else "🛒 Shop is temporarily closed"
+        
+        # اگه پیام ادمین کوتاه بود، نشونش بده
+        # محدودیت show_alert = 200 کاراکتر، عنوان ~30 کاراکتر
+        if message and len(message) <= 150:
+            alert_text = f"{title}\n\n{message}"
+        else:
+            alert_text = title
+        
+        try:
+            await callback.answer(alert_text, show_alert=True)
+        except Exception as e:
+            logger.warning(f"خطا در alert فروش بسته: {e}")
+            # fallback: فقط عنوان
+            try:
+                await callback.answer(title, show_alert=True)
+            except:
+                try:
+                    await callback.answer()
+                except:
+                    pass
+        
+        return False
+    
+    # ✅ حالت عادی: پیام کامل (بدون تغییر)
     if callback:
-        await callback.message.edit_text(
-            f"🛒 <b>فروش موقتاً بسته است</b>\n\n{message}",
-            reply_markup=get_back_only_keyboard(lang),
-            parse_mode=ParseMode.HTML
-        )
+        text = f"🛒 <b>{'فروش موقتاً بسته است' if lang == 'fa' else 'Shop is temporarily closed'}</b>\n\n{message}"
+        keyboard = get_back_only_keyboard(lang)
+        
+        try:
+            # حالت ۱: پیام متنی
+            if callback.message.text:
+                await callback.message.edit_text(
+                    text,
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML
+                )
+            # حالت ۲: پیام با کپشن
+            elif callback.message.caption is not None:
+                await callback.message.edit_caption(
+                    caption=text,
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML
+                )
+            # حالت ۳: پیام بدون متن
+            else:
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                await callback.message.answer(
+                    text,
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML
+                )
+        except Exception as e:
+            error_str = str(e)
+            
+            if "message is not modified" in error_str:
+                pass
+            elif "there is no text in the message to edit" in error_str:
+                try:
+                    await callback.message.delete()
+                except:
+                    pass
+                try:
+                    await callback.message.answer(
+                        text,
+                        reply_markup=keyboard,
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception as e2:
+                    logger.error(f"❌ خطا در ارسال پیام بسته بودن فروش: {e2}")
+            else:
+                logger.warning(f"⚠️ خطا در check_shop_status: {e}")
+        
         try:
             await callback.answer()
         except:
             pass
-    else:
-        pass
     
     return False
 
@@ -13145,13 +13286,52 @@ async def extend_service_start(callback: CallbackQuery):
     user_id = callback.from_user.id
     order_id = int(callback.data.split("_")[2])
     lang = get_user(user_id).get('lang', 'fa')
+    
+    # ✅ چک لیست سیاه
+    if user_id in BLACKLIST:
+        await notify_blacklisted_user(user_id)
+        await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
+        return
+    
+    # ✅ چک عضویت اجباری
+    if not await check_membership(user_id):
+        await callback.answer(
+            "❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" 
+            else "❌ Please verify your membership first!",
+            show_alert=True
+        )
+        return
+    
+    # ✅ چک باز بودن فروشگاه
+    if not await check_shop_status_and_notify(user_id, callback, short_alert=True):
+        return
+    
+    # ✅ چک اجازه خرید/تمدید
+    can_purchase, msg = can_user_purchase(user_id)
+    if not can_purchase:
+        await callback.answer(
+            msg if lang == "fa" else "⚠️ Your account is pending admin approval.",
+            show_alert=True
+        )
+        return
+    
+    # بررسی سفارش
     order = orders.get(str(order_id))
     if not order or order.get('user_id') != user_id:
-        await callback.answer("❌ سفارش یافت نشد" if lang == "fa" else "❌ Order not found", show_alert=True)
+        await callback.answer(
+            "❌ سفارش یافت نشد" if lang == "fa" else "❌ Order not found",
+            show_alert=True
+        )
         return
+    
     if order.get('status') not in ['approved', 'inactive']:
-        await callback.answer("❌ این سرویس قابل تمدید نیست" if lang == "fa" else "❌ This service cannot be extended", show_alert=True)
+        await callback.answer(
+            "❌ این سرویس قابل تمدید نیست" if lang == "fa" else "❌ This service cannot be extended",
+            show_alert=True
+        )
         return
+    
+    # ✅ ذخیره state تمدید
     user_states[user_id] = {
         'extend_order_id': order_id,
         'current_volume': order.get('volume', 0),
@@ -13160,52 +13340,15 @@ async def extend_service_start(callback: CallbackQuery):
         'is_extend': True,
         'timestamp': datetime.now().isoformat()
     }
+    
+    logger.info(f"🔄 [extend_service_start] کاربر {user_id} تمدید سرویس #{order_id} را شروع کرد")
+    
+    # ✅ ریست حجم و روز
     update_user(user_id, 'volume', 1)
     update_user(user_id, 'days', 30)
-    await buy_service(callback)
-    try:
-        await asyncio.sleep(0.5)  # کمی صبر تا buy_service کامل اجرا بشه
-        user = get_user(user_id)
-        vol = user.get('volume', 1)
-        days = user.get('days', 30)
-        price = calculate_price(vol, days)
-        balance = user.get('balance', 0)
-        
-        if lang == "fa":
-            new_text = f"""
-🔄 <b>تمدید سرویس</b>
-
-حجم و مدت مورد نظر برای <b>افزودن</b> به سرویس فعلی را انتخاب کنید.
-⚠️ این مقادیر به سرویس فعلی شما <b>اضافه</b> می‌شوند.
-
-{premium_emoji('config', '📦')} حجم: {vol} GB
-{premium_emoji('time', '⏱')} مدت: {days} روز
-{premium_emoji('money', '💰')} قیمت: {price:,} تومان
-
-{premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
-"""
-        else:
-            new_text = f"""
-🔄 <b>Extend Service</b>
-
-Select the volume and duration to <b>add</b> to your current service.
-⚠️ These values will be <b>added</b> to your existing service.
-
-{premium_emoji('config', '📦')} Volume: {vol} GB
-{premium_emoji('time', '⏱')} Duration: {days} days
-{premium_emoji('money', '💰')} Price: {price:,} Toman
-
-{premium_emoji('wallet', '💰')} Your balance: {balance:,} Toman
-"""
-        await callback.message.edit_text(
-            new_text,
-            reply_markup=callback.message.reply_markup,
-            parse_mode=ParseMode.HTML
-        )
-    except Exception as e:
-        logger.warning(f"خطا در به‌روزرسانی متن تمدید: {e}")
     
-    await callback.answer()
+    # ✅ فراخوانی buy_service
+    await buy_service(callback)
     
     
 async def emergency_backup_from_panel():
@@ -16625,16 +16768,42 @@ async def buy_specific_package(callback: CallbackQuery):
             discount_text = f"\n{premium_emoji('gift', '🏷️')} <b>Discounted Price:</b> {final_price:,} Toman ({discount_percent}% off)"    
     extend_text = ""
     if is_extend and extend_order_id:
-        extend_text = f"""
+        # ✅ حالت تمدید - عنوان فرق داره
+        if lang == "fa":
+            text = f"""
 🔄 <b>تمدید سرویس #{extend_order_id}</b>
-این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
-        """
-    
-    if lang == "fa":
-        text = f"""
+
+{premium_emoji('config', '📦')} دسته: {category_icon} {category_name}
+{premium_emoji('config', '📦')} حجم اضافه‌شده: {volume_display}
+{premium_emoji('time', '⏱')} مدت اضافه‌شده: {days} روز
+{ip_display}
+{premium_emoji('money', '💰')} هزینه تمدید: {original_price:,} تومان
+{discount_text}
+
+{premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
+
+{premium_emoji('info', '💡')} این مبالغ و مدت به سرویس فعلی شما <b>اضافه</b> می‌شوند.
+"""
+        else:
+            text = f"""
+🔄 <b>Extend Service #{extend_order_id}</b>
+
+{premium_emoji('config', '📦')} Category: {category_icon} {category_name}
+{premium_emoji('config', '📦')} Volume to add: {volume_display}
+{premium_emoji('time', '⏱')} Duration to add: {days} days
+{ip_display}
+{premium_emoji('money', '💰')} Extension cost: {original_price:,} Toman
+{discount_text}
+
+{premium_emoji('wallet', '💰')} Your balance: {balance:,} Toman
+
+{premium_emoji('info', '💡')} These values will be <b>added</b> to your current service.
+"""
+    else:
+        if lang == "fa":
+            text = f"""
 {category_icon} <b>خرید بسته آماده: {category_name}</b>
 
-{extend_text}
 {premium_emoji('config', '📦')} حجم: {volume_display}
 {premium_emoji('time', '⏱')} مدت: {days} روز
 {ip_display}
@@ -16646,11 +16815,10 @@ async def buy_specific_package(callback: CallbackQuery):
 {premium_emoji('info', '💡')} این یک بسته آماده است و قابل تغییر نمی‌باشد.
 
 """
-    else:
-        text = f"""
+        else:
+            text = f"""
 {category_icon} <b>Ready Package: {category_name}</b>
 
-{extend_text}
 {premium_emoji('config', '📦')} Volume: {volume_display}
 {premium_emoji('time', '⏱')} Duration: {days} days
 {ip_display}
@@ -22617,31 +22785,63 @@ async def pay_card(callback: CallbackQuery):
             price_display = f"<s>{original_price:,}</s> → {final_price:,} Toman ({discount_percent}% off)"
     volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
     if is_ready_package and category_name:
+        # ✅ محاسبه icon (یکبار)
         icon = "📦"
         if category_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == category_id:
                     icon = cat.get('icon', '📦')
                     break
-        extend_display = ""
+        
+        # ✅ اول تمدید رو چک کن، بعد خرید
         if is_extend and extend_order_id:
+            # ==================== تمدید بسته آماده ====================
             if lang == "fa":
-                extend_display = f"""
-🔄 <b>تمدید سرویس #{extend_order_id}</b>
-این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
+                text = f"""
+🔄 <b>پرداخت تمدید سرویس #{extend_order_id}</b>
+
+{premium_emoji('id', '🆔')} <b>شماره سفارش جدید:</b> #{order_id}
+
+{premium_emoji('config', icon)} <b>دسته:</b> {category_name}
+{premium_emoji('config', '📦')} <b>حجم اضافه‌شده:</b> {volume_display_text}
+{premium_emoji('time', '⏱')} <b>مدت اضافه‌شده:</b> {days} روز
+{premium_emoji('money', '💰')} <b>مبلغ تمدید:</b> {price_display}
+
+{premium_emoji('card', '💳')} <b>شماره کارت:</b>
+<code>{card_num}</code>
+
+{premium_emoji('user', '👤')} <b>به نام:</b> {BANK_CARD_HOLDER}
+{premium_emoji('star', '🏦')} <b>بانک:</b> {BANK_NAME}
+
+{premium_emoji('receipt', '📸')} <b>لطفاً تصویر فیش واریزی را ارسال کنید</b>
 """
             else:
-                extend_display = f"""
-🔄 <b>Extending Service #{extend_order_id}</b>
-These values will be added to your current service:
+                text = f"""
+🔄 <b>Extend Service #{extend_order_id} - Payment</b>
+
+{premium_emoji('id', '🆔')} <b>New Order Number:</b> #{order_id}
+
+{premium_emoji('config', icon)} <b>Category:</b> {category_name}
+{premium_emoji('config', '📦')} <b>Volume to add:</b> {volume_display_text}
+{premium_emoji('time', '⏱')} <b>Duration to add:</b> {days} days
+{premium_emoji('money', '💰')} <b>Extension cost:</b> {price_display}
+
+{premium_emoji('card', '💳')} <b>Card Number:</b>
+<code>{card_num}</code>
+
+{premium_emoji('user', '👤')} <b>Account Holder:</b> {BANK_CARD_HOLDER}
+{premium_emoji('star', '🏦')} <b>Bank:</b> {BANK_NAME}
+
+{premium_emoji('receipt', '📸')} <b>Please send the receipt photo</b>
 """
-        
-        if lang == "fa":
-            text = f"""
+        else:
+            # ==================== خرید بسته آماده ====================
+            if lang == "fa":
+                text = f"""
 {premium_emoji('config', icon)} <b>پرداخت بسته آماده: {category_name}</b>
 
 {premium_emoji('id', '🆔')} <b>شماره سفارش:</b> #{order_id}
-{extend_display}
+
 {premium_emoji('config', '📦')} <b>حجم:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>مدت:</b> {days} روز
 {premium_emoji('money', '💰')} <b>مبلغ:</b> {price_display}
@@ -22654,12 +22854,12 @@ These values will be added to your current service:
 
 {premium_emoji('receipt', '📸')} <b>لطفاً تصویر فیش واریزی را ارسال کنید</b>
 """
-        else:
-            text = f"""
+            else:
+                text = f"""
 {premium_emoji('config', icon)} <b>Ready Package Payment: {category_name}</b>
 
 {premium_emoji('id', '🆔')} <b>Order Number:</b> #{order_id}
-{extend_display}
+
 {premium_emoji('config', '📦')} <b>Volume:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>Duration:</b> {days} days
 {premium_emoji('money', '💰')} <b>Amount:</b> {price_display}
@@ -22673,26 +22873,53 @@ These values will be added to your current service:
 {premium_emoji('receipt', '📸')} <b>Please send the receipt photo</b>
 """
     else:
+        # ==================== خرید سفارشی (غیر بسته آماده) ====================
         if is_extend and extend_order_id:
+            # حالت تمدید سفارشی
             if lang == "fa":
-                extend_display = f"""
-🔄 <b>تمدید سرویس #{extend_order_id}</b>
-این مقادیر همراه با کانفیگ های این دسته به سرویس فعلی اضافه می‌شوند:
+                text = f"""
+🔄 <b>پرداخت تمدید سرویس #{extend_order_id}</b>
+
+{premium_emoji('id', '🆔')} <b>شماره سفارش جدید:</b> #{order_id}
+
+{premium_emoji('config', '📦')} <b>حجم اضافه‌شده:</b> {volume_display_text}
+{premium_emoji('time', '⏱')} <b>مدت اضافه‌شده:</b> {days} روز
+{premium_emoji('money', '💰')} <b>مبلغ تمدید:</b> {price_display}
+
+{premium_emoji('card', '💳')} <b>شماره کارت:</b>
+<code>{card_num}</code>
+
+{premium_emoji('user', '👤')} <b>به نام:</b> {BANK_CARD_HOLDER}
+{premium_emoji('star', '🏦')} <b>بانک:</b> {BANK_NAME}
+
+{premium_emoji('receipt', '📸')} <b>لطفاً تصویر فیش واریزی را ارسال کنید</b>
 """
             else:
-                extend_display = f"""
-🔄 <b>Extending Service #{extend_order_id}</b>
-These values will be added to your current service:
+                text = f"""
+🔄 <b>Extend Service #{extend_order_id} - Payment</b>
+
+{premium_emoji('id', '🆔')} <b>New Order Number:</b> #{order_id}
+
+{premium_emoji('config', '📦')} <b>Volume to add:</b> {volume_display_text}
+{premium_emoji('time', '⏱')} <b>Duration to add:</b> {days} days
+{premium_emoji('money', '💰')} <b>Extension cost:</b> {price_display}
+
+{premium_emoji('card', '💳')} <b>Card Number:</b>
+<code>{card_num}</code>
+
+{premium_emoji('user', '👤')} <b>Account Holder:</b> {BANK_CARD_HOLDER}
+{premium_emoji('star', '🏦')} <b>Bank:</b> {BANK_NAME}
+
+{premium_emoji('receipt', '📸')} <b>Please send the receipt photo</b>
 """
         else:
-            extend_display = ""
-        
-        if lang == "fa":
-            text = f"""
+            # ==================== خرید سفارشی عادی ====================
+            if lang == "fa":
+                text = f"""
 {premium_emoji('card', '💳')} <b>پرداخت با کارت بانکی</b>
 
 {premium_emoji('id', '🆔')} <b>شماره سفارش:</b> #{order_id}
-{extend_display}
+
 {premium_emoji('config', '📦')} <b>حجم:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>مدت:</b> {days} روز
 {premium_emoji('money', '💰')} <b>مبلغ:</b> {price_display}
@@ -22705,12 +22932,12 @@ These values will be added to your current service:
 
 {premium_emoji('receipt', '📸')} <b>لطفاً تصویر فیش واریزی را ارسال کنید</b>
 """
-        else:
-            text = f"""
+            else:
+                text = f"""
 {premium_emoji('card', '💳')} <b>Bank Card Payment</b>
 
 {premium_emoji('id', '🆔')} <b>Order Number:</b> #{order_id}
-{extend_display}
+
 {premium_emoji('config', '📦')} <b>Volume:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>Duration:</b> {days} days
 {premium_emoji('money', '💰')} <b>Amount:</b> {price_display}
@@ -26906,19 +27133,30 @@ async def confirm_approve_package(callback: CallbackQuery):
     # ✅✅✅ بررسی parent_order_id برای تمدید
     parent_order_id = order.get('parent_order_id')
     if parent_order_id:
-        # بررسی اینکه آیا سفارش تمدید دیگری برای همین parent وجود دارد
         for existing_oid, existing_order in orders.items():
-            if str(existing_oid) != str(oid):  # خودش نباشد
-                if existing_order.get('is_extend') and existing_order.get('parent_order_id') == parent_order_id:
-                    if existing_order.get('status') == 'approved':
-                        if existing_order.get('new_volume') and existing_order.get('new_days'):
-                            logger.warning(f"⚠️ سرویس #{parent_order_id} قبلاً با سفارش #{existing_oid} تمدید شده است!")
-                            await callback.answer(f"⚠️ این سرویس قبلاً با سفارش #{existing_oid} تمدید شده است!", show_alert=True)
-                            try:
-                                await callback.message.delete()
-                            except:
-                                pass
-                            return
+            if str(existing_oid) != str(oid):
+                if (existing_order.get('is_extend') and 
+                    existing_order.get('parent_order_id') == parent_order_id and
+                    existing_order.get('status') == 'approved' and
+                    existing_order.get('new_volume')):
+                    
+                    # ✅ فقط اگه کمتر از 5 دقیقه پیش تمدید شده، بلاک کن
+                    approved_date_str = existing_order.get('approved_date', '')
+                    if approved_date_str:
+                        try:
+                            approved_date = datetime.strptime(approved_date_str, "%Y-%m-%d %H:%M:%S")
+                            elapsed = (datetime.now() - approved_date).total_seconds()
+                            
+                            if elapsed < 300:  # 5 دقیقه
+                                await callback.answer(
+                                    f"⚠️ این سرویس {int(elapsed)} ثانیه پیش تمدید شده است! لطفاً چند لحظه صبر کنید.",
+                                    show_alert=True
+                                )
+                                return
+                        except Exception as e:
+                            logger.warning(f"خطا در parse تاریخ: {e}")
+    
+    # اگه بیش از 5 دقیقه گذشته باشه، اجازه تمدید جدید بده
     
     # ==================== ادامه کد اصلی ====================
     uid = order['user_id']
@@ -28118,18 +28356,18 @@ async def show_all_my_configs(callback: CallbackQuery):
     if lang == "fa":
         text = f"""
 📂 <b>کانفیگ‌های شما</b>
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 📊 <b>تعداد کانفیگ‌ها:</b> {len(configs_list)}
 🕐 {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 """
     else:
         text = f"""
 📂 <b>Your Configurations</b>
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 📊 <b>Total Configs:</b> {len(configs_list)}
 🕐 {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 """
 
     # ─────────────────────────────────────
@@ -28178,7 +28416,7 @@ async def show_all_my_configs(callback: CallbackQuery):
 🔗 <b>لینک اتصال:</b>
 <code>{config_link}</code>
 
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 """
 
         # ─────────────────────────────────
@@ -28195,7 +28433,7 @@ async def show_all_my_configs(callback: CallbackQuery):
 🔗 <b>Connection Link:</b>
 <code>{config_link}</code>
 
-━━━━━━━━━━━━━━━━━━━━━━
+   ━━━━━━━━━━━━━━━━━━━━
 """
 
     # ─────────────────────────────────────
@@ -33178,7 +33416,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.6.14"
+    version = "v1.6.16"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
