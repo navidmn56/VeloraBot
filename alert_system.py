@@ -554,7 +554,7 @@ class AlertSystem:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data="my_configs",
+                        callback_data=f"extend_service_{order_id}",
                         style="primary"
                     )]
                 ])
@@ -601,7 +601,7 @@ class AlertSystem:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data="my_configs",
+                        callback_data=f"extend_service_{order_id}",
                         style="primary"
                     )]
                 ])
@@ -671,7 +671,7 @@ class AlertSystem:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data="my_configs",
+                        callback_data=f"extend_service_{order_id}",
                         style="primary"
                     )]
                 ])
@@ -716,7 +716,7 @@ class AlertSystem:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data="my_configs",
+                        callback_data=f"extend_service_{order_id}",
                         style="primary"
                     )]
                 ])
