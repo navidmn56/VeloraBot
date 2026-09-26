@@ -16527,26 +16527,36 @@ Please select a package:
         days = pkg.get('days', 30)
         price = pkg.get('price', 0)
         ip_limit = pkg.get('ip_limit', 0)
-        
-        volume_display = "♾️GB" if volume == 0 else f"{volume}GB"
-        
+        package_id = pkg.get('id')
+
+        volume_display = "∞GB" if volume == 0 else f"{volume}GB"
+
         if ip_limit == 0:
-            ip_display = "♾️ Users"
+            users_display = "∞ Users"
         elif ip_limit == 1:
-            ip_display = "1 User"
+            users_display = "1 User"
         else:
-            ip_display = f"{ip_limit} Users"
-        
+            users_display = f"{ip_limit} Users"
+
+        info_label = f"{volume_display} - {days}d - {users_display}"
+
         if lang == "fa":
-            label = f"{volume_display} - {price:,} T - {ip_display}"
+            price_label = f"{price:,} تومان"
         else:
-            label = f"{volume_display} - {price:,} Toman - {ip_display}"
-        
-        buttons.append([InlineKeyboardButton(
-            text=label[:55],
-            callback_data=f"buy_package_{category_id}_{pkg.get('id')}",
-            style="primary"
-        )])
+            price_label = f"{price:,} Toman"
+
+        buttons.append([
+            InlineKeyboardButton(
+                text=info_label,
+                callback_data=f"buy_package_{category_id}_{package_id}",
+                style="primary"
+            ),
+            InlineKeyboardButton(
+                text=price_label,
+                callback_data=f"buy_package_{category_id}_{package_id}",
+                style="primary"
+            )
+        ])
     
     buttons.append([InlineKeyboardButton(
         text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
