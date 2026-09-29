@@ -338,6 +338,12 @@ class AlertSystem:
         order_id = order.get('order_id')
         is_test = order.get('is_test', False) or order.get('type') == 'test'
         
+        volume_exhausted_key = f"vol_{order_id}_exhausted"
+        if (volume_exhausted_key in self.volume_alert_cache or 
+            volume_exhausted_key in self.sent_alerts_history):
+            logger.debug(f"Order #{order_id}: Volume already exhausted, skipping expiry alert")
+            return
+        
         expiry_time = client_info.get('expiryTime', 0)
         if not isinstance(expiry_time, (int, float)) or expiry_time == 0:
             return
@@ -402,6 +408,12 @@ class AlertSystem:
         """بررسی هشدار حجم"""
         order_id = order.get('order_id')
         is_test = order.get('is_test', False) or order.get('type') == 'test'
+        
+        expiry_expired_key = f"exp_{order_id}_expired"
+        if (expiry_expired_key in self.expiry_alert_cache or 
+            expiry_expired_key in self.sent_alerts_history):
+            logger.debug(f"Order #{order_id}: Service already expired, skipping volume alert")
+            return
         
         total_bytes = client_info.get('totalGB', 0)
         if not isinstance(total_bytes, (int, float)) or total_bytes == 0:

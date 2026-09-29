@@ -10119,44 +10119,152 @@ def delete_config(config_id: int) -> bool:
     return False
 
 def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "fa") -> InlineKeyboardMarkup:
+    """ساخت کیبورد نمایش کانفیگ - دکمه تمدید برای سرویس تست حذف میشه"""
+    
+    # ✅✅✅ بررسی اینکه آیا سرویس تست است
+    order = orders.get(str(order_id))
+    is_test = False
+    
+    if order:
+        order_type = order.get('type', 'purchase')
+        is_test = (
+            order_type == 'test'
+            or order.get('is_test', False)
+            or (order.get('email', '') or '').startswith('test_')
+        )
+    
+    logger.debug(f"🔍 [get_config_view_keyboard] سفارش #{order_id} - is_test: {is_test}")
+    
     if lang == "fa":
         if show_qr:
-            return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📝 مشاهده متن کانفیگ", callback_data=f"show_text_{order_id}", style="primary")],
-                [InlineKeyboardButton(text="🔄 تمدید سرویس", callback_data=f"extend_service_{order_id}", style="success")],
-                [
-                    InlineKeyboardButton(text=f"📁 لیست کانفیگ‌ها", callback_data="my_configs", style="primary"),
-                    InlineKeyboardButton(text=f"🔙 صفحه اصلی", callback_data="back_to_main", style="danger")
-                ]
+            buttons = [
+                [InlineKeyboardButton(
+                    text="📝 مشاهده متن کانفیگ",
+                    callback_data=f"show_text_{order_id}",
+                    style="primary"
+                )],
+            ]
+            
+            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
+            if not is_test:
+                buttons.append([InlineKeyboardButton(
+                    text="🔄 تمدید سرویس",
+                    callback_data=f"extend_service_{order_id}",
+                    style="success"
+                )])
+            
+            buttons.append([
+                InlineKeyboardButton(
+                    text="📁 لیست کانفیگ‌ها",
+                    callback_data="my_configs",
+                    style="primary"
+                ),
+                InlineKeyboardButton(
+                    text="🔙 صفحه اصلی",
+                    callback_data="back_to_main",
+                    style="danger"
+                )
             ])
+            
+            return InlineKeyboardMarkup(inline_keyboard=buttons)
+        
         else:
-            return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📱 تبدیل به QR Code", callback_data=f"show_qr_{order_id}", style="primary")],
-                [InlineKeyboardButton(text="🔄 تمدید سرویس", callback_data=f"extend_service_{order_id}", style="success")],
-                [
-                    InlineKeyboardButton(text=f"📁 لیست کانفیگ‌ها", callback_data="my_configs", style="primary"),
-                    InlineKeyboardButton(text=f"🔙 صفحه اصلی", callback_data="back_to_main", style="danger")
-                ]
+            buttons = [
+                [InlineKeyboardButton(
+                    text="📱 تبدیل به QR Code",
+                    callback_data=f"show_qr_{order_id}",
+                    style="primary"
+                )],
+            ]
+            
+            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
+            if not is_test:
+                buttons.append([InlineKeyboardButton(
+                    text="🔄 تمدید سرویس",
+                    callback_data=f"extend_service_{order_id}",
+                    style="success"
+                )])
+            
+            buttons.append([
+                InlineKeyboardButton(
+                    text="📁 لیست کانفیگ‌ها",
+                    callback_data="my_configs",
+                    style="primary"
+                ),
+                InlineKeyboardButton(
+                    text="🔙 صفحه اصلی",
+                    callback_data="back_to_main",
+                    style="danger"
+                )
             ])
+            
+            return InlineKeyboardMarkup(inline_keyboard=buttons)
+    
     else:
+        # انگلیسی
         if show_qr:
-            return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📝 View Config Text", callback_data=f"show_text_{order_id}", style="primary")],
-                [InlineKeyboardButton(text="🔄 Extend Service", callback_data=f"extend_service_{order_id}", style="success")],
-                [
-                    InlineKeyboardButton(text=f"📁 Configs List", callback_data="my_configs", style="primary"),
-                    InlineKeyboardButton(text=f"🔙 Main Menu", callback_data="back_to_main", style="danger")
-                ]
+            buttons = [
+                [InlineKeyboardButton(
+                    text="📝 View Config Text",
+                    callback_data=f"show_text_{order_id}",
+                    style="primary"
+                )],
+            ]
+            
+            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
+            if not is_test:
+                buttons.append([InlineKeyboardButton(
+                    text="🔄 Extend Service",
+                    callback_data=f"extend_service_{order_id}",
+                    style="success"
+                )])
+            
+            buttons.append([
+                InlineKeyboardButton(
+                    text="📁 Configs List",
+                    callback_data="my_configs",
+                    style="primary"
+                ),
+                InlineKeyboardButton(
+                    text="🔙 Main Menu",
+                    callback_data="back_to_main",
+                    style="danger"
+                )
             ])
+            
+            return InlineKeyboardMarkup(inline_keyboard=buttons)
+        
         else:
-            return InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📱 Convert to QR Code", callback_data=f"show_qr_{order_id}", style="primary")],
-                [InlineKeyboardButton(text="🔄 Extend Service", callback_data=f"extend_service_{order_id}", style="success")],
-                [
-                    InlineKeyboardButton(text=f"📁 Configs List", callback_data="my_configs", style="primary"),
-                    InlineKeyboardButton(text=f"🔙 Main Menu", callback_data="back_to_main", style="danger")
-                ]
+            buttons = [
+                [InlineKeyboardButton(
+                    text="📱 Convert to QR Code",
+                    callback_data=f"show_qr_{order_id}",
+                    style="primary"
+                )],
+            ]
+            
+            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
+            if not is_test:
+                buttons.append([InlineKeyboardButton(
+                    text="🔄 Extend Service",
+                    callback_data=f"extend_service_{order_id}",
+                    style="success"
+                )])
+            
+            buttons.append([
+                InlineKeyboardButton(
+                    text="📁 Configs List",
+                    callback_data="my_configs",
+                    style="primary"
+                ),
+                InlineKeyboardButton(
+                    text="🔙 Main Menu",
+                    callback_data="back_to_main",
+                    style="danger"
+                )
             ])
+            
+            return InlineKeyboardMarkup(inline_keyboard=buttons)
             
             
 
@@ -13282,9 +13390,15 @@ async def update_client_full(email: str, update_data: dict) -> bool:
 
 @dp.callback_query(F.data.startswith("extend_service_"))
 async def extend_service_start(callback: CallbackQuery):
-    """شروع فرآیند تمدید سرویس"""
+    """شروع فرآیند تمدید سرویس - با بررسی وجود کانفیگ در پنل"""
     user_id = callback.from_user.id
-    order_id = int(callback.data.split("_")[2])
+    
+    try:
+        order_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        return
+    
     lang = get_user(user_id).get('lang', 'fa')
     
     # ✅ چک لیست سیاه
@@ -13296,7 +13410,7 @@ async def extend_service_start(callback: CallbackQuery):
     # ✅ چک عضویت اجباری
     if not await check_membership(user_id):
         await callback.answer(
-            "❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" 
+            "❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa"
             else "❌ Please verify your membership first!",
             show_alert=True
         )
@@ -13315,7 +13429,7 @@ async def extend_service_start(callback: CallbackQuery):
         )
         return
     
-    # بررسی سفارش
+    # ✅ بررسی سفارش
     order = orders.get(str(order_id))
     if not order or order.get('user_id') != user_id:
         await callback.answer(
@@ -13326,10 +13440,138 @@ async def extend_service_start(callback: CallbackQuery):
     
     if order.get('status') not in ['approved', 'inactive']:
         await callback.answer(
-            "❌ این سرویس قابل تمدید نیست" if lang == "fa" else "❌ This service cannot be extended",
+            "❌ این سرویس قابل تمدید نیست" if lang == "fa"
+            else "❌ This service cannot be extended",
             show_alert=True
         )
         return
+    
+    # ✅✅✅ جلوگیری از تمدید سرویس تست
+    order_type = order.get('type', 'purchase')
+    is_test = (
+        order_type == 'test'
+        or order.get('is_test', False)
+        or (order.get('email', '') or '').startswith('test_')
+    )
+    
+    if is_test:
+        logger.info(
+            f"🚫 [extend_service_start] کاربر {user_id} تلاش کرد "
+            f"سرویس تست #{order_id} را تمدید کند - جلوگیری شد"
+        )
+        
+        # لاگ
+        if log_system:
+            try:
+                await log_system.log_user_action(
+                    user_id,
+                    "تلاش برای تمدید سرویس تست",
+                    f"سفارش #{order_id}"
+                )
+            except Exception as e:
+                logger.warning(f"خطا در ارسال لاگ: {e}")
+        
+        # ✅ هشدار کوتاه به کاربر
+        alert_text = (
+            "🚫 سرویس تست قابل تمدید نیست!"
+            if lang == "fa"
+            else "🚫 Test service cannot be extended!"
+        )
+        
+        try:
+            await callback.answer(alert_text, show_alert=True)
+        except Exception as e:
+            logger.warning(f"خطا در نمایش alert: {e}")
+        
+        return
+    
+    # ✅✅✅ بررسی وجود کانفیگ در پنل (فقط اگر پنل فعال باشد)
+    if SENAI_PANEL_ENABLED:
+        email = (
+            order.get('email') 
+            or extract_email_from_sub_link(order.get('config_link', ''))
+        )
+        
+        # اگه ایمیل پیدا نشد، سرویس ناقص است
+        if not email:
+            logger.warning(
+                f"⚠️ [extend_service_start] سفارش #{order_id} "
+                f"ایمیل ندارد - کاربر {user_id}"
+            )
+            await callback.answer(
+                "❌ اطلاعات سرویس ناقص است. لطفاً با پشتیبانی تماس بگیرید."
+                if lang == "fa"
+                else "❌ Service data incomplete. Please contact support.",
+                show_alert=True
+            )
+            return
+        
+        # بررسی وجود کانفیگ در پنل
+        try:
+            client_info = await xui_get_client_info(email)
+        except Exception as e:
+            logger.error(
+                f"❌ [extend_service_start] خطا در بررسی کانفیگ "
+                f"{email}: {e}", exc_info=True
+            )
+            await callback.answer(
+                "❌ خطا در بررسی سرویس. لطفاً دوباره تلاش کنید."
+                if lang == "fa"
+                else "❌ Error checking service. Please try again.",
+                show_alert=True
+            )
+            return
+        
+        # ❌ کانفیگ در پنل وجود ندارد
+        if not client_info:
+            logger.warning(
+                f"⚠️ [extend_service_start] کاربر {user_id} تلاش کرد "
+                f"سرویس حذف شده #{order_id} (email: {email}) را تمدید کند"
+            )
+            
+            # به‌روزرسانی وضعیت سفارش به deleted
+            update_order(order_id, status='deleted')
+            logger.info(
+                f"🗑 سفارش #{order_id} به وضعیت deleted تغییر کرد "
+                f"(کانفیگ در پنل حذف شده)"
+            )
+            
+            # لاگ در سیستم خارجی
+            if log_system:
+                try:
+                    await log_system.log_user_action(
+                        user_id,
+                        "تلاش برای تمدید سرویس حذف شده",
+                        f"سفارش #{order_id} | ایمیل: {email}"
+                    )
+                except Exception as e:
+                    logger.warning(f"خطا در ارسال لاگ: {e}")
+            
+            # ✅ هشدار به کاربر
+            alert_text = (
+                "⚠️ این سرویس در پنل حذف شده است!\n\n"
+                "❌ امکان تمدید وجود ندارد.\n\n"
+                "💡 لطفاً یک سرویس جدید خریداری کنید "
+                "یا با پشتیبانی تماس بگیرید."
+                if lang == "fa"
+                else
+                "⚠️ This service has been deleted from the panel!\n\n"
+                "❌ Cannot be extended.\n\n"
+                "💡 Please purchase a new service or contact support."
+            )
+            
+            try:
+                await callback.answer(alert_text, show_alert=True)
+            except Exception as e:
+                logger.warning(f"خطا در نمایش alert: {e}")
+            
+            return
+        
+        # ✅ کانفیگ موجود است → ادامه تمدید
+        logger.info(
+            f"✅ [extend_service_start] کانفیگ {email} در پنل موجود "
+            f"است - ادامه تمدید سفارش #{order_id}"
+        )
     
     # ✅ ذخیره state تمدید
     user_states[user_id] = {
@@ -13341,7 +13583,10 @@ async def extend_service_start(callback: CallbackQuery):
         'timestamp': datetime.now().isoformat()
     }
     
-    logger.info(f"🔄 [extend_service_start] کاربر {user_id} تمدید سرویس #{order_id} را شروع کرد")
+    logger.info(
+        f"🔄 [extend_service_start] کاربر {user_id} تمدید "
+        f"سرویس #{order_id} را شروع کرد"
+    )
     
     # ✅ ریست حجم و روز
     update_user(user_id, 'volume', 1)
@@ -16730,10 +16975,25 @@ async def buy_specific_package(callback: CallbackQuery):
     logger.info(f"👤 تعداد کاربر: {ip_limit if ip_limit > 0 else 'نامحدود'}")
     update_user(user_id, 'volume', volume if volume > 0 else 1)
     update_user(user_id, 'days', days)
+    old_state = user_states.get(user_id, {})
+    is_extend = old_state.get('is_extend', False)
+    extend_order_id = old_state.get('extend_order_id')
+    current_volume = old_state.get('current_volume', 0)
+    current_days = old_state.get('current_days', 0)
+    coupon_code_old = old_state.get('coupon_code')
+    coupon_discount_old = old_state.get('coupon_discount')
+    coupon_applied_old = old_state.get('coupon_applied', False)
     
+    logger.info(f"🔍 [buy_specific_package] STATE قبل: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [buy_specific_package] کوپن قبل: code={coupon_code_old}, applied={coupon_applied_old}")
+    logger.info(f"🔍 [buy_specific_package] حجم/روز قبل: {current_volume}GB / {current_days} روز")
+    
+    # ✅✅✅ مرحله 2: تنظیم اینباندهای کاربر
     if category_inbound_ids:
         save_user_inbound_selection(user_id, category_inbound_ids)
         logger.info(f"📡 اینباندهای {category_inbound_ids} برای کاربر {user_id} تنظیم شد (بسته آماده)")
+    
+    # ✅✅✅ مرحله 3: ساخت state جدید با حفظ مقادیر مهم
     user_states[user_id] = {
         'payment_type': 'ready_package',
         'category_id': category_id,
@@ -16750,22 +17010,27 @@ async def buy_specific_package(callback: CallbackQuery):
         'category_icon': category.get('icon', '📦'),
         'current_page': 'package_payment',
         'ip_limit': ip_limit,
+        # ✅ حفظ اطلاعات تمدید
         'is_extend': is_extend,
         'extend_order_id': extend_order_id,
         'current_volume': current_volume,
-        'current_days': current_days
+        'current_days': current_days,
     }
     
+    # ✅✅✅ مرحله 4: لاگ برای دیباگ
     if is_extend and extend_order_id:
         logger.info(f"🔄 [buy_specific_package] وضعیت تمدید در user_states ذخیره شد: order_id={extend_order_id}")
         logger.info(f"   user_states[{user_id}]['is_extend'] = {user_states[user_id].get('is_extend')}")
         logger.info(f"   user_states[{user_id}]['extend_order_id'] = {user_states[user_id].get('extend_order_id')}")
     
-    if coupon_applied and coupon_code and discount_percent > 0:
-        user_states[user_id]['coupon_code'] = coupon_code
+    # ✅✅✅ مرحله 5: حفظ کوپن
+    if coupon_applied_old and coupon_code_old:
+        user_states[user_id]['coupon_code'] = coupon_code_old
         user_states[user_id]['coupon_applied'] = True
-        user_states[user_id]['coupon_discount'] = discount_percent
-        logger.info(f"🏷️ کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+        user_states[user_id]['coupon_discount'] = coupon_discount_old or 0
+        logger.info(f"🏷️ [buy_specific_package] کوپن {coupon_code_old} حفظ شد")
+    
+    # ✅ بقیه کد بدون تغییر
     category_icon = category.get('icon', '📦')
     category_name = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
     balance = user.get('balance', 0)
@@ -21734,26 +21999,56 @@ async def buy_service(callback: CallbackQuery):
     if not await check_shop_status_and_notify(user_id, callback):
         return
     user = get_user(user_id)
-    vol = user.get('volume', 1)
-    days = user.get('days', 30)
-    original_price = calculate_price(vol, days)
     lang = user.get('lang', 'fa')
-    full_state = user_states.get(user_id, {})
-    logger.info(f"🔍 [buy_service] وضعیت کامل: {full_state}")
+
+    # ✅ buy_service = شروع خرید جدید
+    old_state = user_states.get(user_id, {})
+    logger.info(f"🔍 [buy_service] state قبل: {old_state}")
+
+    # ✅ فقط اطلاعات ضروری حفظ میشن
+    preserved_state = {
+        key: old_state[key]
+        for key in (
+            'coupon_code',
+            'coupon_discount',
+            'coupon_applied',
+            'is_extend',
+            'extend_order_id',
+            'current_volume',
+            'current_days',
+        )
+        if key in old_state
+    }
+
+    # ✅ اگه کوپن توی user_states نبود، از دیتابیس بازیابی کن
+    if not preserved_state.get('coupon_applied') or not preserved_state.get('coupon_code'):
+        coupon_data = load_coupon_from_user_db(user_id)
+        if coupon_data.get('coupon_applied') and coupon_data.get('coupon_code'):
+            preserved_state['coupon_code'] = coupon_data.get('coupon_code')
+            preserved_state['coupon_discount'] = coupon_data.get('coupon_discount', 0)
+            preserved_state['coupon_applied'] = True
+            logger.info(f"🏷️ [buy_service] کوپن {coupon_data.get('coupon_code')} از دیتابیس بازیابی شد")
+
+    # ✅ state رو با preserved جایگزین کن
+    user_states[user_id] = preserved_state
+    full_state = user_states[user_id]
+
+    logger.info(f"🔄 [buy_service] state پاک شد - حفظ‌شده: {preserved_state}")
+
     coupon_code = full_state.get('coupon_code')
     coupon_discount = full_state.get('coupon_discount')
     coupon_applied = full_state.get('coupon_applied', False)
+
     is_extend = full_state.get('is_extend', False)
     extend_order_id = full_state.get('extend_order_id')
-    if not coupon_applied or not coupon_code:
-        logger.info(f"🔍 [buy_service] کوپن در user_states نیست، بررسی دیتابیس...")
-        for code, coupon in COUPONS.items():
-            if coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    pass
-    
+
+    vol = user.get('volume', 1)
+    days = user.get('days', 30)
+    original_price = calculate_price(vol, days)
+
     logger.info(f"🔍 [buy_service] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
     logger.info(f"🔍 [buy_service] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [buy_service] حجم/روز: {vol}GB / {days} روز")
     discount_percent = 0
     final_price = original_price
     
@@ -22522,11 +22817,19 @@ async def pay_card(callback: CallbackQuery):
         return
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
-    full_state = user_states.get(user_id, {})
-    is_extend = full_state.get('is_extend', False)
-    extend_order_id = full_state.get('extend_order_id')
-    current_volume = full_state.get('current_volume', 0)
-    current_days = full_state.get('current_days', 0)
+    
+    # ✅✅✅ خواندن مستقیم از user_states (نه از full_state)
+    current_user_state = user_states.get(user_id, {})
+    
+    is_extend = current_user_state.get('is_extend', False)
+    extend_order_id = current_user_state.get('extend_order_id')
+    current_volume = current_user_state.get('current_volume', 0)
+    current_days = current_user_state.get('current_days', 0)
+    
+    full_state = current_user_state  # برای سازگاری با بقیه کد
+    
+    logger.info(f"🔍 [pay_card] STATE کامل: {current_user_state}")
+    logger.info(f"🔍 [pay_card] is_extend={is_extend}, extend_order_id={extend_order_id}")
     
     logger.info(f"🔍 [pay_card] وضعیت کامل قبل: {full_state}")
     logger.info(f"🔍 [pay_card] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
@@ -23497,11 +23800,19 @@ async def pay_balance(callback: CallbackQuery):
     
     user = get_user(user_id)
     lang = user.get('lang', 'fa')
-    full_state = user_states.get(user_id, {})
-    is_extend = full_state.get('is_extend', False)
-    extend_order_id = full_state.get('extend_order_id')
-    current_volume = full_state.get('current_volume', 0)
-    current_days = full_state.get('current_days', 0)
+    
+    # ✅✅✅ خواندن مستقیم از user_states (نه از full_state)
+    current_user_state = user_states.get(user_id, {})
+    
+    is_extend = current_user_state.get('is_extend', False)
+    extend_order_id = current_user_state.get('extend_order_id')
+    current_volume = current_user_state.get('current_volume', 0)
+    current_days = current_user_state.get('current_days', 0)
+    
+    full_state = current_user_state  # برای سازگاری با بقیه کد
+    
+    logger.info(f"🔍 [pay_balance] STATE کامل: {current_user_state}")
+    logger.info(f"🔍 [pay_balance] is_extend={is_extend}, extend_order_id={extend_order_id}")
     
     is_ready_package = full_state.get('is_ready_package', False)
     ip_limit = full_state.get('ip_limit', 0)
@@ -27177,12 +27488,21 @@ async def confirm_approve_package(callback: CallbackQuery):
     is_extend = parent_order_id is not None
     user_state = user_states.get(uid, {})
     
-    if not is_extend:
-        is_extend = user_state.get('is_extend', False)
-        if is_extend:
-            parent_order_id = user_state.get('extend_order_id')
-            logger.info(f"🔄 [confirm_approve_package] تمدید از user_states تشخیص داده شد: order_id={parent_order_id}")
+    # ✅✅✅ خواندن is_extend از چند منبع (به ترتیب اولویت)
+    parent_order_id = order.get('parent_order_id')
     
+    # اول از خود سفارش
+    is_extend = order.get('is_extend', False) or (parent_order_id is not None)
+    
+    # اگه نبود، از user_states
+    if not is_extend:
+        user_state = user_states.get(uid, {})
+        is_extend = user_state.get('is_extend', False)
+        if is_extend and not parent_order_id:
+            parent_order_id = user_state.get('extend_order_id')
+    
+    logger.info(f"🔍 [confirm_approve_package] is_extend={is_extend}, parent_order_id={parent_order_id}")
+    logger.info(f"🔍 [confirm_approve_package] user_state={user_states.get(uid, {})}")    
     payment_method = order.get('payment_method', 'unknown')
     order_type = order.get('type', 'purchase')
     
@@ -33426,7 +33746,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.6.16"
+    version = "v1.6.20"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
