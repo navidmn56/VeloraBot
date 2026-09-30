@@ -1811,31 +1811,41 @@ update_existing() {
 
     draw_step "Synchronizing Application Files"
 
+    # --------------------------------------------------------
+    # Temporarily move data/ out of the way so rsync --delete
+    # cannot touch it, regardless of how exclude patterns are
+    # interpreted by the local rsync version.
+    # --------------------------------------------------------
+
+    local data_stash=""
+
+    if [[ -d "${DATA_DIR}" ]]; then
+        data_stash="${TEMP_ROOT}/data-stash"
+        rm -rf -- "${data_stash}"
+        mv "${DATA_DIR}" "${data_stash}"
+        log_info "data/ was temporarily moved aside."
+    fi
+
     log_info "Synchronizing release ${LATEST_VERSION}..."
 
-    # IMPORTANT:
-    #
-    # config.py is excluded.
-    # data/ is excluded.
-    # .venv/ is excluded.
-    # .version is excluded.
-    #
-    # Leading slashes anchor the patterns to the root of the transfer,
-    # so data/ and config.py anywhere else are not affected and the
-    # protected runtime directories are never touched by rsync.
-    #
-    # --delete removes stale application files that no longer exist
-    # in the new release, while the protected paths remain untouched.
-
     rsync -a --delete \
-        --exclude='/config.py' \
-        --exclude='/data/' \
-        --exclude='/.venv/' \
-        --exclude='/.version' \
+        --exclude='config.py' \
+        --exclude='.venv' \
+        --exclude='.version' \
         "${RELEASE_ROOT}/" \
         "${INSTALL_DIR}/"
 
     log_success "Application files synchronized."
+
+    # --------------------------------------------------------
+    # Restore data/ exactly as it was before the update.
+    # --------------------------------------------------------
+
+    if [[ -n "${data_stash}" && -d "${data_stash}" ]]; then
+        rm -rf -- "${DATA_DIR}"
+        mv "${data_stash}" "${DATA_DIR}"
+        log_success "data/ was restored unchanged."
+    fi
 
     # --------------------------------------------------------
     # Protected-path safety verification
