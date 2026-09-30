@@ -1210,7 +1210,8 @@ validate_existing_config() {
 
     if is_placeholder "${SUPPORT_USERNAME}"; then
         printf '  %bMISSING%b SUPPORT_USERNAME\n' "${RED}" "${NC}"
-        missing=1    fi
+        missing=1    
+    fi
 
     if [[ "${GEMINI_ENABLED}" == "True" ]] &&
        is_placeholder "${GEMINI_API_KEY}"; then
