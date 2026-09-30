@@ -53,9 +53,8 @@ IFS=$'\n\t'
 # Terminal Handling
 # ============================================================
 
-if [[ ! -r /dev/tty ]]; then
-    printf '%s\n' "ERROR: An interactive terminal is required." >&2
-    printf '%s\n' "This script needs a TTY for interactive prompts." >&2
+if [[ ! -t 0 ]]; then
+    printf '%s\n' "ERROR: An interactive terminal is required."
     exit 1
 fi
 
@@ -346,6 +345,7 @@ on_exit() {
         fi
     fi
 
+    close_tty
     cleanup_temp
     exit "${exit_code}"
 }
@@ -1882,6 +1882,7 @@ show_final_summary() {
 
 main() {
     initialize_logging
+    open_tty
 
     parse_arguments "$@"
 
