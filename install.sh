@@ -65,7 +65,7 @@ open_tty() {
 }
 
 close_tty() {
-    exec 3>&- 2>/dev/null || true
+    return 0
 }
 
 
@@ -425,6 +425,7 @@ read_tty() {
     fi
 
     printf -v "${result_var}" '%s' "${value}"
+
     return 0
 }
 
@@ -435,18 +436,29 @@ read_secret_tty() {
 
     printf '%s' "${prompt}" > /dev/tty
 
-    stty -echo < /dev/tty 2>/dev/null || true
+    if ! stty -echo < /dev/tty 2>/dev/null; then
+        # اگر نتوانستیم echo را خاموش کنیم، باز هم ورودی را می‌گیریم.
+        if ! IFS= read -r value < /dev/tty; then
+            return 1
+        fi
 
-    if ! IFS= read -r value < /dev/tty; then
-        stty echo < /dev/tty 2>/dev/null || true
-        printf '\n' > /dev/tty
-        return 1
+        printf -v "${result_var}" '%s' "${value}"
+        return 0
     fi
+
+    local read_status=0
+
+    IFS= read -r value < /dev/tty || read_status=$?
 
     stty echo < /dev/tty 2>/dev/null || true
     printf '\n' > /dev/tty
 
+    if [[ ${read_status} -ne 0 ]]; then
+        return 1
+    fi
+
     printf -v "${result_var}" '%s' "${value}"
+
     return 0
 }
 
