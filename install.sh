@@ -1486,29 +1486,6 @@ prompt_required() {
     done
 }
 
-prompt_secret_required() {
-    local label="$1"
-    local variable="$2"
-    local value=""
-
-    while true; do
-
-        if ! read_secret_tty "${label}: " value; then
-            die \
-                "Could not read input from the terminal."
-        fi
-
-        if [[ -n "${value}" ]]; then
-
-            printf -v "${variable}" '%s' "${value}"
-
-            return
-        fi
-
-        log_warning \
-            "${label} cannot be empty."
-    done
-}
 
 prompt_admin_id() {
     local value=""
@@ -1689,7 +1666,7 @@ configure_fresh_install() {
 
     printf '\n'
 
-    prompt_secret_required \
+    prompt_required \
         "BOT_TOKEN" \
         BOT_TOKEN
 
@@ -1709,7 +1686,7 @@ configure_fresh_install() {
         "Configure log bot token? [y/N]: " \
         "n"; then
 
-        prompt_secret_required \
+        prompt_required \
             "LOG_BOT_TOKEN" \
             LOG_BOT_TOKEN
 
@@ -1743,7 +1720,7 @@ configure_fresh_install() {
         "SENAI_PANEL_USERNAME" \
         SENAI_PANEL_USERNAME
 
-    prompt_secret_required \
+    prompt_required \
         "SENAI_PANEL_PASSWORD" \
         SENAI_PANEL_PASSWORD
 
