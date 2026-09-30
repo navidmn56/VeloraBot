@@ -53,10 +53,21 @@ IFS=$'\n\t'
 # Terminal Handling
 # ============================================================
 
-if [[ ! -t 0 ]]; then
-    printf '%s\n' "ERROR: An interactive terminal is required."
-    exit 1
-fi
+readonly TTY_FD=3
+
+open_tty() {
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        printf '%s\n' "ERROR: An interactive terminal is required." >&2
+        printf '%s\n' "The installer must be run from an SSH terminal." >&2
+        exit 1
+    fi
+
+    exec ${TTY_FD}<>/dev/tty
+}
+
+close_tty() {
+    exec ${TTY_FD}>&- 2>/dev/null || true
+}
 
 # ============================================================
 # Colors
@@ -355,20 +366,6 @@ trap on_exit EXIT
 # ============================================================
 # Input Helpers
 # ============================================================
-
-TTY_FD=3
-
-open_tty() {
-    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
-        die "Interactive terminal input is unavailable."
-    fi
-
-    exec ${TTY_FD}<>/dev/tty
-}
-
-close_tty() {
-    exec ${TTY_FD}>&- 2>/dev/null || true
-}
 
 read_tty() {
     local prompt="$1"
