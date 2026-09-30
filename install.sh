@@ -44,7 +44,6 @@ IFS=$'\n\t'
 # All installer output, logs, comments, prompts, and messages are English.
 # ============================================================
 
-
 # ============================================================
 # Terminal Handling
 # ============================================================
@@ -57,7 +56,6 @@ if [[ ! -t 0 ]]; then
         exit 1
     fi
 fi
-
 
 # ============================================================
 # Colors
@@ -73,7 +71,6 @@ readonly WHITE='\033[1;37m'
 readonly DIM='\033[2m'
 readonly BOLD='\033[1m'
 readonly NC='\033[0m'
-
 
 # ============================================================
 # Application Constants
@@ -103,7 +100,6 @@ readonly FALLBACK_LOG_FILE="/tmp/velorabot-installer.log"
 readonly MIN_PYTHON_MAJOR=3
 readonly MIN_PYTHON_MINOR=10
 
-
 # ============================================================
 # Runtime State
 # ============================================================
@@ -131,7 +127,6 @@ FORCE_UPDATE=0
 SKIP_CONFIG=0
 SERVICE_BACKUP_EXISTS=0
 
-
 # ============================================================
 # Configuration State
 # ============================================================
@@ -155,7 +150,6 @@ SUPPORT_USERNAME=""
 
 GEMINI_ENABLED="False"
 GEMINI_API_KEY=""
-
 
 # ============================================================
 # Logging
@@ -217,7 +211,6 @@ die() {
     exit 1
 }
 
-
 # ============================================================
 # UI
 # ============================================================
@@ -247,7 +240,6 @@ draw_step() {
         "${NC}"
     printf '\n'
 }
-
 
 # ============================================================
 # Error Handling
@@ -352,7 +344,6 @@ on_exit() {
 
 trap on_exit EXIT
 
-
 # ============================================================
 # Input Helpers
 # ============================================================
@@ -416,7 +407,6 @@ ask_yes_no() {
         esac
     done
 }
-
 
 # ============================================================
 # Argument Parsing
@@ -483,7 +473,6 @@ parse_arguments() {
         shift
     done
 }
-
 
 # ============================================================
 # Environment Checks
@@ -594,7 +583,6 @@ check_github_connectivity() {
         die "Unable to connect to GitHub."
     fi
 }
-
 
 # ============================================================
 # GitHub Release Handling
@@ -764,7 +752,6 @@ validate_release_for_update() {
     log_success "Release structure is valid for update."
 }
 
-
 # ============================================================
 # Version Handling
 # ============================================================
@@ -799,7 +786,6 @@ write_version_file() {
     printf '%s\n' "${LATEST_VERSION}" > "${VERSION_FILE}"
     chmod 644 "${VERSION_FILE}"
 }
-
 
 # ============================================================
 # Backup
@@ -859,7 +845,6 @@ create_backup() {
 
     log_success "Backup created: ${BACKUP_DIR}"
 }
-
 
 # ============================================================
 # Service Management
@@ -948,7 +933,6 @@ start_service_and_check() {
     return 1
 }
 
-
 # ============================================================
 # Python Virtual Environment
 # ============================================================
@@ -1021,7 +1005,6 @@ requirements_changed() {
 
     return 0
 }
-
 
 # ============================================================
 # Configuration Helpers
@@ -1210,7 +1193,7 @@ validate_existing_config() {
 
     if is_placeholder "${SUPPORT_USERNAME}"; then
         printf '  %bMISSING%b SUPPORT_USERNAME\n' "${RED}" "${NC}"
-        missing=1    
+        missing=1
     fi
 
     if [[ "${GEMINI_ENABLED}" == "True" ]] &&
@@ -1221,7 +1204,6 @@ validate_existing_config() {
 
     return "${missing}"
 }
-
 
 # ============================================================
 # Configuration Writers
@@ -1349,7 +1331,6 @@ with open(path, "w", encoding="utf-8") as handle:
     handle.write(text)
 PY
 }
-
 
 # ============================================================
 # Fresh Installation Configuration Prompts
@@ -1592,7 +1573,6 @@ configure_fresh_install() {
     log_success "Fresh installation configuration completed."
 }
 
-
 # ============================================================
 # Validation
 # ============================================================
@@ -1667,7 +1647,6 @@ validate_application_layout() {
     log_success "Application layout is valid."
 }
 
-
 # ============================================================
 # Protected Path Verification
 # ============================================================
@@ -1729,7 +1708,6 @@ verify_config_checksum() {
 
     return 0
 }
-
 
 # ============================================================
 # Fresh Installation
@@ -1793,7 +1771,6 @@ fresh_install() {
 
     log_success "Fresh installation completed successfully."
 }
-
 
 # ============================================================
 # Existing Installation Update
@@ -1934,7 +1911,6 @@ update_existing() {
     log_success "VeloraBot was updated successfully."
 }
 
-
 # ============================================================
 # Existing Installation Status
 # ============================================================
@@ -2013,7 +1989,6 @@ handle_existing_installation() {
     fi
 }
 
-
 # ============================================================
 # Final Summary
 # ============================================================
@@ -2059,7 +2034,6 @@ show_final_summary() {
 
     draw_line
 }
-
 
 # ============================================================
 # Main
@@ -2125,6 +2099,5 @@ main() {
 
     log_success "Installer finished successfully."
 }
-
 
 main "$@"
