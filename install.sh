@@ -420,13 +420,9 @@ read_tty() {
 
     printf '%s' "${prompt}" > /dev/tty
 
-    if ! IFS= read -r value < /dev/tty; then
-        return 1
-    fi
+    IFS= read -r value < /dev/tty || return 1
 
     printf -v "${result_var}" '%s' "${value}"
-
-    return 0
 }
 
 read_secret_tty() {
@@ -1468,21 +1464,16 @@ prompt_required() {
     local value=""
 
     while true; do
-
         if ! read_tty "${label}: " value; then
-            die \
-                "Could not read input from the terminal."
+            die "Could not read input from the terminal."
         fi
 
         if [[ -n "${value}" ]]; then
-
             printf -v "${variable}" '%s' "${value}"
-
-            return
+            return 0
         fi
 
-        log_warning \
-            "${label} cannot be empty."
+        log_warning "${label} cannot be empty."
     done
 }
 
