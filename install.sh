@@ -62,17 +62,6 @@ open_tty() {
         printf '%s\n' "The installer must be run from an SSH terminal." >&2
         exit 1
     fi
-
-    # IMPORTANT:
-    # Do NOT use:
-    #
-    #   exec ${TTY_FD}<>/dev/tty
-    #
-    # because Bash interprets the expanded "3" as a command.
-    #
-    # FD 3 must be written literally.
-
-    exec 3<>/dev/tty
 }
 
 close_tty() {
@@ -429,14 +418,13 @@ read_tty() {
     local result_var="$2"
     local value=""
 
-    printf '%s' "${prompt}" >&3
+    printf '%s' "${prompt}" > /dev/tty
 
-    if ! IFS= read -r value <&3; then
+    if ! IFS= read -r value < /dev/tty; then
         return 1
     fi
 
     printf -v "${result_var}" '%s' "${value}"
-
     return 0
 }
 
@@ -445,24 +433,20 @@ read_secret_tty() {
     local result_var="$2"
     local value=""
 
-    printf '%s' "${prompt}" >&3
+    printf '%s' "${prompt}" > /dev/tty
 
-    stty -echo <&3 2>/dev/null || true
+    stty -echo < /dev/tty 2>/dev/null || true
 
-    if ! IFS= read -r value <&3; then
-        stty echo <&3 2>/dev/null || true
-
-        printf '\n' >&3
-
+    if ! IFS= read -r value < /dev/tty; then
+        stty echo < /dev/tty 2>/dev/null || true
+        printf '\n' > /dev/tty
         return 1
     fi
 
-    stty echo <&3 2>/dev/null || true
-
-    printf '\n' >&3
+    stty echo < /dev/tty 2>/dev/null || true
+    printf '\n' > /dev/tty
 
     printf -v "${result_var}" '%s' "${value}"
-
     return 0
 }
 
