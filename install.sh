@@ -356,20 +356,33 @@ trap on_exit EXIT
 # Input Helpers
 # ============================================================
 
+TTY_FD=3
+
+open_tty() {
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        die "Interactive terminal input is unavailable."
+    fi
+
+    exec ${TTY_FD}<>/dev/tty
+}
+
+close_tty() {
+    exec ${TTY_FD}>&- 2>/dev/null || true
+}
+
 read_tty() {
     local prompt="$1"
     local result_var="$2"
     local value=""
 
-    printf '%s' "${prompt}" >&2
+    printf '%s' "${prompt}" >&${TTY_FD}
 
-    if [[ -r /dev/tty ]]; then
-        IFS= read -r value < /dev/tty || value=""
-    else
-        IFS= read -r value || value=""
+    if ! IFS= read -r value <&${TTY_FD}; then
+        return 1
     fi
 
     printf -v "${result_var}" '%s' "${value}"
+    return 0
 }
 
 read_secret_tty() {
@@ -377,20 +390,21 @@ read_secret_tty() {
     local result_var="$2"
     local value=""
 
-    printf '%s' "${prompt}" >&2
+    printf '%s' "${prompt}" >&${TTY_FD}
 
-    local tty_device="/dev/tty"
-    if [[ ! -r "${tty_device}" ]]; then
-        tty_device="/dev/stdin"
+    stty -echo <&${TTY_FD} 2>/dev/null || true
+
+    if ! IFS= read -r value <&${TTY_FD}; then
+        stty echo <&${TTY_FD} 2>/dev/null || true
+        printf '\n' >&${TTY_FD}
+        return 1
     fi
 
-    stty -echo < "${tty_device}" 2>/dev/null || true
-    IFS= read -r value < "${tty_device}" || value=""
-    stty echo < "${tty_device}" 2>/dev/null || true
-
-    printf '\n' >&2
+    stty echo <&${TTY_FD} 2>/dev/null || true
+    printf '\n' >&${TTY_FD}
 
     printf -v "${result_var}" '%s' "${value}"
+    return 0
 }
 
 ask_yes_no() {
