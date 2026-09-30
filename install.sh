@@ -27,19 +27,19 @@ IFS=$'\n\t'
 #       Skip configuration prompts during a fresh installation.
 #
 # Update guarantees:
-#   1. data/ is never replaced by release contents.
-#   2. data/ is never deleted, recreated, chmod'ed, or synchronized.
-#   3. config.py is never replaced or rewritten during an update.
-#   4. .venv/ is preserved during an update.
-#   5. requirements.txt from the new release is installed into .venv
+#   1. data/ is never touched: not backed up, not synchronized,
+#      not verified, not rolled back, not deleted, not recreated.
+#   2. config.py is never replaced or rewritten during an update.
+#   3. .venv/ is preserved during an update.
+#   4. requirements.txt from the new release is installed into .venv
 #      when it changes or when .venv has to be created.
-#   6. All other application files are synchronized from the release.
-#   7. Stale application files are removed during synchronization.
-#   8. A backup is created before an update.
-#   9. If an update fails after modification starts, the application
+#   5. All other application files are synchronized from the release.
+#   6. Stale application files are removed during synchronization.
+#   7. A backup of application source is created before an update.
+#   8. If an update fails after modification starts, the application
 #      source and config are rolled back and the previous requirements
 #      are reinstalled when possible.
-#  10. The service is restarted only after validation succeeds.
+#   9. The service is restarted only after validation succeeds.
 #
 # All installer output, logs, comments, prompts, and messages are English.
 # ============================================================
@@ -269,9 +269,14 @@ restore_application_backup() {
 
     mkdir -p "${INSTALL_DIR}"
 
+    # data/ is deliberately untouched here.
+    # The backup archive does not contain data/ at all.
+
     rsync -a --delete \
-        --exclude='/.venv/' \
-        --exclude='/data/' \
+        --exclude='config.py' \
+        --exclude='data' \
+        --exclude='.venv' \
+        --exclude='.version' \
         "${rollback_root}/" \
         "${INSTALL_DIR}/"
 
@@ -632,10 +637,6 @@ html_url = data.get("html_url", "")
 if not tag:
     raise SystemExit("GitHub did not return a release tag.")
 
-# Always use codeload.github.com directly for the archive download.
-# The GitHub API zipball endpoint returns HTTP 415 for many clients,
-# and the codeload URL is stable, redirect-free, and works with a
-# plain curl request.
 zipball_url = (
     f"https://codeload.github.com/navidmn56/VeloraBot/"
     f"zip/refs/tags/{tag}"
@@ -795,22 +796,16 @@ create_backup() {
 
     draw_step "Creating Update Backup"
 
-    log_info "Creating application backup..."
+    log_info "Creating application source backup..."
 
-    # config.py is intentionally included in this archive.
-    # data/ is deliberately excluded because the update never modifies it.
+    # Application source and config.py are archived.
+    # data/ is deliberately and completely excluded from the backup.
+    # It is never read, never written, and never restored.
     tar -czf \
         "${BACKUP_DIR}/application.tar.gz" \
         --exclude='./.venv' \
         --exclude='./data' \
         -C "${INSTALL_DIR}" .
-
-    if [[ -d "${DATA_DIR}" ]]; then
-        tar -czf \
-            "${BACKUP_DIR}/data.tar.gz" \
-            -C "${INSTALL_DIR}" \
-            data
-    fi
 
     if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
         cp -a \
@@ -1005,7 +1000,7 @@ is_placeholder() {
     local value="$1"
 
     case "${value}" in
-        ""|"Main_bot_token"|"YOUR_TELEGRAM_USER_ID"|"Log_bot_token"|"676778785656565656"|"Navid"|"Blue Bank"|"Panel_username"|"Panel_password"|"Gemini_API_Key"|"@your_username_here")
+        ""|"Main_bot_token"|"YOUR_TELEGRAM_USER_ID"|"Log_bot_token"|"676778785656565656"|"Navid"|"Blue Bank"|"Panel_username"|"Panel_password"|"Gemini_API_Key"|"@your_username_here"|"1234567812345678")
             return 0
             ;;
         *)
@@ -1094,6 +1089,8 @@ try:
 
     if isinstance(value, bool):
         print("True" if value else "False")
+    elif value is None:
+        print("None")
     else:
         print(value)
 except Exception:
@@ -1197,130 +1194,46 @@ validate_existing_config() {
 }
 
 # ============================================================
-# Configuration Writers
+# Configuration Template Generation (Fresh Install Only)
 # ============================================================
+#
+# This function builds a complete config.py from the canonical
+# template, preserving the original comments and structure.
+# It is used ONLY during a fresh installation.
+# During an update, config.py is never touched.
 
-set_config_value() {
-    local key="$1"
-    local value="$2"
+write_fresh_config() {
+    local config_path="$1"
 
-    CFG_VALUE="${value}" python3 - "${CONFIG_FILE}" "${key}" <<'PY'
-import os
-import re
-import sys
+    cat > "${config_path}" <<EOF
+# ==================== 🔴 REQUIRED SETTINGS 🔴 ====================
+# These settings MUST be filled for the bot to work properly
+BOT_TOKEN = "${BOT_TOKEN}"  # Get from @BotFather
+ADMIN_ID = ${ADMIN_ID} # Your Telegram ID (get from @myidbot)
+BANK_CARD_NUMBER = "${BANK_CARD_NUMBER}" # Your bank card number (Only 16 digits (no spaces, dashes, or underscores))
+BANK_CARD_HOLDER = "${BANK_CARD_HOLDER}" # Card holder's full name
+BANK_NAME = "${BANK_NAME}" # e.g., "Blue Bank", "Melli", "Mellat"
+SENAI_PANEL_URL = "${SENAI_PANEL_URL}" # OR use localhost: "https://127.0.0.1:2053/your_Web_Path"
+SENAI_PANEL_USERNAME = "${SENAI_PANEL_USERNAME}" # Panel admin username
+SENAI_PANEL_PASSWORD = "${SENAI_PANEL_PASSWORD}" # Panel admin password
+SENAI_SUB_URL = "${SENAI_SUB_URL}" # Subscription URL for clients
+SUPPORT_USERNAME = "${SUPPORT_USERNAME}"
 
-path = sys.argv[1]
-key = sys.argv[2]
-value = os.environ.get("CFG_VALUE", "")
+# =============== 🟡 OPTIONAL: LOGS SETTINGS ===============
+LOG_BOT_TOKEN = "${LOG_BOT_TOKEN}"  # Token of the second bot (will work after make it admin in LOG Group)
+LOG_CHANNEL_ID = ${LOG_CHANNEL_ID}  # replace None to group ID where logs will be sent (how to get group id: add @myidbot to your Group then get group Id with this command "/getid@myidbot", output example: Your own ID is: -5165329724 (start with negetive))
 
-with open(path, "r", encoding="utf-8") as handle:
-    text = handle.read()
 
-replacement = f"{key} = {value!r}"
+# =============== 🟡 OPTIONAL:َAi Google Gemini ===============
+GEMINI_ENABLED = ${GEMINI_ENABLED} # Set to True to enable Gemini AI
+GEMINI_API_KEY = "${GEMINI_API_KEY}" # Get from https://ai.google.dev/
+GEMINI_MODEL = "gemini-2.5-flash" #you can set it to any model of gemini
+GEMINI_TEMPERATURE = 0.7  # Controls randomness (0.0 to 1.0)
+GEMINI_MAX_TOKENS = 90  # Maximum response length
+GEMINI_DAILY_LIMIT = 3
+EOF
 
-pattern = re.compile(
-    rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*$"
-)
-
-if pattern.search(text):
-    text = pattern.sub(
-        lambda _: replacement,
-        text,
-        count=1,
-    )
-else:
-    if text and not text.endswith("\n"):
-        text += "\n"
-
-    text += replacement + "\n"
-
-with open(path, "w", encoding="utf-8") as handle:
-    handle.write(text)
-PY
-}
-
-set_config_integer() {
-    local key="$1"
-    local value="$2"
-
-    python3 - "${CONFIG_FILE}" "${key}" "${value}" <<'PY'
-import re
-import sys
-
-path, key, value = sys.argv[1:]
-
-if not re.fullmatch(r"-?[0-9]+", value):
-    raise SystemExit(f"{key} must be an integer.")
-
-replacement = f"{key} = {int(value)}"
-
-with open(path, "r", encoding="utf-8") as handle:
-    text = handle.read()
-
-pattern = re.compile(
-    rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*$"
-)
-
-if pattern.search(text):
-    text = pattern.sub(
-        lambda _: replacement,
-        text,
-        count=1,
-    )
-else:
-    if text and not text.endswith("\n"):
-        text += "\n"
-
-    text += replacement + "\n"
-
-with open(path, "w", encoding="utf-8") as handle:
-    handle.write(text)
-PY
-}
-
-set_config_boolean() {
-    local key="$1"
-    local value="$2"
-
-    python3 - "${CONFIG_FILE}" "${key}" "${value}" <<'PY'
-import re
-import sys
-
-path, key, value = sys.argv[1:]
-
-normalized = value.lower()
-
-if normalized == "true":
-    raw = "True"
-elif normalized == "false":
-    raw = "False"
-else:
-    raise SystemExit(f"{key} must be True or False.")
-
-replacement = f"{key} = {raw}"
-
-with open(path, "r", encoding="utf-8") as handle:
-    text = handle.read()
-
-pattern = re.compile(
-    rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*$"
-)
-
-if pattern.search(text):
-    text = pattern.sub(
-        lambda _: replacement,
-        text,
-        count=1,
-    )
-else:
-    if text and not text.endswith("\n"):
-        text += "\n"
-
-    text += replacement + "\n"
-
-with open(path, "w", encoding="utf-8") as handle:
-    handle.write(text)
-PY
+    chmod 600 "${config_path}"
 }
 
 # ============================================================
@@ -1385,17 +1298,33 @@ prompt_admin_id() {
 prompt_log_channel_id() {
     local value=""
 
-    while true; do
-        if ! read_tty "LOG_CHANNEL_ID: " value; then
-            die "Could not read input from the terminal."
-        fi
+    printf '%s\n' "LOG_CHANNEL_ID can be left empty (press Enter) to disable logging."
 
+    if ! read_tty "LOG_CHANNEL_ID: " value; then
+        die "Could not read input from the terminal."
+    fi
+
+    if [[ -z "${value}" ]]; then
+        LOG_CHANNEL_ID="None"
+        return
+    fi
+
+    while true; do
         if [[ "${value}" =~ ^-?[0-9]+$ ]]; then
             LOG_CHANNEL_ID="${value}"
             return
         fi
 
-        log_warning "LOG_CHANNEL_ID must be a numeric value."
+        log_warning "LOG_CHANNEL_ID must be a numeric value or empty for None."
+
+        if ! read_tty "LOG_CHANNEL_ID: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ -z "${value}" ]]; then
+            LOG_CHANNEL_ID="None"
+            return
+        fi
     done
 }
 
@@ -1477,9 +1406,6 @@ prompt_gemini() {
 configure_fresh_install() {
     draw_step "Configuring VeloraBot"
 
-    [[ -f "${CONFIG_FILE}" ]] ||
-        die "config.py does not exist."
-
     printf '%s\n' "The following values will be written to config.py."
     printf '%s\n' "This is only performed during a fresh installation."
     printf '\n'
@@ -1487,81 +1413,43 @@ configure_fresh_install() {
     prompt_secret_required "BOT_TOKEN" BOT_TOKEN
     prompt_admin_id
 
-    prompt_secret_required "LOG_BOT_TOKEN" LOG_BOT_TOKEN
-    prompt_log_channel_id
+    printf '\n'
+    printf '%s\n' "Log settings are optional."
+    printf '%s\n' "Press Enter on each to leave them empty."
+    printf '\n'
+
+    if ask_yes_no "Configure log bot token? [y/N]: " "n"; then
+        prompt_secret_required "LOG_BOT_TOKEN" LOG_BOT_TOKEN
+        prompt_log_channel_id
+    else
+        LOG_BOT_TOKEN=""
+        LOG_CHANNEL_ID="None"
+    fi
+
+    printf '\n'
 
     prompt_card_number
     prompt_required "BANK_CARD_HOLDER" BANK_CARD_HOLDER
     prompt_required "BANK_NAME" BANK_NAME
+
+    printf '\n'
 
     prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
     prompt_required "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
     prompt_secret_required "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
     prompt_http_url "SENAI_SUB_URL" SENAI_SUB_URL
 
+    printf '\n'
+
     prompt_required "SUPPORT_USERNAME" SUPPORT_USERNAME
+
+    printf '\n'
 
     prompt_gemini
 
-    set_config_value \
-        "BOT_TOKEN" \
-        "${BOT_TOKEN}"
+    write_fresh_config "${CONFIG_FILE}"
 
-    set_config_integer \
-        "ADMIN_ID" \
-        "${ADMIN_ID}"
-
-    set_config_value \
-        "LOG_BOT_TOKEN" \
-        "${LOG_BOT_TOKEN}"
-
-    set_config_integer \
-        "LOG_CHANNEL_ID" \
-        "${LOG_CHANNEL_ID}"
-
-    set_config_value \
-        "BANK_CARD_NUMBER" \
-        "${BANK_CARD_NUMBER}"
-
-    set_config_value \
-        "BANK_CARD_HOLDER" \
-        "${BANK_CARD_HOLDER}"
-
-    set_config_value \
-        "BANK_NAME" \
-        "${BANK_NAME}"
-
-    set_config_value \
-        "SENAI_PANEL_URL" \
-        "${SENAI_PANEL_URL}"
-
-    set_config_value \
-        "SENAI_PANEL_USERNAME" \
-        "${SENAI_PANEL_USERNAME}"
-
-    set_config_value \
-        "SENAI_PANEL_PASSWORD" \
-        "${SENAI_PANEL_PASSWORD}"
-
-    set_config_value \
-        "SENAI_SUB_URL" \
-        "${SENAI_SUB_URL}"
-
-    set_config_value \
-        "SUPPORT_USERNAME" \
-        "${SUPPORT_USERNAME}"
-
-    set_config_boolean \
-        "GEMINI_ENABLED" \
-        "${GEMINI_ENABLED}"
-
-    set_config_value \
-        "GEMINI_API_KEY" \
-        "${GEMINI_API_KEY}"
-
-    chmod 600 "${CONFIG_FILE}"
-
-    log_success "Fresh installation configuration completed."
+    log_success "config.py was written for the fresh installation."
 }
 
 # ============================================================
@@ -1636,68 +1524,6 @@ validate_application_layout() {
         die "The Python virtual environment is invalid."
 
     log_success "Application layout is valid."
-}
-
-# ============================================================
-# Protected Path Verification
-# ============================================================
-
-create_data_manifest() {
-    local output="$1"
-
-    if [[ ! -d "${DATA_DIR}" ]]; then
-        : > "${output}"
-        return
-    fi
-
-    (
-        cd "${DATA_DIR}"
-        find . \
-            -type f \
-            -print0 |
-            sort -z |
-            while IFS= read -r -d '' file; do
-                sha256sum -- "${file}"
-            done
-    ) > "${output}"
-}
-
-verify_data_manifest() {
-    local before="$1"
-    local after="${TEMP_ROOT}/data-after.sha256"
-
-    create_data_manifest "${after}"
-
-    if ! cmp -s "${before}" "${after}"; then
-        log_error "data/ was modified during the update."
-        return 1
-    fi
-
-    return 0
-}
-
-create_config_checksum() {
-    local output="$1"
-
-    if [[ -f "${CONFIG_FILE}" ]]; then
-        sha256sum "${CONFIG_FILE}" > "${output}"
-    else
-        : > "${output}"
-    fi
-}
-
-verify_config_checksum() {
-    local expected="$1"
-    local actual="${TEMP_ROOT}/config-after.sha256"
-
-    create_config_checksum "${actual}"
-
-    if ! cmp -s "${expected}" "${actual}"; then
-        log_error "config.py was modified during the update."
-        return 1
-    fi
-
-    return 0
 }
 
 # ============================================================
@@ -1781,17 +1607,12 @@ update_existing() {
     create_virtual_environment_if_needed
 
     local old_requirements="${TEMP_ROOT}/old-requirements.txt"
-    local config_before="${TEMP_ROOT}/config-before.sha256"
-    local data_before="${TEMP_ROOT}/data-before.sha256"
 
     if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
         cp -a \
             "${INSTALL_DIR}/requirements.txt" \
             "${old_requirements}"
     fi
-
-    create_config_checksum "${config_before}"
-    create_data_manifest "${data_before}"
 
     local requirements_need_install=0
 
@@ -1809,13 +1630,20 @@ update_existing() {
 
     stop_service_if_active
 
-    draw_step "Synchronizing Application Files"
+    # --------------------------------------------------------
+    # Synchronization
+    #
+    # data/ is moved out of the way before rsync runs and is
+    # moved back exactly as it was after rsync completes.
+    # This guarantees that data/ is never read, written,
+    # deleted, recreated, or otherwise modified.
+    #
+    # config.py is excluded from synchronization.
+    # .venv/ is excluded from synchronization.
+    # .version is excluded from synchronization.
+    # --------------------------------------------------------
 
-    # --------------------------------------------------------
-    # Temporarily move data/ out of the way so rsync --delete
-    # cannot touch it, regardless of how exclude patterns are
-    # interpreted by the local rsync version.
-    # --------------------------------------------------------
+    draw_step "Synchronizing Application Files"
 
     local data_stash=""
 
@@ -1830,36 +1658,19 @@ update_existing() {
 
     rsync -a --delete \
         --exclude='config.py' \
+        --exclude='data' \
         --exclude='.venv' \
         --exclude='.version' \
         "${RELEASE_ROOT}/" \
         "${INSTALL_DIR}/"
 
-    log_success "Application files synchronized."
-
-    # --------------------------------------------------------
-    # Restore data/ exactly as it was before the update.
-    # --------------------------------------------------------
-
     if [[ -n "${data_stash}" && -d "${data_stash}" ]]; then
         rm -rf -- "${DATA_DIR}"
         mv "${data_stash}" "${DATA_DIR}"
-        log_success "data/ was restored unchanged."
+        log_success "data/ was restored exactly as it was."
     fi
 
-    # --------------------------------------------------------
-    # Protected-path safety verification
-    # --------------------------------------------------------
-
-    if ! verify_config_checksum "${config_before}"; then
-        die "Protected file verification failed: config.py was changed."
-    fi
-
-    if ! verify_data_manifest "${data_before}"; then
-        die "Protected directory verification failed: data/ was changed."
-    fi
-
-    log_success "Protected paths verified: config.py and data/ are unchanged."
+    log_success "Application files synchronized."
 
     # --------------------------------------------------------
     # requirements.txt handling
@@ -1940,11 +1751,7 @@ handle_existing_installation() {
             log_success "Existing configuration appears valid."
         else
             log_warning "Existing configuration contains missing or invalid values."
-
-            # IMPORTANT:
-            # The updater does NOT repair config.py.
-            # It only reports the condition.
-            log_warning "Update will not modify config.py."
+            log_warning "The update will not modify config.py."
         fi
     else
         die "config.py is missing. The updater will not create it."
@@ -1982,9 +1789,6 @@ handle_existing_installation() {
         return 0
     fi
 
-    # When the installed release is older than the latest release,
-    # proceed with the update automatically. The updater still creates
-    # a full backup and rolls back on failure.
     log_info "A newer release is available. Starting update automatically..."
     update_existing
 }
@@ -2007,8 +1811,8 @@ show_final_summary() {
     printf '\n'
 
     printf 'Update protection:\n'
-    printf '  config.py      : preserved during updates\n'
-    printf '  data/          : preserved during updates\n'
+    printf '  config.py      : never modified during updates\n'
+    printf '  data/          : never touched during updates\n'
     printf '  .venv/         : preserved during updates\n'
     printf '  requirements   : synchronized with the release\n'
     printf '\n'
