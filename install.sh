@@ -363,8 +363,10 @@ read_tty() {
 
     printf '%s' "${prompt}" >&2
 
-    if ! IFS= read -r value; then
-        return 1
+    if [[ -r /dev/tty ]]; then
+        IFS= read -r value < /dev/tty || value=""
+    else
+        IFS= read -r value || value=""
     fi
 
     printf -v "${result_var}" '%s' "${value}"
@@ -375,26 +377,16 @@ read_secret_tty() {
     local result_var="$2"
     local value=""
 
-    # The prompt is printed before echo is disabled, so the user
-    # sees the question but cannot erase it with backspace.
     printf '%s' "${prompt}" >&2
 
-    if [[ -t 0 ]] && command -v stty >/dev/null 2>&1; then
-        stty -echo 2>/dev/null || true
-
-        if ! IFS= read -r value; then
-            stty echo 2>/dev/null || true
-            printf '\n' >&2
-            return 1
-        fi
-
-        stty echo 2>/dev/null || true
-    else
-        if ! IFS= read -r value; then
-            printf '\n' >&2
-            return 1
-        fi
+    local tty_device="/dev/tty"
+    if [[ ! -r "${tty_device}" ]]; then
+        tty_device="/dev/stdin"
     fi
+
+    stty -echo < "${tty_device}" 2>/dev/null || true
+    IFS= read -r value < "${tty_device}" || value=""
+    stty echo < "${tty_device}" 2>/dev/null || true
 
     printf '\n' >&2
 
