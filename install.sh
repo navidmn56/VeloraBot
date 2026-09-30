@@ -53,9 +53,9 @@ IFS=$'\n\t'
 # Terminal Handling
 # ============================================================
 
-if [[ ! -t 0 ]]; then
+if [[ ! -r /dev/tty ]]; then
     printf '%s\n' "ERROR: An interactive terminal is required." >&2
-    printf '%s\n' "Run this script directly in a terminal (not via pipe)." >&2
+    printf '%s\n' "This script needs a TTY for interactive prompts." >&2
     exit 1
 fi
 
