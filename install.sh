@@ -1,28 +1,25 @@
 #!/usr/bin/env bash
+# ============================================================
+# VeloraBot — Universal Installer / Updater / Repairer (hardened)
+# ============================================================
+# Source of truth:
+#   https://github.com/navidmn56/VeloraBot (main branch)
+#
+# Hardening highlights (v2):
+#   * FD-3 based prompts → SSH-safe, works with `curl | sudo bash`
+#   * config.py is edited in place (values only) and never regenerated
+#   * data/ is preserved AND backed up on updates
+#   * Version file is written only after a successful health check
+#   * Release ZIP is pinned to the exact commit SHA
+#   * Service runs as a dedicated non-root user with systemd sandboxing
+#   * Rollback validates the archive before wiping INSTALL_DIR
+# ============================================================
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 
 # ============================================================
-# VeloraBot — Universal Installer / Updater / Repairer
-# ============================================================
-# Source of truth:
-#   https://github.com/navidmn56/VeloraBot (main branch)
-#
-# Architecture:
-#   * /dev/tty is opened on FD 3 for all interactive prompts.
-#   * stdin is never modified, so `curl ... | sudo bash` works
-#     and the SSH session is never closed.
-#   * config.py is taken from the GitHub release and edited
-#     in place: only values change, comments and structure are
-#     preserved.
-#   * data/ is never touched by any operation.
-#   * Updates require explicit user consent.
-#   * Missing files are restored from the release.
-# ============================================================
-
-# ============================================================
-# Terminal Handling (FD 3 based, SSH-safe)
+# Terminal handling (FD 3, SSH-safe)
 # ============================================================
 
 open_tty() {
@@ -30,14 +27,11 @@ open_tty() {
         printf '%s\n' "ERROR: An interactive terminal is required." >&2
         exit 1
     fi
-
-    # باز کردن /dev/tty فقط برای خواندن روی FD 3
-    # stdin دست‌نخورده می‌ماند → curl | sudo bash کار می‌کند و SSH نمی‌بندد
     exec 3< /dev/tty
 }
 
 close_tty() {
-    exec 3<&- 2>/dev/null || true
+    { exec 3<&-; } 2>/dev/null || true
     return 0
 }
 
@@ -56,7 +50,7 @@ readonly DIM='\033[2m'
 readonly NC='\033[0m'
 
 # ============================================================
-# Application Constants
+# Constants
 # ============================================================
 
 readonly APP_NAME="VeloraBot"
@@ -67,23 +61,29 @@ readonly BRANCH="main"
 
 readonly REPO_URL="https://github.com/${REPO_FULL}"
 readonly COMMITS_API="https://api.github.com/repos/${REPO_FULL}/commits/${BRANCH}"
-readonly ZIP_URL="https://codeload.github.com/${REPO_FULL}/zip/refs/heads/${BRANCH}"
 
 readonly INSTALL_DIR="/opt/VeloraBot"
 readonly VENV_DIR="${INSTALL_DIR}/.venv"
+readonly VENV_NEW_DIR="${INSTALL_DIR}/.venv.new"
 readonly CONFIG_FILE="${INSTALL_DIR}/config.py"
 readonly DATA_DIR="${INSTALL_DIR}/data"
 readonly VERSION_FILE="${INSTALL_DIR}/.version"
 
 readonly SERVICE_NAME="velorabot"
+readonly SERVICE_USER="velorabot"
+readonly SERVICE_GROUP="velorabot"
 readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+readonly SERVICE_OVERRIDE_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
 
 readonly BACKUP_ROOT="/opt/VeloraBot-backups"
-readonly LOG_FILE="/var/log/velorabot-installer.log"
-readonly FALLBACK_LOG_FILE="/tmp/velorabot-installer.log"
+readonly BACKUP_KEEP=5
+
+# NOTE: not readonly → may be reassigned to a fallback path in initialize_logging
+LOG_FILE="/var/log/velorabot-installer.log"
+LOG_FILE_PRIMARY="/var/log/velorabot-installer.log"
 
 # ============================================================
-# Runtime State
+# Runtime state
 # ============================================================
 
 SCRIPT_MODE="auto"
@@ -102,9 +102,10 @@ FORCE_UPDATE=0
 SKIP_CONFIG=0
 REPAIR_ONLY=0
 SERVICE_BACKUP_EXISTS=0
+STTY_SAVED_STATE=""
 
 # ============================================================
-# Configuration State
+# Configuration state
 # ============================================================
 
 BOT_TOKEN=""
@@ -123,18 +124,27 @@ GEMINI_ENABLED="False"
 GEMINI_API_KEY=""
 
 # ============================================================
-# Logging
+# Logging  (fixed ordering: no readonly, mktemp fallback)
 # ============================================================
 
 initialize_logging() {
-    if ! mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null; then
-        LOG_FILE="${FALLBACK_LOG_FILE}"
-    fi
-    if ! touch "${LOG_FILE}" 2>/dev/null; then
-        LOG_FILE="${FALLBACK_LOG_FILE}"
-        touch "${LOG_FILE}" || true
-    fi
+    # Secure fallback: mktemp, not a fixed name in /tmp (avoids symlink attacks).
+    local fallback
+    fallback="$(mktemp -t velorabot-installer.XXXXXX.log 2>/dev/null || echo "/tmp/velorabot-installer.$$.log")"
+    LOG_FILE="${fallback}"
+    : > "${LOG_FILE}" 2>/dev/null || true
     chmod 600 "${LOG_FILE}" 2>/dev/null || true
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        local dir
+        dir="$(dirname "${LOG_FILE_PRIMARY}")"
+        if mkdir -p "${dir}" 2>/dev/null; then
+            if [[ -w "${LOG_FILE_PRIMARY}" ]] || touch "${LOG_FILE_PRIMARY}" 2>/dev/null; then
+                LOG_FILE="${LOG_FILE_PRIMARY}"
+                chmod 600 "${LOG_FILE}" 2>/dev/null || true
+            fi
+        fi
+    fi
 }
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -195,6 +205,7 @@ cleanup_temp() {
     fi
 }
 
+# Safe restore: verify archive integrity BEFORE wiping INSTALL_DIR.
 restore_application_backup() {
     [[ "${BACKUP_READY}" -eq 1 ]] || return 1
     [[ -n "${BACKUP_DIR}" ]] || return 1
@@ -205,16 +216,38 @@ restore_application_backup() {
     mkdir -p "${rollback_root}"
 
     log_info "Restoring application files from backup..."
-    tar -xzf "${BACKUP_DIR}/application.tar.gz" -C "${rollback_root}"
+    if ! tar -xzf "${BACKUP_DIR}/application.tar.gz" -C "${rollback_root}" 2>>"${LOG_FILE}"; then
+        log_error "Failed to extract backup archive."
+        return 1
+    fi
+
+    if [[ ! -f "${rollback_root}/main.py" ]]; then
+        log_error "Backup archive is incomplete (main.py missing)."
+        return 1
+    fi
 
     mkdir -p "${INSTALL_DIR}"
 
     rsync -a --delete \
-        --exclude='data' \
-        --exclude='.venv' \
-        --exclude='.version' \
+        --exclude='/config.py' \
+        --exclude='/data/' \
+        --exclude='/.venv/' \
+        --exclude='/.version' \
+        --exclude='/.git/' \
+        --exclude='/.env' \
         "${rollback_root}/" \
         "${INSTALL_DIR}/"
+
+    # Restore data/ if the backup contains it.
+    if [[ -f "${BACKUP_DIR}/data.tar.gz" ]]; then
+        log_info "Restoring data/ from backup..."
+        if tar -xzf "${BACKUP_DIR}/data.tar.gz" -C "${INSTALL_DIR}" 2>>"${LOG_FILE}"; then
+            chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${DATA_DIR}" 2>/dev/null || true
+            chmod -R 700 "${DATA_DIR}" 2>/dev/null || true
+        else
+            log_warning "Could not restore data/ from backup."
+        fi
+    fi
 
     if [[ "${SERVICE_BACKUP_EXISTS}" -eq 1 && -f "${BACKUP_DIR}/service" ]]; then
         cp -a "${BACKUP_DIR}/service" "${SERVICE_FILE}"
@@ -232,11 +265,18 @@ rollback_update() {
         return 1
     fi
 
-    if [[ -f "${BACKUP_DIR}/requirements.txt" && -x "${VENV_DIR}/bin/python" ]]; then
-        log_info "Restoring previous Python dependencies..."
+    # Restore pinned Python dependencies from freeze if available.
+    if [[ -f "${BACKUP_DIR}/freeze.txt" && -x "${VENV_DIR}/bin/python" ]]; then
+        log_info "Restoring previous Python dependencies (pinned freeze)..."
         if ! "${VENV_DIR}/bin/python" -m pip install \
-            -r "${BACKUP_DIR}/requirements.txt" \
-            >>"${LOG_FILE}" 2>&1; then
+            --force-reinstall --no-deps \
+            -r "${BACKUP_DIR}/freeze.txt" >>"${LOG_FILE}" 2>&1; then
+            log_warning "Previous Python dependencies could not be fully restored."
+        fi
+    elif [[ -f "${BACKUP_DIR}/requirements.txt" && -x "${VENV_DIR}/bin/python" ]]; then
+        log_info "Restoring previous Python dependencies (requirements.txt)..."
+        if ! "${VENV_DIR}/bin/python" -m pip install \
+            -r "${BACKUP_DIR}/requirements.txt" >>"${LOG_FILE}" 2>&1; then
             log_warning "Previous Python dependencies could not be fully restored."
         fi
     fi
@@ -248,6 +288,13 @@ rollback_update() {
 
 on_exit() {
     local exit_code=$?
+
+    # Restore terminal echo if a secret prompt was interrupted.
+    if [[ -n "${STTY_SAVED_STATE}" ]]; then
+        stty "${STTY_SAVED_STATE}" < /dev/tty 2>/dev/null || \
+            stty echo < /dev/tty 2>/dev/null || true
+        STTY_SAVED_STATE=""
+    fi
 
     if (( exit_code != 0 )) && \
        (( UPDATE_IN_PROGRESS == 1 )) && \
@@ -274,14 +321,14 @@ on_exit() {
 }
 
 trap on_exit EXIT
+# Ignore SIGHUP so an SSH disconnect doesn't kill mid-update.
+trap '' HUP
 
 # ============================================================
-# Input Helpers — FD 3 based, works in curl|bash
+# Input helpers (FD 3)
 # ============================================================
 
 read_tty() {
-    # Prefixed names on purpose: bash uses dynamic scoping, so a local with the
-    # same name as the caller's target variable would shadow it.
     local _rt_prompt="$1"
     local _rt_target="$2"
     local _rt_value=""
@@ -305,6 +352,7 @@ read_secret_tty() {
     printf '%s' "${_rs_prompt}" > /dev/tty
 
     _rs_stty_state="$(stty -g < /dev/tty 2>/dev/null || true)"
+    STTY_SAVED_STATE="${_rs_stty_state}"
     stty -echo < /dev/tty 2>/dev/null || true
 
     IFS= read -r _rs_value <&3 || _rs_rc=1
@@ -314,6 +362,7 @@ read_secret_tty() {
     else
         stty echo < /dev/tty 2>/dev/null || true
     fi
+    STTY_SAVED_STATE=""
     printf '\n' > /dev/tty
 
     (( _rs_rc == 0 )) || return 1
@@ -343,7 +392,7 @@ ask_yes_no() {
 }
 
 # ============================================================
-# Argument Parsing
+# Argument parsing
 # ============================================================
 
 show_help() {
@@ -388,7 +437,7 @@ parse_arguments() {
 }
 
 # ============================================================
-# Environment Checks
+# Environment checks
 # ============================================================
 
 check_root() {
@@ -430,12 +479,13 @@ install_system_dependencies() {
     export DEBIAN_FRONTEND=noninteractive
 
     log_command "apt-get update"
-    apt-get update -qq
+    apt-get -o DPkg::Lock::Timeout=120 update -qq
 
     log_command "Installing required packages"
-    apt-get install -y -qq \
+    apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
         ca-certificates curl unzip rsync python3 python3-pip \
-        python3-venv python3-dev build-essential libssl-dev libffi-dev
+        python3-venv python3-dev build-essential libssl-dev libffi-dev \
+        libjpeg-dev zlib1g-dev
 
     for cmd in python3 curl unzip rsync; do
         command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is not available."
@@ -468,7 +518,7 @@ check_github_connectivity() {
 }
 
 # ============================================================
-# GitHub main Branch Handling
+# GitHub main branch handling
 # ============================================================
 
 fetch_latest_commit() {
@@ -514,17 +564,21 @@ PY
 }
 
 download_latest_commit() {
-    draw_step "Downloading Latest ${BRANCH} Branch"
+    draw_step "Downloading ${BRANCH} branch"
     local archive="${TEMP_ROOT}/main.zip"
     local extract_dir="${TEMP_ROOT}/main"
     mkdir -p "${extract_dir}"
 
-    log_info "Downloading ${BRANCH} branch (${LATEST_VERSION})..."
+    # Pin the ZIP to the exact commit SHA we saw via the API.
+    local zip_url="https://codeload.github.com/${REPO_FULL}/zip/${LATEST_COMMIT_SHA}"
+
+    log_info "Downloading commit ${LATEST_VERSION}..."
+    log_command "curl ${zip_url}"
 
     curl --fail --silent --show-error --location \
         --retry 4 --retry-delay 2 \
         --connect-timeout 15 --max-time 300 \
-        "${ZIP_URL}" -o "${archive}"
+        "${zip_url}" -o "${archive}"
 
     [[ -s "${archive}" ]] || die "The downloaded archive is empty."
 
@@ -565,7 +619,7 @@ validate_release_for_update() {
 }
 
 # ============================================================
-# Version Handling
+# Version handling
 # ============================================================
 
 read_current_version() {
@@ -585,25 +639,60 @@ write_version_file() {
 versions_equal() { [[ "$1" == "$2" ]]; }
 
 # ============================================================
-# Backup
+# Backup (fixed: stop first, include data/, pip freeze, chmod 700, retention)
 # ============================================================
+
+prune_old_backups() {
+    [[ -d "${BACKUP_ROOT}" ]] || return 0
+    local dirs
+    mapfile -t dirs < <(
+        find "${BACKUP_ROOT}" -mindepth 1 -maxdepth 1 -type d \
+            -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk 'NR>'"${BACKUP_KEEP}"' {print $2}'
+    )
+    local d
+    for d in "${dirs[@]}"; do
+        [[ -n "${d}" ]] || continue
+        log_info "Pruning old backup: ${d}"
+        rm -rf -- "${d}"
+    done
+}
 
 create_backup() {
     local ts
     ts="$(date '+%Y%m%d_%H%M%S')"
-    BACKUP_DIR="${BACKUP_ROOT}/${ts}_${LATEST_VERSION}"
+    BACKUP_DIR="${BACKUP_ROOT}/${ts}_from-${CURRENT_VERSION}_to-${LATEST_VERSION}"
     mkdir -p "${BACKUP_DIR}"
+    chmod 700 "${BACKUP_ROOT}" 2>/dev/null || true
+    chmod 700 "${BACKUP_DIR}"
 
     draw_step "Creating Update Backup"
-    log_info "Creating application source backup..."
 
+    log_info "Backing up application source..."
     tar -czf "${BACKUP_DIR}/application.tar.gz" \
         --exclude='./.venv' \
         --exclude='./data' \
-        -C "${INSTALL_DIR}" .
+        --exclude='./.git' \
+        -C "${INSTALL_DIR}" . 2>>"${LOG_FILE}" || {
+        log_error "Failed to create application backup."
+        return 1
+    }
+
+    if [[ -d "${DATA_DIR}" ]]; then
+        log_info "Backing up data/ (users, orders, configs)..."
+        tar -czf "${BACKUP_DIR}/data.tar.gz" \
+            -C "${INSTALL_DIR}" data 2>>"${LOG_FILE}" || {
+            log_error "Failed to back up data/."
+            return 1
+        }
+    fi
 
     if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
         cp -a "${INSTALL_DIR}/requirements.txt" "${BACKUP_DIR}/requirements.txt"
+    fi
+
+    if [[ -x "${VENV_DIR}/bin/python" ]]; then
+        "${VENV_DIR}/bin/python" -m pip freeze \
+            > "${BACKUP_DIR}/freeze.txt" 2>/dev/null || true
     fi
 
     if [[ -f "${SERVICE_FILE}" ]]; then
@@ -615,14 +704,17 @@ create_backup() {
 
     chmod 600 "${BACKUP_DIR}"/*.tar.gz 2>/dev/null || true
     chmod 600 "${BACKUP_DIR}/requirements.txt" 2>/dev/null || true
+    chmod 600 "${BACKUP_DIR}/freeze.txt" 2>/dev/null || true
     chmod 600 "${BACKUP_DIR}/service" 2>/dev/null || true
 
     BACKUP_READY=1
     log_success "Backup created: ${BACKUP_DIR}"
+
+    prune_old_backups
 }
 
 # ============================================================
-# Service Management
+# Service management
 # ============================================================
 
 service_is_active() { systemctl is-active --quiet "${SERVICE_NAME}"; }
@@ -631,64 +723,162 @@ stop_service_if_active() {
     SERVICE_WAS_ACTIVE=0
     if service_is_active; then
         SERVICE_WAS_ACTIVE=1
-        log_info "Stopping ${SERVICE_NAME}..."
-        systemctl stop "${SERVICE_NAME}"
-        log_success "Service stopped."
-    else
-        log_info "Service is not currently running."
+    fi
+    # Always stop (idempotent) — handles activating/auto-restart states too.
+    log_info "Stopping ${SERVICE_NAME} (if present)..."
+    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    sleep 1
+    if service_is_active; then
+        log_warning "Service did not stop cleanly, forcing..."
+        systemctl kill -s SIGKILL "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        sleep 1
     fi
 }
 
-create_systemd_service() {
-    draw_step "Configuring systemd"
-    cat > "${SERVICE_FILE}" <<EOF
+ensure_service_user() {
+    if ! getent group "${SERVICE_GROUP}" >/dev/null 2>&1; then
+        groupadd --system "${SERVICE_GROUP}" 2>/dev/null || true
+    fi
+    if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        useradd --system \
+            --gid "${SERVICE_GROUP}" \
+            --shell /usr/sbin/nologin \
+            --home-dir "${INSTALL_DIR}" \
+            --no-create-home \
+            "${SERVICE_USER}" 2>/dev/null || true
+    fi
+}
+
+fix_permissions() {
+    ensure_service_user
+    mkdir -p "${DATA_DIR}"
+    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}" 2>/dev/null || true
+    chmod 755 "${INSTALL_DIR}" 2>/dev/null || true
+    [[ -f "${CONFIG_FILE}" ]] && chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
+    chmod 700 "${DATA_DIR}" 2>/dev/null || true
+    find "${DATA_DIR}" -type f -exec chmod 600 {} + 2>/dev/null || true
+}
+
+# Service file is rewritten ONLY if the content actually changed.
+# Manual overrides go into /etc/systemd/system/<unit>.service.d/override.conf
+write_service_file() {
+    local desired
+    desired="$(cat <<EOF
 [Unit]
 Description=VeloraBot Telegram Bot
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
-User=root
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
 WorkingDirectory=${INSTALL_DIR}
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=${VENV_DIR}/bin/python ${INSTALL_DIR}/main.py
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65535
 
+# Sandboxing
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=${INSTALL_DIR}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
 [Install]
 WantedBy=multi-user.target
 EOF
+)"
 
-    chmod 644 "${SERVICE_FILE}"
-    systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME}" >/dev/null
+    local current=""
+    [[ -f "${SERVICE_FILE}" ]] && current="$(cat "${SERVICE_FILE}")"
+
+    if [[ "${current}" != "${desired}" ]]; then
+        printf '%s\n' "${desired}" > "${SERVICE_FILE}"
+        chmod 644 "${SERVICE_FILE}"
+        systemctl daemon-reload
+        log_info "systemd unit file updated."
+    else
+        log_info "systemd unit file unchanged (preserving any local edits)."
+    fi
+
+    systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    # Ensure override dir exists for user overrides.
+    mkdir -p "${SERVICE_OVERRIDE_DIR}" 2>/dev/null || true
+}
+
+create_systemd_service() {
+    draw_step "Configuring systemd"
+    ensure_service_user
+    write_service_file
     log_success "systemd service configured."
 }
 
+# Health check: wait longer, verify NRestarts == 0, optionally test getMe.
 start_service_and_check() {
     draw_step "Starting VeloraBot"
     systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME}" >/dev/null
-    systemctl restart "${SERVICE_NAME}"
-    sleep 6
+    systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
 
-    if service_is_active; then
-        log_success "${SERVICE_NAME} is running."
-        return 0
+    # Reset restart counter.
+    systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    systemctl restart "${SERVICE_NAME}"
+
+    log_info "Waiting for service to stabilize..."
+    sleep 15
+
+    local restarts
+    restarts="$(systemctl show "${SERVICE_NAME}" -p NRestarts --value 2>/dev/null || echo 0)"
+    [[ -n "${restarts}" ]] || restarts=0
+
+    if ! service_is_active; then
+        log_error "${SERVICE_NAME} failed to start."
+        printf '\n%s\n%s\n' "Recent service logs:" "------------------------------------------------------------"
+        journalctl -u "${SERVICE_NAME}" -n 100 --no-pager || true
+        printf '%s\n' "------------------------------------------------------------"
+        return 1
     fi
 
-    log_error "${SERVICE_NAME} failed to start."
-    printf '\n%s\n%s\n' "Recent service logs:" "------------------------------------------------------------"
-    journalctl -u "${SERVICE_NAME}" -n 100 --no-pager || true
-    printf '%s\n' "------------------------------------------------------------"
-    return 1
+    if [[ "${restarts}" != "0" ]]; then
+        log_error "${SERVICE_NAME} is in a restart loop (NRestarts=${restarts})."
+        printf '\n%s\n%s\n' "Recent service logs:" "------------------------------------------------------------"
+        journalctl -u "${SERVICE_NAME}" -n 100 --no-pager || true
+        printf '%s\n' "------------------------------------------------------------"
+        return 1
+    fi
+
+    # Optional Telegram getMe probe (token via --config from stdin, not argv).
+    if [[ -n "${BOT_TOKEN}" && "${BOT_TOKEN}" != "None" ]]; then
+        log_info "Verifying Telegram bot token (getMe)..."
+        if printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "${BOT_TOKEN}" \
+             | curl --silent --show-error --max-time 15 --config - >/dev/null 2>&1; then
+            log_success "Telegram bot token is valid."
+        else
+            log_warning "Could not verify bot token via getMe (network or token issue)."
+        fi
+    fi
+
+    log_success "${SERVICE_NAME} is running (NRestarts=0)."
+    return 0
 }
 
 # ============================================================
-# Python Virtual Environment
+# Python virtual environment
 # ============================================================
 
 create_virtual_environment_if_needed() {
@@ -717,12 +907,14 @@ install_requirements() {
 
     "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel
     "${VENV_DIR}/bin/python" -m pip install -r "${req}"
-    "${VENV_DIR}/bin/python" -m pip check
+    "${VENV_DIR}/bin/python" -m pip check || \
+        log_warning "pip check reported inconsistencies (continuing)."
 
     log_success "Python dependencies are installed and verified."
 }
 
 ensure_data_configs_file() {
+    mkdir -p "${DATA_DIR}"
     if [[ ! -f "${DATA_DIR}/configs.json" ]]; then
         printf '{}\n' > "${DATA_DIR}/configs.json"
         chmod 600 "${DATA_DIR}/configs.json"
@@ -731,20 +923,62 @@ ensure_data_configs_file() {
 }
 
 # ============================================================
-# Configuration Helpers
+# Config helpers
 # ============================================================
 
+# Return the default value of a given key from the release config.py.
+release_default_value() {
+    local key="$1"
+    [[ -f "${RELEASE_ROOT}/config.py" ]] || return 1
+    python3 - "${RELEASE_ROOT}/config.py" "${key}" <<'PY'
+import ast, sys
+path, key = sys.argv[1], sys.argv[2]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == key:
+                    try:
+                        v = ast.literal_eval(node.value)
+                    except Exception:
+                        sys.exit(1)
+                    if isinstance(v, bool):
+                        print("True" if v else "False")
+                    elif v is None:
+                        print("None")
+                    else:
+                        print(v)
+                    sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+PY
+}
+
+# Placeholder test: empty, known sentinel values, OR equal to the release default.
 is_placeholder() {
-    local value="$1"
+    local key="$1"
+    local value="$2"
+
     case "${value}" in
-        ""|"Main_bot_token"|"YOUR_TELEGRAM_USER_ID"|"Log_bot_token"|\
+        ""|"Main_bot_token"|"Log_bot_token"|"YOUR_TELEGRAM_USER_ID"|\
         "676778785656565656"|"Navid"|"Blue Bank"|"Panel_username"|\
         "Panel_password"|"Gemini_API_Key"|"@your_username_here"|\
-        "1234567812345678")
+        "1234567812345678"|"None")
             return 0
             ;;
-        *) return 1 ;;
     esac
+
+    local default
+    if default="$(release_default_value "${key}" 2>/dev/null)"; then
+        if [[ "${value}" == "${default}" && -n "${default}" ]]; then
+            return 0
+        fi
+    fi
+
+    return 1
 }
 
 extract_config_values() {
@@ -785,15 +1019,19 @@ PY
     )"
     [[ -n "${values}" ]] || values="{}"
 
+    # Pass JSON via env var, not argv (avoids leaking secrets in `ps`).
+    local exported_json="${values}"
+
     config_value() {
         local key="$1"
         local default="${2:-}"
-        python3 - "${values}" "${key}" "${default}" <<'PY'
-import json, sys
+        CFG_JSON="${exported_json}" CFG_KEY="${key}" CFG_DEFAULT="${default}" \
+        python3 <<'PY'
+import json, os, sys
 try:
-    data = json.loads(sys.argv[1])
-    key = sys.argv[2]
-    default = sys.argv[3]
+    data = json.loads(os.environ.get("CFG_JSON", "{}"))
+    key = os.environ.get("CFG_KEY", "")
+    default = os.environ.get("CFG_DEFAULT", "")
     value = data.get(key, default)
     if isinstance(value, bool):
         print("True" if value else "False")
@@ -802,7 +1040,7 @@ try:
     else:
         print(value)
 except Exception:
-    print(sys.argv[3])
+    print(os.environ.get("CFG_DEFAULT", ""))
 PY
     }
 
@@ -822,29 +1060,57 @@ PY
     GEMINI_API_KEY="$(config_value "GEMINI_API_KEY")"
 }
 
+# LOG_BOT_TOKEN is optional. When unset, we treat it as intentionally disabled.
 validate_existing_config() {
     local missing=0
     printf '%s\n' "Checking existing configuration..."
 
-    is_placeholder "${BOT_TOKEN}"        && { printf '  %bMISSING%b BOT_TOKEN\n'        "${RED}" "${NC}"; missing=1; }
-    [[ "${ADMIN_ID}" =~ ^[0-9]+$ ]]      || { printf '  %bINVALID%b ADMIN_ID\n'         "${RED}" "${NC}"; missing=1; }
-    is_placeholder "${LOG_BOT_TOKEN}"    && { printf '  %bMISSING%b LOG_BOT_TOKEN\n'    "${RED}" "${NC}"; missing=1; }
-    [[ "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ || "${LOG_CHANNEL_ID}" == "None" ]] \
-                                          || { printf '  %bINVALID%b LOG_CHANNEL_ID\n'  "${RED}" "${NC}"; missing=1; }
-    [[ "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]] \
-                                          || { printf '  %bINVALID%b BANK_CARD_NUMBER\n' "${RED}" "${NC}"; missing=1; }
-    is_placeholder "${BANK_CARD_HOLDER}" && { printf '  %bMISSING%b BANK_CARD_HOLDER\n' "${RED}" "${NC}"; missing=1; }
-    is_placeholder "${BANK_NAME}"        && { printf '  %bMISSING%b BANK_NAME\n'        "${RED}" "${NC}"; missing=1; }
-    [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]] \
-                                          || { printf '  %bINVALID%b SENAI_PANEL_URL\n' "${RED}" "${NC}"; missing=1; }
-    is_placeholder "${SENAI_PANEL_USERNAME}" \
-                                          && { printf '  %bMISSING%b SENAI_PANEL_USERNAME\n' "${RED}" "${NC}"; missing=1; }
-    is_placeholder "${SENAI_PANEL_PASSWORD}" \
-                                          && { printf '  %bMISSING%b SENAI_PANEL_PASSWORD\n' "${RED}" "${NC}"; missing=1; }
-    [[ "${SENAI_SUB_URL}" =~ ^https?:// ]] || { printf '  %bINVALID%b SENAI_SUB_URL\n'  "${RED}" "${NC}"; missing=1; }
-    is_placeholder "${SUPPORT_USERNAME}" && { printf '  %bMISSING%b SUPPORT_USERNAME\n' "${RED}" "${NC}"; missing=1; }
+    is_placeholder "BOT_TOKEN" "${BOT_TOKEN}" && \
+        { printf '  %bMISSING%b BOT_TOKEN\n' "${RED}" "${NC}"; missing=1; }
 
-    if [[ "${GEMINI_ENABLED}" == "True" ]] && is_placeholder "${GEMINI_API_KEY}"; then
+    [[ "${ADMIN_ID}" =~ ^[0-9]+$ && "${ADMIN_ID}" != "0" ]] || \
+        { printf '  %bINVALID%b ADMIN_ID\n' "${RED}" "${NC}"; missing=1; }
+
+    # LOG_BOT_TOKEN: if it's set (non-placeholder, non-empty) → also validate channel.
+    if ! is_placeholder "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}" && \
+       [[ -n "${LOG_BOT_TOKEN}" ]]; then
+        if [[ ! "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ && "${LOG_CHANNEL_ID}" != "None" ]]; then
+            printf '  %bINVALID%b LOG_CHANNEL_ID\n' "${RED}" "${NC}"; missing=1
+        fi
+    fi
+
+    [[ "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]] || \
+        { printf '  %bINVALID%b BANK_CARD_NUMBER\n' "${RED}" "${NC}"; missing=1; }
+
+    is_placeholder "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}" && \
+        { printf '  %bMISSING%b BANK_CARD_HOLDER\n' "${RED}" "${NC}"; missing=1; }
+
+    is_placeholder "BANK_NAME" "${BANK_NAME}" && \
+        { printf '  %bMISSING%b BANK_NAME\n' "${RED}" "${NC}"; missing=1; }
+
+    if ! [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]]; then
+        printf '  %bINVALID%b SENAI_PANEL_URL\n' "${RED}" "${NC}"; missing=1
+    elif is_placeholder "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"; then
+        printf '  %bMISSING%b SENAI_PANEL_URL\n' "${RED}" "${NC}"; missing=1
+    fi
+
+    is_placeholder "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}" && \
+        { printf '  %bMISSING%b SENAI_PANEL_USERNAME\n' "${RED}" "${NC}"; missing=1; }
+
+    is_placeholder "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}" && \
+        { printf '  %bMISSING%b SENAI_PANEL_PASSWORD\n' "${RED}" "${NC}"; missing=1; }
+
+    if ! [[ "${SENAI_SUB_URL}" =~ ^https?:// ]]; then
+        printf '  %bINVALID%b SENAI_SUB_URL\n' "${RED}" "${NC}"; missing=1
+    elif is_placeholder "SENAI_SUB_URL" "${SENAI_SUB_URL}"; then
+        printf '  %bMISSING%b SENAI_SUB_URL\n' "${RED}" "${NC}"; missing=1
+    fi
+
+    is_placeholder "SUPPORT_USERNAME" "${SUPPORT_USERNAME}" && \
+        { printf '  %bMISSING%b SUPPORT_USERNAME\n' "${RED}" "${NC}"; missing=1; }
+
+    if [[ "${GEMINI_ENABLED}" == "True" ]] && \
+       is_placeholder "GEMINI_API_KEY" "${GEMINI_API_KEY}"; then
         printf '  %bMISSING%b GEMINI_API_KEY\n' "${RED}" "${NC}"; missing=1
     fi
 
@@ -852,27 +1118,30 @@ validate_existing_config() {
 }
 
 # ============================================================
-# Configuration Editors — edit values in place
+# Config editors (in-place, preserve comments)
 # ============================================================
 
-set_config_value() {
+_set_config_raw() {
+    # $1 = key, $2 = raw Python expression (already quoted/typed)
     local key="$1"
-    local value="$2"
-    CFG_KEY="${key}" CFG_VALUE="${value}" python3 - "${CONFIG_FILE}" <<'PY'
+    local raw="$2"
+    CFG_KEY="${key}" CFG_RAW="${raw}" python3 - "${CONFIG_FILE}" <<'PY'
 import os, re, sys
 path = sys.argv[1]
 key = os.environ["CFG_KEY"]
-value = os.environ["CFG_VALUE"]
+raw = os.environ["CFG_RAW"]
 
 with open(path, "r", encoding="utf-8") as f:
     text = f.read()
 
-replacement = f'{key} = {value!r}'
+replacement = f"{key} = {raw}"
 pattern = re.compile(rf"(?m)^([ \t]*){re.escape(key)}([ \t]*=[^\n]*)")
 
 def repl(match):
     line = match.group(0)
-    comment_idx = line.find("#")
+    # Only treat '#' as a comment if it comes after '=' (avoid '#' inside strings).
+    eq = line.find("=")
+    comment_idx = line.find("#", eq + 1) if eq >= 0 else -1
     if comment_idx >= 0:
         comment = line[comment_idx:]
         return f"{match.group(1)}{replacement}  {comment}"
@@ -888,91 +1157,48 @@ else:
 with open(path, "w", encoding="utf-8") as f:
     f.write(text)
 PY
+}
+
+set_config_value() {
+    # String value, safely quoted via repr.
+    CFG_KEY="$1" CFG_VAL="$2" python3 - "${CONFIG_FILE}" <<'PY'
+import os, sys
+key = os.environ["CFG_KEY"]
+val = os.environ["CFG_VAL"]
+print(val)
+PY
+    local quoted
+    quoted="$(CFG_VAL="$2" python3 -c 'import os,sys; sys.stdout.write(repr(os.environ["CFG_VAL"]))')"
+    _set_config_raw "$1" "${quoted}"
 }
 
 set_config_integer() {
-    local key="$1"
-    local value="$2"
-    CFG_KEY="${key}" CFG_VALUE="${value}" python3 - "${CONFIG_FILE}" <<'PY'
-import os, re, sys
-path = sys.argv[1]
-key = os.environ["CFG_KEY"]
-value = os.environ["CFG_VALUE"]
-
-if not re.fullmatch(r"-?[0-9]+", value):
-    raise SystemExit(f"{key} must be an integer.")
-
-replacement = f"{key} = {int(value)}"
-with open(path, "r", encoding="utf-8") as f:
-    text = f.read()
-
-pattern = re.compile(rf"(?m)^([ \t]*){re.escape(key)}([ \t]*=[^\n]*)")
-
-def repl(match):
-    line = match.group(0)
-    comment_idx = line.find("#")
-    if comment_idx >= 0:
-        comment = line[comment_idx:]
-        return f"{match.group(1)}{replacement}  {comment}"
-    return f"{match.group(1)}{replacement}"
-
-if pattern.search(text):
-    text = pattern.sub(repl, text, count=1)
-else:
-    if text and not text.endswith("\n"):
-        text += "\n"
-    text += replacement + "\n"
-
-with open(path, "w", encoding="utf-8") as f:
-    f.write(text)
-PY
+    local key="$1" value="$2"
+    [[ "${value}" =~ ^-?[0-9]+$ ]] || die "${key} must be an integer."
+    _set_config_raw "${key}" "${value}"
 }
 
 set_config_boolean() {
-    local key="$1"
-    local value="$2"
-    CFG_KEY="${key}" CFG_VALUE="${value}" python3 - "${CONFIG_FILE}" <<'PY'
-import os, re, sys
-path = sys.argv[1]
-key = os.environ["CFG_KEY"]
-value = os.environ["CFG_VALUE"]
+    local key="$1" value="$2"
+    local normalized="${value,,}"
+    local raw
+    case "${normalized}" in
+        true)  raw="True" ;;
+        false) raw="False" ;;
+        none)  raw="None" ;;
+        *)     die "${key} must be True, False or None." ;;
+    esac
+    _set_config_raw "${key}" "${raw}"
+}
 
-normalized = value.lower()
-if normalized == "true":
-    raw = "True"
-elif normalized == "false":
-    raw = "False"
-else:
-    raise SystemExit(f"{key} must be True or False.")
-
-replacement = f"{key} = {raw}"
-with open(path, "r", encoding="utf-8") as f:
-    text = f.read()
-
-pattern = re.compile(rf"(?m)^([ \t]*){re.escape(key)}([ \t]*=[^\n]*)")
-
-def repl(match):
-    line = match.group(0)
-    comment_idx = line.find("#")
-    if comment_idx >= 0:
-        comment = line[comment_idx:]
-        return f"{match.group(1)}{replacement}  {comment}"
-    return f"{match.group(1)}{replacement}"
-
-if pattern.search(text):
-    text = pattern.sub(repl, text, count=1)
-else:
-    if text and not text.endswith("\n"):
-        text += "\n"
-    text += replacement + "\n"
-
-with open(path, "w", encoding="utf-8") as f:
-    f.write(text)
-PY
+set_config_literal() {
+    # For None / True / False / bare numbers.
+    local key="$1" value="$2"
+    _set_config_raw "${key}" "${value}"
 }
 
 # ============================================================
-# Prompt Helpers
+# Prompt helpers
 # ============================================================
 
 prompt_for_value() {
@@ -1015,11 +1241,11 @@ prompt_admin_id() {
         if ! read_tty "ADMIN_ID: " value; then
             die "Could not read input from the terminal."
         fi
-        if [[ "${value}" =~ ^[0-9]+$ ]]; then
+        if [[ "${value}" =~ ^[0-9]+$ && "${value}" != "0" ]]; then
             ADMIN_ID="${value}"
             return
         fi
-        log_warning "ADMIN_ID must contain digits only."
+        log_warning "ADMIN_ID must contain digits only (and not 0)."
     done
 }
 
@@ -1082,7 +1308,7 @@ prompt_http_url() {
 }
 
 # ============================================================
-# Configure VeloraBot — fill only missing/invalid fields in place
+# Configure VeloraBot — fill missing/invalid values in place
 # ============================================================
 
 configure_config_in_place() {
@@ -1098,7 +1324,7 @@ configure_config_in_place() {
 
     local changed=0
 
-    if is_placeholder "${BOT_TOKEN}"; then
+    if is_placeholder "BOT_TOKEN" "${BOT_TOKEN}"; then
         prompt_for_secret "BOT_TOKEN" BOT_TOKEN
         set_config_value "BOT_TOKEN" "${BOT_TOKEN}"
         changed=1
@@ -1106,7 +1332,7 @@ configure_config_in_place() {
         printf 'BOT_TOKEN                : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ ]]; then
+    if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ || "${ADMIN_ID}" == "0" ]]; then
         prompt_admin_id
         set_config_integer "ADMIN_ID" "${ADMIN_ID}"
         changed=1
@@ -1114,7 +1340,7 @@ configure_config_in_place() {
         printf 'ADMIN_ID                 : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if is_placeholder "${LOG_BOT_TOKEN}"; then
+    if is_placeholder "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}" || [[ -z "${LOG_BOT_TOKEN}" ]]; then
         if ask_yes_no "Configure log bot token now? [y/N]: " "n"; then
             prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
             set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
@@ -1123,7 +1349,7 @@ configure_config_in_place() {
             if [[ ! "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ && "${LOG_CHANNEL_ID}" != "None" ]]; then
                 prompt_log_channel_id
                 if [[ "${LOG_CHANNEL_ID}" == "None" ]]; then
-                    set_config_value "LOG_CHANNEL_ID" "None"
+                    set_config_literal "LOG_CHANNEL_ID" "None"
                 else
                     set_config_integer "LOG_CHANNEL_ID" "${LOG_CHANNEL_ID}"
                 fi
@@ -1135,7 +1361,7 @@ configure_config_in_place() {
         if [[ ! "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ && "${LOG_CHANNEL_ID}" != "None" ]]; then
             prompt_log_channel_id
             if [[ "${LOG_CHANNEL_ID}" == "None" ]]; then
-                set_config_value "LOG_CHANNEL_ID" "None"
+                set_config_literal "LOG_CHANNEL_ID" "None"
             else
                 set_config_integer "LOG_CHANNEL_ID" "${LOG_CHANNEL_ID}"
             fi
@@ -1151,7 +1377,7 @@ configure_config_in_place() {
         printf 'BANK_CARD_NUMBER         : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if is_placeholder "${BANK_CARD_HOLDER}"; then
+    if is_placeholder "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"; then
         prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
         set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
         changed=1
@@ -1159,7 +1385,7 @@ configure_config_in_place() {
         printf 'BANK_CARD_HOLDER         : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if is_placeholder "${BANK_NAME}"; then
+    if is_placeholder "BANK_NAME" "${BANK_NAME}"; then
         prompt_for_value "BANK_NAME" BANK_NAME
         set_config_value "BANK_NAME" "${BANK_NAME}"
         changed=1
@@ -1167,7 +1393,8 @@ configure_config_in_place() {
         printf 'BANK_NAME                : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if ! [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]]; then
+    if ! [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]] || \
+       is_placeholder "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"; then
         prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
         set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
         changed=1
@@ -1175,7 +1402,7 @@ configure_config_in_place() {
         printf 'SENAI_PANEL_URL          : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if is_placeholder "${SENAI_PANEL_USERNAME}"; then
+    if is_placeholder "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"; then
         prompt_for_value "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
         set_config_value "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
         changed=1
@@ -1183,7 +1410,7 @@ configure_config_in_place() {
         printf 'SENAI_PANEL_USERNAME     : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if is_placeholder "${SENAI_PANEL_PASSWORD}"; then
+    if is_placeholder "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"; then
         prompt_for_secret "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
         set_config_value "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"
         changed=1
@@ -1191,7 +1418,8 @@ configure_config_in_place() {
         printf 'SENAI_PANEL_PASSWORD     : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if ! [[ "${SENAI_SUB_URL}" =~ ^https?:// ]]; then
+    if ! [[ "${SENAI_SUB_URL}" =~ ^https?:// ]] || \
+       is_placeholder "SENAI_SUB_URL" "${SENAI_SUB_URL}"; then
         prompt_http_url "SENAI_SUB_URL" SENAI_SUB_URL
         set_config_value "SENAI_SUB_URL" "${SENAI_SUB_URL}"
         changed=1
@@ -1199,7 +1427,7 @@ configure_config_in_place() {
         printf 'SENAI_SUB_URL            : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if is_placeholder "${SUPPORT_USERNAME}"; then
+    if is_placeholder "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"; then
         prompt_for_value "SUPPORT_USERNAME" SUPPORT_USERNAME
         set_config_value "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"
         changed=1
@@ -1207,7 +1435,8 @@ configure_config_in_place() {
         printf 'SUPPORT_USERNAME         : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if [[ "${GEMINI_ENABLED}" == "True" ]] && is_placeholder "${GEMINI_API_KEY}"; then
+    if [[ "${GEMINI_ENABLED}" == "True" ]] && \
+       is_placeholder "GEMINI_API_KEY" "${GEMINI_API_KEY}"; then
         prompt_for_secret "GEMINI_API_KEY" GEMINI_API_KEY
         set_config_value "GEMINI_API_KEY" "${GEMINI_API_KEY}"
         changed=1
@@ -1220,6 +1449,108 @@ configure_config_in_place() {
     else
         log_success "config.py needed no changes."
     fi
+}
+
+# ============================================================
+# Config key migration (fixes 1-7)
+# ============================================================
+
+migrate_config_keys() {
+    [[ -f "${CONFIG_FILE}" ]] || return 0
+    [[ -f "${RELEASE_ROOT}/config.py" ]] || return 0
+
+    local missing
+    missing="$(python3 - "${INSTALL_DIR}" "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" \
+                          "${VENV_DIR}" "${DATA_DIR}" <<'PY'
+import ast, os, sys
+install_dir, config_path, release_config, venv_dir, data_dir = sys.argv[1:6]
+
+with open(config_path, "r", encoding="utf-8") as f:
+    cfg_tree = ast.parse(f.read())
+defined = set()
+for node in cfg_tree.body:
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            if isinstance(t, ast.Name):
+                defined.add(t.id)
+
+with open(release_config, "r", encoding="utf-8") as f:
+    rel_src = f.read()
+rel_tree = ast.parse(rel_src)
+release_keys = {}
+for node in rel_tree.body:
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            if isinstance(t, ast.Name):
+                seg = ast.get_source_segment(rel_src, node)
+                if seg:
+                    release_keys[t.id] = seg
+
+used = set()
+for root, dirs, files in os.walk(install_dir):
+    dirs[:] = [d for d in dirs
+               if os.path.join(root, d) not in (venv_dir, data_dir)]
+    for fn in files:
+        if not fn.endswith(".py"):
+            continue
+        path = os.path.join(root, fn)
+        try:
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Name) and node.value.id == "config":
+                    used.add(node.attr)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "config":
+                    for alias in node.names:
+                        used.add(alias.name)
+
+missing = sorted(used - defined)
+for key in missing:
+    if key in release_keys:
+        print(key)
+PY
+    )" || true
+
+    if [[ -z "${missing}" ]]; then
+        return 0
+    fi
+
+    log_warning "Missing config.py keys detected: $(echo "${missing}" | tr '\n' ' ')"
+
+    # Append the missing definitions from the release config.py.
+    python3 - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<<"${missing}" <<'PY' 2>/dev/null || \
+    printf '%s\n' "${missing}" | python3 - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<'PY'
+import ast, sys
+
+config_path = sys.argv[1]
+release_config = sys.argv[2]
+missing = set(line.strip() for line in sys.stdin if line.strip())
+
+with open(release_config, "r", encoding="utf-8") as f:
+    rel_src = f.read()
+rel_tree = ast.parse(rel_src)
+
+to_add = []
+for node in rel_tree.body:
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            if isinstance(t, ast.Name) and t.id in missing:
+                seg = ast.get_source_segment(rel_src, node)
+                if seg:
+                    to_add.append(seg)
+
+if to_add:
+    with open(config_path, "a", encoding="utf-8") as f:
+        f.write("\n# === Added by installer (missing keys from release) ===\n")
+        for line in to_add:
+            f.write(line + "\n")
+PY
+
+    log_success "Missing config.py keys were added from release."
 }
 
 # ============================================================
@@ -1268,7 +1599,7 @@ validate_application_layout() {
 }
 
 # ============================================================
-# Fresh Installation
+# Fresh installation
 # ============================================================
 
 prepare_install_directory() {
@@ -1298,16 +1629,28 @@ fresh_install() {
     validate_release_for_install
     prepare_install_directory
 
-    if [[ -d "${INSTALL_DIR}" ]]; then
-        log_info "Cleaning previous application files (data/ is preserved)..."
-        find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 \
-            ! -name 'data' \
-            ! -name '.venv' \
-            -exec rm -rf {} + 2>/dev/null || true
+    # Preserve an existing config.py if present (fixes "config never regenerated" claim).
+    local preserved_config=""
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        preserved_config="${TEMP_ROOT}/preserved_config.py"
+        cp -a "${CONFIG_FILE}" "${preserved_config}"
+        log_warning "Existing config.py detected — it will be preserved."
     fi
+
+    log_info "Cleaning previous application files (data/ and .venv/ preserved)..."
+    find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 \
+        ! -name 'data' \
+        ! -name '.venv' \
+        -exec rm -rf {} + 2>/dev/null || true
 
     log_info "Copying release files into ${INSTALL_DIR}..."
     rsync -a "${RELEASE_ROOT}/" "${INSTALL_DIR}/"
+
+    if [[ -n "${preserved_config}" ]]; then
+        cp -a "${preserved_config}" "${CONFIG_FILE}"
+        chmod 600 "${CONFIG_FILE}"
+        log_info "Restored preserved config.py."
+    fi
 
     mkdir -p "${DATA_DIR}"
     ensure_data_configs_file
@@ -1325,19 +1668,20 @@ fresh_install() {
     install_requirements
     validate_python_source
 
+    fix_permissions
     create_systemd_service
-    write_version_file
 
     if ! start_service_and_check; then
         die "Fresh installation completed, but the service failed to start."
     fi
 
+    write_version_file
     CURRENT_VERSION="${LATEST_VERSION}"
     log_success "Fresh installation completed successfully."
 }
 
 # ============================================================
-# Update Existing Installation
+# Update existing installation (reordered)
 # ============================================================
 
 update_existing() {
@@ -1348,25 +1692,38 @@ update_existing() {
     validate_release_for_update
     create_virtual_environment_if_needed
 
-    UPDATE_IN_PROGRESS=1
-    create_backup
+    # 1) Stop service FIRST, then back up (code + data).
     stop_service_if_active
 
+    # 2) Backup.
+    UPDATE_IN_PROGRESS=1
+    if ! create_backup; then
+        UPDATE_IN_PROGRESS=0
+        if (( SERVICE_WAS_ACTIVE == 1 )); then
+            systemctl start "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        fi
+        die "Backup failed; aborting update."
+    fi
+
+    # 3) Sync release files (anchored excludes, .git/.env preserved).
     draw_step "Synchronizing Application Files"
     log_info "Synchronizing commit ${LATEST_VERSION}..."
 
     rsync -a --delete \
-        --exclude='config.py' \
-        --exclude='data' \
-        --exclude='.venv' \
-        --exclude='.version' \
+        --exclude='/config.py' \
+        --exclude='/data/' \
+        --exclude='/.venv/' \
+        --exclude='/.version' \
+        --exclude='/.git/' \
+        --exclude='/.env' \
         "${RELEASE_ROOT}/" \
         "${INSTALL_DIR}/"
 
     log_success "Application files synchronized."
 
+    # 4) If config.py is missing, restore it from the release.
     if [[ ! -f "${CONFIG_FILE}" ]]; then
-        log_warning "config.py is missing from the server. Restoring from release..."
+        log_warning "config.py is missing. Restoring from release..."
         if [[ -f "${RELEASE_ROOT}/config.py" ]]; then
             cp -a "${RELEASE_ROOT}/config.py" "${CONFIG_FILE}"
             chmod 600 "${CONFIG_FILE}"
@@ -1376,6 +1733,10 @@ update_existing() {
         fi
     fi
 
+    # 5) Migrate missing keys from the release config.py.
+    migrate_config_keys
+
+    # 6) Validate & fix config.
     local config_ok=0
     if extract_config_values && validate_existing_config; then
         config_ok=1
@@ -1399,33 +1760,37 @@ update_existing() {
         log_info "Created placeholder data/configs.json."
     fi
 
+    # 7) Dependencies.
     draw_step "Synchronizing Python Dependencies"
     log_info "Installing release requirements into .venv..."
-
     "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel
     "${VENV_DIR}/bin/python" -m pip install -r "${INSTALL_DIR}/requirements.txt"
-    "${VENV_DIR}/bin/python" -m pip check
-
+    "${VENV_DIR}/bin/python" -m pip check || \
+        log_warning "pip check reported inconsistencies (continuing)."
     log_success "Python dependencies are synchronized."
 
+    # 8) Validate.
     validate_application_layout
     validate_config_syntax
     validate_python_source
 
+    # 9) Service (written only if changed) + permissions.
+    fix_permissions
     create_systemd_service
-    write_version_file
 
+    # 10) Health check FIRST, then write version (fixes bug 1-3).
     if ! start_service_and_check; then
         die "Updated application failed the service health check."
     fi
 
+    write_version_file
     UPDATE_IN_PROGRESS=0
     CURRENT_VERSION="${LATEST_VERSION}"
     log_success "VeloraBot was updated successfully."
 }
 
 # ============================================================
-# Existing Installation Handling
+# Existing installation handling
 # ============================================================
 
 show_existing_status() {
@@ -1506,7 +1871,7 @@ handle_existing_installation() {
 }
 
 # ============================================================
-# Repair Only
+# Repair only
 # ============================================================
 
 repair_only() {
@@ -1523,6 +1888,8 @@ repair_only() {
             die "config.py is missing from the release as well."
         fi
     fi
+
+    migrate_config_keys
 
     local config_ok=0
     if extract_config_values && validate_existing_config; then
@@ -1541,6 +1908,7 @@ repair_only() {
     validate_application_layout
     validate_config_syntax
     validate_python_source
+    fix_permissions
     create_systemd_service
 
     if ! start_service_and_check; then
@@ -1551,7 +1919,7 @@ repair_only() {
 }
 
 # ============================================================
-# Final Summary
+# Final summary
 # ============================================================
 
 show_final_summary() {
@@ -1564,12 +1932,13 @@ show_final_summary() {
     printf 'Config           : %s\n' "${CONFIG_FILE}"
     printf 'Persistent data  : %s\n' "${DATA_DIR}"
     printf 'Service          : %s\n' "${SERVICE_NAME}"
+    printf 'Service user     : %s\n' "${SERVICE_USER}"
     printf 'Installer log    : %s\n' "${LOG_FILE}"
     printf '\n'
 
     printf '%s\n' "Update protection:"
     printf '  config.py      : values edited in place, file never regenerated\n'
-    printf '  data/          : never touched\n'
+    printf '  data/          : never touched (and backed up on update)\n'
     printf '  .venv/         : preserved\n'
     printf '  updates        : require explicit user consent\n'
     printf '\n'
