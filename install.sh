@@ -1238,14 +1238,14 @@ describe() {
 prompt_for_value() {
     local label="$1"
     local result_var="$2"
-    local value=""
+    local _pfv_value=""
 
     while true; do
-        if ! read_tty "${label}: " value; then
+        if ! read_tty "${label}: " _pfv_value; then
             die "Could not read input from the terminal."
         fi
-        if [[ -n "${value}" ]]; then
-            printf -v "${result_var}" '%s' "${value}"
+        if [[ -n "${_pfv_value}" ]]; then
+            printf -v "${result_var}" '%s' "${_pfv_value}"
             return 0
         fi
         log_warning "${label} cannot be empty."
@@ -1255,14 +1255,14 @@ prompt_for_value() {
 prompt_for_secret() {
     local label="$1"
     local result_var="$2"
-    local value=""
+    local _pfs_value=""
 
     while true; do
-        if ! read_secret_tty "${label}: " value; then
+        if ! read_secret_tty "${label}: " _pfs_value; then
             die "Could not read input from the terminal."
         fi
-        if [[ -n "${value}" ]]; then
-            printf -v "${result_var}" '%s' "${value}"
+        if [[ -n "${_pfs_value}" ]]; then
+            printf -v "${result_var}" '%s' "${_pfs_value}"
             return 0
         fi
         log_warning "${label} cannot be empty."
@@ -1349,14 +1349,14 @@ prompt_with_default() {
     local label="$1"
     local default="$2"
     local result_var="$3"
-    local value=""
+    local _pwd_value=""
 
     printf '%s [%s]: ' "${label}" "${default}" > /dev/tty
-    if ! IFS= read -r value <&3; then
+    if ! IFS= read -r _pwd_value <&3; then
         die "Could not read input from the terminal."
     fi
-    [[ -z "${value}" ]] && value="${default}"
-    printf -v "${result_var}" '%s' "${value}"
+    [[ -z "${_pwd_value}" ]] && _pwd_value="${default}"
+    printf -v "${result_var}" '%s' "${_pwd_value}"
 }
 
 prompt_float() {
