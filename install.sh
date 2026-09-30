@@ -29,17 +29,22 @@ IFS=$'\n\t'
 # Update guarantees:
 #   1. data/ is never touched: not backed up, not synchronized,
 #      not verified, not rolled back, not deleted, not recreated.
-#   2. config.py is never replaced or rewritten during an update.
-#   3. .venv/ is preserved during an update.
-#   4. requirements.txt from the new release is installed into .venv
-#      when it changes or when .venv has to be created.
-#   5. All other application files are synchronized from the release.
-#   6. Stale application files are removed during synchronization.
-#   7. A backup of application source is created before an update.
-#   8. If an update fails after modification starts, the application
-#      source and config are rolled back and the previous requirements
-#      are reinstalled when possible.
-#   9. The service is restarted only after validation succeeds.
+#   2. config.py is never replaced during a normal update.
+#   3. If config.py is missing or invalid, the installer prompts
+#      the user for values and writes a complete config.py.
+#   4. .venv/ is preserved during an update.
+#   5. requirements.txt from the release is always installed into
+#      .venv, so new dependencies are never missed.
+#   6. All other application files are synchronized from the release.
+#   7. Stale application files are removed during synchronization.
+#   8. A backup of the application source (including config.py) is
+#      created before an update.
+#   9. If an update fails after modification starts, the application
+#      source and config are rolled back and the previous
+#      requirements are reinstalled when possible.
+#  10. The service is restarted only after validation succeeds.
+#  11. If a fresh installation is requested but backups already exist,
+#      the user is warned and must confirm before continuing.
 #
 # All installer output, logs, comments, prompts, and messages are English.
 # ============================================================
@@ -85,6 +90,7 @@ readonly INSTALL_DIR="/opt/VeloraBot"
 readonly VENV_DIR="${INSTALL_DIR}/.venv"
 readonly CONFIG_FILE="${INSTALL_DIR}/config.py"
 readonly DATA_DIR="${INSTALL_DIR}/data"
+readonly DATA_CONFIGS_FILE="${DATA_DIR}/configs.json"
 readonly VERSION_FILE="${INSTALL_DIR}/.version"
 
 readonly SERVICE_NAME="velorabot"
@@ -266,8 +272,15 @@ restore_application_backup() {
 
     mkdir -p "${INSTALL_DIR}"
 
+    # Restore every application file, including the previous config.py,
+    # because the backup archive contains the pre-update config.py.
+    #
+    # data/ is deliberately excluded because it was never touched by
+    # the update process and it is not part of the backup.
+    #
+    # .venv/ and .version are also excluded because they are not part
+    # of the backup.
     rsync -a --delete \
-        --exclude='config.py' \
         --exclude='data' \
         --exclude='.venv' \
         --exclude='.version' \
@@ -982,23 +995,15 @@ install_requirements() {
     log_success "Python dependencies are installed and verified."
 }
 
-requirements_changed() {
-    local old_file="$1"
-    local new_file="$2"
-
-    if [[ ! -f "${old_file}" ]]; then
-        return 0
+ensure_data_configs_file() {
+    # Some releases expect data/configs.json to exist.
+    # Create an empty one if it is missing.
+    # Never overwrite an existing file.
+    if [[ ! -f "${DATA_CONFIGS_FILE}" ]]; then
+        printf '{}\n' > "${DATA_CONFIGS_FILE}"
+        chmod 600 "${DATA_CONFIGS_FILE}"
+        log_info "Created placeholder ${DATA_CONFIGS_FILE}."
     fi
-
-    if [[ ! -f "${new_file}" ]]; then
-        return 0
-    fi
-
-    if cmp -s "${old_file}" "${new_file}"; then
-        return 1
-    fi
-
-    return 0
 }
 
 # ============================================================
@@ -1411,7 +1416,7 @@ configure_fresh_install() {
     draw_step "Configuring VeloraBot"
 
     printf '%s\n' "The following values will be written to config.py."
-    printf '%s\n' "This is only performed during a fresh installation."
+    printf '%s\n' "This is only performed when config.py must be created or completed."
     printf '\n'
 
     prompt_secret_required "BOT_TOKEN" BOT_TOKEN
@@ -1453,7 +1458,7 @@ configure_fresh_install() {
 
     write_fresh_config "${CONFIG_FILE}"
 
-    log_success "config.py was written for the fresh installation."
+    log_success "config.py was written."
 }
 
 # ============================================================
@@ -1544,6 +1549,28 @@ fresh_install() {
 
     draw_step "Fresh Installation"
 
+    # Check whether previous backups exist. If they do, warn the
+    # user and offer a chance to abort before overwriting anything.
+    if [[ -d "${BACKUP_ROOT}" ]]; then
+        local backup_count
+        backup_count="$(find "${BACKUP_ROOT}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+
+        if (( backup_count > 0 )); then
+            log_warning "Existing backups were found in ${BACKUP_ROOT}."
+            log_warning "Backup count: ${backup_count}"
+            printf '\n'
+            printf '%s\n' "A fresh installation will NOT use those backups."
+            printf '%s\n' "If you want to restore a previous installation, cancel now"
+            printf '%s\n' "and restore the backup manually before running this installer."
+            printf '\n'
+
+            if ! ask_yes_no "Continue with a fresh installation anyway? [y/N]: " "n"; then
+                log_warning "Fresh installation cancelled by user."
+                exit 0
+            fi
+        fi
+    fi
+
     validate_release_for_install
     prepare_install_directory
 
@@ -1563,6 +1590,7 @@ fresh_install() {
         "${INSTALL_DIR}/"
 
     mkdir -p "${DATA_DIR}"
+    ensure_data_configs_file
 
     create_virtual_environment_if_needed
 
@@ -1609,24 +1637,6 @@ update_existing() {
     validate_release_for_update
 
     create_virtual_environment_if_needed
-
-    local old_requirements="${TEMP_ROOT}/old-requirements.txt"
-
-    if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
-        cp -a \
-            "${INSTALL_DIR}/requirements.txt" \
-            "${old_requirements}"
-    fi
-
-    local requirements_need_install=0
-
-    if (( VENV_CREATED == 1 )); then
-        requirements_need_install=1
-    elif requirements_changed \
-        "${old_requirements}" \
-        "${RELEASE_ROOT}/requirements.txt"; then
-        requirements_need_install=1
-    fi
 
     UPDATE_IN_PROGRESS=1
 
@@ -1676,36 +1686,36 @@ update_existing() {
 
     log_success "Application files synchronized."
 
+    # Ensure data/configs.json exists without ever overwriting an
+    # existing file. This runs after data/ has been restored.
+    ensure_data_configs_file
+
     # --------------------------------------------------------
-    # requirements.txt handling
+    # Python dependencies
+    #
+    # Always run pip install during an update. pip is idempotent
+    # and only installs what is missing. This guarantees that any
+    # new dependency introduced by the release is actually
+    # installed, even when requirements.txt has not changed on
+    # disk.
     # --------------------------------------------------------
 
-    if (( requirements_need_install == 1 )); then
-        draw_step "Updating Python Dependencies"
+    draw_step "Synchronizing Python Dependencies"
 
-        if (( VENV_CREATED == 1 )); then
-            log_info "A new virtual environment was created."
-        else
-            log_info "requirements.txt changed in the new release."
-        fi
+    log_info "Installing release requirements into .venv..."
 
-        log_info "Installing the release requirements into .venv..."
+    "${VENV_DIR}/bin/python" -m pip install \
+        --upgrade \
+        pip \
+        setuptools \
+        wheel
 
-        "${VENV_DIR}/bin/python" -m pip install \
-            --upgrade \
-            pip \
-            setuptools \
-            wheel
+    "${VENV_DIR}/bin/python" -m pip install \
+        -r "${INSTALL_DIR}/requirements.txt"
 
-        "${VENV_DIR}/bin/python" -m pip install \
-            -r "${INSTALL_DIR}/requirements.txt"
+    "${VENV_DIR}/bin/python" -m pip check
 
-        "${VENV_DIR}/bin/python" -m pip check
-
-        log_success "Python dependencies are synchronized."
-    else
-        log_success "requirements.txt is unchanged. Existing dependencies are preserved."
-    fi
+    log_success "Python dependencies are synchronized."
 
     # --------------------------------------------------------
     # Final validation before service restart
@@ -1746,6 +1756,8 @@ handle_existing_installation() {
     read_current_version
     show_existing_status
 
+    local config_valid=0
+
     if [[ -f "${CONFIG_FILE}" ]]; then
         log_info "Validating existing config.py..."
 
@@ -1753,12 +1765,26 @@ handle_existing_installation() {
            validate_existing_config; then
 
             log_success "Existing configuration appears valid."
+            config_valid=1
         else
             log_warning "Existing configuration contains missing or invalid values."
-            log_warning "The update will not modify config.py."
         fi
     else
-        die "config.py is missing. The updater will not create it."
+        log_warning "config.py is missing from the existing installation."
+    fi
+
+    # If config.py is missing or invalid, prompt the user for values
+    # and (re)write config.py instead of aborting the update.
+    if (( config_valid == 0 )); then
+        log_warning "The installer will now collect the required settings"
+        log_warning "and write a complete config.py."
+        printf '\n'
+
+        if ask_yes_no "Configure VeloraBot now? [Y/n]: " "y"; then
+            configure_fresh_install
+        else
+            die "Cannot continue without a valid config.py."
+        fi
     fi
 
     if (( FORCE_UPDATE == 0 )) &&
@@ -1771,7 +1797,7 @@ handle_existing_installation() {
         printf 'Installed release : %s\n' "${CURRENT_VERSION}"
         printf 'Latest release    : %s\n' "${LATEST_VERSION}"
         printf '\n'
-        printf '%s\n' "No files were changed."
+        printf '%s\n' "config.py was validated and is now complete."
 
         return 0
     fi
@@ -1815,10 +1841,11 @@ show_final_summary() {
     printf '\n'
 
     printf 'Update protection:\n'
-    printf '  config.py      : never modified during updates\n'
+    printf '  config.py      : never modified during a normal update\n'
+    printf '  config.py      : created or completed only when missing/invalid\n'
     printf '  data/          : never touched during updates\n'
     printf '  .venv/         : preserved during updates\n'
-    printf '  requirements   : synchronized with the release\n'
+    printf '  requirements   : always synchronized with the release\n'
     printf '\n'
 
     if service_is_active; then
