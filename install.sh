@@ -127,6 +127,10 @@ UPDATE_IN_PROGRESS=0
 VENV_CREATED=0
 FRESH_INSTALL=0
 
+FORCE_UPDATE=0
+SKIP_CONFIG=0
+SERVICE_BACKUP_EXISTS=0
+
 
 # ============================================================
 # Configuration State
@@ -283,7 +287,7 @@ restore_application_backup() {
     # data/ was never modified by the update process.
     # Therefore it must not be touched during rollback either.
 
-    if [[ "${SERVICE_BACKUP_EXISTS:-0}" -eq 1 &&
+    if [[ "${SERVICE_BACKUP_EXISTS}" -eq 1 &&
           -f "${BACKUP_DIR}/service" ]]; then
         cp -a "${BACKUP_DIR}/service" "${SERVICE_FILE}"
     fi
@@ -480,9 +484,6 @@ parse_arguments() {
     done
 }
 
-FORCE_UPDATE=0
-SKIP_CONFIG=0
-
 
 # ============================================================
 # Environment Checks
@@ -643,16 +644,18 @@ if data.get("prerelease"):
 
 tag = data.get("tag_name", "")
 html_url = data.get("html_url", "")
-zipball_url = data.get("zipball_url", "")
 
 if not tag:
     raise SystemExit("GitHub did not return a release tag.")
 
-if not zipball_url:
-    zipball_url = (
-        f"https://github.com/navidmn56/VeloraBot/"
-        f"archive/refs/tags/{tag}.zip"
-    )
+# Always use codeload.github.com directly for the archive download.
+# The GitHub API zipball endpoint returns HTTP 415 for many clients,
+# and the codeload URL is stable, redirect-free, and works with a
+# plain curl request.
+zipball_url = (
+    f"https://codeload.github.com/navidmn56/VeloraBot/"
+    f"zip/refs/tags/{tag}"
+)
 
 print(tag)
 print(html_url)
@@ -688,6 +691,9 @@ download_latest_release() {
 
     log_info "Downloading release ${LATEST_VERSION}..."
 
+    # No custom Accept header here.
+    # codeload.github.com serves the archive directly and does not
+    # require or support GitHub API media types.
     curl \
         --fail \
         --silent \
@@ -697,7 +703,6 @@ download_latest_release() {
         --retry-delay 2 \
         --connect-timeout 15 \
         --max-time 300 \
-        -H "Accept: application/octet-stream" \
         "${LATEST_ZIP_URL}" \
         -o "${archive}"
 
@@ -706,7 +711,12 @@ download_latest_release() {
 
     log_info "Extracting release archive..."
 
-    unzip -q "${archive}" -d "${extract_dir}"
+    rm -rf -- "${extract_dir}"
+    mkdir -p "${extract_dir}"
+
+    if ! unzip -q "${archive}" -d "${extract_dir}"; then
+        die "Failed to extract the release archive."
+    fi
 
     RELEASE_ROOT=""
 
@@ -1200,8 +1210,7 @@ validate_existing_config() {
 
     if is_placeholder "${SUPPORT_USERNAME}"; then
         printf '  %bMISSING%b SUPPORT_USERNAME\n' "${RED}" "${NC}"
-        missing=1
-    fi
+        missing=1    fi
 
     if [[ "${GEMINI_ENABLED}" == "True" ]] &&
        is_placeholder "${GEMINI_API_KEY}"; then
@@ -1661,28 +1670,6 @@ validate_application_layout() {
 # ============================================================
 # Protected Path Verification
 # ============================================================
-
-verify_protected_paths() {
-    local config_before="$1"
-    local data_before="$2"
-
-    if [[ -f "${config_before}" ]]; then
-        if ! cmp -s "${config_before}" "${CONFIG_FILE}"; then
-            log_error "config.py changed during update."
-            return 1
-        fi
-    fi
-
-    if [[ -f "${data_before}" ]]; then
-        # This function is not used for directory comparison.
-        # A hash manifest is generated for the complete data directory.
-        if [[ -f "${data_before}" ]]; then
-            :
-        fi
-    fi
-
-    return 0
-}
 
 create_data_manifest() {
     local output="$1"
