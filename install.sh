@@ -1160,16 +1160,11 @@ PY
 }
 
 set_config_value() {
-    # String value, safely quoted via repr.
-    CFG_KEY="$1" CFG_VAL="$2" python3 - "${CONFIG_FILE}" <<'PY'
-import os, sys
-key = os.environ["CFG_KEY"]
-val = os.environ["CFG_VAL"]
-print(val)
-PY
+    local key="$1"
+    local value="$2"
     local quoted
-    quoted="$(CFG_VAL="$2" python3 -c 'import os,sys; sys.stdout.write(repr(os.environ["CFG_VAL"]))')"
-    _set_config_raw "$1" "${quoted}"
+    quoted="$(CFG_VAL="${value}" python3 -c 'import os,sys; sys.stdout.write(repr(os.environ["CFG_VAL"]))')"
+    _set_config_raw "${key}" "${quoted}"
 }
 
 set_config_integer() {
@@ -1477,14 +1472,12 @@ for node in cfg_tree.body:
 with open(release_config, "r", encoding="utf-8") as f:
     rel_src = f.read()
 rel_tree = ast.parse(rel_src)
-release_keys = {}
+release_keys = set()
 for node in rel_tree.body:
     if isinstance(node, ast.Assign):
         for t in node.targets:
             if isinstance(t, ast.Name):
-                seg = ast.get_source_segment(rel_src, node)
-                if seg:
-                    release_keys[t.id] = seg
+                release_keys.add(t.id)
 
 used = set()
 for root, dirs, files in os.walk(install_dir):
@@ -1508,8 +1501,7 @@ for root, dirs, files in os.walk(install_dir):
                     for alias in node.names:
                         used.add(alias.name)
 
-missing = sorted(used - defined)
-for key in missing:
+for key in sorted(used - defined):
     if key in release_keys:
         print(key)
 PY
@@ -1521,9 +1513,8 @@ PY
 
     log_warning "Missing config.py keys detected: $(echo "${missing}" | tr '\n' ' ')"
 
-    # Append the missing definitions from the release config.py.
-    python3 - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<<"${missing}" <<'PY' 2>/dev/null || \
-    printf '%s\n' "${missing}" | python3 - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<'PY'
+    printf '%s\n' "${missing}" \
+        | python3 - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<'PY'
 import ast, sys
 
 config_path = sys.argv[1]
