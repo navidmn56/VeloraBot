@@ -49,12 +49,9 @@ IFS=$'\n\t'
 # ============================================================
 
 if [[ ! -t 0 ]]; then
-    if [[ -r /dev/tty ]]; then
-        exec </dev/tty
-    else
-        printf '%s\n' "ERROR: An interactive terminal is required." >&2
-        exit 1
-    fi
+    printf '%s\n' "ERROR: An interactive terminal is required." >&2
+    printf '%s\n' "Run this script directly in a terminal (not via pipe)." >&2
+    exit 1
 fi
 
 # ============================================================
@@ -269,9 +266,6 @@ restore_application_backup() {
 
     mkdir -p "${INSTALL_DIR}"
 
-    # data/ is deliberately untouched here.
-    # The backup archive does not contain data/ at all.
-
     rsync -a --delete \
         --exclude='config.py' \
         --exclude='data' \
@@ -354,7 +348,7 @@ read_tty() {
     local result_var="$2"
     local value=""
 
-    printf '%s' "${prompt}"
+    printf '%s' "${prompt}" >&2
 
     if ! IFS= read -r value; then
         return 1
@@ -368,13 +362,28 @@ read_secret_tty() {
     local result_var="$2"
     local value=""
 
-    printf '%s' "${prompt}"
+    # The prompt is printed before echo is disabled, so the user
+    # sees the question but cannot erase it with backspace.
+    printf '%s' "${prompt}" >&2
 
-    if ! IFS= read -r -s value; then
-        return 1
+    if [[ -t 0 ]] && command -v stty >/dev/null 2>&1; then
+        stty -echo 2>/dev/null || true
+
+        if ! IFS= read -r value; then
+            stty echo 2>/dev/null || true
+            printf '\n' >&2
+            return 1
+        fi
+
+        stty echo 2>/dev/null || true
+    else
+        if ! IFS= read -r value; then
+            printf '\n' >&2
+            return 1
+        fi
     fi
 
-    printf '\n'
+    printf '\n' >&2
 
     printf -v "${result_var}" '%s' "${value}"
 }
@@ -1196,11 +1205,6 @@ validate_existing_config() {
 # ============================================================
 # Configuration Template Generation (Fresh Install Only)
 # ============================================================
-#
-# This function builds a complete config.py from the canonical
-# template, preserving the original comments and structure.
-# It is used ONLY during a fresh installation.
-# During an update, config.py is never touched.
 
 write_fresh_config() {
     local config_path="$1"
