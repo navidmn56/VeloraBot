@@ -1,19 +1,63 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+IFS=$'\n\t'
 
 # ============================================================
-# Interactive Terminal
+# VeloraBot
+# Complete Installer + Release Updater
+# ============================================================
+# Source of truth:
+#   https://github.com/navidmn56/VeloraBot
+#
+# Modes:
+#   bash velorabot-installer.sh
+#       Automatically install or update.
+#
+#   bash velorabot-installer.sh --install
+#       Perform a fresh installation.
+#
+#   bash velorabot-installer.sh --update
+#       Update an existing installation.
+#
+#   bash velorabot-installer.sh --force-update
+#       Force an update even when the installed release is current.
+#
+#   bash velorabot-installer.sh --skip-config
+#       Skip configuration prompts during a fresh installation.
+#
+# Update guarantees:
+#   1. data/ is never replaced by release contents.
+#   2. data/ is never deleted, recreated, chmod'ed, or synchronized.
+#   3. config.py is never replaced or rewritten during an update.
+#   4. .venv/ is preserved during an update.
+#   5. requirements.txt from the new release is installed into .venv
+#      when it changes or when .venv has to be created.
+#   6. All other application files are synchronized from the release.
+#   7. Stale application files are removed during synchronization.
+#   8. A backup is created before an update.
+#   9. If an update fails after modification starts, the application
+#      source and config are rolled back and the previous requirements
+#      are reinstalled when possible.
+#  10. The service is restarted only after validation succeeds.
+#
+# All installer output, logs, comments, prompts, and messages are English.
+# ============================================================
+
+
+# ============================================================
+# Terminal Handling
 # ============================================================
 
 if [[ ! -t 0 ]]; then
     if [[ -r /dev/tty ]]; then
         exec </dev/tty
     else
-        echo "ERROR: Interactive terminal is required." >&2
+        printf '%s\n' "ERROR: An interactive terminal is required." >&2
         exit 1
     fi
 fi
+
 
 # ============================================================
 # Colors
@@ -30,6 +74,7 @@ readonly DIM='\033[2m'
 readonly BOLD='\033[1m'
 readonly NC='\033[0m'
 
+
 # ============================================================
 # Application Constants
 # ============================================================
@@ -37,8 +82,10 @@ readonly NC='\033[0m'
 readonly APP_NAME="VeloraBot"
 readonly OWNER="navidmn56"
 readonly REPO="VeloraBot"
-readonly REPO_URL="https://github.com/${OWNER}/${REPO}.git"
-readonly API_URL="https://api.github.com/repos/${OWNER}/${REPO}"
+readonly REPO_FULL="${OWNER}/${REPO}"
+
+readonly REPO_URL="https://github.com/${REPO_FULL}"
+readonly API_URL="https://api.github.com/repos/${REPO_FULL}"
 
 readonly INSTALL_DIR="/opt/VeloraBot"
 readonly VENV_DIR="${INSTALL_DIR}/.venv"
@@ -50,28 +97,44 @@ readonly SERVICE_NAME="velorabot"
 readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 readonly BACKUP_ROOT="/opt/VeloraBot-backups"
-readonly INSTALL_LOG="/tmp/velorabot-install.log"
+readonly LOG_FILE="/var/log/velorabot-installer.log"
+readonly FALLBACK_LOG_FILE="/tmp/velorabot-installer.log"
+
+readonly MIN_PYTHON_MAJOR=3
+readonly MIN_PYTHON_MINOR=10
+
 
 # ============================================================
-# Runtime Variables
+# Runtime State
 # ============================================================
 
-CURRENT_VERSION=""
-LATEST_VERSION=""
+SCRIPT_MODE="auto"
+
+CURRENT_VERSION="unknown"
+LATEST_VERSION="unknown"
 LATEST_RELEASE_URL=""
+LATEST_ZIP_URL=""
 
-INSTALL_MODE=""
-NEEDS_CONFIG_REPAIR="false"
+TEMP_ROOT=""
+RELEASE_ROOT=""
 
-SKIP_CONFIG="${SKIP_CONFIG:-false}"
-FORCE_UPDATE="${FORCE_UPDATE:-false}"
+BACKUP_DIR=""
+BACKUP_READY=0
+
+SERVICE_WAS_ACTIVE=0
+UPDATE_IN_PROGRESS=0
+
+VENV_CREATED=0
+FRESH_INSTALL=0
+
 
 # ============================================================
-# Critical Configuration Values
+# Configuration State
 # ============================================================
 
 BOT_TOKEN=""
 ADMIN_ID=""
+
 LOG_BOT_TOKEN=""
 LOG_CHANNEL_ID=""
 
@@ -89,106 +152,227 @@ SUPPORT_USERNAME=""
 GEMINI_ENABLED="False"
 GEMINI_API_KEY=""
 
-# ============================================================
-# Installer Logging
-# ============================================================
-
-touch "$INSTALL_LOG" 2>/dev/null || INSTALL_LOG="/tmp/velorabot-install-$(date +%s).log"
-touch "$INSTALL_LOG"
-chmod 600 "$INSTALL_LOG"
-
-log() {
-    echo "$*" | tee -a "$INSTALL_LOG"
-}
 
 # ============================================================
-# UI Functions
+# Logging
 # ============================================================
 
-line() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+initialize_logging() {
+    if ! mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null; then
+        LOG_FILE="${FALLBACK_LOG_FILE}"
+    fi
+
+    if ! touch "${LOG_FILE}" 2>/dev/null; then
+        LOG_FILE="${FALLBACK_LOG_FILE}"
+        touch "${LOG_FILE}" || true
+    fi
+
+    chmod 600 "${LOG_FILE}" 2>/dev/null || true
 }
 
-header() {
-    echo
-    line
-    echo -e "${BOLD}${CYAN}  $1${NC}"
-    line
-    echo
+timestamp() {
+    date '+%Y-%m-%d %H:%M:%S'
 }
 
-step() {
-    echo
-    echo -e "${MAGENTA}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${MAGENTA}${BOLD}  $1${NC}"
-    echo -e "${MAGENTA}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo
+write_log() {
+    local level="$1"
+    shift
+    printf '[%s] [%s] %s\n' "$(timestamp)" "${level}" "$*" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
-info() {
-    echo -e "${CYAN}ℹ $1${NC}"
+log_info() {
+    printf '%b[INFO]%b %s\n' "${CYAN}" "${NC}" "$*"
+    write_log "INFO" "$*"
 }
 
-success() {
-    echo -e "${GREEN}✔ $1${NC}"
+log_success() {
+    printf '%b[ OK ]%b %s\n' "${GREEN}" "${NC}" "$*"
+    write_log "OK" "$*"
 }
 
-warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
+log_warning() {
+    printf '%b[WARN]%b %s\n' "${YELLOW}" "${NC}" "$*" >&2
+    write_log "WARN" "$*"
 }
 
-error() {
-    echo -e "${RED}✖ $1${NC}"
+log_error() {
+    printf '%b[FAIL]%b %s\n' "${RED}" "${NC}" "$*" >&2
+    write_log "FAIL" "$*"
 }
 
-command_info() {
-    echo -e "${DIM}➜ $1${NC}"
+log_command() {
+    printf '%b[CMD ]%b %s\n' "${DIM}" "${NC}" "$*"
+    write_log "CMD" "$*"
 }
 
 die() {
-    error "$1"
-    echo
-    info "Installer log:"
-    echo "  $INSTALL_LOG"
+    log_error "$*"
+    printf '\n'
+    printf '%s\n' "Installer log:"
+    printf '  %s\n' "${LOG_FILE}"
     exit 1
 }
 
-# ============================================================
-# Error Trap
-# ============================================================
-
-trap '
-    error "Unexpected error on line $LINENO."
-    error "Command: $BASH_COMMAND"
-    echo
-    info "Installer log: $INSTALL_LOG"
-    exit 1
-' ERR
 
 # ============================================================
-# Input Functions (Fixed for curl | bash)
+# UI
+# ============================================================
+
+draw_line() {
+    printf '%b%s%b\n' "${BLUE}" \
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+        "${NC}"
+}
+
+draw_header() {
+    printf '\n'
+    draw_line
+    printf '%b  %s%b\n' "${BOLD}${CYAN}" "$1" "${NC}"
+    draw_line
+    printf '\n'
+}
+
+draw_step() {
+    printf '\n'
+    printf '%b%s%b\n' "${MAGENTA}${BOLD}" \
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+        "${NC}"
+    printf '%b  %s%b\n' "${MAGENTA}${BOLD}" "$1" "${NC}"
+    printf '%b%s%b\n' "${MAGENTA}${BOLD}" \
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' \
+        "${NC}"
+    printf '\n'
+}
+
+
+# ============================================================
+# Error Handling
+# ============================================================
+
+cleanup_temp() {
+    if [[ -n "${TEMP_ROOT}" && -d "${TEMP_ROOT}" ]]; then
+        rm -rf -- "${TEMP_ROOT}"
+    fi
+}
+
+restore_application_backup() {
+    [[ "${BACKUP_READY}" -eq 1 ]] || return 1
+    [[ -n "${BACKUP_DIR}" ]] || return 1
+    [[ -f "${BACKUP_DIR}/application.tar.gz" ]] || return 1
+
+    local rollback_root="${TEMP_ROOT}/rollback"
+
+    rm -rf -- "${rollback_root}"
+    mkdir -p "${rollback_root}"
+
+    log_info "Restoring application files from backup..."
+
+    tar -xzf \
+        "${BACKUP_DIR}/application.tar.gz" \
+        -C "${rollback_root}"
+
+    mkdir -p "${INSTALL_DIR}"
+
+    # Restore every application file except the protected runtime paths.
+    rsync -a --delete \
+        --exclude='.venv/' \
+        --exclude='data/' \
+        "${rollback_root}/" \
+        "${INSTALL_DIR}/"
+
+    # data/ was never modified by the update process.
+    # Therefore it must not be touched during rollback either.
+
+    if [[ "${SERVICE_BACKUP_EXISTS:-0}" -eq 1 &&
+          -f "${BACKUP_DIR}/service" ]]; then
+        cp -a "${BACKUP_DIR}/service" "${SERVICE_FILE}"
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    return 0
+}
+
+rollback_update() {
+    log_warning "Attempting to roll back the failed update..."
+
+    if ! restore_application_backup; then
+        log_error "Application rollback failed."
+        return 1
+    fi
+
+    if [[ -f "${BACKUP_DIR}/requirements.txt" &&
+          -x "${VENV_DIR}/bin/python" ]]; then
+
+        log_info "Restoring previous Python dependencies..."
+
+        if ! "${VENV_DIR}/bin/python" -m pip install \
+            -r "${BACKUP_DIR}/requirements.txt" \
+            >>"${LOG_FILE}" 2>&1; then
+            log_warning "Previous Python dependencies could not be fully restored."
+        fi
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    log_success "Application rollback completed."
+    return 0
+}
+
+on_exit() {
+    local exit_code=$?
+
+    if (( exit_code != 0 )) &&
+       (( UPDATE_IN_PROGRESS == 1 )) &&
+       (( BACKUP_READY == 1 )); then
+
+        printf '\n'
+        log_error "The update failed with exit code ${exit_code}."
+
+        if rollback_update; then
+            if (( SERVICE_WAS_ACTIVE == 1 )); then
+                log_info "Starting the previous service version..."
+                systemctl start "${SERVICE_NAME}" >/dev/null 2>&1 || true
+            fi
+
+            log_warning "The previous application version has been restored."
+        else
+            log_error "Automatic rollback was not fully successful."
+            log_error "Manual recovery may be required."
+        fi
+    fi
+
+    cleanup_temp
+    exit "${exit_code}"
+}
+
+trap on_exit EXIT
+
+
+# ============================================================
+# Input Helpers
 # ============================================================
 
 read_tty() {
     local prompt="$1"
-    local __resultvar="$2"
+    local result_var="$2"
     local value=""
 
-    printf "%s" "$prompt"
+    printf '%s' "${prompt}"
 
     if ! IFS= read -r value; then
         return 1
     fi
 
-    printf -v "$__resultvar" '%s' "$value"
+    printf -v "${result_var}" '%s' "${value}"
 }
 
 read_secret_tty() {
     local prompt="$1"
-    local __resultvar="$2"
+    local result_var="$2"
     local value=""
 
-    printf "%s" "$prompt"
+    printf '%s' "${prompt}"
 
     if ! IFS= read -r -s value; then
         return 1
@@ -196,69 +380,159 @@ read_secret_tty() {
 
     printf '\n'
 
-    printf -v "$__resultvar" '%s' "$value"
+    printf -v "${result_var}" '%s' "${value}"
 }
 
+ask_yes_no() {
+    local prompt="$1"
+    local default="$2"
+    local answer=""
+
+    while true; do
+        if ! read_tty "${prompt}" answer; then
+            return 1
+        fi
+
+        answer="${answer,,}"
+
+        if [[ -z "${answer}" ]]; then
+            answer="${default}"
+        fi
+
+        case "${answer}" in
+            y|yes)
+                return 0
+                ;;
+            n|no)
+                return 1
+                ;;
+            *)
+                log_warning "Please answer yes or no."
+                ;;
+        esac
+    done
+}
+
+
 # ============================================================
-# Root Check
+# Argument Parsing
+# ============================================================
+
+show_help() {
+    cat <<EOF
+VeloraBot Installer / Updater
+
+Usage:
+  sudo bash $0
+  sudo bash $0 --install
+  sudo bash $0 --update
+  sudo bash $0 --force-update
+  sudo bash $0 --skip-config
+  sudo bash $0 --update --force-update
+  sudo bash $0 --help
+
+Options:
+  --install         Perform a fresh installation.
+  --update          Update an existing installation.
+  --force-update    Force the latest release to be installed.
+  --skip-config     Skip configuration prompts during a fresh install.
+  --help, -h        Show this help message.
+
+Automatic mode:
+  If ${INSTALL_DIR} does not exist, a fresh installation is performed.
+  If ${INSTALL_DIR} exists, an update is performed.
+
+Protected update paths:
+  ${CONFIG_FILE}
+  ${DATA_DIR}
+  ${VENV_DIR}
+
+Update source:
+  ${REPO_URL}
+EOF
+}
+
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --install)
+                SCRIPT_MODE="install"
+                ;;
+            --update)
+                SCRIPT_MODE="update"
+                ;;
+            --force-update)
+                FORCE_UPDATE=1
+                ;;
+            --skip-config)
+                SKIP_CONFIG=1
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+
+        shift
+    done
+}
+
+FORCE_UPDATE=0
+SKIP_CONFIG=0
+
+
+# ============================================================
+# Environment Checks
 # ============================================================
 
 check_root() {
-    if [[ "$EUID" -ne 0 ]]; then
-        die "Please run this installer as root."
+    if [[ "$(id -u)" -ne 0 ]]; then
+        die "This installer must be run as root."
     fi
-    success "Running with root privileges."
+
+    log_success "Running with root privileges."
 }
 
-# ============================================================
-# OS Check
-# ============================================================
-
-check_os() {
-    if [[ ! -f /etc/os-release ]]; then
+check_operating_system() {
+    [[ -f /etc/os-release ]] ||
         die "Cannot detect the operating system."
-    fi
 
+    # shellcheck disable=SC1091
     source /etc/os-release
 
-    echo "Operating System : ${PRETTY_NAME:-Unknown}"
-    echo "Architecture     : $(uname -m)"
-    echo "Kernel           : $(uname -r)"
-    echo
+    printf 'Operating System : %s\n' "${PRETTY_NAME:-Unknown}"
+    printf 'Architecture     : %s\n' "$(uname -m)"
+    printf 'Kernel           : %s\n' "$(uname -r)"
+    printf '\n'
 
     if [[ "${ID:-}" != "ubuntu" ]]; then
-        warning "This installer is designed for Ubuntu."
-        warning "Detected OS: ${PRETTY_NAME:-Unknown}"
-        echo
+        log_warning "This installer is designed for Ubuntu."
+        log_warning "Detected operating system: ${PRETTY_NAME:-Unknown}"
 
-        local answer
-        if ! read_tty "Continue anyway? [y/N]: " answer; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+        if ! ask_yes_no "Continue anyway? [y/N]: " "n"; then
             exit 0
         fi
     fi
 }
 
-# ============================================================
-# System Dependencies
-# ============================================================
-
 install_system_dependencies() {
-    step "Installing System Dependencies"
+    draw_step "Installing System Dependencies"
 
     export DEBIAN_FRONTEND=noninteractive
 
-    command_info "apt-get update"
+    log_command "apt-get update"
     apt-get update
 
-    command_info "Installing required packages"
+    log_command "Installing required packages"
+
     apt-get install -y \
-        git \
-        curl \
         ca-certificates \
+        curl \
+        unzip \
+        rsync \
         python3 \
         python3-pip \
         python3-venv \
@@ -267,1165 +541,344 @@ install_system_dependencies() {
         libssl-dev \
         libffi-dev
 
-    success "System dependencies installed."
+    command -v python3 >/dev/null 2>&1 ||
+        die "python3 is not available."
+
+    command -v curl >/dev/null 2>&1 ||
+        die "curl is not available."
+
+    command -v unzip >/dev/null 2>&1 ||
+        die "unzip is not available."
+
+    command -v rsync >/dev/null 2>&1 ||
+        die "rsync is not available."
+
+    log_success "System dependencies are installed."
 }
 
-# ============================================================
-# Python Check
-# ============================================================
-
-check_python() {
+check_python_version() {
     local version
 
     version="$(
         python3 -c \
-        'import sys; print(".".join(map(str, sys.version_info[:2])))'
+            'import sys; print(".".join(map(str, sys.version_info[:2])))'
     )"
 
-    echo "Python version: $version"
+    printf 'Python version: %s\n' "${version}"
 
     if ! python3 -c \
-        'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)'
+        'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)'
     then
         die "VeloraBot requires Python 3.10 or newer."
     fi
 
-    success "Python version is supported."
+    log_success "Python version is supported."
 }
 
-# ============================================================
-# Internet Check
-# ============================================================
-
-check_internet() {
-    info "Checking GitHub connectivity..."
+check_github_connectivity() {
+    draw_step "Checking GitHub Connectivity"
 
     if curl \
         --fail \
         --silent \
         --show-error \
+        --location \
         --connect-timeout 10 \
-        https://github.com \
-        >/dev/null
-    then
-        success "GitHub is reachable."
+        --max-time 30 \
+        "https://github.com" \
+        >/dev/null; then
+
+        log_success "GitHub is reachable."
     else
         die "Unable to connect to GitHub."
     fi
 }
 
+
 # ============================================================
-# GitHub API
+# GitHub Release Handling
 # ============================================================
 
-get_latest_release() {
-    step "Checking GitHub Releases"
+fetch_latest_release() {
+    draw_step "Checking Latest GitHub Release"
 
-    local response
+    local metadata_file="${TEMP_ROOT}/release.json"
 
-    response="$(
-        curl \
-            --fail \
-            --silent \
-            --show-error \
-            --location \
-            --connect-timeout 15 \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "${API_URL}/releases/latest"
-    )"
+    log_info "Requesting latest release information from GitHub..."
 
-    LATEST_VERSION="$(
-        printf '%s' "$response" |
-        python3 -c '
+    curl \
+        --fail \
+        --silent \
+        --show-error \
+        --location \
+        --retry 4 \
+        --retry-delay 2 \
+        --connect-timeout 15 \
+        --max-time 60 \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "${API_URL}/releases/latest" \
+        -o "${metadata_file}"
+
+    local parsed
+
+    parsed="$(
+        python3 - "${metadata_file}" <<'PY'
 import json
 import sys
 
-data = json.load(sys.stdin)
-print(data.get("tag_name", ""))
-'
-    )"
+path = sys.argv[1]
 
-    LATEST_RELEASE_URL="$(
-        printf '%s' "$response" |
-        python3 -c '
-import json
-import sys
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
 
-data = json.load(sys.stdin)
-print(data.get("html_url", ""))
-'
-    )"
+if data.get("message"):
+    raise SystemExit(f"GitHub API error: {data['message']}")
 
-    if [[ -z "$LATEST_VERSION" ]]; then
-        die "Could not determine the latest GitHub Release."
-    fi
+if data.get("draft"):
+    raise SystemExit("The latest GitHub release is a draft.")
 
-    echo
-    echo "Latest GitHub Release:"
-    echo -e "  ${GREEN}${LATEST_VERSION}${NC}"
-    echo
-    echo "Release:"
-    echo "  ${LATEST_RELEASE_URL}"
-    echo
+if data.get("prerelease"):
+    raise SystemExit("The latest GitHub release is a prerelease.")
 
-    success "Latest release detected."
+tag = data.get("tag_name", "")
+html_url = data.get("html_url", "")
+zipball_url = data.get("zipball_url", "")
+
+if not tag:
+    raise SystemExit("GitHub did not return a release tag.")
+
+if not zipball_url:
+    zipball_url = (
+        f"https://github.com/navidmn56/VeloraBot/"
+        f"archive/refs/tags/{tag}.zip"
+    )
+
+print(tag)
+print(html_url)
+print(zipball_url)
+PY
+    )" || die "Failed to parse GitHub release information."
+
+    LATEST_VERSION="$(printf '%s\n' "${parsed}" | sed -n '1p')"
+    LATEST_RELEASE_URL="$(printf '%s\n' "${parsed}" | sed -n '2p')"
+    LATEST_ZIP_URL="$(printf '%s\n' "${parsed}" | sed -n '3p')"
+
+    [[ -n "${LATEST_VERSION}" ]] ||
+        die "Latest release version could not be determined."
+
+    [[ -n "${LATEST_ZIP_URL}" ]] ||
+        die "Latest release ZIP URL could not be determined."
+
+    printf '\n'
+    printf 'Latest Release : %s\n' "${LATEST_VERSION}"
+    printf 'Release URL    : %s\n' "${LATEST_RELEASE_URL}"
+    printf '\n'
+
+    log_success "Latest release detected."
 }
 
+download_latest_release() {
+    draw_step "Downloading Release"
+
+    local archive="${TEMP_ROOT}/release.zip"
+    local extract_dir="${TEMP_ROOT}/release"
+
+    mkdir -p "${extract_dir}"
+
+    log_info "Downloading release ${LATEST_VERSION}..."
+
+    curl \
+        --fail \
+        --silent \
+        --show-error \
+        --location \
+        --retry 4 \
+        --retry-delay 2 \
+        --connect-timeout 15 \
+        --max-time 300 \
+        -H "Accept: application/octet-stream" \
+        "${LATEST_ZIP_URL}" \
+        -o "${archive}"
+
+    [[ -s "${archive}" ]] ||
+        die "The downloaded release archive is empty."
+
+    log_info "Extracting release archive..."
+
+    unzip -q "${archive}" -d "${extract_dir}"
+
+    RELEASE_ROOT=""
+
+    while IFS= read -r -d '' directory; do
+        if [[ -f "${directory}/main.py" &&
+              -f "${directory}/requirements.txt" ]]; then
+
+            RELEASE_ROOT="${directory}"
+            break
+        fi
+    done < <(
+        find "${extract_dir}" \
+            -mindepth 1 \
+            -maxdepth 2 \
+            -type d \
+            -print0
+    )
+
+    [[ -n "${RELEASE_ROOT}" ]] ||
+        die "Invalid release structure. main.py and requirements.txt were not found."
+
+    log_success "Release archive extracted successfully."
+}
+
+validate_release_for_install() {
+    [[ -f "${RELEASE_ROOT}/main.py" ]] ||
+        die "main.py is missing from the release."
+
+    [[ -f "${RELEASE_ROOT}/requirements.txt" ]] ||
+        die "requirements.txt is missing from the release."
+
+    [[ -f "${RELEASE_ROOT}/config.py" ]] ||
+        die "config.py is missing from the release. Fresh installation cannot continue."
+
+    log_success "Release structure is valid for installation."
+}
+
+validate_release_for_update() {
+    [[ -f "${RELEASE_ROOT}/main.py" ]] ||
+        die "main.py is missing from the release."
+
+    [[ -f "${RELEASE_ROOT}/requirements.txt" ]] ||
+        die "requirements.txt is missing from the release."
+
+    log_success "Release structure is valid for update."
+}
+
+
 # ============================================================
-# Detect Installed Version (Using .version file)
+# Version Handling
 # ============================================================
 
-get_current_version() {
-    if [[ ! -f "$VERSION_FILE" ]]; then
-        # Fallback to git if .version doesn't exist
-        if [[ -d "$INSTALL_DIR/.git" ]]; then
-            CURRENT_VERSION="$(
-                git -C "$INSTALL_DIR" describe \
-                    --tags \
-                    --exact-match \
-                    2>/dev/null || true
-            )"
-        fi
-        
-        if [[ -z "$CURRENT_VERSION" ]]; then
+read_current_version() {
+    if [[ -f "${VERSION_FILE}" ]]; then
+        CURRENT_VERSION="$(tr -d '\r\n' < "${VERSION_FILE}")"
+
+        [[ -n "${CURRENT_VERSION}" ]] ||
             CURRENT_VERSION="unknown"
-        fi
     else
-        CURRENT_VERSION="$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")"
+        CURRENT_VERSION="unknown"
     fi
 }
-
-save_version_file() {
-    echo "$LATEST_VERSION" > "$VERSION_FILE"
-    chmod 644 "$VERSION_FILE"
-}
-
-# ============================================================
-# Version Comparison
-# ============================================================
 
 normalize_version() {
     local version="$1"
     version="${version#v}"
-    echo "$version"
+    printf '%s\n' "${version}"
 }
 
-version_is_equal() {
-    local a b
-    a="$(normalize_version "$1")"
-    b="$(normalize_version "$2")"
-    [[ "$a" == "$b" ]]
+versions_equal() {
+    local left right
+
+    left="$(normalize_version "$1")"
+    right="$(normalize_version "$2")"
+
+    [[ "${left}" == "${right}" ]]
 }
+
+write_version_file() {
+    printf '%s\n' "${LATEST_VERSION}" > "${VERSION_FILE}"
+    chmod 644 "${VERSION_FILE}"
+}
+
 
 # ============================================================
-# Backup (Enhanced)
+# Backup
 # ============================================================
 
 create_backup() {
-    local timestamp backup_dir
+    local timestamp
+
     timestamp="$(date '+%Y%m%d_%H%M%S')"
-    backup_dir="${BACKUP_ROOT}/${timestamp}"
 
-    mkdir -p "$backup_dir"
+    BACKUP_DIR="${BACKUP_ROOT}/${timestamp}_${LATEST_VERSION}"
 
-    # Backup config.py
-    if [[ -f "$CONFIG_FILE" ]]; then
-        cp -a "$CONFIG_FILE" "$backup_dir/config.py"
+    mkdir -p "${BACKUP_DIR}"
+
+    draw_step "Creating Update Backup"
+
+    log_info "Creating application backup..."
+
+    # config.py is intentionally included in this archive.
+    # data/ is deliberately excluded because the update never modifies it.
+    tar -czf \
+        "${BACKUP_DIR}/application.tar.gz" \
+        --exclude='./.venv' \
+        --exclude='./data' \
+        -C "${INSTALL_DIR}" .
+
+    if [[ -d "${DATA_DIR}" ]]; then
+        # This is a read-only backup operation.
+        # The update itself never writes to data/.
+        tar -czf \
+            "${BACKUP_DIR}/data.tar.gz" \
+            -C "${INSTALL_DIR}" \
+            data
     fi
 
-    # Backup data directory
-    if [[ -d "$DATA_DIR" ]]; then
-        cp -a "$DATA_DIR" "$backup_dir/data"
+    if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
+        cp -a \
+            "${INSTALL_DIR}/requirements.txt" \
+            "${BACKUP_DIR}/requirements.txt"
     fi
 
-    # Backup version file
-    if [[ -f "$VERSION_FILE" ]]; then
-        cp -a "$VERSION_FILE" "$backup_dir/.version"
-    fi
-
-    # Backup requirements.txt
-    if [[ -f "$INSTALL_DIR/requirements.txt" ]]; then
-        cp -a "$INSTALL_DIR/requirements.txt" "$backup_dir/requirements.txt"
-    fi
-
-    echo "$backup_dir"
-}
-
-# ============================================================
-# Extract Configuration (Robust with Regex Fallback)
-# ============================================================
-
-extract_config_values() {
-    [[ -f "$CONFIG_FILE" ]] || return 1
-
-    local values=""
-    
-    # Method 1: Try AST parsing
-    values="$(python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || echo "{}"
-import ast
-import json
-import sys
-
-path = sys.argv[1]
-
-try:
-    with open(path, encoding="utf-8") as f:
-        source = f.read()
-    
-    tree = ast.parse(source, filename=path)
-    
-    allowed = {
-        "BOT_TOKEN", "ADMIN_ID", "LOG_BOT_TOKEN", "LOG_CHANNEL_ID",
-        "BANK_CARD_NUMBER", "BANK_CARD_HOLDER", "BANK_NAME",
-        "SENAI_PANEL_URL", "SENAI_PANEL_USERNAME", "SENAI_PANEL_PASSWORD",
-        "SENAI_SUB_URL", "SUPPORT_USERNAME",
-        "GEMINI_ENABLED", "GEMINI_API_KEY",
-    }
-    
-    result = {}
-    
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        
-        for target in node.targets:
-            if not isinstance(target, ast.Name):
-                continue
-            
-            key = target.id
-            if key not in allowed:
-                continue
-            
-            try:
-                value = ast.literal_eval(node.value)
-                result[key] = value
-            except Exception:
-                continue
-    
-    print(json.dumps(result))
-except Exception:
-    print("{}")
-PY
-)"
-
-    # Method 2: If AST failed, try regex
-    if [[ -z "$values" ]] || [[ "$values" == "{}" ]]; then
-        warning "Using regex extraction for config values..."
-        
-        values="$(python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || echo "{}"
-import json
-import re
-import sys
-
-path = sys.argv[1]
-
-try:
-    with open(path, encoding="utf-8") as f:
-        content = f.read()
-except Exception:
-    print("{}")
-    sys.exit(0)
-
-result = {}
-
-# Define patterns for each key
-patterns = {
-    "BOT_TOKEN": r'BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
-    "ADMIN_ID": r'ADMIN_ID\s*=\s*["\']?(\d+)["\']?',
-    "LOG_BOT_TOKEN": r'LOG_BOT_TOKEN\s*=\s*["\']([^"\']+)["\']',
-    "LOG_CHANNEL_ID": r'LOG_CHANNEL_ID\s*=\s*(-?\d+)',
-    "BANK_CARD_NUMBER": r'BANK_CARD_NUMBER\s*=\s*["\']([^"\']+)["\']',
-    "BANK_CARD_HOLDER": r'BANK_CARD_HOLDER\s*=\s*["\']([^"\']+)["\']',
-    "BANK_NAME": r'BANK_NAME\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_PANEL_URL": r'SENAI_PANEL_URL\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_PANEL_USERNAME": r'SENAI_PANEL_USERNAME\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_PANEL_PASSWORD": r'SENAI_PANEL_PASSWORD\s*=\s*["\']([^"\']+)["\']',
-    "SENAI_SUB_URL": r'SENAI_SUB_URL\s*=\s*["\']([^"\']+)["\']',
-    "SUPPORT_USERNAME": r'SUPPORT_USERNAME\s*=\s*["\']([^"\']+)["\']',
-    "GEMINI_ENABLED": r'GEMINI_ENABLED\s*=\s*["\']?(True|False)["\']?',
-    "GEMINI_API_KEY": r'GEMINI_API_KEY\s*=\s*["\']([^"\']+)["\']',
-}
-
-for key, pattern in patterns.items():
-    match = re.search(pattern, content, re.MULTILINE)
-    if match:
-        if key == "GEMINI_ENABLED":
-            result[key] = match.group(1) == "True"
-        elif key in ["ADMIN_ID", "LOG_CHANNEL_ID"]:
-            try:
-                result[key] = int(match.group(1))
-            except:
-                result[key] = match.group(1)
-        else:
-            result[key] = match.group(1)
-
-print(json.dumps(result))
-PY
-)"
-    fi
-
-    # Extract values from JSON
-    extract_single_value() {
-        local key="$1"
-        local default="$2"
-        local value
-        
-        value="$(python3 -c "
-import json, sys
-try:
-    d = json.loads('''$values''')
-    val = d.get('$key', '$default')
-    if isinstance(val, bool):
-        print('True' if val else 'False')
-    else:
-        print(val)
-except Exception as e:
-    print('$default')
-" 2>/dev/null)"
-        
-        echo "$value"
-    }
-
-    BOT_TOKEN="$(extract_single_value "BOT_TOKEN" "")"
-    ADMIN_ID="$(extract_single_value "ADMIN_ID" "")"
-    LOG_BOT_TOKEN="$(extract_single_value "LOG_BOT_TOKEN" "")"
-    LOG_CHANNEL_ID="$(extract_single_value "LOG_CHANNEL_ID" "")"
-    
-    BANK_CARD_NUMBER="$(extract_single_value "BANK_CARD_NUMBER" "")"
-    BANK_CARD_HOLDER="$(extract_single_value "BANK_CARD_HOLDER" "")"
-    BANK_NAME="$(extract_single_value "BANK_NAME" "")"
-    
-    SENAI_PANEL_URL="$(extract_single_value "SENAI_PANEL_URL" "")"
-    SENAI_PANEL_USERNAME="$(extract_single_value "SENAI_PANEL_USERNAME" "")"
-    SENAI_PANEL_PASSWORD="$(extract_single_value "SENAI_PANEL_PASSWORD" "")"
-    SENAI_SUB_URL="$(extract_single_value "SENAI_SUB_URL" "")"
-    
-    SUPPORT_USERNAME="$(extract_single_value "SUPPORT_USERNAME" "")"
-    
-    GEMINI_ENABLED="$(extract_single_value "GEMINI_ENABLED" "False")"
-    GEMINI_API_KEY="$(extract_single_value "GEMINI_API_KEY" "")"
-}
-
-# ============================================================
-# Configuration Validation
-# ============================================================
-
-is_placeholder() {
-    local value="$1"
-
-    case "$value" in
-        ""|\
-        "Main_bot_token"|\
-        "YOUR_TELEGRAM_USER_ID"|\
-        "Log_bot_token"|\
-        "676778785656565656"|\
-        "Navid"|\
-        "Blue Bank"|\
-        "Panel_username"|\
-        "Panel_password"|\
-        "Gemini_API_Key"|\
-        "@your_username_here")
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-validate_config() {
-    local missing=0
-
-    if is_placeholder "$BOT_TOKEN"; then
-        echo "  ✖ BOT_TOKEN"
-        missing=1
-    fi
-
-    if [[ ! "$ADMIN_ID" =~ ^[0-9]+$ ]]; then
-        echo "  ✖ ADMIN_ID"
-        missing=1
-    fi
-
-    if is_placeholder "$LOG_BOT_TOKEN"; then
-        echo "  ✖ LOG_BOT_TOKEN"
-        missing=1
-    fi
-
-    if [[ ! "$LOG_CHANNEL_ID" =~ ^-[0-9]+$ ]]; then
-        echo "  ✖ LOG_CHANNEL_ID"
-        missing=1
-    fi
-
-    if [[ ! "$BANK_CARD_NUMBER" =~ ^[0-9]{16}$ ]]; then
-        echo "  ✖ BANK_CARD_NUMBER"
-        missing=1
-    fi
-
-    if is_placeholder "$BANK_CARD_HOLDER"; then
-        echo "  ✖ BANK_CARD_HOLDER"
-        missing=1
-    fi
-
-    if is_placeholder "$BANK_NAME"; then
-        echo "  ✖ BANK_NAME"
-        missing=1
-    fi
-
-    if ! [[ "$SENAI_PANEL_URL" =~ ^https?:// ]]; then
-        echo "  ✖ SENAI_PANEL_URL"
-        missing=1
-    fi
-
-    if is_placeholder "$SENAI_PANEL_USERNAME"; then
-        echo "  ✖ SENAI_PANEL_USERNAME"
-        missing=1
-    fi
-
-    if is_placeholder "$SENAI_PANEL_PASSWORD"; then
-        echo "  ✖ SENAI_PANEL_PASSWORD"
-        missing=1
-    fi
-
-    if ! [[ "$SENAI_SUB_URL" =~ ^https?:// ]]; then
-        echo "  ✖ SENAI_SUB_URL"
-        missing=1
-    fi
-
-    if is_placeholder "$SUPPORT_USERNAME"; then
-        echo "  ✖ SUPPORT_USERNAME"
-        missing=1
-    fi
-
-    if [[ "$GEMINI_ENABLED" == "True" ]] && is_placeholder "$GEMINI_API_KEY"; then
-        echo "  ✖ GEMINI_API_KEY"
-        missing=1
-    fi
-
-    return "$missing"
-}
-
-# ============================================================
-# Interactive Configuration Functions
-# ============================================================
-
-ask_main_config() {
-    local value
-
-    while true; do
-        echo
-        header "MAIN TELEGRAM BOT"
-
-        echo "This is the Telegram bot that your customers will use."
-        echo
-        echo "Get the token from @BotFather:"
-        echo
-        echo "  1. Open @BotFather."
-        echo "  2. Send /mybots."
-        echo "  3. Select your bot."
-        echo "  4. Open the API Token section."
-        echo "  5. Copy the complete token."
-        echo
-
-        if ! read_secret_tty "Bot Token: " value; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ "$value" =~ ^[0-9]{6,12}:[A-Za-z0-9_-]{20,}$ ]]; then
-            BOT_TOKEN="$value"
-            break
-        fi
-
-        error "Invalid Telegram Bot Token format. Got: '$value'"
-    done
-}
-
-ask_admin_id() {
-    local value
-
-    while true; do
-        echo
-        header "TELEGRAM ADMIN ID"
-
-        echo "This is your personal numeric Telegram ID."
-        echo
-        echo "To get it:"
-        echo
-        echo "  1. Open @myidbot."
-        echo "  2. Press Start."
-        echo "  3. Copy your numeric Telegram ID."
-        echo
-        echo "Example:"
-        echo "  123456789"
-        echo
-
-        if ! read_tty "Admin ID: " value; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ "$value" =~ ^[0-9]+$ ]]; then
-            ADMIN_ID="$value"
-            break
-        fi
-
-        error "Admin ID must contain numbers only. Got: '$value'"
-    done
-}
-
-ask_log_bot() {
-    local value
-
-    while true; do
-        echo
-        header "LOG BOT TOKEN"
-
-        echo "VeloraBot uses a second Telegram bot to send logs."
-        echo
-        echo "IMPORTANT:"
-        echo
-        echo "  1. Create a second bot with @BotFather."
-        echo "  2. Add this bot to your Log group."
-        echo "  3. Make the Log Bot an ADMINISTRATOR."
-        echo "  4. Make sure it has permission to SEND MESSAGES."
-        echo "  5. Then enter its Bot Token below."
-        echo
-
-        if ! read_secret_tty "Log Bot Token: " value; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ "$value" =~ ^[0-9]{6,12}:[A-Za-z0-9_-]{20,}$ ]]; then
-            LOG_BOT_TOKEN="$value"
-            break
-        fi
-
-        error "Invalid Telegram Bot Token format. Got: '$value'"
-    done
-}
-
-ask_log_group() {
-    local value
-
-    while true; do
-        echo
-        header "LOG GROUP ID"
-
-        echo "This is the Telegram group where VeloraBot will send logs."
-        echo
-        echo "Before continuing, make sure your Log Bot:"
-        echo
-        echo "  • Is inside the group."
-        echo "  • Is an administrator."
-        echo "  • Can send messages."
-        echo
-        echo "To get the Group ID:"
-        echo
-        echo "  1. Add @myidbot to the Log group."
-        echo "  2. Open the group."
-        echo "  3. Send:"
-        echo
-        echo "       /getgroupid@myidbot"
-        echo
-        echo "  4. Copy the Group ID."
-        echo
-        echo "Examples:"
-        echo "  -56376"
-        echo "  -107637"
-        echo
-
-        if ! read_tty "Log Group ID: " value; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ "$value" =~ ^-[0-9]+$ ]]; then
-            LOG_CHANNEL_ID="$value"
-            break
-        fi
-
-        error "Group ID must be a negative number. Got: '$value'"
-    done
-}
-
-ask_bank_card() {
-    local value
-
-    while true; do
-        echo
-        header "BANK CARD NUMBER"
-
-        echo "Enter the 16-digit bank card number used for customer payments."
-        echo
-        echo "Do not use spaces or dashes."
-        echo
-        echo "Example:"
-        echo "  6037991234567890"
-        echo
-
-        if ! read_tty "Card Number: " value; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ "$value" =~ ^[0-9]{16}$ ]]; then
-            BANK_CARD_NUMBER="$value"
-            break
-        fi
-
-        error "Card number must contain exactly 16 digits. Got: '$value'"
-    done
-}
-
-ask_card_holder() {
-    echo
-    header "BANK CARD HOLDER"
-
-    echo "Enter the full name of the bank card owner."
-    echo
-    echo "Example:"
-    echo "  Navid Moradi"
-    echo
-
-    if ! read_tty "Card Holder Name: " BANK_CARD_HOLDER; then
-        die "Could not read input from the terminal."
-    fi
-}
-
-ask_bank_name() {
-    echo
-    header "BANK NAME"
-
-    echo "Enter the name of the bank that issued the card."
-    echo
-    echo "Example:"
-    echo "  Mellat"
-    echo
-
-    if ! read_tty "Bank Name: " BANK_NAME; then
-        die "Could not read input from the terminal."
-    fi
-}
-
-ask_panel_url() {
-    local value
-
-    while true; do
-        echo
-        header "3X-UI PANEL URL"
-
-        echo "VeloraBot requires MHSanaei 3X-UI."
-        echo
-        echo "Enter the complete URL of your 3X-UI panel."
-        echo
-        echo "If VeloraBot and 3X-UI are on the SAME SERVER,"
-        echo "you can use a local URL."
-        echo
-        echo "Examples:"
-        echo
-        echo "  https://127.0.0.1:2053/your_web_path"
-        echo "  http://127.0.0.1:2053/your_web_path"
-        echo
-        echo "Using a local URL is recommended when both applications"
-        echo "are installed on the same server."
-        echo
-        echo "If the panel is on another server, use its accessible URL."
-        echo
-
-        if ! read_tty "3X-UI Panel URL: " value; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ "$value" =~ ^https?:// ]]; then
-            SENAI_PANEL_URL="$value"
-            break
-        fi
-
-        error "URL must start with http:// or https://. Got: '$value'"
-    done
-}
-
-ask_panel_credentials() {
-    echo
-    header "3X-UI PANEL LOGIN"
-
-    echo "Enter the administrator username used to log into 3X-UI."
-    echo
-
-    if ! read_tty "Panel Username: " SENAI_PANEL_USERNAME; then
-        die "Could not read input from the terminal."
-    fi
-
-    echo
-    echo "Enter the administrator password."
-    echo "The password will not be displayed."
-    echo
-
-    if ! read_secret_tty "Panel Password: " SENAI_PANEL_PASSWORD; then
-        die "Could not read input from the terminal."
-    fi
-}
-
-ask_subscription_url() {
-    local value
-
-    while true; do
-        echo
-        header "SUBSCRIPTION URL"
-
-        echo "This is the public base URL used when generating"
-        echo "subscription links for your customers."
-        echo
-        echo "It is NOT necessarily the same as your 3X-UI admin URL."
-        echo
-        echo "Example:"
-        echo
-        echo "  Panel:"
-        echo "    https://panel.example.com:2053/xxxxx"
-        echo
-        echo "  Subscription:"
-        echo "    https://sub.example.com:2083"
-        echo
-
-        if ! read_tty "Subscription URL: " value; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ "$value" =~ ^https?:// ]]; then
-            SENAI_SUB_URL="$value"
-            break
-        fi
-
-        error "URL must start with http:// or https://. Got: '$value'"
-    done
-}
-
-ask_support() {
-    echo
-    header "SUPPORT USERNAME"
-
-    echo "Enter the Telegram username customers should contact"
-    echo "when they need support."
-    echo
-    echo "Example:"
-    echo "  @your_username"
-    echo
-
-    if ! read_tty "Support Username: " SUPPORT_USERNAME; then
-        die "Could not read input from the terminal."
-    fi
-}
-
-ask_gemini() {
-    local answer value
-
-    echo
-    header "OPTIONAL GOOGLE GEMINI AI"
-
-    echo "Google Gemini AI support is optional."
-    echo
-    echo "If enabled, VeloraBot can use Gemini for AI-powered support."
-    echo
-    echo "Would you like to enable Gemini?"
-    echo
-
-    if ! read_tty "Enable Gemini? [y/N]: " answer; then
-        die "Could not read input from the terminal."
-    fi
-
-    if [[ "$answer" =~ ^[Yy]$ ]]; then
-        GEMINI_ENABLED="True"
-
-        echo
-        echo "Create an API key here:"
-        echo
-        echo "  https://aistudio.google.com/apikey"
-        echo
-
-        while true; do
-            if ! read_secret_tty "Gemini API Key: " value; then
-                die "Could not read input from the terminal."
-            fi
-
-            if [[ ${#value} -ge 20 ]]; then
-                GEMINI_API_KEY="$value"
-                break
-            fi
-
-            error "The Gemini API key appears invalid."
-        done
+    if [[ -f "${SERVICE_FILE}" ]]; then
+        cp -a \
+            "${SERVICE_FILE}" \
+            "${BACKUP_DIR}/service"
+
+        SERVICE_BACKUP_EXISTS=1
     else
-        GEMINI_ENABLED="False"
-        GEMINI_API_KEY="Gemini_API_Key"
-        info "Gemini AI will remain disabled."
+        SERVICE_BACKUP_EXISTS=0
     fi
+
+    chmod 600 "${BACKUP_DIR}"/*.tar.gz 2>/dev/null || true
+    chmod 600 "${BACKUP_DIR}/requirements.txt" 2>/dev/null || true
+    chmod 600 "${BACKUP_DIR}/service" 2>/dev/null || true
+
+    BACKUP_READY=1
+
+    log_success "Backup created: ${BACKUP_DIR}"
 }
 
+
 # ============================================================
-# Write Critical Values (More Robust)
+# Service Management
 # ============================================================
 
-write_critical_values() {
-    python3 - <<PY
-from pathlib import Path
-import re
-
-path = Path("${CONFIG_FILE}")
-text = path.read_text(encoding="utf-8")
-
-values = {
-    "BOT_TOKEN": ${BOT_TOKEN@Q},
-    "ADMIN_ID": ${ADMIN_ID@Q},
-    "LOG_BOT_TOKEN": ${LOG_BOT_TOKEN@Q},
-    "LOG_CHANNEL_ID": ${LOG_CHANNEL_ID@Q},
-    "BANK_CARD_NUMBER": ${BANK_CARD_NUMBER@Q},
-    "BANK_CARD_HOLDER": ${BANK_CARD_HOLDER@Q},
-    "BANK_NAME": ${BANK_NAME@Q},
-    "SENAI_PANEL_URL": ${SENAI_PANEL_URL@Q},
-    "SENAI_PANEL_USERNAME": ${SENAI_PANEL_USERNAME@Q},
-    "SENAI_PANEL_PASSWORD": ${SENAI_PANEL_PASSWORD@Q},
-    "SENAI_SUB_URL": ${SENAI_SUB_URL@Q},
-    "SUPPORT_USERNAME": ${SUPPORT_USERNAME@Q},
-    "GEMINI_ENABLED": ${GEMINI_ENABLED@Q},
-    "GEMINI_API_KEY": ${GEMINI_API_KEY@Q},
+service_is_active() {
+    systemctl is-active --quiet "${SERVICE_NAME}"
 }
 
-for key, value in values.items():
-    if key == "LOG_CHANNEL_ID":
-        try:
-            replacement = f"{key} = {int(value)}"
-        except:
-            replacement = f'{key} = "{value}"'
-    elif key == "GEMINI_ENABLED":
-        replacement = f"{key} = {value == 'True'}"
-    else:
-        replacement = f"{key} = {value!r}"
+stop_service_if_active() {
+    SERVICE_WAS_ACTIVE=0
 
-    # More flexible pattern matching
-    pattern = rf"(?m)^[ \t]*{re.escape(key)}[ \t]*[:=][^\n]*$"
-    text, count = re.subn(pattern, replacement, text, count=1)
+    if service_is_active; then
+        SERVICE_WAS_ACTIVE=1
 
-    if count == 0:
-        # If key not found, add it after the REQUIRED SETTINGS marker
-        marker = "# ==================== 🔴 REQUIRED SETTINGS 🔴 ===================="
-        if marker in text:
-            text = text.replace(marker, marker + "\n" + replacement)
-        else:
-            text += f"\n{replacement}\n"
+        log_info "Stopping ${SERVICE_NAME}..."
 
-path.write_text(text, encoding="utf-8")
-PY
+        systemctl stop "${SERVICE_NAME}"
 
-    chmod 600 "$CONFIG_FILE"
-}
-
-# ============================================================
-# Repair Configuration
-# ============================================================
-
-repair_config() {
-    step "Repairing Configuration"
-
-    if [[ "$SKIP_CONFIG" == "true" ]]; then
-        warning "Skipping configuration repair (SKIP_CONFIG=true)"
-        return 0
-    fi
-
-    echo "The current config.py is incomplete."
-    echo
-    echo "Only missing or invalid critical settings will be requested."
-    echo "Existing valid settings will be preserved."
-    echo
-
-    is_placeholder "$BOT_TOKEN" && ask_main_config
-    [[ "$ADMIN_ID" =~ ^[0-9]+$ ]] || ask_admin_id
-    is_placeholder "$LOG_BOT_TOKEN" && ask_log_bot
-    [[ "$LOG_CHANNEL_ID" =~ ^-[0-9]+$ ]] || ask_log_group
-    [[ "$BANK_CARD_NUMBER" =~ ^[0-9]{16}$ ]] || ask_bank_card
-    is_placeholder "$BANK_CARD_HOLDER" && ask_card_holder
-    is_placeholder "$BANK_NAME" && ask_bank_name
-    [[ "$SENAI_PANEL_URL" =~ ^https?:// ]] || ask_panel_url
-
-    if is_placeholder "$SENAI_PANEL_USERNAME"; then
-        ask_panel_credentials
-    elif is_placeholder "$SENAI_PANEL_PASSWORD"; then
-        echo
-        header "3X-UI PANEL PASSWORD"
-        if ! read_secret_tty "Panel Password: " SENAI_PANEL_PASSWORD; then
-            die "Could not read input from the terminal."
-        fi
-    fi
-
-    [[ "$SENAI_SUB_URL" =~ ^https?:// ]] || ask_subscription_url
-    is_placeholder "$SUPPORT_USERNAME" && ask_support
-
-    if [[ "$GEMINI_ENABLED" == "True" ]] && is_placeholder "$GEMINI_API_KEY"; then
-        ask_gemini
-    fi
-
-    write_critical_values
-    success "Configuration repaired successfully."
-}
-
-# ============================================================
-# Installation Functions
-# ============================================================
-
-fresh_install() {
-    step "Fresh Installation"
-
-    INSTALL_MODE="fresh"
-
-    if [[ -d "$INSTALL_DIR" ]]; then
-        warning "Existing installation found."
-        
-        local answer
-        if ! read_tty "Remove existing installation and start fresh? [y/N]: " answer; then
-            die "Could not read input from the terminal."
-        fi
-
-        if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-            die "Fresh installation cancelled."
-        fi
-
-        # Create backup before removing
-        local backup_dir
-        backup_dir="$(create_backup)"
-        info "Backup created before fresh install:"
-        echo "  $backup_dir"
-        echo
-
-        systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-        systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-        rm -f "$SERVICE_FILE"
-        systemctl daemon-reload
-        rm -rf "$INSTALL_DIR"
-        success "Previous installation removed."
-    fi
-
-    mkdir -p "$INSTALL_DIR"
-
-    command_info "Downloading latest release: $LATEST_VERSION"
-
-    local archive temp_dir extracted_dir
-    archive="/tmp/VeloraBot-${LATEST_VERSION}.tar.gz"
-    temp_dir="$(mktemp -d)"
-
-    curl \
-        --fail \
-        --location \
-        --silent \
-        --show-error \
-        "${API_URL}/tarball/${LATEST_VERSION}" \
-        -o "$archive"
-
-    tar -xzf "$archive" -C "$temp_dir"
-
-    extracted_dir="$(find "$temp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-
-    if [[ -z "$extracted_dir" ]]; then
-        rm -rf "$temp_dir"
-        rm -f "$archive"
-        die "Could not extract GitHub release."
-    fi
-
-    cp -a "$extracted_dir"/. "$INSTALL_DIR"/
-
-    rm -rf "$temp_dir"
-    rm -f "$archive"
-
-    mkdir -p "$DATA_DIR"
-    
-    # Save version file
-    save_version_file
-
-    success "VeloraBot ${LATEST_VERSION} downloaded."
-}
-
-update_existing() {
-    step "Updating Existing VeloraBot"
-
-    INSTALL_MODE="update"
-
-    local backup_dir
-    backup_dir="$(create_backup)"
-
-    info "Backup created:"
-    echo "  $backup_dir"
-    echo
-
-    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-
-    # Save critical configuration values before replacing config.py
-    extract_config_values
-
-    local temp_dir archive extracted_dir saved_data
-    temp_dir="$(mktemp -d)"
-    archive="/tmp/VeloraBot-${LATEST_VERSION}.tar.gz"
-    saved_data="$(mktemp -d)"
-
-    command_info "Downloading release ${LATEST_VERSION}"
-
-    curl \
-        --fail \
-        --location \
-        --silent \
-        --show-error \
-        "${API_URL}/tarball/${LATEST_VERSION}" \
-        -o "$archive"
-
-    tar -xzf "$archive" -C "$temp_dir"
-
-    extracted_dir="$(find "$temp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-
-    if [[ -z "$extracted_dir" ]]; then
-        rm -rf "$temp_dir" "$saved_data"
-        rm -f "$archive"
-        die "Could not extract GitHub release."
-    fi
-
-    # Preserve data/
-    if [[ -d "$DATA_DIR" ]]; then
-        cp -a "$DATA_DIR"/. "$saved_data"/
-    fi
-
-    # Replace application files
-    info "Replacing application files with release ${LATEST_VERSION}..."
-
-    find "$INSTALL_DIR" \
-        -mindepth 1 \
-        -maxdepth 1 \
-        ! -name ".venv" \
-        ! -name "data" \
-        -exec rm -rf {} +
-
-    cp -a "$extracted_dir"/. "$INSTALL_DIR"/
-
-    # Restore data/
-    mkdir -p "$DATA_DIR"
-    cp -a "$saved_data"/. "$DATA_DIR"/ 2>/dev/null || true
-
-    rm -rf "$saved_data" "$temp_dir"
-    rm -f "$archive"
-
-    # Restore critical settings into NEW config.py
-    write_critical_values
-    
-    # Save version file
-    save_version_file
-
-    success "Application updated to ${LATEST_VERSION}."
-    success "config.py updated from GitHub."
-    success "Critical configuration restored."
-    success "data/ preserved."
-}
-
-# ============================================================
-# Setup Python Environment
-# ============================================================
-
-setup_python_environment() {
-    step "Python Environment"
-
-    if [[ ! -d "$VENV_DIR" ]]; then
-        info "Creating Python virtual environment..."
-        python3 -m venv "$VENV_DIR"
-        success "Virtual environment created."
+        log_success "Service stopped."
     else
-        info "Existing virtual environment preserved."
+        log_info "Service is not currently running."
     fi
-
-    echo
-    info "Upgrading pip..."
-
-    "$VENV_DIR/bin/python" -m pip install \
-        --upgrade \
-        pip \
-        setuptools \
-        wheel
-
-    echo
-    info "Installing project dependencies..."
-
-    "$VENV_DIR/bin/pip" install \
-        -r "$INSTALL_DIR/requirements.txt"
-
-    success "Python dependencies are up to date."
 }
 
-# ============================================================
-# Validate Final Configuration
-# ============================================================
+create_systemd_service() {
+    draw_step "Configuring systemd"
 
-validate_final_config() {
-    step "Validating Configuration"
-
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        die "config.py does not exist."
-    fi
-
-    # Check if config.py has syntax errors
-    if ! python3 -m py_compile "$CONFIG_FILE" 2>/dev/null; then
-        error "config.py has syntax errors."
-        
-        # Try to extract values and rewrite
-        extract_config_values
-        write_critical_values
-        
-        if ! python3 -m py_compile "$CONFIG_FILE" 2>/dev/null; then
-            die "Could not fix config.py syntax errors."
-        fi
-        
-        warning "Fixed config.py syntax errors."
-    fi
-
-    # Check if config.py can be imported from the INSTALL_DIR
-    cd "$INSTALL_DIR"
-    
-    "$VENV_DIR/bin/python" - <<'PY'
-import sys
-import os
-
-# Add the install directory to Python path
-sys.path.insert(0, os.getcwd())
-
-try:
-    import config
-    
-    required = [
-        "BOT_TOKEN", "ADMIN_ID", "LOG_BOT_TOKEN", "LOG_CHANNEL_ID",
-        "BANK_CARD_NUMBER", "BANK_CARD_HOLDER", "BANK_NAME",
-        "SENAI_PANEL_URL", "SENAI_PANEL_USERNAME", "SENAI_PANEL_PASSWORD",
-        "SENAI_SUB_URL", "SUPPORT_USERNAME",
-        "GEMINI_ENABLED", "GEMINI_API_KEY",
-    ]
-    
-    missing = [name for name in required if not hasattr(config, name)]
-    
-    if missing:
-        print(f"Missing configuration: {', '.join(missing)}")
-        sys.exit(1)
-    
-    print("config.py import: OK")
-    print("Required configuration: OK")
-    
-except SyntaxError as e:
-    print(f"Syntax error in config.py: {e}")
-    sys.exit(1)
-except Exception as e:
-    print(f"Error importing config.py: {e}")
-    sys.exit(1)
-PY
-
-    chmod 600 "$CONFIG_FILE"
-    success "Configuration is valid."
-}
-
-# ============================================================
-# Create systemd Service
-# ============================================================
-
-create_service() {
-    step "Configuring systemd"
-
-    cat > "$SERVICE_FILE" <<EOF
+    cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=VeloraBot Telegram Bot
 After=network-online.target
@@ -1434,344 +887,1256 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/main.py
+WorkingDirectory=${INSTALL_DIR}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${VENV_DIR}/bin/python ${INSTALL_DIR}/main.py
 Restart=always
 RestartSec=5
-Environment=PYTHONUNBUFFERED=1
+TimeoutStopSec=30
 LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME"
+    chmod 644 "${SERVICE_FILE}"
 
-    success "systemd service configured."
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}" >/dev/null
+
+    log_success "systemd service configured."
 }
 
-# ============================================================
-# Start and Health Check
-# ============================================================
+start_service_and_check() {
+    draw_step "Starting VeloraBot"
 
-start_and_check() {
-    step "Starting VeloraBot"
-
-    systemctl restart "$SERVICE_NAME"
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}" >/dev/null
+    systemctl restart "${SERVICE_NAME}"
 
     sleep 5
 
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        success "VeloraBot service is running."
-    else
-        error "VeloraBot failed to start."
-
-        echo
-        header "SERVICE LOGS"
-
-        journalctl -u "$SERVICE_NAME" -n 100 --no-pager
-
-        die "Service health check failed."
+    if service_is_active; then
+        log_success "${SERVICE_NAME} is running."
+        return 0
     fi
+
+    log_error "${SERVICE_NAME} failed to start."
+
+    printf '\n'
+    printf '%s\n' "Recent service logs:"
+    printf '%s\n' "------------------------------------------------------------"
+
+    journalctl \
+        -u "${SERVICE_NAME}" \
+        -n 100 \
+        --no-pager \
+        || true
+
+    printf '%s\n' "------------------------------------------------------------"
+
+    return 1
 }
 
+
 # ============================================================
-# Show Logs
+# Python Virtual Environment
 # ============================================================
 
-show_logs() {
-    echo
-    header "LATEST VELOraBOT LOGS"
+create_virtual_environment_if_needed() {
+    if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+        draw_step "Creating Python Virtual Environment"
 
-    journalctl -u "$SERVICE_NAME" -n 50 --no-pager
+        log_info "Creating ${VENV_DIR}..."
 
-    echo
-    line
-    echo
+        mkdir -p "${INSTALL_DIR}"
 
-    local answer
-    if ! read_tty "Watch live logs now? [Y/n]: " answer; then
-        warning "Could not read input. Skipping live logs."
+        python3 -m venv "${VENV_DIR}"
+
+        VENV_CREATED=1
+
+        log_success "Python virtual environment created."
+    else
+        log_info "Existing Python virtual environment will be preserved."
+    fi
+
+    [[ -x "${VENV_DIR}/bin/python" ]] ||
+        die "Virtual environment Python executable is missing."
+
+    "${VENV_DIR}/bin/python" --version
+
+    "${VENV_DIR}/bin/python" -m pip --version >/dev/null ||
+        die "pip is not available inside the virtual environment."
+}
+
+install_requirements() {
+    local requirements_file="${INSTALL_DIR}/requirements.txt"
+
+    [[ -f "${requirements_file}" ]] ||
+        die "requirements.txt does not exist."
+
+    draw_step "Installing Python Dependencies"
+
+    log_info "Installing dependencies from requirements.txt..."
+
+    "${VENV_DIR}/bin/python" -m pip install \
+        --upgrade \
+        pip \
+        setuptools \
+        wheel
+
+    "${VENV_DIR}/bin/python" -m pip install \
+        -r "${requirements_file}"
+
+    "${VENV_DIR}/bin/python" -m pip check
+
+    log_success "Python dependencies are installed and verified."
+}
+
+requirements_changed() {
+    local old_file="$1"
+    local new_file="$2"
+
+    if [[ ! -f "${old_file}" ]]; then
+        return 0
+    fi
+
+    if [[ ! -f "${new_file}" ]]; then
+        return 0
+    fi
+
+    if cmp -s "${old_file}" "${new_file}"; then
+        return 1
+    fi
+
+    return 0
+}
+
+
+# ============================================================
+# Configuration Helpers
+# ============================================================
+
+is_placeholder() {
+    local value="$1"
+
+    case "${value}" in
+        ""|"Main_bot_token"|"YOUR_TELEGRAM_USER_ID"|"Log_bot_token"|"676778785656565656"|"Navid"|"Blue Bank"|"Panel_username"|"Panel_password"|"Gemini_API_Key"|"@your_username_here")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+extract_config_values() {
+    [[ -f "${CONFIG_FILE}" ]] || return 1
+
+    local values
+
+    values="$(
+        python3 - "${CONFIG_FILE}" <<'PY'
+import ast
+import json
+import sys
+
+path = sys.argv[1]
+
+allowed = {
+    "BOT_TOKEN",
+    "ADMIN_ID",
+    "LOG_BOT_TOKEN",
+    "LOG_CHANNEL_ID",
+    "BANK_CARD_NUMBER",
+    "BANK_CARD_HOLDER",
+    "BANK_NAME",
+    "SENAI_PANEL_URL",
+    "SENAI_PANEL_USERNAME",
+    "SENAI_PANEL_PASSWORD",
+    "SENAI_SUB_URL",
+    "SUPPORT_USERNAME",
+    "GEMINI_ENABLED",
+    "GEMINI_API_KEY",
+}
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        source = handle.read()
+
+    tree = ast.parse(source)
+    result = {}
+
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+
+            key = target.id
+
+            if key not in allowed:
+                continue
+
+            try:
+                result[key] = ast.literal_eval(node.value)
+            except Exception:
+                pass
+
+    print(json.dumps(result))
+except Exception:
+    print("{}")
+PY
+    )"
+
+    [[ -n "${values}" ]] || values="{}"
+
+    config_value() {
+        local key="$1"
+        local default="${2:-}"
+
+        python3 - "${values}" "${key}" "${default}" <<'PY'
+import json
+import sys
+
+try:
+    data = json.loads(sys.argv[1])
+    key = sys.argv[2]
+    default = sys.argv[3]
+
+    value = data.get(key, default)
+
+    if isinstance(value, bool):
+        print("True" if value else "False")
+    else:
+        print(value)
+except Exception:
+    print(sys.argv[3])
+PY
+    }
+
+    BOT_TOKEN="$(config_value "BOT_TOKEN")"
+    ADMIN_ID="$(config_value "ADMIN_ID")"
+
+    LOG_BOT_TOKEN="$(config_value "LOG_BOT_TOKEN")"
+    LOG_CHANNEL_ID="$(config_value "LOG_CHANNEL_ID")"
+
+    BANK_CARD_NUMBER="$(config_value "BANK_CARD_NUMBER")"
+    BANK_CARD_HOLDER="$(config_value "BANK_CARD_HOLDER")"
+    BANK_NAME="$(config_value "BANK_NAME")"
+
+    SENAI_PANEL_URL="$(config_value "SENAI_PANEL_URL")"
+    SENAI_PANEL_USERNAME="$(config_value "SENAI_PANEL_USERNAME")"
+    SENAI_PANEL_PASSWORD="$(config_value "SENAI_PANEL_PASSWORD")"
+    SENAI_SUB_URL="$(config_value "SENAI_SUB_URL")"
+
+    SUPPORT_USERNAME="$(config_value "SUPPORT_USERNAME")"
+
+    GEMINI_ENABLED="$(config_value "GEMINI_ENABLED" "False")"
+    GEMINI_API_KEY="$(config_value "GEMINI_API_KEY")"
+}
+
+validate_existing_config() {
+    local missing=0
+
+    printf '%s\n' "Checking existing configuration..."
+
+    if is_placeholder "${BOT_TOKEN}"; then
+        printf '  %bMISSING%b BOT_TOKEN\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ ]]; then
+        printf '  %bINVALID%b ADMIN_ID\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if is_placeholder "${LOG_BOT_TOKEN}"; then
+        printf '  %bMISSING%b LOG_BOT_TOKEN\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if [[ ! "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ ]]; then
+        printf '  %bINVALID%b LOG_CHANNEL_ID\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if [[ ! "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]]; then
+        printf '  %bINVALID%b BANK_CARD_NUMBER\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if is_placeholder "${BANK_CARD_HOLDER}"; then
+        printf '  %bMISSING%b BANK_CARD_HOLDER\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if is_placeholder "${BANK_NAME}"; then
+        printf '  %bMISSING%b BANK_NAME\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if ! [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]]; then
+        printf '  %bINVALID%b SENAI_PANEL_URL\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if is_placeholder "${SENAI_PANEL_USERNAME}"; then
+        printf '  %bMISSING%b SENAI_PANEL_USERNAME\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if is_placeholder "${SENAI_PANEL_PASSWORD}"; then
+        printf '  %bMISSING%b SENAI_PANEL_PASSWORD\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if ! [[ "${SENAI_SUB_URL}" =~ ^https?:// ]]; then
+        printf '  %bINVALID%b SENAI_SUB_URL\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if is_placeholder "${SUPPORT_USERNAME}"; then
+        printf '  %bMISSING%b SUPPORT_USERNAME\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    if [[ "${GEMINI_ENABLED}" == "True" ]] &&
+       is_placeholder "${GEMINI_API_KEY}"; then
+        printf '  %bMISSING%b GEMINI_API_KEY\n' "${RED}" "${NC}"
+        missing=1
+    fi
+
+    return "${missing}"
+}
+
+
+# ============================================================
+# Configuration Writers
+# ============================================================
+
+set_config_value() {
+    local key="$1"
+    local value="$2"
+
+    CFG_VALUE="${value}" python3 - "${CONFIG_FILE}" "${key}" <<'PY'
+import os
+import re
+import sys
+
+path = sys.argv[1]
+key = sys.argv[2]
+value = os.environ.get("CFG_VALUE", "")
+
+with open(path, "r", encoding="utf-8") as handle:
+    text = handle.read()
+
+replacement = f"{key} = {value!r}"
+
+pattern = re.compile(
+    rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*$"
+)
+
+if pattern.search(text):
+    text = pattern.sub(
+        lambda _: replacement,
+        text,
+        count=1,
+    )
+else:
+    if text and not text.endswith("\n"):
+        text += "\n"
+
+    text += replacement + "\n"
+
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+PY
+}
+
+set_config_integer() {
+    local key="$1"
+    local value="$2"
+
+    python3 - "${CONFIG_FILE}" "${key}" "${value}" <<'PY'
+import re
+import sys
+
+path, key, value = sys.argv[1:]
+
+if not re.fullmatch(r"-?[0-9]+", value):
+    raise SystemExit(f"{key} must be an integer.")
+
+replacement = f"{key} = {int(value)}"
+
+with open(path, "r", encoding="utf-8") as handle:
+    text = handle.read()
+
+pattern = re.compile(
+    rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*$"
+)
+
+if pattern.search(text):
+    text = pattern.sub(
+        lambda _: replacement,
+        text,
+        count=1,
+    )
+else:
+    if text and not text.endswith("\n"):
+        text += "\n"
+
+    text += replacement + "\n"
+
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+PY
+}
+
+set_config_boolean() {
+    local key="$1"
+    local value="$2"
+
+    python3 - "${CONFIG_FILE}" "${key}" "${value}" <<'PY'
+import re
+import sys
+
+path, key, value = sys.argv[1:]
+
+normalized = value.lower()
+
+if normalized == "true":
+    raw = "True"
+elif normalized == "false":
+    raw = "False"
+else:
+    raise SystemExit(f"{key} must be True or False.")
+
+replacement = f"{key} = {raw}"
+
+with open(path, "r", encoding="utf-8") as handle:
+    text = handle.read()
+
+pattern = re.compile(
+    rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[^\n]*$"
+)
+
+if pattern.search(text):
+    text = pattern.sub(
+        lambda _: replacement,
+        text,
+        count=1,
+    )
+else:
+    if text and not text.endswith("\n"):
+        text += "\n"
+
+    text += replacement + "\n"
+
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+PY
+}
+
+
+# ============================================================
+# Fresh Installation Configuration Prompts
+# ============================================================
+
+prompt_required() {
+    local label="$1"
+    local variable="$2"
+    local value=""
+
+    while true; do
+        if ! read_tty "${label}: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ -n "${value}" ]]; then
+            printf -v "${variable}" '%s' "${value}"
+            return
+        fi
+
+        log_warning "${label} cannot be empty."
+    done
+}
+
+prompt_secret_required() {
+    local label="$1"
+    local variable="$2"
+    local value=""
+
+    while true; do
+        if ! read_secret_tty "${label}: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ -n "${value}" ]]; then
+            printf -v "${variable}" '%s' "${value}"
+            return
+        fi
+
+        log_warning "${label} cannot be empty."
+    done
+}
+
+prompt_admin_id() {
+    local value=""
+
+    while true; do
+        if ! read_tty "ADMIN_ID: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ "${value}" =~ ^[0-9]+$ ]]; then
+            ADMIN_ID="${value}"
+            return
+        fi
+
+        log_warning "ADMIN_ID must contain digits only."
+    done
+}
+
+prompt_log_channel_id() {
+    local value=""
+
+    while true; do
+        if ! read_tty "LOG_CHANNEL_ID: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ "${value}" =~ ^-?[0-9]+$ ]]; then
+            LOG_CHANNEL_ID="${value}"
+            return
+        fi
+
+        log_warning "LOG_CHANNEL_ID must be a numeric value."
+    done
+}
+
+prompt_card_number() {
+    local value=""
+
+    while true; do
+        if ! read_tty "BANK_CARD_NUMBER: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ "${value}" =~ ^[0-9]{16}$ ]]; then
+            BANK_CARD_NUMBER="${value}"
+            return
+        fi
+
+        log_warning "BANK_CARD_NUMBER must contain exactly 16 digits."
+    done
+}
+
+prompt_http_url() {
+    local label="$1"
+    local variable="$2"
+    local value=""
+
+    while true; do
+        if ! read_tty "${label}: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ "${value}" =~ ^https?:// ]]; then
+            printf -v "${variable}" '%s' "${value}"
+            return
+        fi
+
+        log_warning "${label} must start with http:// or https://."
+    done
+}
+
+prompt_gemini() {
+    local answer=""
+    local value=""
+
+    while true; do
+        if ! read_tty "Enable Gemini AI? [y/N]: " answer; then
+            die "Could not read input from the terminal."
+        fi
+
+        case "${answer,,}" in
+            y|yes)
+                GEMINI_ENABLED="True"
+                break
+                ;;
+            ""|n|no)
+                GEMINI_ENABLED="False"
+                GEMINI_API_KEY=""
+                return
+                ;;
+            *)
+                log_warning "Please answer y or n."
+                ;;
+        esac
+    done
+
+    while true; do
+        if ! read_secret_tty "GEMINI_API_KEY: " value; then
+            die "Could not read input from the terminal."
+        fi
+
+        if [[ ${#value} -ge 20 ]]; then
+            GEMINI_API_KEY="${value}"
+            return
+        fi
+
+        log_warning "The Gemini API key appears too short."
+    done
+}
+
+configure_fresh_install() {
+    draw_step "Configuring VeloraBot"
+
+    [[ -f "${CONFIG_FILE}" ]] ||
+        die "config.py does not exist."
+
+    printf '%s\n' "The following values will be written to config.py."
+    printf '%s\n' "This is only performed during a fresh installation."
+    printf '\n'
+
+    prompt_secret_required "BOT_TOKEN" BOT_TOKEN
+    prompt_admin_id
+
+    prompt_secret_required "LOG_BOT_TOKEN" LOG_BOT_TOKEN
+    prompt_log_channel_id
+
+    prompt_card_number
+    prompt_required "BANK_CARD_HOLDER" BANK_CARD_HOLDER
+    prompt_required "BANK_NAME" BANK_NAME
+
+    prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
+    prompt_required "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
+    prompt_secret_required "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
+    prompt_http_url "SENAI_SUB_URL" SENAI_SUB_URL
+
+    prompt_required "SUPPORT_USERNAME" SUPPORT_USERNAME
+
+    prompt_gemini
+
+    set_config_value \
+        "BOT_TOKEN" \
+        "${BOT_TOKEN}"
+
+    set_config_integer \
+        "ADMIN_ID" \
+        "${ADMIN_ID}"
+
+    set_config_value \
+        "LOG_BOT_TOKEN" \
+        "${LOG_BOT_TOKEN}"
+
+    set_config_integer \
+        "LOG_CHANNEL_ID" \
+        "${LOG_CHANNEL_ID}"
+
+    set_config_value \
+        "BANK_CARD_NUMBER" \
+        "${BANK_CARD_NUMBER}"
+
+    set_config_value \
+        "BANK_CARD_HOLDER" \
+        "${BANK_CARD_HOLDER}"
+
+    set_config_value \
+        "BANK_NAME" \
+        "${BANK_NAME}"
+
+    set_config_value \
+        "SENAI_PANEL_URL" \
+        "${SENAI_PANEL_URL}"
+
+    set_config_value \
+        "SENAI_PANEL_USERNAME" \
+        "${SENAI_PANEL_USERNAME}"
+
+    set_config_value \
+        "SENAI_PANEL_PASSWORD" \
+        "${SENAI_PANEL_PASSWORD}"
+
+    set_config_value \
+        "SENAI_SUB_URL" \
+        "${SENAI_SUB_URL}"
+
+    set_config_value \
+        "SUPPORT_USERNAME" \
+        "${SUPPORT_USERNAME}"
+
+    set_config_boolean \
+        "GEMINI_ENABLED" \
+        "${GEMINI_ENABLED}"
+
+    set_config_value \
+        "GEMINI_API_KEY" \
+        "${GEMINI_API_KEY}"
+
+    chmod 600 "${CONFIG_FILE}"
+
+    log_success "Fresh installation configuration completed."
+}
+
+
+# ============================================================
+# Validation
+# ============================================================
+
+validate_config_syntax() {
+    [[ -f "${CONFIG_FILE}" ]] ||
+        die "config.py does not exist."
+
+    if ! "${VENV_DIR}/bin/python" \
+        -m py_compile \
+        "${CONFIG_FILE}" \
+        >/dev/null 2>&1; then
+
+        die "config.py contains a Python syntax error."
+    fi
+
+    log_success "config.py syntax is valid."
+}
+
+validate_python_source() {
+    draw_step "Validating Python Source"
+
+    local failed=0
+    local pyfile
+
+    while IFS= read -r -d '' pyfile; do
+        if ! "${VENV_DIR}/bin/python" \
+            -m py_compile \
+            "${pyfile}" \
+            >/dev/null 2>&1; then
+
+            printf '%b[FAIL]%b Python syntax error: %s\n' \
+                "${RED}" \
+                "${NC}" \
+                "${pyfile}" \
+                >&2
+
+            write_log "FAIL" "Python syntax error: ${pyfile}"
+
+            failed=1
+        fi
+    done < <(
+        find "${INSTALL_DIR}" \
+            -path "${VENV_DIR}" -prune -o \
+            -path "${DATA_DIR}" -prune -o \
+            -type f \
+            -name '*.py' \
+            -print0
+    )
+
+    (( failed == 0 )) ||
+        die "One or more Python files contain syntax errors."
+
+    log_success "All Python source files passed syntax validation."
+}
+
+validate_application_layout() {
+    draw_step "Validating Application Layout"
+
+    [[ -f "${INSTALL_DIR}/main.py" ]] ||
+        die "main.py is missing from the installed application."
+
+    [[ -f "${INSTALL_DIR}/requirements.txt" ]] ||
+        die "requirements.txt is missing from the installed application."
+
+    [[ -f "${CONFIG_FILE}" ]] ||
+        die "config.py is missing from the installed application."
+
+    [[ -x "${VENV_DIR}/bin/python" ]] ||
+        die "The Python virtual environment is invalid."
+
+    log_success "Application layout is valid."
+}
+
+
+# ============================================================
+# Protected Path Verification
+# ============================================================
+
+verify_protected_paths() {
+    local config_before="$1"
+    local data_before="$2"
+
+    if [[ -f "${config_before}" ]]; then
+        if ! cmp -s "${config_before}" "${CONFIG_FILE}"; then
+            log_error "config.py changed during update."
+            return 1
+        fi
+    fi
+
+    if [[ -f "${data_before}" ]]; then
+        # This function is not used for directory comparison.
+        # A hash manifest is generated for the complete data directory.
+        if [[ -f "${data_before}" ]]; then
+            :
+        fi
+    fi
+
+    return 0
+}
+
+create_data_manifest() {
+    local output="$1"
+
+    if [[ ! -d "${DATA_DIR}" ]]; then
+        : > "${output}"
         return
     fi
 
-    answer="${answer:-Y}"
+    (
+        cd "${DATA_DIR}"
+        find . \
+            -type f \
+            -print0 |
+            sort -z |
+            while IFS= read -r -d '' file; do
+                sha256sum -- "${file}"
+            done
+    ) > "${output}"
+}
 
-    if [[ "$answer" =~ ^[Yy]$ ]]; then
-        echo
-        info "Live logs started."
-        info "Press Ctrl+C to stop watching logs."
-        echo
+verify_data_manifest() {
+    local before="$1"
+    local after="${TEMP_ROOT}/data-after.sha256"
 
-        set +e
-        journalctl -u "$SERVICE_NAME" -f
-        set -e
+    create_data_manifest "${after}"
+
+    if ! cmp -s "${before}" "${after}"; then
+        log_error "data/ was modified during the update."
+        return 1
+    fi
+
+    return 0
+}
+
+create_config_checksum() {
+    local output="$1"
+
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        sha256sum "${CONFIG_FILE}" > "${output}"
+    else
+        : > "${output}"
     fi
 }
+
+verify_config_checksum() {
+    local expected="$1"
+    local actual="${TEMP_ROOT}/config-after.sha256"
+
+    create_config_checksum "${actual}"
+
+    if ! cmp -s "${expected}" "${actual}"; then
+        log_error "config.py was modified during the update."
+        return 1
+    fi
+
+    return 0
+}
+
+
+# ============================================================
+# Fresh Installation
+# ============================================================
+
+prepare_install_directory() {
+    mkdir -p "${INSTALL_DIR}"
+    chmod 755 "${INSTALL_DIR}"
+}
+
+fresh_install() {
+    FRESH_INSTALL=1
+
+    draw_step "Fresh Installation"
+
+    validate_release_for_install
+    prepare_install_directory
+
+    if find "${INSTALL_DIR}" \
+        -mindepth 1 \
+        -maxdepth 1 \
+        -print -quit |
+        grep -q .; then
+
+        die "${INSTALL_DIR} is not empty. Refusing to overwrite an existing installation."
+    fi
+
+    log_info "Copying release files into ${INSTALL_DIR}..."
+
+    rsync -a \
+        "${RELEASE_ROOT}/" \
+        "${INSTALL_DIR}/"
+
+    mkdir -p "${DATA_DIR}"
+
+    create_virtual_environment_if_needed
+
+    if [[ "${SKIP_CONFIG}" -eq 0 ]]; then
+        configure_fresh_install
+    else
+        log_warning "Configuration prompts were skipped."
+        log_warning "The release config.py must already contain valid settings."
+    fi
+
+    validate_application_layout
+    validate_config_syntax
+
+    install_requirements
+
+    validate_python_source
+
+    create_systemd_service
+
+    write_version_file
+
+    if ! start_service_and_check; then
+        die "Fresh installation completed, but the service failed to start."
+    fi
+
+    CURRENT_VERSION="${LATEST_VERSION}"
+
+    log_success "Fresh installation completed successfully."
+}
+
+
+# ============================================================
+# Existing Installation Update
+# ============================================================
+
+update_existing() {
+    draw_step "Updating Existing VeloraBot"
+
+    [[ -d "${INSTALL_DIR}" ]] ||
+        die "${INSTALL_DIR} does not exist."
+
+    [[ -f "${CONFIG_FILE}" ]] ||
+        die "config.py does not exist. The updater will never create or reconstruct it."
+
+    validate_release_for_update
+
+    create_virtual_environment_if_needed
+
+    local old_requirements="${TEMP_ROOT}/old-requirements.txt"
+    local config_before="${TEMP_ROOT}/config-before.sha256"
+    local data_before="${TEMP_ROOT}/data-before.sha256"
+
+    if [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
+        cp -a \
+            "${INSTALL_DIR}/requirements.txt" \
+            "${old_requirements}"
+    fi
+
+    create_config_checksum "${config_before}"
+    create_data_manifest "${data_before}"
+
+    local requirements_need_install=0
+
+    if (( VENV_CREATED == 1 )); then
+        requirements_need_install=1
+    elif requirements_changed \
+        "${old_requirements}" \
+        "${RELEASE_ROOT}/requirements.txt"; then
+        requirements_need_install=1
+    fi
+
+    UPDATE_IN_PROGRESS=1
+
+    create_backup
+
+    stop_service_if_active
+
+    draw_step "Synchronizing Application Files"
+
+    log_info "Synchronizing release ${LATEST_VERSION}..."
+
+    # IMPORTANT:
+    #
+    # config.py is excluded.
+    # data/ is excluded.
+    # .venv/ is excluded.
+    # .version is excluded.
+    #
+    # Everything else is synchronized from the new release.
+    #
+    # --delete removes stale application files that no longer exist
+    # in the new release, while the protected paths remain untouched.
+
+    rsync -a --delete \
+        --exclude='config.py' \
+        --exclude='data/' \
+        --exclude='.venv/' \
+        --exclude='.version' \
+        "${RELEASE_ROOT}/" \
+        "${INSTALL_DIR}/"
+
+    log_success "Application files synchronized."
+
+    # --------------------------------------------------------
+    # Protected-path safety verification
+    # --------------------------------------------------------
+
+    if ! verify_config_checksum "${config_before}"; then
+        die "Protected file verification failed: config.py was changed."
+    fi
+
+    if ! verify_data_manifest "${data_before}"; then
+        die "Protected directory verification failed: data/ was changed."
+    fi
+
+    log_success "Protected paths verified: config.py and data/ are unchanged."
+
+    # --------------------------------------------------------
+    # requirements.txt handling
+    # --------------------------------------------------------
+
+    if (( requirements_need_install == 1 )); then
+        draw_step "Updating Python Dependencies"
+
+        if (( VENV_CREATED == 1 )); then
+            log_info "A new virtual environment was created."
+        else
+            log_info "requirements.txt changed in the new release."
+        fi
+
+        log_info "Installing the release requirements into .venv..."
+
+        "${VENV_DIR}/bin/python" -m pip install \
+            --upgrade \
+            pip \
+            setuptools \
+            wheel
+
+        "${VENV_DIR}/bin/python" -m pip install \
+            -r "${INSTALL_DIR}/requirements.txt"
+
+        "${VENV_DIR}/bin/python" -m pip check
+
+        log_success "Python dependencies are synchronized."
+    else
+        log_success "requirements.txt is unchanged. Existing dependencies are preserved."
+    fi
+
+    # --------------------------------------------------------
+    # Final validation before service restart
+    # --------------------------------------------------------
+
+    validate_application_layout
+    validate_config_syntax
+    validate_python_source
+
+    create_systemd_service
+
+    write_version_file
+
+    if ! start_service_and_check; then
+        die "Updated application failed the service health check."
+    fi
+
+    UPDATE_IN_PROGRESS=0
+    CURRENT_VERSION="${LATEST_VERSION}"
+
+    log_success "VeloraBot was updated successfully."
+}
+
+
+# ============================================================
+# Existing Installation Status
+# ============================================================
+
+show_existing_status() {
+    draw_header "Existing VeloraBot Installation"
+
+    printf 'Installation directory : %s\n' "${INSTALL_DIR}"
+    printf 'Installed release      : %s\n' "${CURRENT_VERSION}"
+    printf 'Latest release         : %s\n' "${LATEST_VERSION}"
+    printf '\n'
+}
+
+handle_existing_installation() {
+    read_current_version
+    show_existing_status
+
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        log_info "Validating existing config.py..."
+
+        if extract_config_values &&
+           validate_existing_config; then
+
+            log_success "Existing configuration appears valid."
+        else
+            log_warning "Existing configuration contains missing or invalid values."
+
+            # IMPORTANT:
+            # The updater does NOT repair config.py.
+            # It only reports the condition.
+            log_warning "Update will not modify config.py."
+        fi
+    else
+        die "config.py is missing. The updater will not create it."
+    fi
+
+    if (( FORCE_UPDATE == 0 )) &&
+       versions_equal "${CURRENT_VERSION}" "${LATEST_VERSION}"; then
+
+        draw_header "VeloraBot Status"
+
+        log_success "VeloraBot is already up to date."
+
+        printf 'Installed release : %s\n' "${CURRENT_VERSION}"
+        printf 'Latest release    : %s\n' "${LATEST_VERSION}"
+        printf '\n'
+        printf '%s\n' "No files were changed."
+
+        return 0
+    fi
+
+    if (( FORCE_UPDATE == 1 )); then
+        log_warning "Force update is enabled."
+        update_existing
+        return
+    fi
+
+    printf '\n'
+    printf 'Current release : %s\n' "${CURRENT_VERSION}"
+    printf 'Latest release : %s\n' "${LATEST_VERSION}"
+    printf '\n'
+
+    if versions_equal "${CURRENT_VERSION}" "${LATEST_VERSION}"; then
+        log_info "The installed release matches the latest release."
+        log_info "No update is required."
+        return 0
+    fi
+
+    if ask_yes_no \
+        "Update VeloraBot to ${LATEST_VERSION}? [Y/n]: " \
+        "y"; then
+
+        update_existing
+    else
+        log_warning "Update cancelled by user."
+    fi
+}
+
 
 # ============================================================
 # Final Summary
 # ============================================================
 
-final_summary() {
-    header "INSTALLATION COMPLETE"
+show_final_summary() {
+    draw_header "VeloraBot Installation Summary"
 
-    echo -e "${GREEN}${BOLD}VeloraBot is ready.${NC}"
-    echo
+    printf 'Repository       : %s\n' "${REPO_URL}"
+    printf 'Release          : %s\n' "${CURRENT_VERSION}"
+    printf 'Install directory: %s\n' "${INSTALL_DIR}"
+    printf 'Virtual env      : %s\n' "${VENV_DIR}"
+    printf 'Config           : %s\n' "${CONFIG_FILE}"
+    printf 'Persistent data  : %s\n' "${DATA_DIR}"
+    printf 'Service          : %s\n' "${SERVICE_NAME}"
+    printf 'Installer log    : %s\n' "${LOG_FILE}"
+    printf '\n'
 
-    echo "Installed Release:"
-    echo -e "  ${GREEN}${CURRENT_VERSION}${NC}"
-    echo
+    printf 'Update protection:\n'
+    printf '  config.py      : preserved during updates\n'
+    printf '  data/          : preserved during updates\n'
+    printf '  .venv/         : preserved during updates\n'
+    printf '  requirements   : synchronized with the release\n'
+    printf '\n'
 
-    echo "Installation:"
-    echo "  $INSTALL_DIR"
-    echo
-
-    echo "Configuration:"
-    echo "  $CONFIG_FILE"
-    echo
-
-    echo "Persistent data:"
-    echo "  $DATA_DIR"
-    echo
-
-    echo "Service:"
-    echo "  $SERVICE_NAME"
-    echo
-
-    echo "Status:"
-    systemctl is-active "$SERVICE_NAME" || true
-    echo
-
-    line
-
-    echo
-    echo "Useful commands:"
-    echo
-    echo "  systemctl status velorabot"
-    echo "  systemctl restart velorabot"
-    echo "  systemctl stop velorabot"
-    echo "  journalctl -u velorabot -f"
-    echo
-
-    line
-
-    echo
-    echo "Installer log:"
-    echo "  $INSTALL_LOG"
-    echo
-}
-
-# ============================================================
-# Handle Existing Installation (Optimized)
-# ============================================================
-
-handle_existing_installation() {
-    get_current_version
-
-    echo
-    header "EXISTING VELOraBOT DETECTED"
-
-    echo "Installation directory:"
-    echo "  $INSTALL_DIR"
-    echo
-
-    echo "Installed version:"
-    echo -e "  ${YELLOW}${CURRENT_VERSION}${NC}"
-    echo
-
-    # Read existing config
-    if [[ -f "$CONFIG_FILE" ]]; then
-        info "Checking existing config.py..."
-
-        if extract_config_values && validate_config; then
-            echo
-            success "Existing config.py is complete."
-        else
-            echo
-            warning "Existing config.py is incomplete."
-            NEEDS_CONFIG_REPAIR="true"
-        fi
+    if service_is_active; then
+        log_success "Service status: active"
     else
-        warning "config.py does not exist."
-        NEEDS_CONFIG_REPAIR="true"
+        log_warning "Service status: inactive"
     fi
 
-    # Already latest and no repair needed - EXIT EARLY
-    if [[ "$NEEDS_CONFIG_REPAIR" == "false" ]] && \
-       [[ "$FORCE_UPDATE" != "true" ]] && \
-       version_is_equal "$CURRENT_VERSION" "$LATEST_VERSION"; then
-        echo
-        header "VELOraBOT STATUS"
+    printf '\n'
+    printf '%s\n' "Useful commands:"
+    printf '  systemctl status %s\n' "${SERVICE_NAME}"
+    printf '  systemctl restart %s\n' "${SERVICE_NAME}"
+    printf '  systemctl stop %s\n' "${SERVICE_NAME}"
+    printf '  journalctl -u %s -f\n' "${SERVICE_NAME}"
+    printf '\n'
 
-        echo -e "${GREEN}✔ VeloraBot is already up to date.${NC}"
-        echo
-        echo "Installed Release:"
-        echo -e "  ${GREEN}${CURRENT_VERSION}${NC}"
-        echo
-        echo "Latest Release:"
-        echo -e "  ${GREEN}${LATEST_VERSION}${NC}"
-        echo
-        echo -e "${GREEN}✔ Configuration is valid.${NC}"
-        echo -e "${GREEN}✔ No update is required.${NC}"
-        echo
-        echo "Nothing was changed."
-        echo
-
-        exit 0
+    if [[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]]; then
+        printf 'Latest backup    : %s\n' "${BACKUP_DIR}"
+        printf '\n'
     fi
 
-    # Repair configuration if needed
-    if [[ "$NEEDS_CONFIG_REPAIR" == "true" ]]; then
-        repair_config
-        extract_config_values
-    fi
-
-    # Check if update is needed
-    if [[ "$FORCE_UPDATE" == "true" ]] || \
-       ! version_is_equal "$CURRENT_VERSION" "$LATEST_VERSION"; then
-        echo
-        header "UPDATE AVAILABLE"
-
-        echo "Current Release:"
-        echo -e "  ${YELLOW}${CURRENT_VERSION}${NC}"
-        echo
-        echo "Latest Release:"
-        echo -e "  ${GREEN}${LATEST_VERSION}${NC}"
-        echo
-
-        local answer
-
-        if [[ "$FORCE_UPDATE" == "true" ]]; then
-            answer="Y"
-        else
-            if ! read_tty "Update VeloraBot to ${LATEST_VERSION}? [Y/n]: " answer; then
-                die "Could not read input from the terminal."
-            fi
-            answer="${answer:-Y}"
-        fi
-
-        if [[ "$answer" =~ ^[Yy]$ ]]; then
-            update_existing
-        else
-            warning "Update skipped."
-
-            if [[ "$NEEDS_CONFIG_REPAIR" == "true" ]]; then
-                info "Configuration was repaired."
-            fi
-
-            return 0
-        fi
-    fi
+    draw_line
 }
+
 
 # ============================================================
 # Main
 # ============================================================
 
 main() {
-    # Parse command line arguments
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --skip-config)
-                SKIP_CONFIG="true"
-                shift
-                ;;
-            --force-update)
-                FORCE_UPDATE="true"
-                shift
-                ;;
-            --help|-h)
-                echo "Usage: $0 [OPTIONS]"
-                echo
-                echo "Options:"
-                echo "  --skip-config    Skip configuration prompts"
-                echo "  --force-update   Force update even if already latest"
-                echo "  --help, -h       Show this help message"
-                exit 0
-                ;;
-            *)
-                warning "Unknown option: $1"
-                shift
-                ;;
-        esac
-    done
+    initialize_logging
 
-    # Don't clear screen - keep history visible
-    # clear || true
+    parse_arguments "$@"
 
-    echo
-    echo -e "${CYAN}${BOLD}"
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║                                                            ║"
-    echo "║                    VeloraBot Installer                     ║"
-    echo "║                                                            ║"
-    echo "║             Smart Install / Update / Repair                ║"
-    echo "║                                                            ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+    draw_header "VeloraBot Installer / Updater"
 
-    echo
-    echo "Repository:"
-    echo "https://github.com/${OWNER}/${REPO}"
-    echo
+    printf 'Repository: %s\n' "${REPO_URL}"
+    printf '\n'
+
+    log_info "Installer started."
+    log_info "Requested mode: ${SCRIPT_MODE}"
 
     check_root
-    check_os
-    check_internet
-
+    check_operating_system
     install_system_dependencies
-    check_python
+    check_python_version
+    check_github_connectivity
 
-    get_latest_release
+    TEMP_ROOT="$(mktemp -d /tmp/velorabot-installer.XXXXXX)"
 
-    # New installation
-    if [[ ! -d "$INSTALL_DIR" ]]; then
-        fresh_install
+    fetch_latest_release
+    download_latest_release
 
-        # Collect all required settings for new installation
-        extract_config_values || true
+    read_current_version
 
-        if [[ "$SKIP_CONFIG" != "true" ]]; then
-            ask_main_config
-            ask_admin_id
-            ask_log_bot
-            ask_log_group
-            ask_bank_card
-            ask_card_holder
-            ask_bank_name
-            ask_panel_url
-            ask_panel_credentials
-            ask_subscription_url
-            ask_support
-            ask_gemini
-        else
-            warning "Skipping configuration prompts (--skip-config)"
-        fi
+    case "${SCRIPT_MODE}" in
+        install)
+            if [[ -e "${INSTALL_DIR}" ]]; then
+                die "Cannot perform --install because ${INSTALL_DIR} already exists."
+            fi
 
-        write_critical_values
-    else
-        # Existing installation
-        handle_existing_installation
-    fi
+            fresh_install
+            ;;
 
-    # Setup Python environment
-    setup_python_environment
+        update)
+            if [[ ! -d "${INSTALL_DIR}" ]]; then
+                die "Cannot perform --update because no existing installation was found."
+            fi
 
-    # Validate configuration
-    validate_final_config
+            update_existing
+            ;;
 
-    # Create systemd service
-    create_service
+        auto)
+            if [[ -d "${INSTALL_DIR}" ]]; then
+                handle_existing_installation
+            else
+                fresh_install
+            fi
+            ;;
 
-    # Start and health check
-    start_and_check
+        *)
+            die "Internal error: unsupported script mode '${SCRIPT_MODE}'."
+            ;;
+    esac
 
-    # Show final output
-    show_logs
-    final_summary
+    show_final_summary
+
+    log_success "Installer finished successfully."
 }
 
-# Run main with all arguments
+
 main "$@"

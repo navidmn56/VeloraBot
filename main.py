@@ -22544,19 +22544,27 @@ async def show_config_text(callback: CallbackQuery):
                     else:
                         label = f"📱 QR #{idx}" if lang == "fa" else f"📱 QR #{idx}"
                     
-                    buttons.append([InlineKeyboardButton(
+                    buttons.append(InlineKeyboardButton(
                         text=label,
-                        callback_data=f"show_single_qr_{order_id}_{idx}"  # ایندکس واقعی
-                    )])
-                
-                
-                buttons.append([InlineKeyboardButton(
+                        callback_data=f"show_single_qr_{order_id}_{idx}"
+                    ))
+
+                # جفت‌سازی دکمه‌های QR (دوتایی کنار هم)
+                keyboard_rows = []
+                for i in range(0, len(buttons), 2):
+                    row = [buttons[i]]
+                    if i + 1 < len(buttons):
+                        row.append(buttons[i + 1])
+                    keyboard_rows.append(row)
+
+                # دکمه بازگشت همیشه تک و در ردیف آخر
+                keyboard_rows.append([InlineKeyboardButton(
                     text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
                     callback_data="back_to_main",
                     style="danger"
                 )])
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+                keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
                 
                 try:
                     if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
