@@ -269,15 +269,11 @@ restore_application_backup() {
 
     mkdir -p "${INSTALL_DIR}"
 
-    # Restore every application file except the protected runtime paths.
     rsync -a --delete \
-        --exclude='.venv/' \
-        --exclude='data/' \
+        --exclude='/.venv/' \
+        --exclude='/data/' \
         "${rollback_root}/" \
         "${INSTALL_DIR}/"
-
-    # data/ was never modified by the update process.
-    # Therefore it must not be touched during rollback either.
 
     if [[ "${SERVICE_BACKUP_EXISTS}" -eq 1 &&
           -f "${BACKUP_DIR}/service" ]]; then
@@ -679,9 +675,6 @@ download_latest_release() {
 
     log_info "Downloading release ${LATEST_VERSION}..."
 
-    # No custom Accept header here.
-    # codeload.github.com serves the archive directly and does not
-    # require or support GitHub API media types.
     curl \
         --fail \
         --silent \
@@ -813,8 +806,6 @@ create_backup() {
         -C "${INSTALL_DIR}" .
 
     if [[ -d "${DATA_DIR}" ]]; then
-        # This is a read-only backup operation.
-        # The update itself never writes to data/.
         tar -czf \
             "${BACKUP_DIR}/data.tar.gz" \
             -C "${INSTALL_DIR}" \
@@ -1829,16 +1820,18 @@ update_existing() {
     # .venv/ is excluded.
     # .version is excluded.
     #
-    # Everything else is synchronized from the new release.
+    # Leading slashes anchor the patterns to the root of the transfer,
+    # so data/ and config.py anywhere else are not affected and the
+    # protected runtime directories are never touched by rsync.
     #
     # --delete removes stale application files that no longer exist
     # in the new release, while the protected paths remain untouched.
 
     rsync -a --delete \
-        --exclude='config.py' \
-        --exclude='data/' \
-        --exclude='.venv/' \
-        --exclude='.version' \
+        --exclude='/config.py' \
+        --exclude='/data/' \
+        --exclude='/.venv/' \
+        --exclude='/.version' \
         "${RELEASE_ROOT}/" \
         "${INSTALL_DIR}/"
 
@@ -1979,14 +1972,11 @@ handle_existing_installation() {
         return 0
     fi
 
-    if ask_yes_no \
-        "Update VeloraBot to ${LATEST_VERSION}? [Y/n]: " \
-        "y"; then
-
-        update_existing
-    else
-        log_warning "Update cancelled by user."
-    fi
+    # When the installed release is older than the latest release,
+    # proceed with the update automatically. The updater still creates
+    # a full backup and rolls back on failure.
+    log_info "A newer release is available. Starting update automatically..."
+    update_existing
 }
 
 # ============================================================
