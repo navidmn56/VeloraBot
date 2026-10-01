@@ -13,6 +13,7 @@
 #   * ZIP download pinned to exact commit SHA.
 #   * Non-root service user + systemd sandboxing.
 #   * Interactive management panel shown in `auto` mode.
+#   * Auto-detects / installs Python 3.11+ for numpy >= 2.3.
 # ============================================================
 
 set -Eeuo pipefail
@@ -77,6 +78,10 @@ readonly SERVICE_OVERRIDE_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
 readonly BACKUP_ROOT="/opt/VeloraBot-backups"
 readonly BACKUP_KEEP=5
 
+# Minimum Python required by the current release (numpy >= 2.3 requires 3.11+).
+readonly REQUIRED_PYTHON_MAJOR=3
+readonly REQUIRED_PYTHON_MINOR=11
+
 LOG_FILE="/var/log/velorabot-installer.log"
 LOG_FILE_PRIMARY="/var/log/velorabot-installer.log"
 
@@ -87,7 +92,6 @@ SENSITIVE_PLACEHOLDER_KEYS=(
     "SENAI_SUB_URL" "SUPPORT_USERNAME" "GEMINI_API_KEY"
 )
 
-# All keys that the panel and update flow will preserve/restore.
 CONFIG_EDITABLE_KEYS=(
     "BOT_TOKEN" "ADMIN_ID" "LOG_BOT_TOKEN" "LOG_CHANNEL_ID"
     "BANK_CARD_NUMBER" "BANK_CARD_HOLDER" "BANK_NAME"
@@ -118,6 +122,9 @@ SKIP_CONFIG=0
 REPAIR_ONLY=0
 SERVICE_BACKUP_EXISTS=0
 STTY_SAVED_STATE=""
+
+# Best interpreter found by ensure_modern_python().
+PYTHON_BIN="python3"
 
 # ============================================================
 # Configuration state
@@ -225,7 +232,6 @@ cleanup_temp() {
     fi
 }
 
-# Excludes for the rollback restore (we want to KEEP the user's config.py).
 rsync_excludes() {
     printf '%s\n' \
         '--exclude=/config.py' \
@@ -237,7 +243,6 @@ rsync_excludes() {
         '--exclude=/*.log'
 }
 
-# Excludes for the update sync (we WANT config.py from the release here).
 rsync_excludes_update() {
     printf '%s\n' \
         '--exclude=/data/' \
@@ -523,7 +528,7 @@ install_system_dependencies() {
     apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
         ca-certificates curl unzip rsync python3 python3-pip \
         python3-venv python3-dev build-essential libssl-dev libffi-dev \
-        libjpeg-dev zlib1g-dev
+        libjpeg-dev zlib1g-dev software-properties-common
 
     for cmd in python3 curl unzip rsync; do
         command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is not available."
@@ -532,14 +537,80 @@ install_system_dependencies() {
     log_success "System dependencies are installed."
 }
 
+# Ensure Python >= 3.11 is available. Prefer 3.13 → 3.12 → 3.11; install
+# from the deadsnakes PPA if the distro doesn't ship one.
+ensure_modern_python() {
+    local py candidate=""
+
+    for py in python3.13 python3.12 python3.11; do
+        if command -v "${py}" >/dev/null 2>&1; then
+            if "${py}" -c \
+                "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
+                2>/dev/null; then
+                candidate="${py}"
+                break
+            fi
+        fi
+    done
+
+    if [[ -z "${candidate}" ]]; then
+        # If system python3 is already >= 3.11, use it.
+        if command -v python3 >/dev/null 2>&1 && \
+           python3 -c \
+               "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
+               2>/dev/null; then
+            candidate="python3"
+        fi
+    fi
+
+    if [[ -z "${candidate}" ]]; then
+        log_warning "No Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ found. Trying to install one..."
+
+        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+            python3.12 python3.12-venv python3.12-dev 2>/dev/null || true
+
+        if ! command -v python3.12 >/dev/null 2>&1; then
+            log_info "python3.12 not in apt repos. Adding deadsnakes PPA..."
+            apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+                software-properties-common 2>/dev/null || true
+            add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 || true
+            apt-get -o DPkg::Lock::Timeout=120 update -qq 2>/dev/null || true
+            apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+                python3.12 python3.12-venv python3.12-dev 2>/dev/null || true
+        fi
+
+        if ! command -v python3.12 >/dev/null 2>&1; then
+            apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+                python3.11 python3.11-venv python3.11-dev 2>/dev/null || true
+        fi
+
+        for py in python3.12 python3.11; do
+            if command -v "${py}" >/dev/null 2>&1 && \
+               "${py}" -c \
+                   "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
+                   2>/dev/null; then
+                candidate="${py}"
+                break
+            fi
+        done
+    fi
+
+    if [[ -z "${candidate}" ]]; then
+        die "Could not install Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+. Install it manually and re-run the installer."
+    fi
+
+    PYTHON_BIN="${candidate}"
+    log_success "Using ${PYTHON_BIN} ($("${PYTHON_BIN}" --version 2>&1))"
+}
+
 check_python_version() {
     local version
-    version="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
+    version="$("${PYTHON_BIN}" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')"
     printf 'Python version: %s\n' "${version}"
 
-    if ! python3 -c \
-        'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)'; then
-        die "VeloraBot requires Python 3.10 or newer."
+    if ! "${PYTHON_BIN}" -c \
+        "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)"; then
+        die "VeloraBot requires Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR} or newer (numpy >= 2.3 requires it)."
     fi
     log_success "Python version is supported."
 }
@@ -574,7 +645,7 @@ fetch_latest_commit() {
 
     local parsed
     parsed="$(
-        python3 - "${metadata_file}" <<'PY'
+        "${PYTHON_BIN}" - "${metadata_file}" <<'PY'
 import json, sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
     data = json.load(f)
@@ -917,14 +988,32 @@ start_service_and_check() {
 # ============================================================
 
 create_virtual_environment_if_needed() {
+    local recreate=0
+
+    if [[ -x "${VENV_DIR}/bin/python" ]]; then
+        local venv_major_minor target_major_minor
+        venv_major_minor="$("${VENV_DIR}/bin/python" -c \
+            'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' \
+            2>/dev/null || echo "unknown")"
+        target_major_minor="$("${PYTHON_BIN}" -c \
+            'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+
+        if [[ "${venv_major_minor}" != "${target_major_minor}" ]]; then
+            log_warning "Existing venv uses Python ${venv_major_minor}, but target is ${target_major_minor}."
+            log_warning "Recreating the virtual environment..."
+            rm -rf "${VENV_DIR}"
+            recreate=1
+        fi
+    fi
+
     if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
         draw_step "Creating Python Virtual Environment"
-        log_info "Creating ${VENV_DIR}..."
+        log_info "Creating ${VENV_DIR} with ${PYTHON_BIN}..."
         mkdir -p "${INSTALL_DIR}"
-        python3 -m venv "${VENV_DIR}"
+        "${PYTHON_BIN}" -m venv "${VENV_DIR}"
         VENV_CREATED=1
         log_success "Python virtual environment created."
-    else
+    elif (( recreate == 0 )); then
         log_info "Existing Python virtual environment will be preserved."
     fi
 
@@ -964,7 +1053,7 @@ ensure_data_configs_file() {
 release_default_value() {
     local key="$1"
     [[ -f "${RELEASE_ROOT}/config.py" ]] || return 1
-    python3 - "${RELEASE_ROOT}/config.py" "${key}" <<'PY'
+    "${PYTHON_BIN}" - "${RELEASE_ROOT}/config.py" "${key}" <<'PY'
 import ast, sys
 path, key = sys.argv[1], sys.argv[2]
 try:
@@ -1024,7 +1113,7 @@ extract_config_values() {
     [[ -f "${CONFIG_FILE}" ]] || return 1
     local values
     values="$(
-        python3 - "${CONFIG_FILE}" <<'PY'
+        "${PYTHON_BIN}" - "${CONFIG_FILE}" <<'PY'
 import ast, json, sys
 path = sys.argv[1]
 allowed = {
@@ -1065,7 +1154,7 @@ PY
         local key="$1"
         local default="${2:-}"
         CFG_JSON="${exported_json}" CFG_KEY="${key}" CFG_DEFAULT="${default}" \
-        python3 <<'PY'
+        "${PYTHON_BIN}" <<'PY'
 import json, os
 try:
     data = json.loads(os.environ.get("CFG_JSON", "{}"))
@@ -1103,15 +1192,11 @@ PY
     GEMINI_DAILY_LIMIT="$(config_value "GEMINI_DAILY_LIMIT" "3")"
 }
 
-# Apply values from $1 (source config.py) onto $2 (target config.py).
-# Only values of known keys are copied; comments/structure of the target
-# are preserved untouched. Keys present only in the target keep their
-# defaults; keys present only in the source are dropped.
 apply_config_values() {
     local source="$1" target="$2"
     [[ -f "${source}" && -f "${target}" ]] || return 1
 
-    python3 - "${source}" "${target}" <<'PY'
+    "${PYTHON_BIN}" - "${source}" "${target}" <<'PY'
 import ast, re, sys
 
 source_path, target_path = sys.argv[1], sys.argv[2]
@@ -1170,7 +1255,6 @@ with open(target_path, "w", encoding="utf-8") as f:
 PY
 }
 
-# Replace config.py with a new version while preserving values from $saved.
 update_config_file_with_backup() {
     local new_config="$1"
     local saved_config="$2"
@@ -1178,7 +1262,6 @@ update_config_file_with_backup() {
     [[ -f "${new_config}" ]] || return 0
 
     if [[ ! -f "${saved_config}" ]]; then
-        # No existing config to preserve → just install the new one.
         cp -a "${new_config}" "${CONFIG_FILE}"
         chmod 600 "${CONFIG_FILE}"
         log_info "Installed new config.py from release."
@@ -1277,7 +1360,7 @@ validate_existing_config() {
 _set_config_raw() {
     local key="$1"
     local raw="$2"
-    CFG_KEY="${key}" CFG_RAW="${raw}" python3 - "${CONFIG_FILE}" <<'PY'
+    CFG_KEY="${key}" CFG_RAW="${raw}" "${PYTHON_BIN}" - "${CONFIG_FILE}" <<'PY'
 import os, re, sys
 path = sys.argv[1]
 key = os.environ["CFG_KEY"]
@@ -1314,7 +1397,7 @@ set_config_value() {
     local key="$1"
     local value="$2"
     local quoted
-    quoted="$(CFG_VAL="${value}" python3 -c 'import os,sys; sys.stdout.write(repr(os.environ["CFG_VAL"]))')"
+    quoted="$(CFG_VAL="${value}" "${PYTHON_BIN}" -c 'import os,sys; sys.stdout.write(repr(os.environ["CFG_VAL"]))')"
     _set_config_raw "${key}" "${quoted}"
 }
 
@@ -1582,7 +1665,6 @@ edit_all_config_keys() {
                 ;;
             3)
                 describe "Token of the second bot (must be admin in the log group)."
-                describe "Press Enter then Ctrl+C to skip; leave blank to disable."
                 prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
                 set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
                 log_success "LOG_BOT_TOKEN updated."
@@ -1834,9 +1916,6 @@ configure_config_in_place() {
 
     local changed=0
 
-    # ---------------------------------------------------------
-    # Required
-    # ---------------------------------------------------------
     draw_step "Required Settings"
 
     if is_placeholder "BOT_TOKEN" "${BOT_TOKEN}"; then
@@ -1934,9 +2013,6 @@ configure_config_in_place() {
         printf 'SUPPORT_USERNAME         : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    # ---------------------------------------------------------
-    # Optional: log bot
-    # ---------------------------------------------------------
     draw_step "Optional: Log Bot Settings"
 
     describe "LOG_BOT_TOKEN: Token of the second bot (must be admin in the log group)."
@@ -2028,9 +2104,6 @@ configure_config_in_place() {
         printf 'LOG_CHANNEL_ID           : %b(disabled)%b\n' "${DIM}" "${NC}"
     fi
 
-    # ---------------------------------------------------------
-    # Optional: Gemini AI
-    # ---------------------------------------------------------
     draw_step "Optional: Google Gemini AI"
 
     describe "GEMINI_ENABLED: enable AI responses via Google Gemini."
@@ -2108,7 +2181,7 @@ migrate_config_keys() {
     [[ -f "${RELEASE_ROOT}/config.py" ]] || return 0
 
     local missing
-    missing="$(python3 - "${INSTALL_DIR}" "${CONFIG_FILE}" \
+    missing="$("${PYTHON_BIN}" - "${INSTALL_DIR}" "${CONFIG_FILE}" \
                           "${RELEASE_ROOT}/config.py" \
                           "${VENV_DIR}" "${DATA_DIR}" <<'PY'
 import ast, os, sys
@@ -2168,7 +2241,7 @@ PY
     log_warning "Missing config.py keys detected: $(echo "${missing}" | tr '\n' ' ')"
 
     printf '%s\n' "${missing}" \
-        | python3 - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<'PY'
+        | "${PYTHON_BIN}" - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<'PY'
 import ast, sys
 
 config_path = sys.argv[1]
@@ -2274,7 +2347,6 @@ fresh_install() {
     validate_release_for_install
     prepare_install_directory
 
-    # Preserve existing config values (only values, not the file itself).
     local saved_config=""
     if [[ -f "${CONFIG_FILE}" ]]; then
         saved_config="${TEMP_ROOT}/config.py.saved"
@@ -2340,10 +2412,8 @@ update_existing() {
     validate_release_for_update
     create_virtual_environment_if_needed
 
-    # 1) Stop service first.
     stop_service_if_active
 
-    # 2) Save current config.py so we can re-apply values after the sync.
     local saved_config=""
     if [[ -f "${CONFIG_FILE}" ]]; then
         saved_config="${TEMP_ROOT}/config.py.saved"
@@ -2351,7 +2421,6 @@ update_existing() {
         log_info "Saved current config.py for value restoration."
     fi
 
-    # 3) Backup (code + data + freeze + current config inside the tar).
     UPDATE_IN_PROGRESS=1
     if ! create_backup; then
         UPDATE_IN_PROGRESS=0
@@ -2361,8 +2430,6 @@ update_existing() {
         die "Backup failed; aborting update."
     fi
 
-    # 4) Sync code — INCLUDING config.py from the release.
-    #    Values will be re-applied right after.
     draw_step "Synchronizing Application Files"
     log_info "Synchronizing commit ${LATEST_VERSION} (config.py included)..."
 
@@ -2374,12 +2441,10 @@ update_existing() {
 
     log_success "Application files synchronized."
 
-    # 5) Re-apply user values from the saved config onto the new file.
     if [[ -f "${RELEASE_ROOT}/config.py" ]]; then
         update_config_file_with_backup "${RELEASE_ROOT}/config.py" "${saved_config}"
     fi
 
-    # If config.py is still missing entirely, fall back to the release file.
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         log_warning "config.py is missing. Restoring from release..."
         if [[ -f "${RELEASE_ROOT}/config.py" ]]; then
@@ -2431,7 +2496,6 @@ update_existing() {
     fix_permissions
     create_systemd_service
 
-    # Health check FIRST, then write .version.
     if ! start_service_and_check; then
         die "Updated application failed the service health check."
     fi
@@ -2580,6 +2644,7 @@ show_final_summary() {
 
     printf 'Repository       : %s\n' "${REPO_URL}"
     printf 'Release          : %s\n' "${CURRENT_VERSION}"
+    printf 'Python           : %s (%s)\n' "${PYTHON_BIN}" "$("${PYTHON_BIN}" --version 2>&1)"
     printf 'Install directory: %s\n' "${INSTALL_DIR}"
     printf 'Virtual env      : %s\n' "${VENV_DIR}"
     printf 'Config           : %s\n' "${CONFIG_FILE}"
@@ -2593,7 +2658,7 @@ show_final_summary() {
     printf '  config.py      : release version installed, user values preserved\n'
     printf '  data/          : never touched (backed up on update)\n'
     printf '  *.log          : never touched (excluded from rsync/tar)\n'
-    printf '  .venv/         : preserved\n'
+    printf '  .venv/         : preserved (recreated only on Python version change)\n'
     printf '  updates        : require explicit user consent\n'
     printf '\n'
 
@@ -2626,7 +2691,6 @@ main() {
     parse_arguments "$@"
     open_tty
 
-    # پاک‌سازی صفحه قبل از هر کاری (اگر terminal پشتیبانی کند)
     clear > /dev/tty 2>/dev/null || true
 
     draw_header "VeloraBot Installer / Updater"
@@ -2638,7 +2702,6 @@ main() {
     check_root
     check_operating_system
 
-    # Show the interactive management panel when no explicit action was given.
     if [[ "${SCRIPT_MODE}" == "auto" ]] && \
        (( FORCE_UPDATE == 0 )) && \
        (( REPAIR_ONLY == 0 )); then
@@ -2646,6 +2709,7 @@ main() {
     fi
 
     install_system_dependencies
+    ensure_modern_python
     check_python_version
     check_github_connectivity
 
