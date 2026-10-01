@@ -1534,6 +1534,7 @@ prompt_positive_int() {
 
 edit_all_config_keys() {
     while true; do
+        clear > /dev/tty 2>/dev/null || true
         [[ -f "${CONFIG_FILE}" ]] || { log_error "config.py not found."; return 1; }
         extract_config_values || true
 
@@ -1710,6 +1711,7 @@ edit_all_config_keys() {
 
 show_management_panel() {
     while true; do
+        clear > /dev/tty 2>/dev/null || true
         draw_header "VeloraBot Management Panel"
 
         local has_install=0
@@ -2623,6 +2625,9 @@ main() {
     initialize_logging
     parse_arguments "$@"
     open_tty
+
+    # پاک‌سازی صفحه قبل از هر کاری (اگر terminal پشتیبانی کند)
+    clear > /dev/tty 2>/dev/null || true
 
     draw_header "VeloraBot Installer / Updater"
     printf 'Repository: %s\n\n' "${REPO_URL}"
