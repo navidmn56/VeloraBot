@@ -6,11 +6,13 @@
 #
 # Design:
 #   * FD 3 on /dev/tty for prompts → curl|bash safe.
-#   * config.py edited in place; comments & structure preserved.
+#   * config.py from release is applied, then user's values are
+#     re-applied on top (comments & structure from release kept).
 #   * data/ and *.log are never touched by any operation.
 #   * .version written ONLY after successful health check.
 #   * ZIP download pinned to exact commit SHA.
 #   * Non-root service user + systemd sandboxing.
+#   * Interactive management panel shown in `auto` mode.
 # ============================================================
 
 set -Eeuo pipefail
@@ -83,6 +85,16 @@ SENSITIVE_PLACEHOLDER_KEYS=(
     "BANK_CARD_NUMBER" "BANK_CARD_HOLDER" "BANK_NAME"
     "SENAI_PANEL_URL" "SENAI_PANEL_USERNAME" "SENAI_PANEL_PASSWORD"
     "SENAI_SUB_URL" "SUPPORT_USERNAME" "GEMINI_API_KEY"
+)
+
+# All keys that the panel and update flow will preserve/restore.
+CONFIG_EDITABLE_KEYS=(
+    "BOT_TOKEN" "ADMIN_ID" "LOG_BOT_TOKEN" "LOG_CHANNEL_ID"
+    "BANK_CARD_NUMBER" "BANK_CARD_HOLDER" "BANK_NAME"
+    "SENAI_PANEL_URL" "SENAI_PANEL_USERNAME" "SENAI_PANEL_PASSWORD"
+    "SENAI_SUB_URL" "SUPPORT_USERNAME"
+    "GEMINI_ENABLED" "GEMINI_API_KEY" "GEMINI_MODEL"
+    "GEMINI_TEMPERATURE" "GEMINI_MAX_TOKENS" "GEMINI_DAILY_LIMIT"
 )
 
 # ============================================================
@@ -213,10 +225,21 @@ cleanup_temp() {
     fi
 }
 
-# Shared rsync exclude flags for every code sync / restore.
+# Excludes for the rollback restore (we want to KEEP the user's config.py).
 rsync_excludes() {
     printf '%s\n' \
         '--exclude=/config.py' \
+        '--exclude=/data/' \
+        '--exclude=/.venv/' \
+        '--exclude=/.version' \
+        '--exclude=/.git/' \
+        '--exclude=/.env' \
+        '--exclude=/*.log'
+}
+
+# Excludes for the update sync (we WANT config.py from the release here).
+rsync_excludes_update() {
+    printf '%s\n' \
         '--exclude=/data/' \
         '--exclude=/.venv/' \
         '--exclude=/.version' \
@@ -428,6 +451,8 @@ Options:
   --skip-config     Skip config prompts during a fresh install.
   --repair          Validate and repair the current installation.
   --help, -h        Show this help message.
+
+Running without arguments opens the interactive management panel.
 
 Source of truth:
   ${REPO_URL} (branch: ${BRANCH})
@@ -770,7 +795,6 @@ fix_permissions() {
     [[ -f "${CONFIG_FILE}" ]] && chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
     chmod 700 "${DATA_DIR}" 2>/dev/null || true
     find "${DATA_DIR}" -type f -exec chmod 600 {} + 2>/dev/null || true
-    # Log files (if any) are writable by the service user.
     find "${INSTALL_DIR}" -maxdepth 1 -type f -name '*.log' \
         -exec chown "${SERVICE_USER}:${SERVICE_GROUP}" {} + 2>/dev/null || true
     find "${INSTALL_DIR}" -maxdepth 1 -type f -name '*.log' \
@@ -1079,6 +1103,100 @@ PY
     GEMINI_DAILY_LIMIT="$(config_value "GEMINI_DAILY_LIMIT" "3")"
 }
 
+# Apply values from $1 (source config.py) onto $2 (target config.py).
+# Only values of known keys are copied; comments/structure of the target
+# are preserved untouched. Keys present only in the target keep their
+# defaults; keys present only in the source are dropped.
+apply_config_values() {
+    local source="$1" target="$2"
+    [[ -f "${source}" && -f "${target}" ]] || return 1
+
+    python3 - "${source}" "${target}" <<'PY'
+import ast, re, sys
+
+source_path, target_path = sys.argv[1], sys.argv[2]
+
+ALLOWED = {
+    "BOT_TOKEN","ADMIN_ID","LOG_BOT_TOKEN","LOG_CHANNEL_ID",
+    "BANK_CARD_NUMBER","BANK_CARD_HOLDER","BANK_NAME",
+    "SENAI_PANEL_URL","SENAI_PANEL_USERNAME","SENAI_PANEL_PASSWORD",
+    "SENAI_SUB_URL","SUPPORT_USERNAME","GEMINI_ENABLED","GEMINI_API_KEY",
+    "GEMINI_MODEL","GEMINI_TEMPERATURE","GEMINI_MAX_TOKENS","GEMINI_DAILY_LIMIT",
+}
+
+with open(source_path, "r", encoding="utf-8") as f:
+    src = f.read()
+tree = ast.parse(src)
+values = {}
+for node in tree.body:
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            if isinstance(t, ast.Name) and t.id in ALLOWED:
+                try:
+                    values[t.id] = ast.literal_eval(node.value)
+                except Exception:
+                    pass
+
+with open(target_path, "r", encoding="utf-8") as f:
+    text = f.read()
+
+def fmt(v):
+    if isinstance(v, bool):
+        return "True" if v else "False"
+    if v is None:
+        return "None"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return repr(v)
+
+for key, value in values.items():
+    replacement = f"{key} = {fmt(value)}"
+    pattern = re.compile(rf"(?m)^([ \t]*){re.escape(key)}([ \t]*=[^\n]*)")
+
+    def repl(match):
+        line = match.group(0)
+        eq = line.find("=")
+        comment_idx = line.find("#", eq + 1) if eq >= 0 else -1
+        if comment_idx >= 0:
+            comment = line[comment_idx:]
+            return f"{match.group(1)}{replacement}  {comment}"
+        return f"{match.group(1)}{replacement}"
+
+    if pattern.search(text):
+        text = pattern.sub(repl, text, count=1)
+
+with open(target_path, "w", encoding="utf-8") as f:
+    f.write(text)
+PY
+}
+
+# Replace config.py with a new version while preserving values from $saved.
+update_config_file_with_backup() {
+    local new_config="$1"
+    local saved_config="$2"
+
+    [[ -f "${new_config}" ]] || return 0
+
+    if [[ ! -f "${saved_config}" ]]; then
+        # No existing config to preserve → just install the new one.
+        cp -a "${new_config}" "${CONFIG_FILE}"
+        chmod 600 "${CONFIG_FILE}"
+        log_info "Installed new config.py from release."
+        return 0
+    fi
+
+    log_info "Replacing config.py with release version..."
+    cp -a "${new_config}" "${CONFIG_FILE}"
+    chmod 600 "${CONFIG_FILE}"
+
+    log_info "Re-applying existing values onto the new config.py..."
+    if apply_config_values "${saved_config}" "${CONFIG_FILE}"; then
+        log_success "Existing values were re-applied to the new config.py."
+    else
+        log_warning "Could not re-apply values; manual config review may be needed."
+    fi
+}
+
 validate_existing_config() {
     local missing=0
     printf '%s\n' "Checking existing configuration..."
@@ -1086,10 +1204,11 @@ validate_existing_config() {
     is_placeholder "BOT_TOKEN" "${BOT_TOKEN}" && \
         { printf '  %bMISSING%b BOT_TOKEN\n' "${RED}" "${NC}"; missing=1; }
 
-    [[ "${ADMIN_ID}" =~ ^[0-9]+$ && "${ADMIN_ID}" != "0" ]] || \
-        { printf '  %bINVALID%b ADMIN_ID\n' "${RED}" "${NC}"; missing=1; }
+    if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ || "${ADMIN_ID}" == "0" ]] || \
+       is_placeholder "ADMIN_ID" "${ADMIN_ID}"; then
+        printf '  %bINVALID%b ADMIN_ID\n' "${RED}" "${NC}"; missing=1
+    fi
 
-    # LOG_BOT_TOKEN: if set and non-empty, LOG_CHANNEL_ID must be valid.
     if ! is_placeholder "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}" && \
        [[ -n "${LOG_BOT_TOKEN}" ]]; then
         if [[ ! "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ && "${LOG_CHANNEL_ID}" != "None" ]]; then
@@ -1097,8 +1216,10 @@ validate_existing_config() {
         fi
     fi
 
-    [[ "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]] || \
-        { printf '  %bINVALID%b BANK_CARD_NUMBER\n' "${RED}" "${NC}"; missing=1; }
+    if ! [[ "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]] || \
+       is_placeholder "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"; then
+        printf '  %bINVALID%b BANK_CARD_NUMBER\n' "${RED}" "${NC}"; missing=1
+    fi
 
     is_placeholder "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}" && \
         { printf '  %bMISSING%b BANK_CARD_HOLDER\n' "${RED}" "${NC}"; missing=1; }
@@ -1235,6 +1356,19 @@ describe() {
     printf '%b  %s%b\n' "${DIM}" "$1" "${NC}" > /dev/tty
 }
 
+mask_secret() {
+    local v="$1"
+    if [[ -z "${v}" || "${v}" == "None" ]]; then
+        printf '%s' "${v}"
+        return
+    fi
+    if (( ${#v} <= 8 )); then
+        printf '***'
+    else
+        printf '%s...%s' "${v:0:4}" "${v: -4}"
+    fi
+}
+
 prompt_for_value() {
     local label="$1"
     local result_var="$2"
@@ -1283,7 +1417,6 @@ prompt_admin_id() {
     done
 }
 
-# LOG_CHANNEL_ID: negative (group) or None. Empty input → None.
 prompt_log_channel_id() {
     local value=""
     describe "LOG_CHANNEL_ID: numeric group ID. Group/channel IDs are NEGATIVE,"
@@ -1299,7 +1432,6 @@ prompt_log_channel_id() {
     fi
 
     while true; do
-        # Accept -?[0-9]+ (negative allowed, matching real Telegram group IDs).
         if [[ "${value}" =~ ^-?[0-9]+$ ]]; then
             LOG_CHANNEL_ID="${value}"
             return
@@ -1397,6 +1529,292 @@ prompt_positive_int() {
 }
 
 # ============================================================
+# Interactive panel: edit all config keys
+# ============================================================
+
+edit_all_config_keys() {
+    while true; do
+        [[ -f "${CONFIG_FILE}" ]] || { log_error "config.py not found."; return 1; }
+        extract_config_values || true
+
+        draw_header "Edit Configuration Keys"
+
+        printf '  %2d) %-22s : %s\n'  1 "BOT_TOKEN"            "$(mask_secret "${BOT_TOKEN}")"
+        printf '  %2d) %-22s : %s\n'  2 "ADMIN_ID"             "${ADMIN_ID}"
+        printf '  %2d) %-22s : %s\n'  3 "LOG_BOT_TOKEN"        "$(mask_secret "${LOG_BOT_TOKEN}")"
+        printf '  %2d) %-22s : %s\n'  4 "LOG_CHANNEL_ID"       "${LOG_CHANNEL_ID}"
+        printf '  %2d) %-22s : %s\n'  5 "BANK_CARD_NUMBER"     "${BANK_CARD_NUMBER}"
+        printf '  %2d) %-22s : %s\n'  6 "BANK_CARD_HOLDER"     "${BANK_CARD_HOLDER}"
+        printf '  %2d) %-22s : %s\n'  7 "BANK_NAME"            "${BANK_NAME}"
+        printf '  %2d) %-22s : %s\n'  8 "SENAI_PANEL_URL"      "${SENAI_PANEL_URL}"
+        printf '  %2d) %-22s : %s\n'  9 "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
+        printf '  %2d) %-22s : %s\n' 10 "SENAI_PANEL_PASSWORD" "$(mask_secret "${SENAI_PANEL_PASSWORD}")"
+        printf '  %2d) %-22s : %s\n' 11 "SENAI_SUB_URL"        "${SENAI_SUB_URL}"
+        printf '  %2d) %-22s : %s\n' 12 "SUPPORT_USERNAME"     "${SUPPORT_USERNAME}"
+        printf '  %2d) %-22s : %s\n' 13 "GEMINI_ENABLED"       "${GEMINI_ENABLED}"
+        printf '  %2d) %-22s : %s\n' 14 "GEMINI_API_KEY"       "$(mask_secret "${GEMINI_API_KEY}")"
+        printf '  %2d) %-22s : %s\n' 15 "GEMINI_MODEL"         "${GEMINI_MODEL}"
+        printf '  %2d) %-22s : %s\n' 16 "GEMINI_TEMPERATURE"   "${GEMINI_TEMPERATURE}"
+        printf '  %2d) %-22s : %s\n' 17 "GEMINI_MAX_TOKENS"    "${GEMINI_MAX_TOKENS}"
+        printf '  %2d) %-22s : %s\n' 18 "GEMINI_DAILY_LIMIT"   "${GEMINI_DAILY_LIMIT}"
+        printf '\n'
+        printf '  b) Back to main menu\n'
+        printf '\n'
+
+        local choice=""
+        if ! read_tty "Select a key to edit: " choice; then
+            return 0
+        fi
+
+        case "${choice}" in
+            1)
+                describe "Get from @BotFather (main bot token)."
+                prompt_for_secret "BOT_TOKEN" BOT_TOKEN
+                set_config_value "BOT_TOKEN" "${BOT_TOKEN}"
+                log_success "BOT_TOKEN updated."
+                ;;
+            2)
+                describe "Your Telegram numeric ID (get from @myidbot)."
+                prompt_admin_id
+                set_config_integer "ADMIN_ID" "${ADMIN_ID}"
+                log_success "ADMIN_ID updated."
+                ;;
+            3)
+                describe "Token of the second bot (must be admin in the log group)."
+                describe "Press Enter then Ctrl+C to skip; leave blank to disable."
+                prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
+                set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
+                log_success "LOG_BOT_TOKEN updated."
+                ;;
+            4)
+                prompt_log_channel_id
+                if [[ "${LOG_CHANNEL_ID}" == "None" ]]; then
+                    set_config_literal "LOG_CHANNEL_ID" "None"
+                else
+                    set_config_integer "LOG_CHANNEL_ID" "${LOG_CHANNEL_ID}"
+                fi
+                log_success "LOG_CHANNEL_ID updated."
+                ;;
+            5)
+                describe "Your bank card number — exactly 16 digits (no spaces/dashes/underscores)."
+                prompt_card_number
+                set_config_value "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"
+                log_success "BANK_CARD_NUMBER updated."
+                ;;
+            6)
+                describe "Card holder's full name (as printed on the card)."
+                prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
+                set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
+                log_success "BANK_CARD_HOLDER updated."
+                ;;
+            7)
+                describe "Bank name — e.g. \"Blue Bank\", \"Melli\", \"Mellat\"."
+                prompt_for_value "BANK_NAME" BANK_NAME
+                set_config_value "BANK_NAME" "${BANK_NAME}"
+                log_success "BANK_NAME updated."
+                ;;
+            8)
+                describe "3x-ui panel URL, e.g. https://panel.Domain.com:2053/<web_path>"
+                prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
+                set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
+                log_success "SENAI_PANEL_URL updated."
+                ;;
+            9)
+                describe "Panel admin username."
+                prompt_for_value "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
+                set_config_value "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
+                log_success "SENAI_PANEL_USERNAME updated."
+                ;;
+            10)
+                describe "Panel admin password."
+                prompt_for_secret "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
+                set_config_value "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"
+                log_success "SENAI_PANEL_PASSWORD updated."
+                ;;
+            11)
+                describe "Subscription URL for clients, e.g. https://sub.Domain.com:2083"
+                prompt_http_url "SENAI_SUB_URL" SENAI_SUB_URL
+                set_config_value "SENAI_SUB_URL" "${SENAI_SUB_URL}"
+                log_success "SENAI_SUB_URL updated."
+                ;;
+            12)
+                describe "Support Telegram username — e.g. @your_username_here"
+                prompt_for_value "SUPPORT_USERNAME" SUPPORT_USERNAME
+                set_config_value "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"
+                log_success "SUPPORT_USERNAME updated."
+                ;;
+            13)
+                local gem=""
+                printf 'Enable Gemini? [true/false/none]: ' > /dev/tty
+                if ! IFS= read -r gem <&3; then
+                    die "Could not read input."
+                fi
+                gem="${gem,,}"
+                case "${gem}" in
+                    true|false|none) ;;
+                    *) log_warning "Must be true, false or none."; continue ;;
+                esac
+                set_config_boolean "GEMINI_ENABLED" "${gem}"
+                GEMINI_ENABLED="True"
+                [[ "${gem}" == "false" ]] && GEMINI_ENABLED="False"
+                [[ "${gem}" == "none"  ]] && GEMINI_ENABLED="None"
+                log_success "GEMINI_ENABLED updated."
+                ;;
+            14)
+                describe "GEMINI_API_KEY: Get from https://ai.google.dev/"
+                prompt_for_secret "GEMINI_API_KEY" GEMINI_API_KEY
+                set_config_value "GEMINI_API_KEY" "${GEMINI_API_KEY}"
+                log_success "GEMINI_API_KEY updated."
+                ;;
+            15)
+                describe "GEMINI_MODEL: any Gemini model, e.g. gemini-2.5-flash"
+                prompt_with_default "GEMINI_MODEL" "${GEMINI_MODEL:-gemini-2.5-flash}" GEMINI_MODEL
+                set_config_value "GEMINI_MODEL" "${GEMINI_MODEL}"
+                log_success "GEMINI_MODEL updated."
+                ;;
+            16)
+                describe "GEMINI_TEMPERATURE: randomness (0.0 to 1.0)"
+                prompt_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE:-0.7}" GEMINI_TEMPERATURE
+                set_config_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE}"
+                log_success "GEMINI_TEMPERATURE updated."
+                ;;
+            17)
+                describe "GEMINI_MAX_TOKENS: maximum response length"
+                prompt_positive_int "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS:-90}" GEMINI_MAX_TOKENS
+                set_config_integer "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS}"
+                log_success "GEMINI_MAX_TOKENS updated."
+                ;;
+            18)
+                describe "GEMINI_DAILY_LIMIT: max AI responses per user per day"
+                prompt_positive_int "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT:-3}" GEMINI_DAILY_LIMIT
+                set_config_integer "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT}"
+                log_success "GEMINI_DAILY_LIMIT updated."
+                ;;
+            b|B|back|q|quit)
+                return 0
+                ;;
+            *)
+                log_warning "Invalid option."
+                continue
+                ;;
+        esac
+
+        chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
+        log_info "config.py updated in place."
+    done
+}
+
+# ============================================================
+# Interactive management panel
+# ============================================================
+
+show_management_panel() {
+    while true; do
+        draw_header "VeloraBot Management Panel"
+
+        local has_install=0
+        if [[ -d "${INSTALL_DIR}" && -f "${INSTALL_DIR}/main.py" ]]; then
+            has_install=1
+        fi
+
+        if (( has_install == 1 )); then
+            read_current_version
+            printf 'Status             : %bInstalled%b\n' "${GREEN}" "${NC}"
+            printf 'Installed version  : %s\n' "${CURRENT_VERSION}"
+            if service_is_active; then
+                printf 'Service            : %bactive%b\n' "${GREEN}" "${NC}"
+            else
+                printf 'Service            : %binactive%b\n' "${YELLOW}" "${NC}"
+            fi
+            printf 'Install directory  : %s\n' "${INSTALL_DIR}"
+            printf '\n'
+            printf '  1) Update to latest version\n'
+            printf '  2) Force re-sync (re-download current version)\n'
+            printf '  3) Edit configuration keys\n'
+            printf '  4) Repair installation\n'
+            printf '  5) Restart service\n'
+            printf '  6) Show recent service logs\n'
+            printf '  q) Quit\n'
+        else
+            printf 'Status             : %bNot installed%b\n' "${YELLOW}" "${NC}"
+            printf 'Install directory  : %s\n' "${INSTALL_DIR}"
+            printf '\n'
+            printf '  1) Install VeloraBot\n'
+            printf '  q) Quit\n'
+        fi
+        printf '\n'
+
+        local choice=""
+        if ! read_tty "Select an option: " choice; then
+            exit 1
+        fi
+
+        case "${choice}" in
+            1)
+                if (( has_install == 1 )); then
+                    SCRIPT_MODE="update"
+                    return 0
+                else
+                    SCRIPT_MODE="install"
+                    return 0
+                fi
+                ;;
+            2)
+                if (( has_install == 1 )); then
+                    FORCE_UPDATE=1
+                    SCRIPT_MODE="update"
+                    return 0
+                fi
+                log_warning "Not installed yet."
+                ;;
+            3)
+                if (( has_install == 1 )); then
+                    if [[ -f "${CONFIG_FILE}" ]]; then
+                        edit_all_config_keys
+                    else
+                        log_warning "config.py not found in ${INSTALL_DIR}."
+                    fi
+                fi
+                ;;
+            4)
+                if (( has_install == 1 )); then
+                    REPAIR_ONLY=1
+                    return 0
+                fi
+                ;;
+            5)
+                if (( has_install == 1 )); then
+                    log_info "Restarting ${SERVICE_NAME}..."
+                    systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 || true
+                    sleep 3
+                    if service_is_active; then
+                        log_success "Service restarted."
+                    else
+                        log_error "Service failed to restart."
+                    fi
+                    local _d=""
+                    read_tty "Press Enter to continue..." _d || true
+                fi
+                ;;
+            6)
+                if (( has_install == 1 )); then
+                    journalctl -u "${SERVICE_NAME}" -n 50 --no-pager || true
+                    local _d=""
+                    read_tty "Press Enter to continue..." _d || true
+                fi
+                ;;
+            q|Q|quit|exit)
+                log_info "Exiting."
+                exit 0
+                ;;
+            *)
+                log_warning "Invalid option."
+                ;;
+        esac
+    done
+}
+
+# ============================================================
 # configure_config_in_place
 # ============================================================
 
@@ -1415,7 +1833,7 @@ configure_config_in_place() {
     local changed=0
 
     # ---------------------------------------------------------
-    # 🔴 REQUIRED
+    # Required
     # ---------------------------------------------------------
     draw_step "Required Settings"
 
@@ -1428,7 +1846,8 @@ configure_config_in_place() {
         printf 'BOT_TOKEN                : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ || "${ADMIN_ID}" == "0" ]]; then
+    if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ || "${ADMIN_ID}" == "0" ]] || \
+       is_placeholder "ADMIN_ID" "${ADMIN_ID}"; then
         describe "Your Telegram numeric ID (get from @myidbot)."
         prompt_admin_id
         set_config_integer "ADMIN_ID" "${ADMIN_ID}"
@@ -1437,7 +1856,8 @@ configure_config_in_place() {
         printf 'ADMIN_ID                 : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
     fi
 
-    if [[ ! "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]]; then
+    if ! [[ "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]] || \
+       is_placeholder "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"; then
         describe "Your bank card number — exactly 16 digits (no spaces/dashes/underscores)."
         prompt_card_number
         set_config_value "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"
@@ -1513,7 +1933,7 @@ configure_config_in_place() {
     fi
 
     # ---------------------------------------------------------
-    # 🟡 OPTIONAL: log bot
+    # Optional: log bot
     # ---------------------------------------------------------
     draw_step "Optional: Log Bot Settings"
 
@@ -1541,7 +1961,6 @@ configure_config_in_place() {
     fi
 
     if (( configure_logs == 1 )); then
-        # Always prompt both fields when the user opted in.
         if ! is_placeholder "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}" && \
            [[ -n "${LOG_BOT_TOKEN}" ]]; then
             describe "A LOG_BOT_TOKEN is already set. Press Enter to keep it."
@@ -1565,7 +1984,6 @@ configure_config_in_place() {
             changed=1
         fi
 
-        # Always ask for LOG_CHANNEL_ID (fixes the "None" bug).
         if [[ "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ ]]; then
             describe "A LOG_CHANNEL_ID is already set (${LOG_CHANNEL_ID}). Press Enter to keep it."
             local keep_cid=""
@@ -1596,7 +2014,6 @@ configure_config_in_place() {
             changed=1
         fi
     else
-        # Explicitly disable.
         if [[ "${LOG_BOT_TOKEN}" != "" ]]; then
             set_config_value "LOG_BOT_TOKEN" ""
             changed=1
@@ -1610,7 +2027,7 @@ configure_config_in_place() {
     fi
 
     # ---------------------------------------------------------
-    # 🟡 OPTIONAL: Gemini AI
+    # Optional: Gemini AI
     # ---------------------------------------------------------
     draw_step "Optional: Google Gemini AI"
 
@@ -1855,11 +2272,12 @@ fresh_install() {
     validate_release_for_install
     prepare_install_directory
 
-    local preserved_config=""
+    # Preserve existing config values (only values, not the file itself).
+    local saved_config=""
     if [[ -f "${CONFIG_FILE}" ]]; then
-        preserved_config="${TEMP_ROOT}/preserved_config.py"
-        cp -a "${CONFIG_FILE}" "${preserved_config}"
-        log_warning "Existing config.py detected — it will be preserved."
+        saved_config="${TEMP_ROOT}/config.py.saved"
+        cp -a "${CONFIG_FILE}" "${saved_config}"
+        log_warning "Existing config.py detected — its values will be preserved."
     fi
 
     log_info "Cleaning previous application files (data/, .venv/, *.log preserved)..."
@@ -1872,10 +2290,11 @@ fresh_install() {
     log_info "Copying release files into ${INSTALL_DIR}..."
     rsync -a "${RELEASE_ROOT}/" "${INSTALL_DIR}/"
 
-    if [[ -n "${preserved_config}" ]]; then
-        cp -a "${preserved_config}" "${CONFIG_FILE}"
+    if [[ -n "${saved_config}" && -f "${saved_config}" && -f "${CONFIG_FILE}" ]]; then
+        log_info "Re-applying existing values onto the release config.py..."
+        apply_config_values "${saved_config}" "${CONFIG_FILE}" || \
+            log_warning "Could not re-apply values from the old config.py."
         chmod 600 "${CONFIG_FILE}"
-        log_info "Restored preserved config.py."
     fi
 
     mkdir -p "${DATA_DIR}"
@@ -1922,7 +2341,15 @@ update_existing() {
     # 1) Stop service first.
     stop_service_if_active
 
-    # 2) Backup (code + data + freeze).
+    # 2) Save current config.py so we can re-apply values after the sync.
+    local saved_config=""
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        saved_config="${TEMP_ROOT}/config.py.saved"
+        cp -a "${CONFIG_FILE}" "${saved_config}"
+        log_info "Saved current config.py for value restoration."
+    fi
+
+    # 3) Backup (code + data + freeze + current config inside the tar).
     UPDATE_IN_PROGRESS=1
     if ! create_backup; then
         UPDATE_IN_PROGRESS=0
@@ -1932,18 +2359,25 @@ update_existing() {
         die "Backup failed; aborting update."
     fi
 
-    # 3) Sync code (data/, config.py, .venv/, .version, .git, .env, *.log preserved).
+    # 4) Sync code — INCLUDING config.py from the release.
+    #    Values will be re-applied right after.
     draw_step "Synchronizing Application Files"
-    log_info "Synchronizing commit ${LATEST_VERSION}..."
+    log_info "Synchronizing commit ${LATEST_VERSION} (config.py included)..."
 
     local excludes=()
-    while IFS= read -r line; do excludes+=("${line}"); done < <(rsync_excludes)
+    while IFS= read -r line; do excludes+=("${line}"); done < <(rsync_excludes_update)
 
     rsync -a --delete "${excludes[@]}" \
         "${RELEASE_ROOT}/" "${INSTALL_DIR}/"
 
     log_success "Application files synchronized."
 
+    # 5) Re-apply user values from the saved config onto the new file.
+    if [[ -f "${RELEASE_ROOT}/config.py" ]]; then
+        update_config_file_with_backup "${RELEASE_ROOT}/config.py" "${saved_config}"
+    fi
+
+    # If config.py is still missing entirely, fall back to the release file.
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         log_warning "config.py is missing. Restoring from release..."
         if [[ -f "${RELEASE_ROOT}/config.py" ]]; then
@@ -2154,7 +2588,7 @@ show_final_summary() {
     printf '\n'
 
     printf '%s\n' "Update protection:"
-    printf '  config.py      : values edited in place, file never regenerated\n'
+    printf '  config.py      : release version installed, user values preserved\n'
     printf '  data/          : never touched (backed up on update)\n'
     printf '  *.log          : never touched (excluded from rsync/tar)\n'
     printf '  .venv/         : preserved\n'
@@ -2198,6 +2632,14 @@ main() {
 
     check_root
     check_operating_system
+
+    # Show the interactive management panel when no explicit action was given.
+    if [[ "${SCRIPT_MODE}" == "auto" ]] && \
+       (( FORCE_UPDATE == 0 )) && \
+       (( REPAIR_ONLY == 0 )); then
+        show_management_panel
+    fi
+
     install_system_dependencies
     check_python_version
     check_github_connectivity
@@ -2236,11 +2678,7 @@ main() {
             ;;
 
         auto)
-            if (( has_install == 1 )); then
-                handle_existing_installation
-            else
-                fresh_install
-            fi
+            die "Internal error: 'auto' mode reached the dispatch stage."
             ;;
 
         *)
