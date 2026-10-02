@@ -41,6 +41,7 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    CopyTextButton,
 )
 
 
@@ -17736,10 +17737,22 @@ async def pay_ready_package_card(callback: CallbackQuery):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"📸 {'ارسال فیش' if lang=='fa' else 'Send Receipt'}", 
-                                callback_data=f"send_receipt_{order_id}", style="primary"),
-            InlineKeyboardButton(text=f"❌ {'انصراف' if lang=='fa' else 'Cancel'}", 
-                                callback_data=f"cancel_order_{order_id}", style="danger")
+            InlineKeyboardButton(
+                text=f"📋 {'کپی مبلغ (ریال)' if lang=='fa' else 'Copy Amount (Rial)'} ({price * 10:,})",
+                copy_text=CopyTextButton(text=str(price * 10))
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"📸 {'ارسال فیش' if lang=='fa' else 'Send Receipt'}", 
+                callback_data=f"send_receipt_{order_id}", 
+                style="primary"
+            ),
+            InlineKeyboardButton(
+                text=f"❌ {'انصراف' if lang=='fa' else 'Cancel'}", 
+                callback_data=f"cancel_order_{order_id}", 
+                style="danger"
+            )
         ]
     ])
     
@@ -23272,6 +23285,12 @@ async def pay_card(callback: CallbackQuery):
 {premium_emoji('receipt', '📸')} <b>Please send the receipt photo</b>
 """
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=f"📋 {'کپی مبلغ (ریال)' if lang=='fa' else 'Copy Amount (Rial)'} ({final_price * 10:,})",
+                copy_text=CopyTextButton(text=str(final_price * 10))
+            )
+        ],
         [
             InlineKeyboardButton(
                 text=f"📸 {'ارسال فیش' if lang=='fa' else 'Send Receipt'}", 
@@ -33320,6 +33339,12 @@ async def process_balance_amount(message: Message):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(
+                        text=f"📋 {'کپی مبلغ (ریال)' if lang=='fa' else 'Copy Amount (Rial)'} ({amount * 10:,})",
+                        copy_text=CopyTextButton(text=str(amount * 10))
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
                         text=f"📸 {'ارسال فیش' if lang=='fa' else 'Send Receipt'}", 
                         callback_data=f"send_receipt_{order_id}", 
                         style="primary"
@@ -33754,7 +33779,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.6.20"
+    version = "v1.6.21"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
