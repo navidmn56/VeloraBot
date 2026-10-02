@@ -15777,26 +15777,53 @@ def add_coupon_fields_to_user(user_id: int):
             
             
 
-@dp.message(Command("use_coupon"))
+@dp.message(F.text.regexp(r'^/use_coupon(?:_|\s+|@\w+)'))
 async def use_coupon(message: Message):
-    """اعتبارسنجی و اعمال کوپن"""
+    """اعتبارسنجی و اعمال کوپن - پشتیبانی از /use_coupon_CODE و /use_coupon CODE"""
     user_id = message.from_user.id
-    lang = get_user(user_id).get('lang', 'fa')
-    if await _is_admin_broadcasting(message):
+
+    # ✅ اگر ادمین در حالت پیام همگانی هست، به broadcast هدایت کن
+    if user_id == ADMIN_ID_INT and user_states.get(user_id, {}).get('awaiting_broadcast'):
         await admin_broadcast_send(message)
         return
-    parts = message.text.split()
-    if len(parts) < 2:
+
+    lang = get_user(user_id).get('lang', 'fa')
+
+    # ✅ استخراج کد کوپن از پیام
+    code = None
+    text = (message.text or "").strip()
+
+    # فرمت 1: /use_coupon_CODE یا /use_coupon_CODE@botname
+    match = re.match(r'^/use_coupon_([A-Za-z0-9_]+?)(?:@\w+)?$', text)
+    if match:
+        code = match.group(1)
+
+    # فرمت 2: /use_coupon CODE یا /use_coupon@botname CODE
+    if not code:
+        match = re.match(r'^/use_coupon(?:@\w+)?\s+(.+)$', text)
+        if match:
+            code = match.group(1).strip()
+
+    # ✅ اگر کد پیدا نشد، راهنما نشون بده
+    if not code:
         await message.reply(
             "📝 <b>استفاده از کوپن تخفیف</b>\n\n"
             "برای استفاده از کوپن، دستور زیر را وارد کنید:\n"
-            "<code>/use_coupon کد_کوپن</code>\n\n"
-            "مثال: <code>/use_coupon Summer2025</code>\n\n"
-            "⚠️ توجه: کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!" if lang == "fa" else 
+            "<code>/use_coupon CODE</code>\n"
+            "یا\n"
+            "<code>/use_coupon_CODE</code>\n\n"
+            "مثال:\n"
+            "<code>/use_coupon Summer2025</code>\n"
+            "<code>/use_coupon_Summer2025</code>\n\n"
+            "⚠️ توجه: کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!" if lang == "fa" else
             "📝 <b>Use Discount Coupon</b>\n\n"
             "To use a coupon, enter the command:\n"
-            "<code>/use_coupon coupon_code</code>\n\n"
-            "Example: <code>/use_coupon Summer2025</code>\n\n"
+            "<code>/use_coupon CODE</code>\n"
+            "or\n"
+            "<code>/use_coupon_CODE</code>\n\n"
+            "Example:\n"
+            "<code>/use_coupon Summer2025</code>\n"
+            "<code>/use_coupon_Summer2025</code>\n\n"
             "⚠️ Note: Coupon code is <b>case-sensitive</b>!",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -15807,14 +15834,22 @@ async def use_coupon(message: Message):
             ])
         )
         return
-    
-    code = parts[1].strip()
-    
+
+    # ==================== بقیه کد اصلی بدون تغییر ====================
+
+    # ✅ دکمه بازگشت
+    back_button = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+            callback_data="back_to_main"
+        )]
+    ])
+
     if code not in COUPONS:
         code_upper = code.upper()
         code_lower = code.lower()
         code_title = code.title()
-        
+
         suggestion = None
         if code_upper in COUPONS:
             suggestion = code_upper
@@ -15822,7 +15857,7 @@ async def use_coupon(message: Message):
             suggestion = code_lower
         elif code_title in COUPONS:
             suggestion = code_title
-        
+
         if suggestion:
             await message.reply(
                 f"❌ کد کوپن <code>{code}</code> یافت نشد!\n"
@@ -15832,52 +15867,32 @@ async def use_coupon(message: Message):
                 f"💡 Did you mean <code>{suggestion}</code>?\n\n"
                 f"⚠️ Coupon code is <b>case-sensitive</b>!",
                 parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-                        callback_data="back_to_main"
-                    )]
-                ])
+                reply_markup=back_button
             )
             return
-        
+
         await message.reply(
             f"❌ کوپن <code>{code}</code> یافت نشد!\n\n"
             f"⚠️ کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!" if lang == "fa" else
             f"❌ Coupon <code>{code}</code> not found!\n\n"
             f"⚠️ Coupon code is <b>case-sensitive</b>!",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-                    callback_data="back_to_main"
-                )]
-            ])
+            reply_markup=back_button
         )
         return
-    
+
     coupon = COUPONS[code]
     coupon_type = coupon.get('coupon_type', 'normal')
-    
-    # ✅ دکمه بازگشت
-    back_button = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-            callback_data="back_to_main"
-        )]
-    ])
-    
+
     # ==================== بررسی کوپن ادمین ====================
     if coupon_type == 'admin_special':
         locked_user_id = coupon.get('locked_user_id')
-        
+
         if locked_user_id is None:
-            # ✅ اولین کاربر - قفل می‌شود
             coupon['locked_user_id'] = user_id
             save_coupons(COUPONS)
             logger.info(f"🔒 کوپن ادمین {code} برای کاربر {user_id} قفل شد (اولین کاربر)")
         elif locked_user_id != user_id:
-            # ❌ کاربر دیگری - رد می‌شود
             logger.warning(f"⛔ کاربر {user_id} تلاش کرد از کوپن ادمین {code} استفاده کند (قفل: {locked_user_id})")
             await message.reply(
                 f"❌ <b>این کوپن اختصاصی است!</b>\n\n"
@@ -15889,12 +15904,11 @@ async def use_coupon(message: Message):
                 reply_markup=back_button
             )
             return
-        
-        # ✅ بررسی تعداد استفاده کاربر
+
         user_usage = coupon.get('user_usage', {})
         user_used_count = user_usage.get(str(user_id), 0)
         max_usage = coupon.get('usage_limit', 1)
-        
+
         if user_used_count >= max_usage:
             logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن ادمین {code} رسیده ({user_used_count}/{max_usage})")
             await message.reply(
@@ -15907,37 +15921,32 @@ async def use_coupon(message: Message):
                 reply_markup=back_button
             )
             return
-        
-        # ✅ محاسبه remaining
+
         remaining = max_usage - user_used_count
         remaining_text = f"{remaining} بار"
-        
-        # ✅ اعمال کوپن
         discount = coupon.get('discount', 0)
-        
+
         user_states[user_id] = {
             'coupon_code': code,
             'coupon_discount': discount,
             'coupon_applied': True
         }
-        
+
         logger.info(f"✅ [use_coupon] کوپن ادمین {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد (استفاده {user_used_count + 1}/{max_usage})")
-        
         save_coupon_to_user_db(user_id)
-        
-        # ✅ دکمه‌های موفقیت
+
         success_buttons = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
                 callback_data="buy_service",
-                style = "success"
+                style="success"
             )],
             [InlineKeyboardButton(
                 text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
                 callback_data="back_to_main"
             )]
         ])
-        
+
         if lang == "fa":
             await message.reply(
                 f"{premium_emoji('success','✅')} <b>کوپن ادمین با موفقیت اعمال شد!</b>\n\n"
@@ -15961,10 +15970,10 @@ async def use_coupon(message: Message):
                 reply_markup=success_buttons
             )
         return
-    
-    # ==================== کوپن معمولی (کد قبلی) ====================
+
+    # ==================== کوپن معمولی ====================
     logger.info(f"🔍 [use_coupon] کوپن معمولی {code} پیدا شد - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
-    
+
     if user_id in coupon.get('used_by', []):
         clear_coupon_from_user_db(user_id)
         await message.reply(
@@ -15974,20 +15983,20 @@ async def use_coupon(message: Message):
         )
         fully_remove_coupon_from_user(user_id)
         return
-    
+
     if coupon.get('status') != 'active':
         status_text = {
             'used': '❌ این کوپن به پایان رسیده است!',
             'expired': '❌ این کوپن منقضی شده است!'
         }.get(coupon.get('status'), '❌ این کوپن فعال نیست!')
-        
+
         await message.reply(
             status_text if lang == "fa" else "❌ This coupon is not active!",
             parse_mode=ParseMode.HTML,
             reply_markup=back_button
         )
         return
-    
+
     expiry_date = coupon.get('expiry_date')
     if expiry_date:
         try:
@@ -16003,10 +16012,10 @@ async def use_coupon(message: Message):
                 return
         except:
             pass
-    
+
     usage_limit = coupon.get('usage_limit', 0)
     used_count = coupon.get('used_count', 0)
-    
+
     if usage_limit > 0 and used_count >= usage_limit:
         coupon['status'] = 'used'
         save_coupons(COUPONS)
@@ -16016,32 +16025,31 @@ async def use_coupon(message: Message):
             reply_markup=back_button
         )
         return
-    
+
     discount = coupon.get('discount', 0)
     remaining = usage_limit - used_count if usage_limit > 0 else 'نامحدود'
-    
+
     user_states[user_id] = {
         'coupon_code': code,
         'coupon_discount': discount,
         'coupon_applied': True
     }
-    
+
     logger.info(f"✅ [use_coupon] کوپن {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد")
-    
     save_coupon_to_user_db(user_id)
-    
+
     success_buttons = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
             callback_data="buy_service",
-            style = "success"
+            style="success"
         )],
         [InlineKeyboardButton(
             text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
             callback_data="back_to_main"
         )]
     ])
-    
+
     if lang == "fa":
         await message.reply(
             f"{premium_emoji('success','✅')} <b>کوپن با موفقیت اعمال شد!</b>\n\n"
@@ -33789,7 +33797,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.6.21"
+    version = "v1.6.22"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
