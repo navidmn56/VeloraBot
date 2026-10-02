@@ -15325,7 +15325,7 @@ async def admin_coupon_create_process(message: Message):
 ━━━━━━━━━━━━━━━━━━━━━━
 {special_note}
 ⚠️ توجه: کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!
-🔗 لینک استفاده: <code>/use_coupon {code}</code>
+🔗 لینک استفاده: <code>/use_coupon_{code}</code>
 """
             else:
                 if coupon_type == 'admin_special':
@@ -15353,7 +15353,7 @@ async def admin_coupon_create_process(message: Message):
 ━━━━━━━━━━━━━━━━━━━━━━
 {special_note}
 ⚠️ Note: Coupon code is <b>case-sensitive</b>!
-🔗 Use link: <code>/use_coupon {code}</code>
+🔗 Use link: <code>/use_coupon_{code}</code>
 """
             
             buttons = [
