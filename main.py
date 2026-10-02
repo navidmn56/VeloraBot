@@ -5790,6 +5790,9 @@ async def errors_handler(event: types.ErrorEvent):
 async def cmd_start(message: Message):
     """دستور استارت - نسخه نهایی با مدیریت کامل تایید دستی و عضویت اجباری"""
     user_id = message.from_user.id
+    if await _is_admin_broadcasting(message):
+        await admin_broadcast_send(message)
+        return
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id, message)
         logger.warning(f"⛔ کاربر مسدود {user_id} دستور /start را اجرا کرد")
@@ -15779,7 +15782,9 @@ async def use_coupon(message: Message):
     """اعتبارسنجی و اعمال کوپن"""
     user_id = message.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    
+    if await _is_admin_broadcasting(message):
+        await admin_broadcast_send(message)
+        return
     parts = message.text.split()
     if len(parts) < 2:
         await message.reply(
@@ -21325,7 +21330,12 @@ async def admin_broadcast_start(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
     
-    
+async def _is_admin_broadcasting(message: Message) -> bool:
+    """چک می‌کنه که ادمین در حالت broadcast هست یا نه"""
+    if message.from_user.id != ADMIN_ID_INT:
+        return False
+    return bool(user_states.get(message.from_user.id, {}).get('awaiting_broadcast'))
+  
 @dp.callback_query(F.data.startswith("broadcast_type_"))
 async def broadcast_type_selected(callback: CallbackQuery):
     """انتخاب نوع پیام همگانی"""
