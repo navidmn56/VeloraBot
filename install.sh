@@ -895,20 +895,25 @@ RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65535
 
+# --- Sandbox: relaxed but still safe ---
 NoNewPrivileges=yes
-ProtectSystem=strict
+ProtectSystem=full
 ReadWritePaths=${INSTALL_DIR}
-ProtectHome=yes
+ProtectHome=no
 PrivateTmp=yes
-PrivateDevices=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=yes
-LockPersonality=yes
-RestrictRealtime=yes
+PrivateDevices=no
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectControlGroups=no
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=no
+LockPersonality=no
+RestrictRealtime=no
 SystemCallArchitectures=native
+
+# Allow raw sockets for ICMP ping (loopback and remote)
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
