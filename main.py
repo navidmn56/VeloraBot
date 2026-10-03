@@ -3387,6 +3387,10 @@ def _try_recover_from_backup(file_path: str) -> dict:
 
 
 user_states = {}
+# ✅ کش لینک‌های کانفیگ برای صفحه‌بندی
+CONFIG_LINKS_CACHE = {}          # {order_id: {'links': [...], 'email': str, 'timestamp': datetime}}
+CONFIG_LINKS_CACHE_TTL = 300     # 5 دقیقه
+CONFIG_PAGE_SIZE = 3             # تعداد لینک در هر صفحه
 logger.info("دیکشنری user_states ایجاد شد") 
 
 
@@ -22519,253 +22523,320 @@ def extract_vless_link(links: list) -> Optional[str]:
 
 from urllib.parse import quote 
 
-@dp.callback_query(F.data.startswith("show_text_"))
-async def show_config_text(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    order_id = int(callback.data.split("_")[2])
-    lang = get_user(user_id).get('lang', 'fa')
-    
+async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
+    """دریافت لینک‌های کانفیگ با کش (برای صفحه‌بندی)"""
+    now = datetime.now()
+
+    if not force_refresh and order_id in CONFIG_LINKS_CACHE:
+        cached = CONFIG_LINKS_CACHE[order_id]
+        if (now - cached['timestamp']).total_seconds() < CONFIG_LINKS_CACHE_TTL:
+            return cached['links'], cached['email']
+
     order = orders.get(str(order_id))
-    if not order or not order.get('config_link'):
-        await callback.answer("❌ کانفیگ یافت نشد" if lang == 'fa' else "❌ Config not found", show_alert=True)
-        return
-    
+    if not order:
+        return [], None
+
     email = extract_email_from_sub_link(order.get('config_link', ''))
-    config_text = ""
-    
+    links = []
+
     if email and SENAI_PANEL_ENABLED:
-        links = await xui_get_client_links(email)
-        if links:
-            all_links = []
-            for link in links:
+        raw_links = await xui_get_client_links(email)
+        if raw_links:
+            for link in raw_links:
                 if isinstance(link, str) and (
-                    link.startswith('vless://') or 
-                    link.startswith('vmess://') or 
-                    link.startswith('trojan://') or 
+                    link.startswith('vless://') or
+                    link.startswith('vmess://') or
+                    link.startswith('trojan://') or
                     link.startswith('ss://')
                 ):
-                    all_links.append(link)
-            
-            if len(all_links) > 1:
-                if lang == "fa":
-                    config_text = f"📡 {len(all_links)} لینک کانفیگ پیدا شد:\n\n"
-                else:
-                    config_text = f"📡 {len(all_links)} config links found:\n\n"
-                
-                for idx, link in enumerate(all_links, 1):
-                    if link.startswith('vless://'):
-                        protocol = "VLESS"
-                    elif link.startswith('vmess://'):
-                        protocol = "VMESS"
-                    elif link.startswith('trojan://'):
-                        protocol = "TROJAN"
-                    else:
-                        protocol = "SS"
-                    
-                    display_link = link
-                    if '#' not in link and not link.startswith('vmess://'):
-                        display_link = f"{link}#{email}"
-                    
-                    config_text += f"{idx}. [{protocol}]:\n <code>{display_link}</code>\n\n"
-                
-                buttons = []
-                for idx, link in enumerate(all_links, 1):
-                    if link.startswith('vmess://'):
-                        label = f"📱 QR VMESS #{idx}" if lang == "fa" else f"📱 VMESS QR #{idx}"
-                    else:
-                        label = f"📱 QR #{idx}" if lang == "fa" else f"📱 QR #{idx}"
-                    
-                    buttons.append(InlineKeyboardButton(
-                        text=label,
-                        callback_data=f"show_single_qr_{order_id}_{idx}"
-                    ))
+                    links.append(link)
 
-                # جفت‌سازی دکمه‌های QR (دوتایی کنار هم)
-                keyboard_rows = []
-                for i in range(0, len(buttons), 2):
-                    row = [buttons[i]]
-                    if i + 1 < len(buttons):
-                        row.append(buttons[i + 1])
-                    keyboard_rows.append(row)
+    if not links and order.get('config_link'):
+        links = [order['config_link']]
 
-                # دکمه بازگشت همیشه تک و در ردیف آخر
-                keyboard_rows.append([InlineKeyboardButton(
-                    text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
-                    callback_data="back_to_main",
-                    style="danger"
-                )])
+    CONFIG_LINKS_CACHE[order_id] = {
+        'links': links,
+        'email': email,
+        'timestamp': now
+    }
+    return links, email
+async def _render_config_page(callback: CallbackQuery, order_id: int, page: int = 0):
+    """نمایش صفحه‌بندی‌شده کانفیگ"""
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
 
-                keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
-                
-                try:
-                    if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
-                        try:
-                            await callback.message.delete()
-                        except:
-                            pass
-                        await bot.send_message(
-                            user_id,
-                            config_text,
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=keyboard
-                        )
-                    else:
-                        await callback.message.edit_text(
-                            config_text,
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=keyboard
-                        )
-                except Exception as e:
-                    if "there is no text in the message to edit" in str(e):
-                        try:
-                            await callback.message.delete()
-                        except:
-                            pass
-                        await bot.send_message(
-                            user_id,
-                            config_text,
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=keyboard
-                        )
-                    else:
-                        raise
-                
-                await callback.answer("✅ نمایش همه کانفیگ‌ها" if lang == 'fa' else "✅ Showing all configs")
-                return
-                
-            elif all_links:
-                config_text = all_links[0]
-            else:
-                config_text = order['config_link']
-        else:
-            config_text = order['config_link']
-    else:
-        config_text = order['config_link']
-    
-    
+    order = orders.get(str(order_id))
+    if not order:
+        await callback.answer("❌ سفارش یافت نشد" if lang == 'fa' else "❌ Order not found", show_alert=True)
+        return
+
+    links, email = await _get_cached_config_links(order_id)
+
+    if not links:
+        await callback.answer(
+            "❌ لینکی یافت نشد. دوباره تلاش کنید." if lang == 'fa'
+            else "❌ No links found. Try again.",
+            show_alert=True
+        )
+        return
+
     display_email = email if email else ("نامشخص" if lang == "fa" else "Unknown")
-    
-    if display_email and config_text and '#' not in config_text:
-        if not config_text.startswith('vmess://'):
-            config_text = f"{config_text}#{display_email}"
-    
+
+    total_links = len(links)
+    total_pages = max(1, (total_links + CONFIG_PAGE_SIZE - 1) // CONFIG_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * CONFIG_PAGE_SIZE
+    end_idx = min(start_idx + CONFIG_PAGE_SIZE, total_links)
+    page_links = links[start_idx:end_idx]
+
+    # ==================== ساخت متن ====================
     if lang == "fa":
-        text = (f"{premium_emoji('link','🔗')} <b>کانفیگ #{order_id}</b>\n"
-                f"{premium_emoji('anime','👤')} <b>نام کانفیگ:</b> <code>{display_email}</code>\n\n"
-                f"<code>{config_text}</code>")
-        back_btn = InlineKeyboardButton(text="🔙 صفحه اصلی", callback_data="back_to_main", style="danger")
-        qr_btn = InlineKeyboardButton(text="📱 نمایش QR", callback_data=f"show_qr_{order_id}")
-        
+        header = (
+            f"📡 <b>لینک‌های کانفیگ #{order_id}</b>\n"
+            f"👤 نام: <code>{display_email}</code>\n"
+            f"📄 صفحه <b>{page + 1}</b> از <b>{total_pages}</b>\n"
+            f"📊 مجموع لینک‌ها: <b>{total_links}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
     else:
-        text = (f"{premium_emoji('link','🔗')} <b>Config #{order_id}</b>\n"
-                f"{premium_emoji('anime','👤')} <b>Config Name:</b> <code>{display_email}</code>\n\n"
-                f"<code>{config_text}</code>")
-        back_btn = InlineKeyboardButton(text="🔙 Main Menu", callback_data="back_to_main", style="danger")
-        qr_btn = InlineKeyboardButton(text="📱 Show QR", callback_data=f"show_qr_{order_id}")
-        
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [qr_btn],
-        [back_btn]
-    ])
-    
+        header = (
+            f"📡 <b>Config Links #{order_id}</b>\n"
+            f"👤 Name: <code>{display_email}</code>\n"
+            f"📄 Page <b>{page + 1}</b> of <b>{total_pages}</b>\n"
+            f"📊 Total links: <b>{total_links}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+
+    body = ""
+    for local_idx, link in enumerate(page_links):
+        abs_idx = start_idx + local_idx + 1
+
+        if link.startswith('vless://'):
+            protocol = "VLESS"
+        elif link.startswith('vmess://'):
+            protocol = "VMESS"
+        elif link.startswith('trojan://'):
+            protocol = "TROJAN"
+        else:
+            protocol = "SS"
+
+        display_link = link
+        if '#' not in link and not link.startswith('vmess://'):
+            display_link = f"{link}#{display_email}"
+
+        body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{display_link}</code>\n\n"
+
+    text = header + body
+
+    # اگه به هر دلیل از 4000 کاراکتر گذشت (لینک خیلی طولانی)، هشدار بده
+    if len(text) > 4000:
+        logger.warning(f"⚠️ صفحه {page + 1} سفارش #{order_id} طولانی شد: {len(text)} کاراکتر")
+        # کوتاه‌سازی: فقط 2 لینک اول صفحه رو نشون بده
+        truncated_body = ""
+        for local_idx, link in enumerate(page_links[:2]):
+            abs_idx = start_idx + local_idx + 1
+            protocol = (
+                "VLESS" if link.startswith('vless://') else
+                "VMESS" if link.startswith('vmess://') else
+                "TROJAN" if link.startswith('trojan://') else "SS"
+            )
+            display_link = link
+            if '#' not in link and not link.startswith('vmess://'):
+                display_link = f"{link}#{display_email}"
+            truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{display_link}</code>\n\n"
+
+        text = header + truncated_body
+        if lang == "fa":
+            text += "⚠️ <i>به دلیل طولانی بودن، فقط ۲ لینک نمایش داده شد.</i>"
+        else:
+            text += "⚠️ <i>Due to length, only 2 links are shown.</i>"
+
+    # ==================== ساخت کیبورد ====================
+    buttons = []
+
+    # --- دکمه‌های QR برای همین صفحه ---
+    qr_buttons = []
+    for local_idx in range(len(page_links)):
+        abs_idx = start_idx + local_idx + 1
+        qr_buttons.append(InlineKeyboardButton(
+            text=f"📱 QR #{abs_idx}",
+            callback_data=f"show_single_qr_{order_id}_{abs_idx}_{page}"
+        ))
+
+    # دوتایی/سه‌تایی توی هر ردیف
+    for i in range(0, len(qr_buttons), 3):
+        buttons.append(qr_buttons[i:i + 3])
+
+    # --- دکمه‌های صفحه‌بندی ---
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                text="◀️ قبلی" if lang == "fa" else "◀️ Prev",
+                callback_data=f"show_text_page_{order_id}_{page - 1}"
+            ))
+
+        nav_row.append(InlineKeyboardButton(
+            text=f"📄 {page + 1}/{total_pages}",
+            callback_data="noop"
+        ))
+
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(
+                text="بعدی ▶️" if lang == "fa" else "Next ▶️",
+                callback_data=f"show_text_page_{order_id}_{page + 1}"
+            ))
+
+        buttons.append(nav_row)
+
+    # --- دکمه‌های عملیات ---
+    buttons.append([InlineKeyboardButton(
+        text="🔄 بروزرسانی" if lang == "fa" else "🔄 Refresh",
+        callback_data=f"show_text_refresh_{order_id}_{page}"
+    )])
+
+    buttons.append([InlineKeyboardButton(
+        text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
+        callback_data="back_to_main",
+        style="danger"
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    # ==================== ارسال یا ویرایش پیام ====================
     try:
         if callback.message.content_type in ['photo', 'document', 'video', 'audio', 'voice', 'animation', 'sticker']:
             try:
                 await callback.message.delete()
-            except:
+            except Exception:
                 pass
             await bot.send_message(user_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
         else:
-            await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-    except Exception as e:
-        if "there is no text in the message to edit" in str(e):
             try:
-                await callback.message.delete()
-            except:
-                pass
-            await bot.send_message(user_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-        else:
-            raise
-    
-    await callback.answer("✅ مشاهده متن کانفیگ" if lang == 'fa' else "✅ Config text")
-@dp.callback_query(F.data.startswith("show_single_qr_"))
-async def show_single_qr(callback: CallbackQuery):
-    """نمایش QR Code برای یک لینک خاص از بین چندین لینک"""
-    user_id = callback.from_user.id
-    parts = callback.data.split("_")
-    
-    try:
-        order_id = int(parts[3])
-        link_index = int(parts[4]) - 1  
-        logger.info(f"📱 درخواست QR برای سفارش #{order_id}، لینک شماره {link_index + 1}")
-    except (ValueError, IndexError) as e:
-        logger.error(f"❌ خطا در استخراج داده‌ها: {e}")
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    
-    lang = get_user(user_id).get('lang', 'fa')
-    
-    order = orders.get(str(order_id))
-    if not order or not order.get('config_link'):
-        await callback.answer("❌ کانفیگ یافت نشد" if lang == 'fa' else "❌ Config not found", show_alert=True)
-        return
-    
-    email = extract_email_from_sub_link(order.get('config_link', ''))
-    
-    if not email or not SENAI_PANEL_ENABLED:
-        await callback.answer("❌ اطلاعات در دسترس نیست" if lang == 'fa' else "❌ Info unavailable", show_alert=True)
-        return
-    
-    links = await xui_get_client_links(email)
-    if not links:
-        await callback.answer("❌ لینکی یافت نشد" if lang == 'fa' else "❌ No links found", show_alert=True)
-        return
-    
-    valid_links = []
-    for link in links:
-        if isinstance(link, str) and (
-            link.startswith('vless://') or 
-            link.startswith('vmess://') or 
-            link.startswith('trojan://') or 
-            link.startswith('ss://')
-        ):
-            valid_links.append(link)
-    
-    if not valid_links:
-        await callback.answer("❌ لینک معتبری یافت نشد" if lang == 'fa' else "❌ No valid links found", show_alert=True)
-        return
-    
-    if link_index >= len(valid_links):
+                await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            except Exception as e:
+                err = str(e)
+                if "there is no text in the message to edit" in err:
+                    try:
+                        await callback.message.delete()
+                    except Exception:
+                        pass
+                    await bot.send_message(user_id, text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+                elif "message is not modified" not in err:
+                    raise
+    except Exception as e:
+        logger.error(f"❌ خطا در نمایش صفحه کانفیگ: {e}", exc_info=True)
         await callback.answer(
-            f"❌ لینک شماره {link_index + 1} یافت نشد. {len(valid_links)} لینک موجود است." if lang == 'fa' 
-            else f"❌ Link #{link_index + 1} not found. {len(valid_links)} links available.",
+            "❌ خطا در نمایش. دوباره تلاش کنید." if lang == 'fa' else "❌ Error. Try again.",
             show_alert=True
         )
+@dp.callback_query(F.data.regexp(r'^show_text_\d+$'))
+async def show_config_text(callback: CallbackQuery):
+    """ورودی اولیه - نمایش صفحه اول کانفیگ"""
+    try:
+        order_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
+
+    await _render_config_page(callback, order_id, page=0)
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+@dp.callback_query(F.data.startswith("show_text_page_"))
+async def show_config_text_page(callback: CallbackQuery):
+    """جابه‌جایی بین صفحات"""
+    parts = callback.data.split("_")
+    try:
+        order_id = int(parts[3])
+        page = int(parts[4])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        return
+
+    await _render_config_page(callback, order_id, page=page)
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data.startswith("show_text_refresh_"))
+async def show_config_text_refresh(callback: CallbackQuery):
+    """بروزرسانی - گرفتن لینک‌های تازه از پنل"""
+    parts = callback.data.split("_")
+    try:
+        order_id = int(parts[3])
+        page = int(parts[4])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        return
+
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+
+    # پاک کردن کش این سفارش و گرفتن دوباره از پنل
+    CONFIG_LINKS_CACHE.pop(order_id, None)
+
+    await callback.answer("🔄 در حال بروزرسانی..." if lang == 'fa' else "🔄 Refreshing...")
+
+    await _render_config_page(callback, order_id, page=page)
     
-    target_link = valid_links[link_index]
-    logger.info(f"✅ لینک انتخاب شده ({link_index + 1}): {target_link[:50]}...")
-    
+@dp.callback_query(F.data.startswith("show_single_qr_"))
+async def show_single_qr(callback: CallbackQuery):
+    """نمایش QR Code برای یک لینک خاص (با حفظ شماره صفحه)"""
+    user_id = callback.from_user.id
+    parts = callback.data.split("_")
+
+    # فرمت: show_single_qr_{order_id}_{index}[_{page}]
+    try:
+        order_id = int(parts[3])
+        link_index = int(parts[4]) - 1
+        page = int(parts[5]) if len(parts) > 5 else 0
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        return
+
+    lang = get_user(user_id).get('lang', 'fa')
+
+    links, email = await _get_cached_config_links(order_id)
+    if not links:
+        await callback.answer("❌ لینکی یافت نشد" if lang == 'fa' else "❌ No links", show_alert=True)
+        return
+
+    if link_index >= len(links):
+        await callback.answer("❌ لینک یافت نشد" if lang == 'fa' else "❌ Link not found", show_alert=True)
+        return
+
+    target_link = links[link_index]
     is_vmess = target_link.startswith('vmess://')
+
     try:
         qr_img = generate_qr_code(target_link, order_id)
-        
+
         if is_vmess:
-            if lang == "fa":
-                caption = f"📱 <b>QR Code VMESS #{link_index + 1} - سفارش #{order_id}</b>\n\n⚠️ این لینک VMESS است و ممکن است در بعضی کلاینت‌ها کار نکند."
-            else:
-                caption = f"📱 <b>VMESS QR #{link_index + 1} - Order #{order_id}</b>\n\n⚠️ This is a VMESS link and may not work in some clients."
+            caption = (
+                f"📱 <b>QR Code VMESS #{link_index + 1}</b>\n"
+                f"🆔 سفارش: #{order_id}"
+                if lang == "fa" else
+                f"📱 <b>QR Code VMESS #{link_index + 1}</b>\n"
+                f"🆔 Order: #{order_id}"
+            )
         else:
-            if lang == "fa":
-                caption = f"📱 <b>QR Code #{link_index + 1} - سفارش #{order_id}</b>"
-            else:
-                caption = f"📱 <b>QR Code #{link_index + 1} - Order #{order_id}</b>"
+            caption = (
+                f"📱 <b>QR Code #{link_index + 1}</b>\n"
+                f"🆔 سفارش: #{order_id}"
+                if lang == "fa" else
+                f"📱 <b>QR Code #{link_index + 1}</b>\n"
+                f"🆔 Order: #{order_id}"
+            )
+
         try:
             await callback.message.delete()
-        except:
+        except Exception:
             pass
-        
+
         await bot.send_photo(
             user_id,
             qr_img,
@@ -22773,8 +22844,8 @@ async def show_single_qr(callback: CallbackQuery):
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="🔙 بازگشت به متن کانفیگ" if lang == "fa" else "🔙 Back to Config Text",
-                    callback_data=f"show_text_{order_id}"
+                    text="🔙 بازگشت به لینک‌ها" if lang == "fa" else "🔙 Back to Links",
+                    callback_data=f"show_text_page_{order_id}_{page}"
                 )],
                 [InlineKeyboardButton(
                     text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
@@ -22783,13 +22854,14 @@ async def show_single_qr(callback: CallbackQuery):
                 )]
             ])
         )
-        
-        await callback.answer("✅ QR Code ارسال شد" if lang == 'fa' else "✅ QR Code sent")
-        
+        await callback.answer("✅ ارسال شد" if lang == 'fa' else "✅ Sent")
+
     except Exception as e:
-        logger.error(f"خطا در تولید QR Code: {e}")
-        await callback.answer("❌ خطا در تولید QR Code" if lang == 'fa' else "❌ Error generating QR Code", show_alert=True)         
-    
+        logger.error(f"❌ خطا در تولید QR: {e}")
+        await callback.answer(
+            "❌ خطا در تولید QR" if lang == 'fa' else "❌ Error",
+            show_alert=True
+        )    
     
 @dp.callback_query(F.data == "vol_up")
 async def vol_up(callback: CallbackQuery):
