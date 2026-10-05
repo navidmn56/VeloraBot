@@ -22733,7 +22733,8 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     # --- دکمه‌های عملیات ---
     buttons.append([InlineKeyboardButton(
         text="🔄 بروزرسانی" if lang == "fa" else "🔄 Refresh",
-        callback_data=f"show_text_refresh_{order_id}_{page}"
+        callback_data=f"show_text_refresh_{order_id}_{page}",
+        style="primary"
     )])
 
     buttons.append([InlineKeyboardButton(
