@@ -22560,6 +22560,27 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
         'timestamp': now
     }
     return links, email
+
+DOWNLOADED_FILES = {}
+async def _delete_downloaded_files(user_id: int, chat_id: int = None):
+    """پاک کردن همه فایل‌های ارسال‌شده به کاربر"""
+    if user_id not in DOWNLOADED_FILES:
+        return
+    
+    for item in list(DOWNLOADED_FILES[user_id]):
+        try:
+            await bot.delete_message(
+                chat_id=item.get('chat_id', chat_id),
+                message_id=item['message_id']
+            )
+            logger.info(f"🗑 فایل دانلود کاربر {user_id} پاک شد (msg_id: {item['message_id']})")
+        except Exception as e:
+            logger.debug(f"خطا در پاک کردن فایل: {e}")
+    
+    DOWNLOADED_FILES[user_id].clear()
+    del DOWNLOADED_FILES[user_id]
+    
+
 async def _render_config_page(callback: CallbackQuery, order_id: int, page: int = 0):
     """نمایش صفحه‌بندی‌شده کانفیگ"""
     user_id = callback.from_user.id
@@ -22690,6 +22711,25 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
 
         buttons.append(nav_row)
 
+    # ==================== دکمه کپی همه لینک‌ها ====================
+    all_links_text = "\n".join(links)
+    COPY_LIMIT = 256
+
+    if len(all_links_text) <= COPY_LIMIT:
+        # جا میشه → کپی مستقیم
+        buttons.append([InlineKeyboardButton(
+            text="📋 کپی همه لینک‌ها" if lang == "fa" else "📋 Copy All Links",
+            copy_text=CopyTextButton(text=all_links_text),
+            style="success"
+        )])
+    else:
+        # جا نمیشه → فایل می‌فرستیم
+        buttons.append([InlineKeyboardButton(
+            text="📋 کپی همه لینک‌ها" if lang == "fa" else "📋 Copy All Links",
+            callback_data=f"copy_all_links_file_{order_id}",
+            style="success"
+        )])
+    
     # --- دکمه‌های عملیات ---
     buttons.append([InlineKeyboardButton(
         text="🔄 بروزرسانی" if lang == "fa" else "🔄 Refresh",
@@ -22731,6 +22771,152 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             "❌ خطا در نمایش. دوباره تلاش کنید." if lang == 'fa' else "❌ Error. Try again.",
             show_alert=True
         )
+        
+
+@dp.callback_query(F.data.startswith("copy_all_links_file_"))
+async def copy_all_links_file(callback: CallbackQuery):
+    """وقتی لینک‌ها از 256 کاراکتر بیشترن، فایل TXT می‌فرستیم"""
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+
+    try:
+        order_id = int(callback.data.split("_")[4])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        return
+
+    links, _ = await _get_cached_config_links(order_id)
+
+    if not links:
+        await callback.answer(
+            "❌ لینکی یافت نشد" if lang == "fa" else "❌ No links found",
+            show_alert=True
+        )
+        return
+
+    # ✅ فایل رو با فقط لینک‌ها می‌سازیم (هر لینک یک خط، بدون چیز اضافه)
+    all_links_text = "\n".join(links)
+    total_len = len(all_links_text)
+    total_links = len(links)
+
+    from io import BytesIO
+    from aiogram.types import BufferedInputFile
+
+    file_buffer = BytesIO()
+    file_buffer.write(all_links_text.encode('utf-8'))
+    file_buffer.seek(0)
+
+    filename = f"configs_{order_id}.txt"
+    input_file = BufferedInputFile(file_buffer.read(), filename=filename)
+
+    # ✅ کپشن با توضیح دلیل ارسال فایل
+    if lang == "fa":
+        caption = (
+            f"📥 <b>فایل لینک‌های کانفیگ شما</b>\n"
+            f"🆔 سفارش: <code>#{order_id}</code>\n"
+            f"📊 تعداد لینک‌ها: <b>{total_links}</b>\n\n"
+            f"⚠️ <b>چرا فایل ارسال شد؟</b>\n"
+            f"📏 حجم لینک‌ها: <b>{total_len:,}</b> کاراکتر\n"
+            f"🚧 محدودیت دکمه کپی تلگرام: <b>256</b> کاراکتر\n\n"
+            f"💡 چون لینک‌ها از حد مجاز بیشتر بودن،\n"
+            f"نتونستیم همه رو توی یک دکمه کپی کنیم.\n\n"
+            f"✅ <b>روش استفاده:</b>\n"
+            f"۱. فایل رو دانلود کنید\n"
+            f"۲. بازش کنید و همه متن رو کپی کنید\n"
+            f"۳. توی کلاینت Import کنید"
+        )
+    else:
+        caption = (
+            f"📥 <b>Your Config Links File</b>\n"
+            f"🆔 Order: <code>#{order_id}</code>\n"
+            f"📊 Links count: <b>{total_links}</b>\n\n"
+            f"⚠️ <b>Why file?</b>\n"
+            f"📏 Total chars: <b>{total_len:,}</b>\n"
+            f"🚧 Telegram copy limit: <b>256</b>\n\n"
+            f"💡 Links were too long to fit\n"
+            f"into a single copy button.\n\n"
+            f"✅ <b>How to use:</b>\n"
+            f"1. Download the file\n"
+            f"2. Open and copy all text\n"
+            f"3. Import in your client"
+        )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔙 بازگشت به صفحه لینک‌ها" if lang == "fa" else "🔙 Back to Links Page",
+            callback_data=f"back_to_config_page_{order_id}",
+            style="primary"
+        )],
+        [InlineKeyboardButton(
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main_from_file",
+            style="danger"
+        )]
+    ])
+
+    try:
+        sent_msg = await bot.send_document(
+            user_id,
+            input_file,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard
+        )
+
+        # ✅ ذخیره message_id برای پاک کردن بعدی
+        if user_id not in DOWNLOADED_FILES:
+            DOWNLOADED_FILES[user_id] = []
+        DOWNLOADED_FILES[user_id].append({
+            'message_id': sent_msg.message_id,
+            'chat_id': user_id
+        })
+
+        logger.info(f"📥 فایل لینک‌ها (سفارش #{order_id}) به کاربر {user_id} ارسال شد")
+        await callback.answer("✅ فایل ارسال شد" if lang == "fa" else "✅ File sent")
+
+    except Exception as e:
+        logger.error(f"❌ خطا در ارسال فایل: {e}", exc_info=True)
+        await callback.answer(
+            "❌ خطا در ارسال فایل" if lang == "fa" else "❌ Error sending file",
+            show_alert=True
+        )
+
+
+@dp.callback_query(F.data.startswith("back_to_config_page_"))
+async def back_to_config_page(callback: CallbackQuery):
+    """بازگشت به صفحه لینک‌ها + پاک کردن فایل"""
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+
+    try:
+        order_id = int(callback.data.split("_")[4])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا", show_alert=True)
+        return
+
+    # ✅ پاک کردن فایل(های) ارسال‌شده
+    await _delete_downloaded_files(user_id, callback.message.chat.id)
+
+    # ✅ برگشت به صفحه اول لینک‌ها
+    await _render_config_page(callback, order_id, page=0)
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data == "back_to_main_from_file")
+async def back_to_main_from_file(callback: CallbackQuery):
+    """بازگشت به منوی اصلی + پاک کردن فایل"""
+    user_id = callback.from_user.id
+
+    # ✅ پاک کردن فایل(های) ارسال‌شده
+    await _delete_downloaded_files(user_id, callback.message.chat.id)
+
+    # ✅ فراخوانی back_to_main موجود
+    await back_to_main(callback)
+    
+    
 @dp.callback_query(F.data.regexp(r'^show_text_\d+$'))
 async def show_config_text(callback: CallbackQuery):
     """ورودی اولیه - نمایش صفحه اول کانفیگ"""
