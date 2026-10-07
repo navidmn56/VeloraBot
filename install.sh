@@ -1821,20 +1821,21 @@ parse_setup_link() {
     local url_var="$2"
     local pass_var="$3"
 
-    local url="${link%%#*}"
-    local password="${link##*#}"
+    # ✅ اسم‌های متمایز برای جلوگیری از تصادم scope
+    local parsed_url="${link%%#*}"
+    local parsed_password="${link##*#}"
 
-    if [[ -z "$url" || -z "$password" || "$url" == "$link" ]]; then
+    if [[ -z "$parsed_url" || -z "$parsed_password" || "$parsed_url" == "$link" ]]; then
         return 1
     fi
 
-    # Accept http://, https://, file://
-    if [[ ! "$url" =~ ^(https?|file):// ]]; then
+    # ✅ پشتیبانی از http://، https:// و file://
+    if [[ ! "$parsed_url" =~ ^(https?|file):// ]]; then
         return 1
     fi
 
-    printf -v "$url_var" '%s' "$url"
-    printf -v "$pass_var" '%s' "$password"
+    printf -v "$url_var" '%s' "$parsed_url"
+    printf -v "$pass_var" '%s' "$parsed_password"
     return 0
 }
 
@@ -2101,7 +2102,7 @@ download_and_decrypt_setup() {
     rm -rf "$work_dir"
     mkdir -p "$work_dir"
 
-    # ─── Download (supports http(s):// and file://) ───
+    # ─── Download (http/https یا file) ───
     if [[ "$url" == file://* ]]; then
         local local_path="${url#file://}"
         log_info "Using local file: $local_path"
@@ -2118,7 +2119,7 @@ download_and_decrypt_setup() {
             -H "User-Agent: VeloraBot-Installer/1.0" \
             -o "$work_dir/setup.enc" \
             "$url" 2>>"$LOG_FILE"; then
-            die "Failed to download the setup archive."
+            die "Failed to download the setup archive from: $url"
         fi
 
         [[ -s "$work_dir/setup.enc" ]] || die "Downloaded archive is empty."
@@ -2134,7 +2135,7 @@ download_and_decrypt_setup() {
         -in "$work_dir/setup.enc" \
         -out "$work_dir/setup.tar.gz" \
         -pass "pass:$password" 2>>"$LOG_FILE"; then
-        die "Failed to decrypt archive. The link may be invalid or expired."
+        die "Failed to decrypt archive. The password or file may be invalid."
     fi
     log_success "Decryption successful."
 
