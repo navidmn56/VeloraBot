@@ -1828,7 +1828,8 @@ parse_setup_link() {
         return 1
     fi
 
-    if [[ ! "$url" =~ ^https?:// ]]; then
+    # Accept http://, https://, file://
+    if [[ ! "$url" =~ ^(https?|file):// ]]; then
         return 1
     fi
 
@@ -1927,60 +1928,129 @@ create_setup_link() {
     local file_name
     file_name="velora-setup-$(date +%s)-$(openssl rand -hex 4).enc"
 
-    # Try 1: transfer.sh
-    upload_url="$(curl -fsSL --max-time 180 \
-        --upload-file "$work_dir/setup.enc" \
-        "https://transfer.sh/$file_name" 2>>"$LOG_FILE" || true)"
+    local user_agent="VeloraBot-Installer/1.0 (https://github.com/navidmn56/VeloraBot)"
 
-    if [[ "$upload_url" =~ ^https?://transfer\.sh ]]; then
-        host_name="transfer.sh"
+    # ─── Try 1: beacon.host ───
+    log_info "Trying beacon.host..."
+    upload_url="$(
+        curl -fsSL --max-time 180 \
+            -H "User-Agent: ${user_agent}" \
+            -F "file=@$work_dir/setup.enc" \
+            "https://beacon.host/v1/upload" \
+            2>>"$LOG_FILE" || true
+    )"
+    upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
+
+    if [[ "$upload_url" =~ ^https?:// ]]; then
+        host_name="beacon.host"
+        log_success "Uploaded to beacon.host"
     else
+        log_warning "beacon.host upload failed (response: ${upload_url:0:80})"
         upload_url=""
     fi
 
-    # Try 2: bashupload.com
+    # ─── Try 2: 0x0.st ───
     if [[ -z "$upload_url" ]]; then
-        log_info "transfer.sh unavailable, trying bashupload.com..."
-        local resp
-        resp="$(curl -fsSL --max-time 180 \
-            --upload-file "$work_dir/setup.enc" \
-            "https://bashupload.com/$file_name" 2>>"$LOG_FILE" || true)"
+        log_info "Trying 0x0.st..."
+        upload_url="$(
+            curl -fsSL --max-time 180 \
+                -H "User-Agent: ${user_agent}" \
+                -F "file=@$work_dir/setup.enc" \
+                "https://0x0.st" \
+                2>>"$LOG_FILE" || true
+        )"
+        upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
 
-        upload_url="$(printf '%s' "$resp" | grep -oP 'https?://bashupload\.com/\S+' | head -n1 || true)"
-
-        if [[ -n "$upload_url" ]]; then
-            host_name="bashupload.com"
-        fi
-    fi
-
-    # Try 3: 0x0.st
-    if [[ -z "$upload_url" ]]; then
-        log_info "bashupload unavailable, trying 0x0.st..."
-        upload_url="$(curl -fsSL --max-time 180 \
-            -H "User-Agent: VeloraBot-Installer/1.0 (https://github.com/navidmn56/VeloraBot)" \
-            -F "file=@$work_dir/setup.enc" \
-            "https://0x0.st" 2>>"$LOG_FILE" || true)"
-
-        if [[ ! "$upload_url" =~ ^https?:// ]]; then
-            upload_url=""
-        else
+        if [[ "$upload_url" =~ ^https?:// ]]; then
             host_name="0x0.st"
+            log_success "Uploaded to 0x0.st"
+        else
+            log_warning "0x0.st upload failed (response: ${upload_url:0:80})"
+            upload_url=""
         fi
     fi
 
-    # Restart service
+    # ─── Try 3: transfer.sh ───
+    if [[ -z "$upload_url" ]]; then
+        log_info "Trying transfer.sh..."
+        upload_url="$(
+            curl -fsSL --max-time 180 \
+                -H "User-Agent: ${user_agent}" \
+                --upload-file "$work_dir/setup.enc" \
+                "https://transfer.sh/$file_name" \
+                2>>"$LOG_FILE" || true
+        )"
+        upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
+
+        if [[ "$upload_url" =~ ^https?:// ]]; then
+            host_name="transfer.sh"
+            log_success "Uploaded to transfer.sh"
+        else
+            log_warning "transfer.sh upload failed (response: ${upload_url:0:80})"
+            upload_url=""
+        fi
+    fi
+
+    # ─── Try 4: litterbox.catbox.moe (backup fallback) ───
+    if [[ -z "$upload_url" ]]; then
+        log_info "Trying litterbox.catbox.moe..."
+        upload_url="$(
+            curl -fsSL --max-time 180 \
+                -H "User-Agent: ${user_agent}" \
+                -F "reqtype=fileupload" \
+                -F "time=72h" \
+                -F "fileToUpload=@$work_dir/setup.enc" \
+                "https://litterbox.catbox.moe/resources/internals/api.php" \
+                2>>"$LOG_FILE" || true
+        )"
+        upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
+
+        if [[ "$upload_url" =~ ^https?:// ]]; then
+            host_name="litterbox.catbox.moe"
+            log_success "Uploaded to litterbox.catbox.moe"
+        else
+            log_warning "litterbox upload failed (response: ${upload_url:0:80})"
+            upload_url=""
+        fi
+    fi
+
+    # ─── Restart service ───
     if (( SERVICE_WAS_ACTIVE == 1 )); then
         systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
     fi
 
+    # ─── All hosts failed ───
     if [[ -z "$upload_url" ]]; then
-        log_error "Failed to upload the encrypted archive to any host."
-        log_error ""
-        log_error "Local archive (keep it safe):"
-        log_error "  $work_dir/setup.enc"
-        log_error ""
-        log_error "Password:"
-        log_error "  $password"
+        draw_header "Upload Failed — Manual Transfer Required"
+
+        log_error "Could not upload to any host (beacon.host / 0x0.st / transfer.sh / litterbox)."
+        printf '\n'
+
+        printf '%b📦 Manual Transfer Instructions:%b\n\n' "${BOLD}" "${NC}"
+
+        printf '%b1. Archive (encrypted):%b\n' "${BOLD}" "${NC}"
+        printf '   %s\n\n' "$work_dir/setup.enc"
+
+        printf '%b2. Decryption password:%b\n' "${BOLD}" "${NC}"
+        printf '   %b%s%b\n\n' "${GREEN}" "$password" "${NC}"
+
+        printf '%b3. Transfer methods:%b\n' "${BOLD}" "${NC}"
+        printf '   a) Download via scp:\n'
+        printf '      scp root@<this-server>:%s /tmp/\n\n' "$work_dir/setup.enc"
+
+        printf '   b) Base64 paste (small archives only):\n'
+        printf '      base64 -w0 %s\n\n' "$work_dir/setup.enc"
+
+        printf '%b4. On the target server, run:%b\n' "${BOLD}" "${NC}"
+        printf '   sudo bash %s --restore "<url>#%s"\n\n' \
+            "$(basename "$0")" "$password"
+
+        printf '%b5. Or place the file manually and run:%b\n' "${BOLD}" "${NC}"
+        printf '   # Copy the .enc file to: /tmp/velorabot-restore.enc\n'
+        printf '   # Then run:\n'
+        printf '   sudo bash %s --restore "file:///tmp/velorabot-restore.enc#%s"\n\n' \
+            "$(basename "$0")" "$password"
+
         return 1
     fi
 
@@ -2031,20 +2101,32 @@ download_and_decrypt_setup() {
     rm -rf "$work_dir"
     mkdir -p "$work_dir"
 
-    # ─── Download ───
-    log_info "Downloading encrypted archive..."
-    if ! curl -fsSL --max-time 300 \
-        -H "User-Agent: VeloraBot-Installer/1.0" \
-        -o "$work_dir/setup.enc" \
-        "$url" 2>>"$LOG_FILE"; then
-        die "Failed to download the setup archive."
+    # ─── Download (supports http(s):// and file://) ───
+    if [[ "$url" == file://* ]]; then
+        local local_path="${url#file://}"
+        log_info "Using local file: $local_path"
+
+        [[ -f "$local_path" ]] || die "Local file not found: $local_path"
+
+        if ! cp -a "$local_path" "$work_dir/setup.enc"; then
+            die "Failed to copy local archive."
+        fi
+        log_success "Local archive loaded."
+    else
+        log_info "Downloading encrypted archive..."
+        if ! curl -fsSL --max-time 300 \
+            -H "User-Agent: VeloraBot-Installer/1.0" \
+            -o "$work_dir/setup.enc" \
+            "$url" 2>>"$LOG_FILE"; then
+            die "Failed to download the setup archive."
+        fi
+
+        [[ -s "$work_dir/setup.enc" ]] || die "Downloaded archive is empty."
+
+        local enc_size
+        enc_size="$(du -h "$work_dir/setup.enc" | cut -f1)"
+        log_success "Downloaded: $enc_size"
     fi
-
-    [[ -s "$work_dir/setup.enc" ]] || die "Downloaded archive is empty."
-
-    local enc_size
-    enc_size="$(du -h "$work_dir/setup.enc" | cut -f1)"
-    log_success "Downloaded: $enc_size"
 
     # ─── Decrypt ───
     log_info "Decrypting archive..."
