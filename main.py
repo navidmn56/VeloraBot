@@ -29326,7 +29326,7 @@ async def my_account(callback: CallbackQuery):
     
     buttons = []
     
-    # ✅✅✅ دکمه‌ها با پشتیبانی از کوپن ادمین
+    # ✅✅✅ دکمه‌های کوپن
     if coupon_is_valid:
         # کوپن فعال داره
         buttons.append([
@@ -29352,11 +29352,27 @@ async def my_account(callback: CallbackQuery):
                 style="primary"
             )
         ])
+
+    # ✅✅✅ شارژ کیف پول و تراکنش‌ها کنار هم
+    buttons.append([
+        InlineKeyboardButton(
+            text=f"➕ {'شارژ کیف پول' if lang == 'fa' else 'Charge Wallet'}",
+            callback_data="increase_balance",
+            style="success"
+        ),
+        InlineKeyboardButton(
+            text=f"🧾 {'تراکنش‌ها' if lang == 'fa' else 'Transactions'}",
+            callback_data="my_transactions",
+            style="primary"
+        )
+    ])
     
+    # ✅ دکمه برگشت
     buttons.append([
         InlineKeyboardButton(
             text=f"🔙 {'برگشت' if lang == 'fa' else 'Back'}",
-            callback_data="back_to_main"
+            callback_data="back_to_main",
+            style="danger"
         )
     ])
     
@@ -33707,7 +33723,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.7.24"
+    version = "v1.7.25"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
@@ -38111,7 +38127,7 @@ async def init_ai():
     save_all()
     
     return gemini_client is not None or openrouter_client is not None
-
+from transaction_system import register_transaction_handlers
 async def main():
     global log_system, panel_semaphore, panel_rate_limiter, shared_connector
 
@@ -38130,6 +38146,8 @@ async def main():
     
     register_balance_handlers(dp, __import__('sys').modules[__name__])
     logger.info("✅ Balance handlers registered successfully")
+    register_transaction_handlers(dp, __import__('sys').modules[__name__])
+    logger.info("✅ Transaction handlers registered successfully")
     await init_ai()
     logger.info("=" * 60)
     logger.info("در حال راه‌اندازی ربات...")
