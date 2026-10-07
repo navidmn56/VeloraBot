@@ -38128,7 +38128,7 @@ async def main():
     )
     logger.info("✅ Search handlers registered successfully")
     
-    register_balance_handlers(dp, sys.modules[__name__])
+    register_balance_handlers(dp, __import__('sys').modules[__name__])
     logger.info("✅ Balance handlers registered successfully")
     await init_ai()
     logger.info("=" * 60)
