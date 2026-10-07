@@ -2,9 +2,11 @@
 transaction_system.py
 ---------------------
 سیستم تراکنش‌ها - مستقیم از orders.json
-- نمایش ۱۰ تای آخر
+- نمایش ۱۰ تای آخر با صفحه‌بندی
 - دانلود کامل به صورت TXT
 - تاریخ شمسی فارسی + انگلیسی
+- پشتیبانی از approved / inactive / deleted
+- تفکیک کیف پول از کارت‌به‌کارت
 """
 
 import io
@@ -29,6 +31,31 @@ _main: Any = None
 logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 10
+
+
+# ─────────────────────────────────────────────────────
+# وضعیت‌های مجاز
+# ─────────────────────────────────────────────────────
+VALID_STATUSES = {"approved", "inactive", "deleted"}
+
+STATUS_LABEL_FA = {
+    "approved": "",
+    "inactive": " (غیرفعال)",
+    "deleted": " (حذف‌شده)",
+}
+
+STATUS_LABEL_EN = {
+    "approved": "",
+    "inactive": " (inactive)",
+    "deleted": " (deleted)",
+}
+
+# روش‌های پرداخت
+WALLET_METHODS = {
+    "balance", "balance_extend", "balance_pool", "balance_pool_extend",
+    "free_coupon", "free_coupon_extend",
+}
+CARD_METHODS = {"card", "card_extend"}
 
 
 # ─────────────────────────────────────────────────────
@@ -145,11 +172,9 @@ def _parse_order_date(order: Dict[str, Any]) -> Optional[datetime]:
 # ─────────────────────────────────────────────────────
 # استخراج تراکنش‌ها
 # ─────────────────────────────────────────────────────
-
 CHARGE_TYPES = {"balance_charge"}
 PURCHASE_TYPES = {"purchase", "ready_package", "category_purchase"}
 EXTEND_MARKERS = {"extend"}
-VALID_STATUSES = {"approved"}
 
 
 def _classify_order(order: Dict[str, Any]) -> Optional[Tuple[str, str]]:
@@ -197,6 +222,9 @@ def get_user_transactions(user_id: int) -> List[Dict[str, Any]]:
 
         order_date = _parse_order_date(order)
 
+        payment_method = (order.get("payment_method") or "").strip()
+        from_wallet = payment_method in WALLET_METHODS
+
         transactions.append({
             "order_id": order.get("order_id"),
             "type_label": type_label,
@@ -206,6 +234,9 @@ def get_user_transactions(user_id: int) -> List[Dict[str, Any]]:
             "volume": order.get("volume", 0),
             "days": order.get("days", 0),
             "email": order.get("email", ""),
+            "payment_method": payment_method,
+            "from_wallet": from_wallet,
+            "order_status": order.get("status", "approved"),
         })
 
     transactions.sort(key=lambda t: t["date"] or datetime.min, reverse=True)
@@ -213,7 +244,7 @@ def get_user_transactions(user_id: int) -> List[Dict[str, Any]]:
 
 
 # ─────────────────────────────────────────────────────
-# فرمت یک خط
+# فرمت‌ها
 # ─────────────────────────────────────────────────────
 
 def _get_en_label(fa_label: str) -> str:
@@ -229,8 +260,15 @@ def _format_line(tx: Dict[str, Any], lang: str) -> str:
     amount = tx.get("amount", 0)
     direction = tx.get("direction", "in")
     label_fa = tx.get("type_label", "تراکنش")
+    order_status = tx.get("order_status", "approved")
 
     label = _get_en_label(label_fa) if lang == "en" else label_fa
+
+    # نشانگر وضعیت
+    status_suffix = STATUS_LABEL_FA.get(order_status, "") if lang == "fa" \
+        else STATUS_LABEL_EN.get(order_status, "")
+
+    label_with_status = f"{label}{status_suffix}"
 
     if direction == "out":
         emoji = "➖"
@@ -244,9 +282,9 @@ def _format_line(tx: Dict[str, Any], lang: str) -> str:
 
     if lang == "fa":
         amount_str = _to_persian_digits(f"{amount:,}")
-        return f"{emoji} <b>{sign}{amount_str} ت</b> · {label} · {date_str}"
+        return f"{emoji} <b>{sign}{amount_str} ت</b> · {label_with_status} · {date_str}"
     else:
-        return f"{emoji} <b>{sign}{amount:,} T</b> · {label} · {date_str}"
+        return f"{emoji} <b>{sign}{amount:,} T</b> · {label_with_status} · {date_str}"
 
 
 # ─────────────────────────────────────────────────────
@@ -288,7 +326,6 @@ def build_transactions_text(user_id: int, page: int = 0, lang: str = "fa") -> Tu
     body = "\n".join(_format_line(tx, lang) for tx in page_items)
 
     if lang == "fa":
-        # نمایش محدوده + مجموع
         if total <= PAGE_SIZE:
             footer = f"\n\n📊 مجموع: {_to_persian_digits(str(total))} تراکنش"
         else:
@@ -314,8 +351,31 @@ def build_transactions_text(user_id: int, page: int = 0, lang: str = "fa") -> Tu
 # ساخت فایل TXT
 # ─────────────────────────────────────────────────────
 
+def _get_payment_method_label(tx: Dict[str, Any], lang: str) -> str:
+    """تعیین روش پرداخت برای نمایش"""
+    direction = tx.get("direction", "in")
+    from_wallet = tx.get("from_wallet", False)
+    payment_method = tx.get("payment_method", "")
+
+    if direction == "in":
+        # شارژ حساب
+        if "custom_payment" in payment_method:
+            return "افزایش توسط ادمین" if lang == "fa" else "Admin add"
+        return "کیف پول" if lang == "fa" else "Wallet"
+    else:
+        # خرید یا تمدید
+        if from_wallet:
+            return "کیف پول" if lang == "fa" else "Wallet"
+        elif payment_method in CARD_METHODS:
+            return "کارت‌به‌کارت" if lang == "fa" else "Card-to-Card"
+        elif "free_coupon" in payment_method:
+            return "کوپن رایگان" if lang == "fa" else "Free Coupon"
+        else:
+            return "—"
+
+
 def build_transactions_file(user_id: int, lang: str = "fa") -> Optional[BufferedInputFile]:
-    """ساخت فایل TXT با تمام تراکنش‌ها"""
+    """ساخت فایل TXT با تمام تراکنش‌ها + خلاصه تفکیک شده"""
     transactions = get_user_transactions(user_id)
 
     if not transactions:
@@ -323,9 +383,27 @@ def build_transactions_file(user_id: int, lang: str = "fa") -> Optional[Buffered
 
     user = _main.get_user(user_id) if _main else {}
     user_name = user.get("name", f"user_{user_id}")
+    current_balance = user.get("balance", 0)
+
+    # ✅ محاسبه تفکیک شده
+    wallet_in = sum(
+        t["amount"] for t in transactions
+        if t["direction"] == "in"
+    )
+    wallet_out = sum(
+        t["amount"] for t in transactions
+        if t["direction"] == "out" and t.get("from_wallet", False)
+    )
+    card_out = sum(
+        t["amount"] for t in transactions
+        if t["direction"] == "out" and not t.get("from_wallet", False)
+    )
 
     lines = []
 
+    # ═══════════════════════════════════════
+    # 🇮🇷 فارسی
+    # ═══════════════════════════════════════
     if lang == "fa":
         lines.append("=" * 60)
         lines.append("🧾  تاریخچه تراکنش‌ها")
@@ -333,37 +411,57 @@ def build_transactions_file(user_id: int, lang: str = "fa") -> Optional[Buffered
         lines.append(f"👤 کاربر: {user_name}")
         lines.append(f"🆔 آیدی: {user_id}")
         lines.append(f"🕐 تاریخ گزارش: {format_jalali_date_with_time(datetime.now(), 'fa')}")
-        lines.append(f"📊 تعداد تراکنش‌ها: {total_count_fa(transactions)}")
+        lines.append(f"📊 تعداد تراکنش‌ها: {_to_persian_digits(str(len(transactions)))}")
         lines.append("=" * 60)
         lines.append("")
 
-        total_in = sum(t["amount"] for t in transactions if t["direction"] == "in")
-        total_out = sum(t["amount"] for t in transactions if t["direction"] == "out")
+        # ─── خلاصه ───
+        lines.append("📊 خلاصه:")
+        lines.append("")
 
-        lines.append("📈 خلاصه:")
-        lines.append(f"  ➕ کل واریز: {total_in:,} تومان")
-        lines.append(f"  ➖ کل برداشت: {total_out:,} تومان")
-        lines.append(f"  💰 مانده خالص: {total_in - total_out:,} تومان")
+        lines.append("  💰 از کیف پول:")
+        lines.append(f"    ➕ شارژ: {wallet_in:,} تومان")
+        lines.append(f"    ➖ خرید: {wallet_out:,} تومان")
+        lines.append("")
+
+        if card_out > 0:
+            lines.append("  💳 کارت‌به‌کارت:")
+            lines.append(f"    ➖ خرید مستقیم: {card_out:,} تومان")
+            lines.append("")
+
+        lines.append("  ─────────────────────────")
+        lines.append(f"  💰 موجودی فعلی: {current_balance:,} تومان")
         lines.append("")
         lines.append("=" * 60)
         lines.append("📋 لیست تراکنش‌ها:")
         lines.append("=" * 60)
         lines.append("")
 
+        # ─── لیست تراکنش‌ها ───
         for i, tx in enumerate(transactions, 1):
             amount = tx["amount"]
             direction = tx["direction"]
             label = tx["type_label"]
+            order_status = tx.get("order_status", "approved")
             dt = tx.get("date")
             date_str = format_jalali_date_with_time(dt, 'fa') if dt else "—"
-
-            sign = "+" if direction == "in" else "-"
             order_id = tx.get("order_id", "—")
 
-            lines.append(
-                f"{i}. [{sign}{amount:,}] {label} | {date_str} | سفارش #{order_id}"
-            )
+            sign = "+" if direction == "in" else "-"
+            status_suffix = STATUS_LABEL_FA.get(order_status, "")
+            method = _get_payment_method_label(tx, 'fa')
 
+            lines.append(
+                f"{i}. [{sign}{amount:,}] {label}{status_suffix} | {date_str}"
+            )
+            lines.append(
+                f"    🆔 سفارش #{order_id} | 💳 {method}"
+            )
+            lines.append("")
+
+    # ═══════════════════════════════════════
+    # 🇬🇧 انگلیسی
+    # ═══════════════════════════════════════
     else:
         lines.append("=" * 60)
         lines.append("🧾  Transaction History")
@@ -375,13 +473,22 @@ def build_transactions_file(user_id: int, lang: str = "fa") -> Optional[Buffered
         lines.append("=" * 60)
         lines.append("")
 
-        total_in = sum(t["amount"] for t in transactions if t["direction"] == "in")
-        total_out = sum(t["amount"] for t in transactions if t["direction"] == "out")
+        # ─── Summary ───
+        lines.append("📊 Summary:")
+        lines.append("")
 
-        lines.append("📈 Summary:")
-        lines.append(f"  ➕ Total in:  {total_in:,} T")
-        lines.append(f"  ➖ Total out: {total_out:,} T")
-        lines.append(f"  💰 Net:       {total_in - total_out:,} T")
+        lines.append("  💰 From Wallet:")
+        lines.append(f"    ➕ Charge: {wallet_in:,} T")
+        lines.append(f"    ➖ Purchase: {wallet_out:,} T")
+        lines.append("")
+
+        if card_out > 0:
+            lines.append("  💳 Card-to-Card:")
+            lines.append(f"    ➖ Direct purchase: {card_out:,} T")
+            lines.append("")
+
+        lines.append("  ─────────────────────────")
+        lines.append(f"  💰 Current balance: {current_balance:,} T")
         lines.append("")
         lines.append("=" * 60)
         lines.append("📋 Transactions:")
@@ -392,17 +499,24 @@ def build_transactions_file(user_id: int, lang: str = "fa") -> Optional[Buffered
             amount = tx["amount"]
             direction = tx["direction"]
             label = _get_en_label(tx["type_label"])
+            order_status = tx.get("order_status", "approved")
             dt = tx.get("date")
             date_str = format_jalali_date_with_time(dt, 'en') if dt else "—"
-
-            sign = "+" if direction == "in" else "-"
             order_id = tx.get("order_id", "—")
 
-            lines.append(
-                f"{i}. [{sign}{amount:,}] {label} | {date_str} | Order #{order_id}"
-            )
+            sign = "+" if direction == "in" else "-"
+            status_suffix = STATUS_LABEL_EN.get(order_status, "")
+            method = _get_payment_method_label(tx, 'en')
 
-    lines.append("")
+            lines.append(
+                f"{i}. [{sign}{amount:,}] {label}{status_suffix} | {date_str}"
+            )
+            lines.append(
+                f"    🆔 Order #{order_id} | 💳 {method}"
+            )
+            lines.append("")
+
+    # ─── Footer ───
     lines.append("=" * 60)
     lines.append("🤖 VeloraBot - Transaction Report")
     lines.append("=" * 60)
@@ -416,11 +530,6 @@ def build_transactions_file(user_id: int, lang: str = "fa") -> Optional[Buffered
     filename = f"transactions_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
     return BufferedInputFile(buf.read(), filename=filename)
-
-
-def total_count_fa(transactions: list) -> str:
-    """نمایش تعداد به فارسی"""
-    return _to_persian_digits(str(len(transactions)))
 
 
 # ─────────────────────────────────────────────────────
@@ -461,7 +570,7 @@ def build_transactions_keyboard(
         if nav:
             buttons.append(nav)
 
-    # ─── Download All (فقط اگه تراکنش زیاده) ───
+    # ─── Download All ───
     if total_count > PAGE_SIZE:
         buttons.append([InlineKeyboardButton(
             text=(
