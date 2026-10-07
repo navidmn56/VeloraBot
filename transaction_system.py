@@ -591,8 +591,8 @@ async def download_transactions(callback: CallbackQuery):
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="🔙 بازگشت به تراکنش‌ها" if lang == "fa" else "🔙 Back to Transactions",
-                    callback_data="my_transactions",
+                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                    callback_data="back_to_main",
                     style="primary"
                 )]
             ])
