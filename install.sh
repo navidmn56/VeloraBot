@@ -2193,6 +2193,188 @@ restore_from_setup_link() {
 }
 
 # ============================================================
+# Migration Watchdog (Auto-stop when another instance is online)
+# ============================================================
+
+readonly WATCHDOG_SCRIPT="/usr/local/bin/velorabot-migration-watch.sh"
+readonly WATCHDOG_SERVICE="/etc/systemd/system/velorabot-migration-watch.service"
+readonly WATCHDOG_TIMER="/etc/systemd/system/velorabot-migration-watch.timer"
+
+create_watchdog_script() {
+    cat > "${WATCHDOG_SCRIPT}" <<'WATCHDOG_EOF'
+#!/usr/bin/env bash
+# ============================================================
+# VeloraBot Migration Watchdog
+# Auto-stops velorabot when a second instance is detected
+# (via Telegram 409 Conflict errors in journalctl)
+# ============================================================
+
+set -u
+
+SERVICE="velorabot"
+LOG_TAG="velorabot-migration-watch"
+CHECK_WINDOW="3 minutes ago"
+THRESHOLD=5
+
+# Exit early if service is not active
+if ! systemctl is-active --quiet "${SERVICE}"; then
+    exit 0
+fi
+
+# Count conflict errors in recent logs
+CONFLICTS=$(
+    journalctl -u "${SERVICE}" \
+        --since "${CHECK_WINDOW}" \
+        --no-pager 2>/dev/null \
+        | grep -ci "conflict\|terminated by other" 2>/dev/null \
+        || true
+)
+
+# Sanity check
+[[ -z "${CONFLICTS}" ]] && CONFLICTS=0
+
+if (( CONFLICTS >= THRESHOLD )); then
+    logger -t "${LOG_TAG}" \
+        "Detected ${CONFLICTS} Telegram conflicts in ${CHECK_WINDOW} — another instance is online. Stopping ${SERVICE}."
+
+    # Graceful stop
+    systemctl stop "${SERVICE}" >/dev/null 2>&1 || true
+
+    # Prevent auto-restart
+    systemctl disable "${SERVICE}" >/dev/null 2>&1 || true
+
+    # Disable watchdog itself
+    systemctl stop velorabot-migration-watch.timer >/dev/null 2>&1 || true
+    systemctl disable velorabot-migration-watch.timer >/dev/null 2>&1 || true
+
+    logger -t "${LOG_TAG}" "VeloraBot stopped and disabled."
+fi
+
+exit 0
+WATCHDOG_EOF
+
+    chmod 755 "${WATCHDOG_SCRIPT}"
+}
+
+create_watchdog_units() {
+    cat > "${WATCHDOG_SERVICE}" <<'SERVICE_EOF'
+[Unit]
+Description=VeloraBot Migration Watchdog
+After=velorabot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/velorabot-migration-watch.sh
+User=root
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+    cat > "${WATCHDOG_TIMER}" <<'TIMER_EOF'
+[Unit]
+Description=VeloraBot Migration Watchdog Timer
+Requires=velorabot-migration-watch.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=velorabot-migration-watch.service
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
+TIMER_EOF
+
+    chmod 644 "${WATCHDOG_SERVICE}" "${WATCHDOG_TIMER}"
+}
+
+enable_migration_watchdog() {
+    draw_step "Enabling Migration Watchdog"
+
+    if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
+        log_warning "VeloraBot service is not running."
+        log_warning "Start the service first, then enable the watchdog."
+        return 1
+    fi
+
+    create_watchdog_script
+    create_watchdog_units
+
+    systemctl daemon-reload
+    systemctl enable --now velorabot-migration-watch.timer >/dev/null 2>&1
+
+    log_success "Migration watchdog enabled."
+    printf '\n'
+    printf 'The watchdog checks every minute.\n'
+    printf 'If another VeloraBot instance comes online (via same bot token),\n'
+    printf 'the local service will be stopped automatically.\n'
+    printf '\n'
+    printf 'To monitor:\n'
+    printf '  journalctl -t velorabot-migration-watch -f\n'
+    printf '\n'
+
+    if log_system 2>/dev/null; then :; fi
+    return 0
+}
+
+disable_migration_watchdog() {
+    draw_step "Disabling Migration Watchdog"
+
+    systemctl stop velorabot-migration-watch.timer >/dev/null 2>&1 || true
+    systemctl disable velorabot-migration-watch.timer >/dev/null 2>&1 || true
+    systemctl stop velorabot-migration-watch.service >/dev/null 2>&1 || true
+
+    rm -f "${WATCHDOG_SERVICE}" "${WATCHDOG_TIMER}" "${WATCHDOG_SCRIPT}"
+
+    systemctl daemon-reload
+
+    log_success "Migration watchdog disabled and removed."
+    return 0
+}
+
+watchdog_status() {
+    if systemctl is-active --quiet velorabot-migration-watch.timer 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+stop_service_manual() {
+    draw_step "Stop VeloraBot Service"
+
+    if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
+        log_warning "${SERVICE_NAME} is already inactive."
+        return 0
+    fi
+
+    printf 'This will STOP the VeloraBot service on this server.\n' > /dev/tty
+    printf 'Use this after a successful migration to another server.\n\n' > /dev/tty
+
+    if ! ask_yes_no "Stop the service now? [y/N]: " "n"; then
+        log_info "Cancelled."
+        return 0
+    fi
+
+    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    sleep 1
+
+    if systemctl is-active --quiet "${SERVICE_NAME}"; then
+        log_error "Failed to stop the service."
+        return 1
+    fi
+
+    log_success "Service stopped."
+
+    if ask_yes_no "Also disable auto-start on boot? [y/N]: " "n"; then
+        systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        log_success "Auto-start disabled."
+    fi
+
+    return 0
+}
+# ============================================================
 # Interactive management panel
 # ============================================================
 
@@ -2215,23 +2397,35 @@ show_management_panel() {
             else
                 printf 'Service            : %binactive%b\n' "${YELLOW}" "${NC}"
             fi
+            if watchdog_status; then
+                printf 'Migration Watchdog : %benabled%b\n' "${GREEN}" "${NC}"
+            else
+                printf 'Migration Watchdog : %bdisabled%b\n' "${DIM}" "${NC}"
+            fi
             printf 'Install directory  : %s\n' "${INSTALL_DIR}"
             printf '\n'
-            printf '  1) Update to latest version\n'
-            printf '  2) Force re-sync (re-download current version)\n'
-            printf '  3) Edit configuration keys\n'
-            printf '  4) Repair installation\n'
-            printf '  5) Restart service\n'
-            printf '  6) Show recent service logs\n'
-            printf '  7) %bCreate Setup Link (backup)%b\n' "${CYAN}" "${NC}"
+            printf '  %b── General ──%b\n' "${BOLD}" "${NC}"
+            printf '   1) Update to latest version\n'
+            printf '   2) Force re-sync (re-download current version)\n'
+            printf '   3) Edit configuration keys\n'
+            printf '   4) Repair installation\n'
+            printf '   5) Restart service\n'
+            printf '   6) Show recent service logs\n'
+            printf '\n'
+            printf '  %b── Backup / Migration ──%b\n' "${BOLD}" "${NC}"
+            printf '   7) %bCreate Setup Link (Backup)%b\n' "${CYAN}" "${NC}"
+            printf '   8) Enable Migration Watchdog\n'
+            printf '   9) Disable Migration Watchdog\n'
+            printf '  10) %bStop Service (Migration)%b\n' "${YELLOW}" "${NC}"
+            printf '\n'
             printf '  q) Quit\n'
         else
             printf 'Status             : %bNot installed%b\n' "${YELLOW}" "${NC}"
             printf 'Install directory  : %s\n' "${INSTALL_DIR}"
             printf '\n'
-            printf '  1) Install VeloraBot\n'
-            printf '  2) %bRestore from Setup Link%b\n' "${CYAN}" "${NC}"
-            printf '  q) Quit\n'
+            printf '   1) Install VeloraBot\n'
+            printf '   2) %bRestore from Setup Link%b\n' "${CYAN}" "${NC}"
+            printf '   q) Quit\n'
         fi
         printf '\n'
 
@@ -2256,7 +2450,6 @@ show_management_panel() {
                     SCRIPT_MODE="update"
                     return 0
                 else
-                    # Restore from setup link
                     local link=""
                     if read_setup_link_from_tty link; then
                         RESTORE_LINK="$link"
@@ -2307,6 +2500,27 @@ show_management_panel() {
                 if (( has_install == 1 )); then
                     SCRIPT_MODE="backup-link"
                     return 0
+                fi
+                ;;
+            8)
+                if (( has_install == 1 )); then
+                    enable_migration_watchdog || true
+                    local _d=""
+                    read_tty "Press Enter to continue..." _d || true
+                fi
+                ;;
+            9)
+                if (( has_install == 1 )); then
+                    disable_migration_watchdog || true
+                    local _d=""
+                    read_tty "Press Enter to continue..." _d || true
+                fi
+                ;;
+            10)
+                if (( has_install == 1 )); then
+                    stop_service_manual || true
+                    local _d=""
+                    read_tty "Press Enter to continue..." _d || true
                 fi
                 ;;
             q|Q|quit|exit)
