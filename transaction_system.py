@@ -2,9 +2,12 @@
 transaction_system.py
 ---------------------
 سیستم تراکنش‌ها - مستقیم از orders.json
-بدون فایل جداگانه، بدون داده تکراری
+- نمایش ۱۰ تای آخر
+- دانلود کامل به صورت TXT
+- تاریخ شمسی فارسی + انگلیسی
 """
 
+import io
 import logging
 from datetime import datetime
 from typing import Any, Optional, List, Dict, Tuple
@@ -14,6 +17,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    BufferedInputFile,
 )
 from aiogram.enums import ParseMode
 
@@ -28,11 +32,16 @@ PAGE_SIZE = 10
 
 
 # ─────────────────────────────────────────────────────
-# تاریخ شمسی (بدون کتابخانه)
+# تاریخ شمسی
 # ─────────────────────────────────────────────────────
-PERSIAN_MONTHS = [
+PERSIAN_MONTHS_FA = [
     "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
     "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
+]
+
+PERSIAN_MONTHS_EN = [
+    "farvardin", "ordibehesht", "khordad", "tir", "mordad", "shahrivar",
+    "mehr", "aban", "azar", "dey", "bahman", "esfand"
 ]
 
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
@@ -47,7 +56,7 @@ def _to_persian_digits(text) -> str:
 
 
 def gregorian_to_jalali(gy: int, gm: int, gd: int) -> Tuple[int, int, int]:
-    """تبدیل تاریخ میلادی به شمسی (الگوریتم استاندارد)"""
+    """تبدیل تاریخ میلادی به شمسی"""
     g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
 
     gy2 = gy + 1 if gm > 2 else gy
@@ -80,31 +89,53 @@ def gregorian_to_jalali(gy: int, gm: int, gd: int) -> Tuple[int, int, int]:
     return jy, jm, jd
 
 
-def format_jalali_date(dt: Optional[datetime] = None) -> str:
-    """datetime → «۱۳ مهر ۱۴۰۵»"""
+def format_jalali_date(dt: Optional[datetime] = None, lang: str = "fa") -> str:
+    """
+    datetime → تاریخ شمسی
+    - فارسی: «۱۳ مهر ۱۴۰۵»
+    - انگلیسی: «15 mehr 1405»
+    """
     if dt is None:
         dt = datetime.now()
+
     try:
         jy, jm, jd = gregorian_to_jalali(dt.year, dt.month, dt.day)
-        return _to_persian_digits(f"{jd} {PERSIAN_MONTHS[jm - 1]} {jy}")
+
+        if lang == "fa":
+            month_name = PERSIAN_MONTHS_FA[jm - 1]
+            return _to_persian_digits(f"{jd} {month_name} {jy}")
+        else:
+            month_name = PERSIAN_MONTHS_EN[jm - 1]
+            return f"{jd} {month_name} {jy}"
+
     except Exception as e:
         logger.error(f"خطا در تبدیل تاریخ: {e}")
         return _to_persian_digits(dt.strftime("%Y-%m-%d"))
 
 
+def format_jalali_date_with_time(dt: Optional[datetime] = None, lang: str = "fa") -> str:
+    """تاریخ شمسی + ساعت"""
+    if dt is None:
+        dt = datetime.now()
+
+    date_str = format_jalali_date(dt, lang=lang)
+
+    if lang == "fa":
+        return f"{date_str} - {_to_persian_digits(dt.strftime('%H:%M'))}"
+    else:
+        return f"{date_str} - {dt.strftime('%H:%M')}"
+
+
 def _parse_order_date(order: Dict[str, Any]) -> Optional[datetime]:
     """پیدا کردن بهترین تاریخ از سفارش"""
-    # اولویت: approved_date → date → created_at
     for key in ("approved_date", "date", "created_at"):
         val = order.get(key)
         if not val:
             continue
         try:
-            # فرمت ISO
             return datetime.fromisoformat(str(val).replace(' ', 'T').split('.')[0])
         except Exception:
             try:
-                # فرمت strftime
                 return datetime.strptime(str(val), "%Y-%m-%d %H:%M:%S")
             except Exception:
                 continue
@@ -112,23 +143,17 @@ def _parse_order_date(order: Dict[str, Any]) -> Optional[datetime]:
 
 
 # ─────────────────────────────────────────────────────
-# استخراج تراکنش‌ها از orders
+# استخراج تراکنش‌ها
 # ─────────────────────────────────────────────────────
 
-# انواع سفارشی که به عنوان تراکنش نمایش داده می‌شن
 CHARGE_TYPES = {"balance_charge"}
 PURCHASE_TYPES = {"purchase", "ready_package", "category_purchase"}
-EXTEND_MARKERS = {"extend"}  # type یا is_extend
-
-# وضعیت‌هایی که تراکنش محسوب می‌شن
+EXTEND_MARKERS = {"extend"}
 VALID_STATUSES = {"approved"}
 
 
 def _classify_order(order: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-    """
-    تعیین نوع تراکنش از سفارش
-    Returns: (type_label, direction) یا None اگه تراکنش نیست
-    """
+    """تعیین نوع تراکنش"""
     status = order.get("status", "")
     if status not in VALID_STATUSES:
         return None
@@ -136,27 +161,17 @@ def _classify_order(order: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     order_type = order.get("type", "purchase")
     is_extend = order.get("is_extend", False) or order.get("parent_order_id")
 
-    # تمدید
     if is_extend or order_type in EXTEND_MARKERS:
         return ("تمدید سرویس", "out")
-
-    # خرید
     if order_type in PURCHASE_TYPES:
         return ("خرید کانفیگ", "out")
-
-    # شارژ
     if order_type in CHARGE_TYPES:
         return ("شارژ حساب", "in")
-
-    # بقیه (test و غیره) → نمایش داده نمی‌شن
     return None
 
 
 def get_user_transactions(user_id: int) -> List[Dict[str, Any]]:
-    """
-    استخراج تراکنش‌های کاربر از orders
-    Returns: لیست تراکنش‌ها (جدیدترین اول)
-    """
+    """استخراج تراکنش‌های کاربر از orders"""
     if _main is None:
         return []
 
@@ -175,7 +190,6 @@ def get_user_transactions(user_id: int) -> List[Dict[str, Any]]:
 
         type_label, direction = classification
 
-        # مبلغ: برای شارژ از amount، بقیه از price
         if order.get("type") == "balance_charge":
             amount = order.get("amount", 0) or order.get("price", 0)
         else:
@@ -191,38 +205,33 @@ def get_user_transactions(user_id: int) -> List[Dict[str, Any]]:
             "date": order_date,
             "volume": order.get("volume", 0),
             "days": order.get("days", 0),
+            "email": order.get("email", ""),
         })
 
-    # جدیدترین اول
-    transactions.sort(
-        key=lambda t: t["date"] or datetime.min,
-        reverse=True
-    )
+    transactions.sort(key=lambda t: t["date"] or datetime.min, reverse=True)
     return transactions
 
 
 # ─────────────────────────────────────────────────────
-# ساخت UI
+# فرمت یک خط
 # ─────────────────────────────────────────────────────
 
+def _get_en_label(fa_label: str) -> str:
+    return {
+        "خرید کانفیگ": "Purchase",
+        "تمدید سرویس": "Extend",
+        "شارژ حساب": "Charge",
+    }.get(fa_label, fa_label)
+
+
 def _format_line(tx: Dict[str, Any], lang: str) -> str:
-    """یک خط تراکنش"""
+    """یک خط تراکنش برای نمایش در بات"""
     amount = tx.get("amount", 0)
     direction = tx.get("direction", "in")
     label_fa = tx.get("type_label", "تراکنش")
 
-    # ترجمه انگلیسی
-    if lang == "en":
-        en_map = {
-            "خرید کانفیگ": "Purchase",
-            "تمدید سرویس": "Extend",
-            "شارژ حساب": "Charge",
-        }
-        label = en_map.get(label_fa, label_fa)
-    else:
-        label = label_fa
+    label = _get_en_label(label_fa) if lang == "en" else label_fa
 
-    # ایموجی و علامت
     if direction == "out":
         emoji = "➖"
         sign = "-"
@@ -230,11 +239,9 @@ def _format_line(tx: Dict[str, Any], lang: str) -> str:
         emoji = "➕"
         sign = "+"
 
-    # تاریخ شمسی
     dt = tx.get("date")
-    date_str = format_jalali_date(dt) if dt else "—"
+    date_str = format_jalali_date(dt, lang=lang) if dt else "—"
 
-    # فرمت مبلغ
     if lang == "fa":
         amount_str = _to_persian_digits(f"{amount:,}")
         return f"{emoji} <b>{sign}{amount_str} ت</b> · {label} · {date_str}"
@@ -242,12 +249,15 @@ def _format_line(tx: Dict[str, Any], lang: str) -> str:
         return f"{emoji} <b>{sign}{amount:,} T</b> · {label} · {date_str}"
 
 
+# ─────────────────────────────────────────────────────
+# ساخت متن صفحه
+# ─────────────────────────────────────────────────────
+
 def build_transactions_text(user_id: int, page: int = 0, lang: str = "fa") -> Tuple[str, int, int]:
     """ساخت متن صفحه تراکنش‌ها"""
     transactions = get_user_transactions(user_id)
     total = len(transactions)
 
-    # خالی
     if total == 0:
         if lang == "fa":
             text = (
@@ -278,17 +288,155 @@ def build_transactions_text(user_id: int, page: int = 0, lang: str = "fa") -> Tu
     body = "\n".join(_format_line(tx, lang) for tx in page_items)
 
     if lang == "fa":
-        footer = f"\n\n📊 مجموع: {_to_persian_digits(str(total))} تراکنش"
+        # نمایش محدوده + مجموع
+        if total <= PAGE_SIZE:
+            footer = f"\n\n📊 مجموع: {_to_persian_digits(str(total))} تراکنش"
+        else:
+            footer = (
+                f"\n\n📄 نمایش {_to_persian_digits(str(start + 1))} تا "
+                f"{_to_persian_digits(str(end))} از "
+                f"{_to_persian_digits(str(total))}\n"
+                f"💡 برای مشاهده همه، از دکمه «📥 دانلود کامل» استفاده کنید."
+            )
     else:
-        footer = f"\n\n📊 Total: {total} transactions"
+        if total <= PAGE_SIZE:
+            footer = f"\n\n📊 Total: {total} transactions"
+        else:
+            footer = (
+                f"\n\n📄 Showing {start + 1} to {end} of {total}\n"
+                f"💡 Use '📥 Download All' to see everything."
+            )
 
     return header + body + footer, total_pages, page
 
 
-def build_transactions_keyboard(page: int, total_pages: int, lang: str = "fa") -> InlineKeyboardMarkup:
-    """کیبورد صفحه‌بندی"""
+# ─────────────────────────────────────────────────────
+# ساخت فایل TXT
+# ─────────────────────────────────────────────────────
+
+def build_transactions_file(user_id: int, lang: str = "fa") -> Optional[BufferedInputFile]:
+    """ساخت فایل TXT با تمام تراکنش‌ها"""
+    transactions = get_user_transactions(user_id)
+
+    if not transactions:
+        return None
+
+    user = _main.get_user(user_id) if _main else {}
+    user_name = user.get("name", f"user_{user_id}")
+
+    lines = []
+
+    if lang == "fa":
+        lines.append("=" * 60)
+        lines.append("🧾  تاریخچه تراکنش‌ها")
+        lines.append("=" * 60)
+        lines.append(f"👤 کاربر: {user_name}")
+        lines.append(f"🆔 آیدی: {user_id}")
+        lines.append(f"🕐 تاریخ گزارش: {format_jalali_date_with_time(datetime.now(), 'fa')}")
+        lines.append(f"📊 تعداد تراکنش‌ها: {total_count_fa(transactions)}")
+        lines.append("=" * 60)
+        lines.append("")
+
+        total_in = sum(t["amount"] for t in transactions if t["direction"] == "in")
+        total_out = sum(t["amount"] for t in transactions if t["direction"] == "out")
+
+        lines.append("📈 خلاصه:")
+        lines.append(f"  ➕ کل واریز: {total_in:,} تومان")
+        lines.append(f"  ➖ کل برداشت: {total_out:,} تومان")
+        lines.append(f"  💰 مانده خالص: {total_in - total_out:,} تومان")
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("📋 لیست تراکنش‌ها:")
+        lines.append("=" * 60)
+        lines.append("")
+
+        for i, tx in enumerate(transactions, 1):
+            amount = tx["amount"]
+            direction = tx["direction"]
+            label = tx["type_label"]
+            dt = tx.get("date")
+            date_str = format_jalali_date_with_time(dt, 'fa') if dt else "—"
+
+            sign = "+" if direction == "in" else "-"
+            order_id = tx.get("order_id", "—")
+
+            lines.append(
+                f"{i}. [{sign}{amount:,}] {label} | {date_str} | سفارش #{order_id}"
+            )
+
+    else:
+        lines.append("=" * 60)
+        lines.append("🧾  Transaction History")
+        lines.append("=" * 60)
+        lines.append(f"👤 User: {user_name}")
+        lines.append(f"🆔 ID: {user_id}")
+        lines.append(f"🕐 Report time: {format_jalali_date_with_time(datetime.now(), 'en')}")
+        lines.append(f"📊 Total transactions: {len(transactions)}")
+        lines.append("=" * 60)
+        lines.append("")
+
+        total_in = sum(t["amount"] for t in transactions if t["direction"] == "in")
+        total_out = sum(t["amount"] for t in transactions if t["direction"] == "out")
+
+        lines.append("📈 Summary:")
+        lines.append(f"  ➕ Total in:  {total_in:,} T")
+        lines.append(f"  ➖ Total out: {total_out:,} T")
+        lines.append(f"  💰 Net:       {total_in - total_out:,} T")
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("📋 Transactions:")
+        lines.append("=" * 60)
+        lines.append("")
+
+        for i, tx in enumerate(transactions, 1):
+            amount = tx["amount"]
+            direction = tx["direction"]
+            label = _get_en_label(tx["type_label"])
+            dt = tx.get("date")
+            date_str = format_jalali_date_with_time(dt, 'en') if dt else "—"
+
+            sign = "+" if direction == "in" else "-"
+            order_id = tx.get("order_id", "—")
+
+            lines.append(
+                f"{i}. [{sign}{amount:,}] {label} | {date_str} | Order #{order_id}"
+            )
+
+    lines.append("")
+    lines.append("=" * 60)
+    lines.append("🤖 VeloraBot - Transaction Report")
+    lines.append("=" * 60)
+
+    text = "\n".join(lines)
+
+    buf = io.BytesIO()
+    buf.write(text.encode("utf-8"))
+    buf.seek(0)
+
+    filename = f"transactions_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    return BufferedInputFile(buf.read(), filename=filename)
+
+
+def total_count_fa(transactions: list) -> str:
+    """نمایش تعداد به فارسی"""
+    return _to_persian_digits(str(len(transactions)))
+
+
+# ─────────────────────────────────────────────────────
+# کیبورد
+# ─────────────────────────────────────────────────────
+
+def build_transactions_keyboard(
+    page: int,
+    total_pages: int,
+    total_count: int,
+    lang: str = "fa"
+) -> InlineKeyboardMarkup:
+    """کیبورد صفحه‌بندی + دانلود"""
     buttons = []
 
+    # ─── Navigation ───
     if total_pages > 1:
         nav = []
         if page > 0:
@@ -297,8 +445,11 @@ def build_transactions_keyboard(page: int, total_pages: int, lang: str = "fa") -
                 callback_data=f"tx_page_{page - 1}"
             ))
 
-        page_text = _to_persian_digits(f"{page + 1}/{total_pages}") if lang == "fa" \
+        page_text = (
+            _to_persian_digits(f"{page + 1}/{total_pages}")
+            if lang == "fa"
             else f"{page + 1}/{total_pages}"
+        )
         nav.append(InlineKeyboardButton(text=page_text, callback_data="noop"))
 
         if page < total_pages - 1:
@@ -310,6 +461,19 @@ def build_transactions_keyboard(page: int, total_pages: int, lang: str = "fa") -
         if nav:
             buttons.append(nav)
 
+    # ─── Download All (فقط اگه تراکنش زیاده) ───
+    if total_count > PAGE_SIZE:
+        buttons.append([InlineKeyboardButton(
+            text=(
+                f"📥 دانلود کامل ({_to_persian_digits(str(total_count))} تراکنش)"
+                if lang == "fa"
+                else f"📥 Download All ({total_count})"
+            ),
+            callback_data="tx_download_all",
+            style="success"
+        )])
+
+    # ─── Back ───
     buttons.append([InlineKeyboardButton(
         text="🔙 بازگشت به حساب کاربری" if lang == "fa" else "🔙 Back to Account",
         callback_data="my_account",
@@ -332,8 +496,11 @@ async def show_transactions(callback: CallbackQuery):
     user_id = callback.from_user.id
     lang = _main.get_user(user_id).get('lang', 'fa')
 
+    transactions = get_user_transactions(user_id)
+    total_count = len(transactions)
+
     text, total_pages, page = build_transactions_text(user_id, page=0, lang=lang)
-    keyboard = build_transactions_keyboard(page, total_pages, lang)
+    keyboard = build_transactions_keyboard(page, total_pages, total_count, lang)
 
     try:
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
@@ -366,8 +533,11 @@ async def transactions_page(callback: CallbackQuery):
         await callback.answer("❌ خطا", show_alert=True)
         return
 
+    transactions = get_user_transactions(user_id)
+    total_count = len(transactions)
+
     text, total_pages, page = build_transactions_text(user_id, page=page, lang=lang)
-    keyboard = build_transactions_keyboard(page, total_pages, lang)
+    keyboard = build_transactions_keyboard(page, total_pages, total_count, lang)
 
     try:
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
@@ -379,6 +549,60 @@ async def transactions_page(callback: CallbackQuery):
         await callback.answer()
     except Exception:
         pass
+
+
+async def download_transactions(callback: CallbackQuery):
+    """دانلود کامل تراکنش‌ها به صورت فایل TXT"""
+    if _main is None:
+        await callback.answer("❌ خطا", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+    lang = _main.get_user(user_id).get('lang', 'fa')
+
+    await callback.answer("⏳ در حال آماده‌سازی فایل..." if lang == "fa" else "⏳ Preparing file...")
+
+    file = build_transactions_file(user_id, lang=lang)
+
+    if not file:
+        await callback.answer(
+            "📭 هیچ تراکنشی برای دانلود وجود ندارد" if lang == "fa"
+            else "📭 No transactions to download",
+            show_alert=True
+        )
+        return
+
+    caption = (
+        "🧾 <b>فایل کامل تراکنش‌ها</b>\n\n"
+        "📥 فایل متنی شامل تمام تراکنش‌های شما\n"
+        "💡 می‌توانید آن را ذخیره یا با پشتیبانی به اشتراک بگذارید."
+        if lang == "fa"
+        else
+        "🧾 <b>Full Transactions File</b>\n\n"
+        "📥 Text file with all your transactions\n"
+        "💡 You can save it or share with support."
+    )
+
+    try:
+        await _main.bot.send_document(
+            chat_id=user_id,
+            document=file,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت به تراکنش‌ها" if lang == "fa" else "🔙 Back to Transactions",
+                    callback_data="my_transactions",
+                    style="primary"
+                )]
+            ])
+        )
+    except Exception as e:
+        logger.error(f"خطا در ارسال فایل تراکنش: {e}")
+        await callback.answer(
+            "❌ خطا در ارسال فایل" if lang == "fa" else "❌ Error sending file",
+            show_alert=True
+        )
 
 
 async def noop(callback: CallbackQuery):
@@ -399,6 +623,7 @@ def register_transaction_handlers(dp, main_module):
 
     dp.callback_query.register(show_transactions, F.data == "my_transactions")
     dp.callback_query.register(transactions_page, F.data.startswith("tx_page_"))
+    dp.callback_query.register(download_transactions, F.data == "tx_download_all")
     dp.callback_query.register(noop, F.data == "noop")
 
     logger.info("✅ Transaction handlers registered successfully")
