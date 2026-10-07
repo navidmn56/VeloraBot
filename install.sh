@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # VeloraBot — Universal Installer / Updater / Repairer
+#              + Setup Link (Backup / Restore)
 # ============================================================
 # Source of truth: https://github.com/navidmn56/VeloraBot (main)
 #
@@ -14,6 +15,8 @@
 #   * Non-root service user + systemd sandboxing.
 #   * Interactive management panel shown in `auto` mode.
 #   * Auto-detects / installs Python 3.11+ for numpy >= 2.3.
+#   * Setup Link: AES-256-CBC encrypted backup of data/ + config.py
+#     uploaded to a temporary host; restorable on another server.
 # ============================================================
 
 set -Eeuo pipefail
@@ -78,7 +81,6 @@ readonly SERVICE_OVERRIDE_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
 readonly BACKUP_ROOT="/opt/VeloraBot-backups"
 readonly BACKUP_KEEP=5
 
-# Minimum Python required by the current release (numpy >= 2.3 requires 3.11+).
 readonly REQUIRED_PYTHON_MAJOR=3
 readonly REQUIRED_PYTHON_MINOR=11
 
@@ -122,8 +124,8 @@ SKIP_CONFIG=0
 REPAIR_ONLY=0
 SERVICE_BACKUP_EXISTS=0
 STTY_SAVED_STATE=""
+RESTORE_LINK=""
 
-# Best interpreter found by ensure_modern_python().
 PYTHON_BIN="python3"
 
 # ============================================================
@@ -438,26 +440,35 @@ ask_yes_no() {
 
 show_help() {
     cat <<EOF
-VeloraBot Installer / Updater / Repairer
+VeloraBot Installer / Updater / Repairer / Backup / Restore
 
 Usage:
-  sudo bash $0
-  sudo bash $0 --install
-  sudo bash $0 --update
-  sudo bash $0 --force-update
-  sudo bash $0 --skip-config
-  sudo bash $0 --repair
+  sudo bash $0                                # Interactive menu
+  sudo bash $0 --install                      # Fresh install
+  sudo bash $0 --update                       # Update existing install
+  sudo bash $0 --force-update                 # Force re-sync
+  sudo bash $0 --skip-config                  # Skip config prompts
+  sudo bash $0 --repair                       # Repair installation
+  sudo bash $0 --backup-link                  # Create Setup Link (source)
+  sudo bash $0 --restore "URL#PASS"           # Restore from Setup Link
   sudo bash $0 --help
 
 Options:
-  --install         Force a fresh installation.
-  --update          Force an update of an existing installation.
-  --force-update    Re-sync even when the installed commit is current.
-  --skip-config     Skip config prompts during a fresh install.
-  --repair          Validate and repair the current installation.
-  --help, -h        Show this help message.
+  --install              Force a fresh installation.
+  --update               Force an update of an existing installation.
+  --force-update         Re-sync even when the installed commit is current.
+  --skip-config          Skip config prompts during a fresh install.
+  --repair               Validate and repair the current installation.
+  --backup-link          Generate a portable Setup Link (encrypted).
+  --restore <link>       Restore data + config from a Setup Link.
+  --help, -h             Show this help.
 
-Running without arguments opens the interactive management panel.
+Setup Link format:
+  https://<host>/<file>#<password>
+
+The link is produced by --backup-link on the source server. Both the
+encrypted archive and the decryption password are embedded in the link.
+Links expire automatically within a few days (host-dependent).
 
 Source of truth:
   ${REPO_URL} (branch: ${BRANCH})
@@ -467,13 +478,23 @@ EOF
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --install)       SCRIPT_MODE="install" ;;
-            --update)        SCRIPT_MODE="update" ;;
-            --force-update)  FORCE_UPDATE=1 ;;
-            --skip-config)   SKIP_CONFIG=1 ;;
-            --repair)        REPAIR_ONLY=1 ;;
-            --help|-h)       show_help; exit 0 ;;
-            *)               die "Unknown argument: $1" ;;
+            --install)              SCRIPT_MODE="install" ;;
+            --update)               SCRIPT_MODE="update" ;;
+            --force-update)         FORCE_UPDATE=1 ;;
+            --skip-config)          SKIP_CONFIG=1 ;;
+            --repair)               REPAIR_ONLY=1 ;;
+            --backup-link)          SCRIPT_MODE="backup-link" ;;
+            --create-setup-link)    SCRIPT_MODE="backup-link" ;;
+            --restore)
+                if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
+                    die "--restore requires a setup link argument."
+                fi
+                RESTORE_LINK="$2"
+                SCRIPT_MODE="restore"
+                shift
+                ;;
+            --help|-h)              show_help; exit 0 ;;
+            *)                      die "Unknown argument: $1" ;;
         esac
         shift
     done
@@ -526,19 +547,18 @@ install_system_dependencies() {
 
     log_command "Installing required packages"
     apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
-        ca-certificates curl unzip rsync python3 python3-pip \
+        ca-certificates curl unzip rsync openssl \
+        python3 python3-pip \
         python3-venv python3-dev build-essential libssl-dev libffi-dev \
         libjpeg-dev zlib1g-dev software-properties-common
 
-    for cmd in python3 curl unzip rsync; do
+    for cmd in python3 curl unzip rsync openssl; do
         command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is not available."
     done
 
     log_success "System dependencies are installed."
 }
 
-# Ensure Python >= 3.11 is available. Prefer 3.13 → 3.12 → 3.11; install
-# from the deadsnakes PPA if the distro doesn't ship one.
 ensure_modern_python() {
     local py candidate=""
 
@@ -554,7 +574,6 @@ ensure_modern_python() {
     done
 
     if [[ -z "${candidate}" ]]; then
-        # If system python3 is already >= 3.11, use it.
         if command -v python3 >/dev/null 2>&1 && \
            python3 -c \
                "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
@@ -1793,6 +1812,387 @@ edit_all_config_keys() {
 }
 
 # ============================================================
+# Setup Link — Shared helpers
+# ============================================================
+
+parse_setup_link() {
+    # $1 = full link, $2 = url_out_var, $3 = password_out_var
+    local link="$1"
+    local url_var="$2"
+    local pass_var="$3"
+
+    local url="${link%%#*}"
+    local password="${link##*#}"
+
+    if [[ -z "$url" || -z "$password" || "$url" == "$link" ]]; then
+        return 1
+    fi
+
+    if [[ ! "$url" =~ ^https?:// ]]; then
+        return 1
+    fi
+
+    printf -v "$url_var" '%s' "$url"
+    printf -v "$pass_var" '%s' "$password"
+    return 0
+}
+
+read_setup_link_from_tty() {
+    local target_var="$1"
+    local value=""
+
+    printf '\n' > /dev/tty
+    printf '%bPaste the Setup Link from the source server:%b\n' \
+        "${BOLD}" "${NC}" > /dev/tty
+    printf 'Format: https://host/file#password\n\n' > /dev/tty
+    printf 'Setup link: ' > /dev/tty
+
+    if ! IFS= read -r value <&3; then
+        return 1
+    fi
+
+    value="$(printf '%s' "$value" | tr -d '[:space:]')"
+
+    if [[ -z "$value" ]]; then
+        return 1
+    fi
+
+    printf -v "$target_var" '%s' "$value"
+    return 0
+}
+
+# ============================================================
+# Setup Link — Create (source server)
+# ============================================================
+
+create_setup_link() {
+    draw_step "Creating Setup Link"
+
+    [[ -d "$INSTALL_DIR" ]] || die "VeloraBot is not installed on this server."
+    [[ -f "$CONFIG_FILE" ]] || die "config.py not found."
+    [[ -d "$DATA_DIR" ]] || die "data/ folder not found."
+
+    command -v openssl >/dev/null 2>&1 || \
+        apt-get -o DPkg::Lock::Timeout=120 install -y -qq openssl >/dev/null 2>&1
+    command -v openssl >/dev/null 2>&1 || die "openssl is required."
+
+    # Stop service to get consistent snapshot
+    stop_service_if_active
+
+    local work_dir="$TEMP_ROOT/setup-link"
+    rm -rf "$work_dir"
+    mkdir -p "$work_dir"
+
+    # ─── Pack data/ + config.py ───
+    log_info "Packing data/ and config.py..."
+    if ! tar -czf "$work_dir/setup.tar.gz" \
+        -C "$INSTALL_DIR" \
+        data config.py 2>>"$LOG_FILE"; then
+        if (( SERVICE_WAS_ACTIVE == 1 )); then
+            systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+        fi
+        die "Failed to pack files."
+    fi
+
+    local raw_size
+    raw_size="$(du -h "$work_dir/setup.tar.gz" | cut -f1)"
+    log_info "Archive size: $raw_size"
+
+    # ─── Random password ───
+    local password
+    password="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)"
+
+    # ─── Encrypt ───
+    log_info "Encrypting archive (AES-256-CBC, PBKDF2)..."
+    if ! openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
+        -in "$work_dir/setup.tar.gz" \
+        -out "$work_dir/setup.enc" \
+        -pass "pass:$password" 2>>"$LOG_FILE"; then
+
+        if (( SERVICE_WAS_ACTIVE == 1 )); then
+            systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+        fi
+        die "Failed to encrypt archive."
+    fi
+
+    local enc_size
+    enc_size="$(du -h "$work_dir/setup.enc" | cut -f1)"
+    log_info "Encrypted size: $enc_size"
+
+    # ─── Upload ───
+    log_info "Uploading to temporary file host..."
+
+    local upload_url=""
+    local host_name=""
+    local file_name
+    file_name="velora-setup-$(date +%s)-$(openssl rand -hex 4).enc"
+
+    # Try 1: transfer.sh
+    upload_url="$(curl -fsSL --max-time 180 \
+        --upload-file "$work_dir/setup.enc" \
+        "https://transfer.sh/$file_name" 2>>"$LOG_FILE" || true)"
+
+    if [[ "$upload_url" =~ ^https?://transfer\.sh ]]; then
+        host_name="transfer.sh"
+    else
+        upload_url=""
+    fi
+
+    # Try 2: bashupload.com
+    if [[ -z "$upload_url" ]]; then
+        log_info "transfer.sh unavailable, trying bashupload.com..."
+        local resp
+        resp="$(curl -fsSL --max-time 180 \
+            --upload-file "$work_dir/setup.enc" \
+            "https://bashupload.com/$file_name" 2>>"$LOG_FILE" || true)"
+
+        upload_url="$(printf '%s' "$resp" | grep -oP 'https?://bashupload\.com/\S+' | head -n1 || true)"
+
+        if [[ -n "$upload_url" ]]; then
+            host_name="bashupload.com"
+        fi
+    fi
+
+    # Try 3: 0x0.st
+    if [[ -z "$upload_url" ]]; then
+        log_info "bashupload unavailable, trying 0x0.st..."
+        upload_url="$(curl -fsSL --max-time 180 \
+            -H "User-Agent: VeloraBot-Installer/1.0 (https://github.com/navidmn56/VeloraBot)" \
+            -F "file=@$work_dir/setup.enc" \
+            "https://0x0.st" 2>>"$LOG_FILE" || true)"
+
+        if [[ ! "$upload_url" =~ ^https?:// ]]; then
+            upload_url=""
+        else
+            host_name="0x0.st"
+        fi
+    fi
+
+    # Restart service
+    if (( SERVICE_WAS_ACTIVE == 1 )); then
+        systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+
+    if [[ -z "$upload_url" ]]; then
+        log_error "Failed to upload the encrypted archive to any host."
+        log_error ""
+        log_error "Local archive (keep it safe):"
+        log_error "  $work_dir/setup.enc"
+        log_error ""
+        log_error "Password:"
+        log_error "  $password"
+        return 1
+    fi
+
+    # ─── Compose link ───
+    local setup_link="${upload_url}#${password}"
+
+    # ─── Show ───
+    draw_header "Setup Link Ready"
+
+    printf '%b🔒 IMPORTANT:%b This link contains your FULL data + config.\n' \
+        "${YELLOW}${BOLD}" "${NC}"
+    printf '%bKeep it secret. Anyone with this link can restore your bot.%b\n\n' \
+        "${YELLOW}" "${NC}"
+
+    printf '%b🔗 Setup Link:%b\n' "${BOLD}" "${NC}"
+    printf '%b%s%b\n\n' "${GREEN}" "$setup_link" "${NC}"
+
+    printf '%bDetails:%b\n' "${BOLD}" "${NC}"
+    printf '  Host         : %s\n' "$host_name"
+    printf '  Encrypted    : %s\n' "$enc_size"
+    printf '  Encryption   : AES-256-CBC + PBKDF2\n'
+    printf '  Retention    : a few days (host-dependent)\n'
+    printf '\n'
+
+    printf '%bHow to restore on another server:%b\n' "${BOLD}" "${NC}"
+    printf '  sudo bash %s --restore "%s"\n' "$(basename "$0")" "$setup_link"
+    printf '\n'
+
+    log_success "Setup link created successfully."
+    return 0
+}
+
+# ============================================================
+# Setup Link — Download & Decrypt
+# ============================================================
+
+download_and_decrypt_setup() {
+    # $1 = url, $2 = password, $3 = output_staging_dir
+    local url="$1"
+    local password="$2"
+    local staging="$3"
+
+    command -v openssl >/dev/null 2>&1 || \
+        apt-get -o DPkg::Lock::Timeout=120 install -y -qq openssl >/dev/null 2>&1
+    command -v openssl >/dev/null 2>&1 || die "openssl is required."
+
+    local work_dir="$TEMP_ROOT/restore"
+    rm -rf "$work_dir"
+    mkdir -p "$work_dir"
+
+    # ─── Download ───
+    log_info "Downloading encrypted archive..."
+    if ! curl -fsSL --max-time 300 \
+        -H "User-Agent: VeloraBot-Installer/1.0" \
+        -o "$work_dir/setup.enc" \
+        "$url" 2>>"$LOG_FILE"; then
+        die "Failed to download the setup archive."
+    fi
+
+    [[ -s "$work_dir/setup.enc" ]] || die "Downloaded archive is empty."
+
+    local enc_size
+    enc_size="$(du -h "$work_dir/setup.enc" | cut -f1)"
+    log_success "Downloaded: $enc_size"
+
+    # ─── Decrypt ───
+    log_info "Decrypting archive..."
+    if ! openssl enc -d -aes-256-cbc -salt -pbkdf2 -iter 100000 \
+        -in "$work_dir/setup.enc" \
+        -out "$work_dir/setup.tar.gz" \
+        -pass "pass:$password" 2>>"$LOG_FILE"; then
+        die "Failed to decrypt archive. The link may be invalid or expired."
+    fi
+    log_success "Decryption successful."
+
+    # ─── Extract ───
+    rm -rf "$staging"
+    mkdir -p "$staging"
+
+    if ! tar -xzf "$work_dir/setup.tar.gz" -C "$staging" 2>>"$LOG_FILE"; then
+        die "Failed to extract the archive."
+    fi
+
+    # ─── Validate ───
+    [[ -d "$staging/data" ]] || die "Archive is missing data/ folder."
+    [[ -f "$staging/config.py" ]] || die "Archive is missing config.py."
+
+    log_success "Archive contents validated."
+    return 0
+}
+
+# ============================================================
+# Setup Link — Restore (target server)
+# ============================================================
+
+restore_from_setup_link() {
+    local setup_link="$1"
+
+    draw_step "Restoring from Setup Link"
+
+    [[ -n "$setup_link" ]] || die "Setup link was not provided."
+
+    local url=""
+    local password=""
+
+    if ! parse_setup_link "$setup_link" url password; then
+        die "Invalid setup link. Expected format: https://host/file#password"
+    fi
+
+    log_info "URL      : ${url}"
+    log_info "Password : (${#password} chars)"
+
+    # ─── Download & Decrypt ───
+    local staging="$TEMP_ROOT/staging-restore"
+    download_and_decrypt_setup "$url" "$password" "$staging"
+
+    # ─── Determine existing install ───
+    local has_install=0
+    if [[ -d "$INSTALL_DIR" && -f "$INSTALL_DIR/main.py" ]]; then
+        has_install=1
+    fi
+
+    # ─── Install or Update release files ───
+    if (( has_install == 0 )); then
+        log_warning "VeloraBot is not installed. Deploying fresh files first..."
+
+        prepare_install_directory
+        rsync -a "$RELEASE_ROOT/" "$INSTALL_DIR/"
+
+        create_virtual_environment_if_needed
+        install_requirements
+    else
+        log_info "Existing installation detected. Updating release files..."
+        stop_service_if_active
+
+        # Take a safety backup of the existing config/data
+        local safety_backup
+        safety_backup="${BACKUP_ROOT}/pre-restore-$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$safety_backup"
+
+        if [[ -d "$DATA_DIR" ]]; then
+            tar -czf "$safety_backup/data.tar.gz" -C "$INSTALL_DIR" data 2>>"$LOG_FILE" || true
+        fi
+        if [[ -f "$CONFIG_FILE" ]]; then
+            cp -a "$CONFIG_FILE" "$safety_backup/config.py" 2>/dev/null || true
+        fi
+
+        log_info "Safety backup: $safety_backup"
+
+        # Sync release files (preserving data/, .venv/)
+        local excludes=()
+        while IFS= read -r line; do excludes+=("$line"); done < <(rsync_excludes_update)
+
+        rsync -a --delete "${excludes[@]}" \
+            "$RELEASE_ROOT/" "$INSTALL_DIR/"
+
+        create_virtual_environment_if_needed
+        install_requirements
+    fi
+
+    # ─── Stop service before replacing data ───
+    stop_service_if_active
+
+    # ─── Replace data/ ───
+    log_info "Replacing data/ ..."
+    rm -rf "$DATA_DIR"
+    mkdir -p "$DATA_DIR"
+    rsync -a "$staging/data/" "$DATA_DIR/"
+
+    # ─── Replace config.py ───
+    log_info "Replacing config.py ..."
+    cp -a "$staging/config.py" "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+
+    # ─── Ensure data/configs.json exists ───
+    ensure_data_configs_file
+
+    # ─── Fix permissions ───
+    fix_permissions
+
+    # ─── Validate config syntax ───
+    if ! "${VENV_DIR}/bin/python" -m py_compile "$CONFIG_FILE" >/dev/null 2>&1; then
+        log_warning "config.py contains a syntax error!"
+        log_warning "Restore aborted to avoid breaking the service."
+        return 1
+    fi
+
+    # ─── Setup systemd service ───
+    create_systemd_service
+
+    # ─── Start service ───
+    if ! start_service_and_check; then
+        log_error "Restore completed, but the service failed to start."
+        log_error "Check the logs with: journalctl -u $SERVICE_NAME -n 100"
+        return 1
+    fi
+
+    # ─── Write version file ───
+    write_version_file
+    CURRENT_VERSION="$LATEST_VERSION"
+
+    draw_header "Restore Complete"
+    log_success "VeloraBot restored successfully from setup link."
+    printf 'URL         : %s\n' "$url"
+    printf 'Service     : active\n'
+    printf 'Data folder : replaced\n'
+    printf 'Config      : replaced\n'
+    printf '\n'
+    return 0
+}
+
+# ============================================================
 # Interactive management panel
 # ============================================================
 
@@ -1823,12 +2223,14 @@ show_management_panel() {
             printf '  4) Repair installation\n'
             printf '  5) Restart service\n'
             printf '  6) Show recent service logs\n'
+            printf '  7) %bCreate Setup Link (backup)%b\n' "${CYAN}" "${NC}"
             printf '  q) Quit\n'
         else
             printf 'Status             : %bNot installed%b\n' "${YELLOW}" "${NC}"
             printf 'Install directory  : %s\n' "${INSTALL_DIR}"
             printf '\n'
             printf '  1) Install VeloraBot\n'
+            printf '  2) %bRestore from Setup Link%b\n' "${CYAN}" "${NC}"
             printf '  q) Quit\n'
         fi
         printf '\n'
@@ -1853,8 +2255,17 @@ show_management_panel() {
                     FORCE_UPDATE=1
                     SCRIPT_MODE="update"
                     return 0
+                else
+                    # Restore from setup link
+                    local link=""
+                    if read_setup_link_from_tty link; then
+                        RESTORE_LINK="$link"
+                        SCRIPT_MODE="restore"
+                        return 0
+                    else
+                        log_warning "No link provided."
+                    fi
                 fi
-                log_warning "Not installed yet."
                 ;;
             3)
                 if (( has_install == 1 )); then
@@ -1890,6 +2301,12 @@ show_management_panel() {
                     journalctl -u "${SERVICE_NAME}" -n 50 --no-pager || true
                     local _d=""
                     read_tty "Press Enter to continue..." _d || true
+                fi
+                ;;
+            7)
+                if (( has_install == 1 )); then
+                    SCRIPT_MODE="backup-link"
+                    return 0
                 fi
                 ;;
             q|Q|quit|exit)
@@ -2723,6 +3140,24 @@ main() {
     fetch_latest_commit
     download_latest_commit
     read_current_version
+
+    # ─── Special modes: backup-link and restore ───
+    if [[ "${SCRIPT_MODE}" == "backup-link" ]]; then
+        create_setup_link || die "Failed to create setup link."
+        return 0
+    fi
+
+    if [[ "${SCRIPT_MODE}" == "restore" ]]; then
+        if [[ -z "${RESTORE_LINK}" ]]; then
+            if ! read_setup_link_from_tty RESTORE_LINK; then
+                die "No setup link provided."
+            fi
+        fi
+        restore_from_setup_link "${RESTORE_LINK}" || die "Restore failed."
+        show_final_summary
+        log_success "Restore finished successfully."
+        return 0
+    fi
 
     if (( REPAIR_ONLY == 1 )); then
         repair_only
