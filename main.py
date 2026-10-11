@@ -17308,7 +17308,7 @@ async def buy_specific_package(callback: CallbackQuery):
         'discount_percent': discount_percent,
         'inbound_ids': category_inbound_ids,
         'category_name': category.get('name'),
-        'category_name_en': category.get('name_en', category.get('name')),
+        'category_name_en': category.get('name_en') or '',
         'is_ready_package': True,
         'category_icon': category.get('icon', '📦'),
         'current_page': 'package_payment',
@@ -23631,14 +23631,18 @@ async def pay_card(callback: CallbackQuery):
             
             await send_config_with_qr_option(user_id, order_id, vol, days, 0, sub_link, lang)
             
-            category_display = f"{category_name} - " if is_ready_package else ""
+            # ✅ درست
+            if is_ready_package:
+                category_display_final = f"{category_display} - "
+            else:
+                category_display_final = ""
             volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-            
+                        
             if lang == "fa":
                 text = f"""
 ✅ <b>سرویس رایگان با موفقیت فعال شد!</b>
 
-{category_display}📦 حجم: {volume_display_text}
+{category_display_final}📦 حجم: {volume_display_text}
 ⏱ مدت: {days} روز
 🎁 روش پرداخت: رایگان (کوپن)
 💰 مبلغ پرداختی: ۰ تومان
@@ -23649,7 +23653,7 @@ async def pay_card(callback: CallbackQuery):
                 text = f"""
 ✅ <b>Free service activated successfully!</b>
 
-{category_display}📦 Volume: {volume_display_text}
+{category_display_final}📦 Volume: {volume_display_text}
 ⏱ Duration: {days} days
 🎁 Payment method: Free (Coupon)
 💰 Amount paid: 0 Toman
@@ -23736,7 +23740,7 @@ async def pay_card(callback: CallbackQuery):
 
 {premium_emoji('id', '🆔')} <b>شماره سفارش جدید:</b> #{order_id}
 
-{premium_emoji('config', icon)} <b>دسته:</b> {category_name}
+{premium_emoji('config', icon)} <b>دسته:</b> {category_display}
 {premium_emoji('config', '📦')} <b>حجم اضافه‌شده:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>مدت اضافه‌شده:</b> {days} روز
 {premium_emoji('money', '💰')} <b>مبلغ تمدید:</b> {price_display}
@@ -23755,7 +23759,7 @@ async def pay_card(callback: CallbackQuery):
 
 {premium_emoji('id', '🆔')} <b>New Order Number:</b> #{order_id}
 
-{premium_emoji('config', icon)} <b>Category:</b> {category_name}
+{premium_emoji('config', icon)} <b>Category:</b> {category_display}
 {premium_emoji('config', '📦')} <b>Volume to add:</b> {volume_display_text}
 {premium_emoji('time', '⏱')} <b>Duration to add:</b> {days} days
 {premium_emoji('money', '💰')} <b>Extension cost:</b> {price_display}
@@ -23772,7 +23776,7 @@ async def pay_card(callback: CallbackQuery):
             # ==================== خرید بسته آماده ====================
             if lang == "fa":
                 text = f"""
-{premium_emoji('config', icon)} <b>پرداخت بسته آماده: {category_name}</b>
+{premium_emoji('config', icon)} <b>پرداخت بسته آماده: {category_display}</b>
 
 {premium_emoji('id', '🆔')} <b>شماره سفارش:</b> #{order_id}
 
@@ -23790,7 +23794,7 @@ async def pay_card(callback: CallbackQuery):
 """
             else:
                 text = f"""
-{premium_emoji('config', icon)} <b>Ready Package Payment: {category_name}</b>
+{premium_emoji('config', icon)} <b>Ready Package Payment: {category_display}</b>
 
 {premium_emoji('id', '🆔')} <b>Order Number:</b> #{order_id}
 
@@ -24874,13 +24878,15 @@ async def pay_balance(callback: CallbackQuery):
             user_states[user_id].pop('coupon_discount', None)
         
         volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-        category_display = f"{category_name} - " if is_ready_package else ""
-        
+        if is_ready_package:
+            category_display_final = f"{category_display} - "
+        else:
+            category_display_final = ""        
         if lang == "fa":
             text = f"""
 ✅ <b>سرویس با موفقیت فعال شد!</b>
 
-{category_display}📦 حجم: {volume_display_text}
+{category_display_final}📦 حجم: {volume_display_text}
 ⏱ مدت: {days} روز
 💰 روش پرداخت: {payment_label}
 💰 مبلغ پرداختی: {final_price:,} تومان
@@ -24891,7 +24897,7 @@ async def pay_balance(callback: CallbackQuery):
             text = f"""
 ✅ <b>Service activated successfully!</b>
 
-{category_display}📦 Volume: {volume_display_text}
+{category_display_final}📦 Volume: {volume_display_text}
 ⏱ Duration: {days} days
 💰 Payment method: {payment_label}
 💰 Amount paid: {final_price:,} Toman
