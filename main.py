@@ -28094,19 +28094,33 @@ async def confirm_approve_package(callback: CallbackQuery):
             save_user_inbound_selection(uid, final_inbounds)
             logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی برای کاربر {uid} ذخیره شد: {final_inbounds}")
         
-        # ✅ استخراج اطلاعات کتگوری از state یا سفارش
-        _cat_id = category_id
-        _cat_name = category_name
-        _cat_name_en = order.get('category_name_en')
-        _pkg_id = package_id
+        # ✅ استخراج اطلاعات کتگوری از سفارش + state (با fallback امن)
+        _state = user_states.get(uid, {})
 
-        # اگه توی سفارش فعلی نداریم، از state بگیر
-        if not _cat_id:
-            _state = user_states.get(uid, {})
+        # ✅ از order اول (چون همیشه dict هست)
+        _cat_id = order.get('category_id')
+        _cat_name = order.get('category_name')
+        _cat_name_en = order.get('category_name_en')
+        _pkg_id = order.get('package_id')
+
+        # ✅ اگه توی سفارش نبود، از state بگیر
+        if _cat_id is None:
             _cat_id = _state.get('category_id')
-            _cat_name = _state.get('category_name') or _cat_name
-            _cat_name_en = _state.get('category_name_en') or _cat_name_en
-            _pkg_id = _state.get('package_id') or _pkg_id
+        if not _cat_name:
+            _cat_name = _state.get('category_name')
+        if not _cat_name_en:
+            _cat_name_en = _state.get('category_name_en')
+        if _pkg_id is None:
+            _pkg_id = _state.get('package_id')
+
+        # ✅ اگه هنوز category_name خالی بود، از READY_PACKAGES بگیر
+        if not _cat_name and _cat_id:
+            for cat in READY_PACKAGES.get('categories', []):
+                if cat.get('id') == _cat_id:
+                    _cat_name = cat.get('name')
+                    _cat_name_en = cat.get('name_en', _cat_name)
+                    logger.info(f"✅ category_name از READY_PACKAGES بازیابی شد: {_cat_name}")
+                    break
 
         success = await extend_service(
             parent_order_id, 
@@ -34261,7 +34275,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.7.26"
+    version = "v1.7.29"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
