@@ -13147,14 +13147,15 @@ async def extend_service(
     extra_volume: int, 
     extra_days: int,
     new_inbounds: list = None,
-    new_ip_limit: int = None
+    new_ip_limit: int = None,
+    new_category_id: int = None,          # ✅ جدید
+    new_category_name: str = None,        # ✅ جدید
+    new_category_name_en: str = None,     # ✅ جدید
+    new_package_id: int = None,           # ✅ جدید
 ) -> bool:
     """
-    تمدید سرویس موجود - افزایش حجم و روز + جایگزینی اینباندها
-    مراحل:
-    1. UPDATE برای حجم، تاریخ و IP
-    2. DETACH برای حذف اینباندهای اضافی
-    3. ATTACH برای اضافه کردن اینباندهای جدید
+    تمدید سرویس موجود - افزایش حجم و روز + جایزینی اینباندها
+    + آپدیت اطلاعات دسته در سفارش اصلی
     """
     logger.info(f"🔄 [extend_service] شروع تمدید سرویس - order_id={order_id}, user_id={user_id}")
     logger.info(f"   📦 حجم اضافی: {extra_volume}GB {'(نامحدود)' if extra_volume == 0 else ''}")
@@ -13309,14 +13310,32 @@ async def extend_service(
         logger.info(f"   ⏱ روز جدید: {new_days_total}")
         logger.info(f"   👤 محدودیت IP جدید: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
         logger.info(f"   📡 اینباندها: {selected_inbounds}")
-        
-        update_order(order_id, 
-                    volume=new_volume_total,
-                    days=new_days_total,
-                    inbound_id=selected_inbounds,
-                    ip_limit=final_ip_limit,
-                    updated_at=datetime.now().isoformat())
-        
+
+        # ✅ ساخت data برای آپدیت
+        update_data = {
+            'volume': new_volume_total,
+            'days': new_days_total,
+            'inbound_id': selected_inbounds,
+            'ip_limit': final_ip_limit,
+            'updated_at': datetime.now().isoformat(),
+        }
+
+        # ✅ اگه کتگوری جدید داریم، آپدیتش کن
+        if new_category_id is not None:
+            update_data['category_id'] = new_category_id
+            logger.info(f"   🏷️ کتگوری جدید: {new_category_name or new_category_id}")
+
+        if new_category_name:
+            update_data['category_name'] = new_category_name
+
+        if new_category_name_en:
+            update_data['category_name_en'] = new_category_name_en
+
+        if new_package_id is not None:
+            update_data['package_id'] = new_package_id
+
+        update_order(order_id, **update_data)
+
         if selected_inbounds:
             save_user_inbound_selection(user_id, selected_inbounds)
         
@@ -23186,8 +23205,20 @@ async def pay_card(callback: CallbackQuery):
                     reply_markup=get_back_only_keyboard(lang)
                 )
                 return
-            
-            success = await extend_service(extend_order_id, user_id, vol, days)
+
+            _state = user_states.get(user_id, {})
+            _cat_id = _state.get('category_id') or full_state.get('category_id')
+            _cat_name = _state.get('category_name') or full_state.get('category_name')
+            _cat_name_en = _state.get('category_name_en') or full_state.get('category_name_en')
+            _pkg_id = _state.get('package_id') or full_state.get('package_id')
+
+            success = await extend_service(
+                extend_order_id, user_id, vol, days,
+                new_category_id=_cat_id,
+                new_category_name=_cat_name,
+                new_category_name_en=_cat_name_en,
+                new_package_id=_pkg_id,
+            )
             if success:
                 order_id = create_order(user_id, vol, days, 0, "extend", ip_limit=ip_limit)
                 update_order(order_id, 
@@ -24280,13 +24311,24 @@ async def pay_balance(callback: CallbackQuery):
             )
             return
         
+        # ✅ استخراج اطلاعات کتگوری از state
+        _state = user_states.get(user_id, {})
+        _cat_id = _state.get('category_id') or full_state.get('category_id')
+        _cat_name = _state.get('category_name') or full_state.get('category_name')
+        _cat_name_en = _state.get('category_name_en') or full_state.get('category_name_en')
+        _pkg_id = _state.get('package_id') or full_state.get('package_id')
+
         success = await extend_service(
             extend_order_id, 
             user_id, 
             vol, 
             days,
             inbound_ids,
-            ip_limit
+            ip_limit,
+            new_category_id=_cat_id,
+            new_category_name=_cat_name,
+            new_category_name_en=_cat_name_en,
+            new_package_id=_pkg_id,
         )
         
         if success:
@@ -28052,13 +28094,31 @@ async def confirm_approve_package(callback: CallbackQuery):
             save_user_inbound_selection(uid, final_inbounds)
             logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی برای کاربر {uid} ذخیره شد: {final_inbounds}")
         
+        # ✅ استخراج اطلاعات کتگوری از state یا سفارش
+        _cat_id = category_id
+        _cat_name = category_name
+        _cat_name_en = order.get('category_name_en')
+        _pkg_id = package_id
+
+        # اگه توی سفارش فعلی نداریم، از state بگیر
+        if not _cat_id:
+            _state = user_states.get(uid, {})
+            _cat_id = _state.get('category_id')
+            _cat_name = _state.get('category_name') or _cat_name
+            _cat_name_en = _state.get('category_name_en') or _cat_name_en
+            _pkg_id = _state.get('package_id') or _pkg_id
+
         success = await extend_service(
             parent_order_id, 
             uid, 
             vol, 
             days,
             final_inbounds,
-            ip_limit
+            ip_limit,
+            new_category_id=_cat_id,
+            new_category_name=_cat_name,
+            new_category_name_en=_cat_name_en,
+            new_package_id=_pkg_id,
         )
         
         if success:
@@ -28385,10 +28445,20 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             callback,
             f"⏳ در حال تمدید سرویس #{parent_order_id}..."
         )
-        
-        # ✅ try/except برای extend_service
+        _state = user_states.get(uid, {})
+        _cat_id = order.get('category_id') or _state.get('category_id')
+        _cat_name = order.get('category_name') or _state.get('category_name')
+        _cat_name_en = order.get('category_name_en') or _state.get('category_name_en')
+        _pkg_id = order.get('package_id') or _state.get('package_id')
+
         try:
-            success = await extend_service(parent_order_id, uid, vol, days)
+            success = await extend_service(
+                parent_order_id, uid, vol, days,
+                new_category_id=_cat_id,
+                new_category_name=_cat_name,
+                new_category_name_en=_cat_name_en,
+                new_package_id=_pkg_id,
+            )
         except Exception as e:
             logger.error(f"❌ خطا در extend_service: {e}", exc_info=True)
             success = False
@@ -29091,7 +29161,7 @@ async def my_configs(callback: CallbackQuery):
                 style="success"
             )],
             [InlineKeyboardButton(
-                text="🏠 منو اصلی" if lang == "fa" else "🏠 Main Menu",
+                text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                 callback_data="back_to_main",
                 style="danger"
             )]
@@ -29253,16 +29323,15 @@ async def my_configs(callback: CallbackQuery):
             style="success" if is_active else "danger"
         )])
 
-    # خرید سرویس
     buttons.append([InlineKeyboardButton(
         text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
         callback_data="buy_service",
         style="primary"
     )])
 
-    # منو اصلی
+    
     buttons.append([InlineKeyboardButton(
-        text="🏠 منو اصلی" if lang == "fa" else "🏠 Main Menu",
+        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
         callback_data="back_to_main",
         style="danger"
     )])
