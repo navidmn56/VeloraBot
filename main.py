@@ -15779,6 +15779,33 @@ def add_coupon_fields_to_user(user_id: int):
                 logger.error(f"❌ خطا در ذخیره فیلدهای کوپن: {e}")
             
             
+def safe_html(text: str, max_length: int = 100) -> str:
+    """
+    امن‌سازی امن برای نمایش متن کاربر در HTML
+    
+    Args:
+        text: متن ورودی کاربر
+        max_length: حداکثر طول مجاز
+    
+    Returns:
+        متن امن برای استفاده در parse_mode=HTML
+    """
+    if text is None:
+        return ""
+    
+    # تبدیل به string
+    text = str(text).strip()
+    
+    # محدودیت طول (برای جلوگیری از اسپم)
+    if len(text) > max_length:
+        text = text[:max_length] + "..."
+    
+    # حذف کاراکترهای کنترلی
+    text = ''.join(c for c in text if c.isprintable() or c in ' \t')
+    
+    # escape کردن HTML
+    return html.escape(text, quote=True)
+
 
 @dp.message(F.text.regexp(r'^/use_coupon(?:_|\s+|@\w+)'))
 async def use_coupon(message: Message):
@@ -15861,13 +15888,17 @@ async def use_coupon(message: Message):
         elif code_title in COUPONS:
             suggestion = code_title
 
+        # ✅ امن‌سازی ورودی کاربر
+        code_safe = safe_html(code, max_length=50)
+        suggestion_safe = safe_html(suggestion, max_length=50) if suggestion else ""
+        
         if suggestion:
             await message.reply(
-                f"❌ کد کوپن <code>{code}</code> یافت نشد!\n"
-                f"💡 آیا منظور شما <code>{suggestion}</code> بود؟\n\n"
+                f"❌ کد کوپن <code>{code_safe}</code> یافت نشد!\n"
+                f"💡 آیا منظور شما <code>{suggestion_safe}</code> بود؟\n\n"
                 f"⚠️ کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!" if lang == "fa" else
-                f"❌ Coupon code <code>{code}</code> not found!\n"
-                f"💡 Did you mean <code>{suggestion}</code>?\n\n"
+                f"❌ Coupon code <code>{code_safe}</code> not found!\n"
+                f"💡 Did you mean <code>{suggestion_safe}</code>?\n\n"
                 f"⚠️ Coupon code is <b>case-sensitive</b>!",
                 parse_mode=ParseMode.HTML,
                 reply_markup=back_button
@@ -15875,9 +15906,9 @@ async def use_coupon(message: Message):
             return
 
         await message.reply(
-            f"❌ کوپن <code>{code}</code> یافت نشد!\n\n"
+            f"❌ کوپن <code>{code_safe}</code> یافت نشد!\n\n"
             f"⚠️ کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!" if lang == "fa" else
-            f"❌ Coupon <code>{code}</code> not found!\n\n"
+            f"❌ Coupon <code>{code_safe}</code> not found!\n\n"
             f"⚠️ Coupon code is <b>case-sensitive</b>!",
             parse_mode=ParseMode.HTML,
             reply_markup=back_button
@@ -16133,14 +16164,18 @@ async def handle_coupon_code_input(message: Message):
         elif code_title in COUPONS:
             suggestion = code_title
 
+        # ✅ امن‌سازی
+        code_safe = safe_html(code, max_length=50)
+        suggestion_safe = safe_html(suggestion, max_length=50) if suggestion else ""
+        
         if suggestion:
             await message.reply(
-                f"❌ کد کوپن <code>{code}</code> یافت نشد!\n"
-                f"💡 آیا منظور شما <code>{suggestion}</code> بود؟\n\n"
+                f"❌ کد کوپن <code>{code_safe}</code> یافت نشد!\n"
+                f"💡 آیا منظور شما <code>{suggestion_safe}</code> بود؟\n\n"
                 f"⚠️ کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!"
                 if lang == "fa"
-                else f"❌ Coupon code <code>{code}</code> not found!\n"
-                     f"💡 Did you mean <code>{suggestion}</code>?\n\n"
+                else f"❌ Coupon code <code>{code_safe}</code> not found!\n"
+                     f"💡 Did you mean <code>{suggestion_safe}</code>?\n\n"
                      f"⚠️ Coupon code is <b>case-sensitive</b>!",
                 parse_mode=ParseMode.HTML,
                 reply_markup=back_button
@@ -16148,10 +16183,10 @@ async def handle_coupon_code_input(message: Message):
             return
 
         await message.reply(
-            f"❌ کوپن <code>{code}</code> یافت نشد!\n\n"
+            f"❌ کوپن <code>{code_safe}</code> یافت نشد!\n\n"
             f"⚠️ کد کوپن به <b>حروف بزرگ و کوچک</b> حساس است!"
             if lang == "fa"
-            else f"❌ Coupon <code>{code}</code> not found!\n\n"
+            else f"❌ Coupon <code>{code_safe}</code> not found!\n\n"
                  f"⚠️ Coupon code is <b>case-sensitive</b>!",
             parse_mode=ParseMode.HTML,
             reply_markup=back_button
@@ -24818,31 +24853,85 @@ async def pay_balance(callback: CallbackQuery):
     
     # ✅ بررسی موجودی کافی (برای خریدهای غیر رایگان)
     if final_price > 0 and balance < final_price:
+        # ==================== 0) حذف پیام بسته ====================
+        try:
+            await callback.message.delete()
+            logger.info(f"🗑 پیام بسته آماده برای کاربر {user_id} حذف شد")
+        except Exception as e:
+            logger.debug(f"نتوانست پیام را حذف کند: {e}")
+        
+        # ==================== محاسبه کمبود ====================
+        shortage = final_price - balance
+        
+        # ==================== 1) آلرت ====================
+        if lang == "fa":
+            alert_text = f"⚠️ کسری: {shortage:,} تومان"
+        else:
+            alert_text = f"⚠️ Shortage: {shortage:,} Toman"        
+        try:
+            await callback.answer(alert_text, show_alert=False)
+        except Exception as e:
+            logger.warning(f"⚠️ خطا در نمایش alert: {e}")
+        
+        # ==================== 2) استیکر ====================
         try:
             insufficient_sticker = "CAACAgIAAxkBAAERYtdqLYNgjzOUQi8uRFj-ZxHiOhEZvwACRh4AAvyUOEnTIzZfgD7FIDwE"
             await callback.message.answer_sticker(insufficient_sticker)
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"⚠️ خطا در ارسال استیکر: {e}")
         
+        # ==================== 3) متن + دکمه‌ها ====================
         if lang == "fa":
-            price_display = f"{final_price:,} تومان"
-            if discount_percent > 0:
-                price_display = f"{final_price:,} تومان (تخفیف {discount_percent}%)"
+            text = (
+                f"⚠️ <b>موجودی کافی نیست.</b>\n"
+                f"‏\n"
+                f"‏قیمت: <b>{final_price:,} تومان</b>\n"
+                f"‏موجودی شما: <b>{balance:,} تومان</b>\n"
+                f"‏کسری: <b>{shortage:,} تومان</b>"
+            )
+            btn_increase = "➕ افزایش موجودی"
+            btn_main = "🏠 منوی اصلی"
         else:
-            price_display = f"{final_price:,} Toman"
-            if discount_percent > 0:
-                price_display = f"{final_price:,} Toman ({discount_percent}% off)"        
+            text = (
+                f"⚠️ <b>Insufficient balance.</b>\n"
+                f"‏\n"
+                f"‏Price: <b>{final_price:,} Toman</b>\n"
+                f"‏Your balance: <b>{balance:,} Toman</b>\n"
+                f"‏Shortage: <b>{shortage:,} Toman</b>"
+            )
+            btn_increase = "➕ Increase Balance"
+            btn_main = "🏠 Main Menu"
         
-        msg = f"❌ موجودی کافی نیست!\n💰 موجودی شما: {balance:,} تومان\n💰 قیمت سرویس: {price_display}" if lang == "fa" else f"❌ Insufficient balance!\n💰 Your balance: {balance:,} Toman\n💰 Service price: {price_display}"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=btn_increase,
+                callback_data="increase_balance",
+                style="success"
+            )],
+            [InlineKeyboardButton(
+                text=btn_main,
+                callback_data="back_to_main",
+                style="primary"
+            )]
+        ])
         
+        try:
+            await callback.message.answer(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"❌ خطا در ارسال پیام: {e}", exc_info=True)
+        
+        # ==================== 4) لاگ ====================
         if log_system:
             await log_system.log_user_action(
-                user_id, 
-                "خطا در پرداخت از موجودی", 
-                f"موجودی: {balance:,} | نیاز: {final_price:,} | وضعیت: موجودی ناکافی"
+                user_id,
+                "موجودی ناکافی",
+                f"موجودی: {balance:,} | نیاز: {final_price:,} | کسری: {shortage:,}"
             )
         
-        await callback.answer(msg, show_alert=True)
         return
     
     # ✅ کسر موجودی (فقط اگر قیمت > 0)
