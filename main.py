@@ -14619,7 +14619,7 @@ def get_feedback_keyboard(order_id: int, lang: str = "fa") -> InlineKeyboardMark
                 InlineKeyboardButton(text="😐 متوسط", callback_data=f"feedback_medium_{order_id}"),
                 InlineKeyboardButton(text="😞 بد بود", callback_data=f"feedback_bad_{order_id}")
             ],
-            [InlineKeyboardButton(text=f"🔙 صفحه اصلی", callback_data="back_to_main", style="danger")]
+            [InlineKeyboardButton(text=f"🏠 منوی اصلی", callback_data="back_to_main", style="danger")]
         ])
     else:
         return InlineKeyboardMarkup(inline_keyboard=[
@@ -14628,13 +14628,13 @@ def get_feedback_keyboard(order_id: int, lang: str = "fa") -> InlineKeyboardMark
                 InlineKeyboardButton(text="😐 Average", callback_data=f"feedback_medium_{order_id}"),
                 InlineKeyboardButton(text="😞 Bad", callback_data=f"feedback_bad_{order_id}")
             ],
-            [InlineKeyboardButton(text=f"🔙 Main Menu", callback_data="back_to_main", style="danger")]
+            [InlineKeyboardButton(text=f"🏠 Main Menu", callback_data="back_to_main", style="danger")]
         ])
 
 def get_feedback_comment_keyboard(order_id: int, lang: str = "fa") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"❌ {'بدون نظر' if lang=='fa' else 'No Comment'}", callback_data=f"feedback_nocomment_{order_id}")],
-        [InlineKeyboardButton(text=f"🔙 {'صفحه اصلی' if lang=='fa' else 'Main Menu'}", callback_data="back_to_main", style="danger")]
+        [InlineKeyboardButton(text=f"🏠 {'منوی اصلی' if lang=='fa' else 'Main Menu'}", callback_data="back_to_main", style="danger")]
     ])
 
 def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
@@ -14694,7 +14694,7 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="🧹 پاکسازی لاگ", callback_data="admin_clear_logs"),
                 InlineKeyboardButton(text="🔒 عضویت اجباری", callback_data="admin_force_join"),
-                InlineKeyboardButton(text="🔙 صفحه اصلی", callback_data="back_to_main", style="danger")
+                InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="back_to_main", style="danger")
             ]
         ])
     else:
@@ -14753,7 +14753,7 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="🧹 Clear Logs", callback_data="admin_clear_logs"),
                 InlineKeyboardButton(text="🔒 Force Join", callback_data="admin_force_join"),
-                InlineKeyboardButton(text="🔙 Main Menu", callback_data="back_to_main", style="danger")
+                InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_main", style="danger")
             ]
         ])
         
@@ -23430,26 +23430,33 @@ async def pay_card(callback: CallbackQuery):
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
         inbound_ids = full_state.get('inbound_ids', [])
+        if not isinstance(inbound_ids, list):
+            inbound_ids = [inbound_ids] if inbound_ids else []
         category_id = full_state.get('category_id')
         package_id = full_state.get('package_id')
 
-        # ✅ category_name با fallback چند مرحله‌ای
-        category_name = (
-            full_state.get('category_name', '')
-            if lang == 'fa'
-            else full_state.get('category_name_en', '')
-        )
+        # ✅ هر دو اسم رو بگیر، مستقل از زبان
+        category_name = full_state.get('category_name', '') or ''
+        category_name_en = full_state.get('category_name_en', '') or ''
 
-        # اگه state خالی بود → از READY_PACKAGES
-        if not category_name and category_id:
+        # اگه یکی از اسم‌ها خالی بود → از READY_PACKAGES پر کن
+        if (not category_name or not category_name_en) and category_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == category_id:
-                    category_name = (
-                        cat.get('name') if lang == 'fa'
-                        else cat.get('name_en', cat.get('name'))
-                    )
-                    logger.info(f"✅ category_name از READY_PACKAGES بازیابی شد: {category_name}")
+                    if not category_name:
+                        category_name = cat.get('name') or ''
+                    if not category_name_en:
+                        category_name_en = cat.get('name_en') or cat.get('name') or ''
                     break
+
+        # اگه هنوز خالی → پیش‌فرض
+        if not category_name:
+            category_name = "بسته آماده"
+        if not category_name_en:
+            category_name_en = "Ready Package"
+
+        # ✅ برای نمایش توی متن، بر اساس زبان انتخاب کن
+        category_display = category_name if lang == 'fa' else category_name_en
         ip_limit = full_state.get('ip_limit', 0)
         order_type = "ready_package"
         
@@ -23498,8 +23505,14 @@ async def pay_card(callback: CallbackQuery):
             _cat_name_en = _state.get('category_name_en') or full_state.get('category_name_en')
             _pkg_id = _state.get('package_id') or full_state.get('package_id')
 
+            # ✅ چک اینباندها
+            if not isinstance(inbound_ids, list):
+                inbound_ids = [inbound_ids] if inbound_ids else []
+
             success = await extend_service(
                 extend_order_id, user_id, vol, days,
+                new_inbounds=inbound_ids,        # ✅ اضافه شد
+                new_ip_limit=ip_limit,           # ✅ اضافه شد
                 new_category_id=_cat_id,
                 new_category_name=_cat_name,
                 new_category_name_en=_cat_name_en,
@@ -23518,6 +23531,7 @@ async def pay_card(callback: CallbackQuery):
                     update_order(order_id, 
                                 category_id=category_id,
                                 category_name=category_name,
+                                category_name_en=category_name_en,
                                 package_id=package_id,
                                 inbound_id=inbound_ids)
                 
@@ -23595,6 +23609,7 @@ async def pay_card(callback: CallbackQuery):
             update_order(order_id, 
                         category_id=category_id,
                         category_name=category_name,
+                        category_name_en=category_name_en,
                         package_id=package_id,
                         inbound_id=inbound_ids)
         
@@ -23665,6 +23680,7 @@ async def pay_card(callback: CallbackQuery):
         update_order(order_id, 
                     category_id=category_id,
                     category_name=category_name,
+                    category_name_en=category_name_en,
                     package_id=package_id,
                     inbound_id=inbound_ids,
                     status='awaiting_payment',
@@ -24446,23 +24462,28 @@ async def pay_balance(callback: CallbackQuery):
         category_id = full_state.get('category_id')
         package_id = full_state.get('package_id')
 
-        # ✅ category_name با fallback چند مرحله‌ای
-        category_name = (
-            full_state.get('category_name', '')
-            if lang == 'fa'
-            else full_state.get('category_name_en', '')
-        )
+        # ✅ هر دو اسم رو بگیر، مستقل از زبان
+        category_name = full_state.get('category_name', '') or ''
+        category_name_en = full_state.get('category_name_en', '') or ''
 
-        # اگه state خالی بود → از READY_PACKAGES
-        if not category_name and category_id:
+        # اگه یکی از اسم‌ها خالی بود → از READY_PACKAGES پر کن
+        if (not category_name or not category_name_en) and category_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == category_id:
-                    category_name = (
-                        cat.get('name') if lang == 'fa'
-                        else cat.get('name_en', cat.get('name'))
-                    )
-                    logger.info(f"✅ category_name از READY_PACKAGES بازیابی شد: {category_name}")
+                    if not category_name:
+                        category_name = cat.get('name') or ''
+                    if not category_name_en:
+                        category_name_en = cat.get('name_en') or cat.get('name') or ''
                     break
+
+        # اگه هنوز خالی → پیش‌فرض
+        if not category_name:
+            category_name = "بسته آماده"
+        if not category_name_en:
+            category_name_en = "Ready Package"
+
+        # ✅ برای نمایش توی متن، بر اساس زبان انتخاب کن
+        category_display = category_name if lang == 'fa' else category_name_en
         order_type = "ready_package"
         
         volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
@@ -24562,6 +24583,7 @@ async def pay_balance(callback: CallbackQuery):
         update_order(order_id, 
                     category_id=category_id,
                     category_name=category_name,
+                    category_name_en=category_name_en,
                     package_id=package_id)
     
     if is_extend and extend_order_id:
@@ -26386,18 +26408,32 @@ async def approve_receipt(callback: CallbackQuery):
             callback_data="admin_orders"
         )])
         
-        category_name = order.get('category_name')
+        category_name = order.get('category_name') or ''
+        category_name_en = order.get('category_name_en') or ''
         package_id = order.get('package_id')
         category_id = order.get('category_id')
         
         order_info = "🛒 سفارش معمولی"
-        if category_name:
+        if category_name or category_name_en:
+            # اگه یکی خالی بود، از READY_PACKAGES پر کن
+            if (not category_name or not category_name_en) and category_id:
+                for cat in READY_PACKAGES.get('categories', []):
+                    if cat.get('id') == category_id:
+                        if not category_name:
+                            category_name = cat.get('name') or ''
+                        if not category_name_en:
+                            category_name_en = cat.get('name_en') or cat.get('name') or ''
+                        break
+
             icon = "📦"
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == category_id:
                     icon = cat.get('icon', '📦')
                     break
-            cat_name_escaped = html.escape(category_name)
+
+            # ✅ نمایش بر اساس زبان ادمین
+            category_display = category_name if lang == 'fa' else category_name_en
+            cat_name_escaped = html.escape(category_display or 'Ready Package')
             order_info = f"{icon} بسته آماده: {cat_name_escaped}"
         
         extend_status = "🔄 <b>تمدید سرویس</b>" if is_extend else "🆕 <b>خرید جدید</b>"
@@ -27205,7 +27241,7 @@ async def apply_coupon_page(callback: CallbackQuery):
                     style="success"
                 )],
                 [InlineKeyboardButton(
-                    text="🔙 برگشت",
+                    text="🏠 منوی اصلی",
                     callback_data="back_to_main"
                 )]
             ]
@@ -27233,7 +27269,7 @@ You have an active coupon:
                     style="success"
                 )],
                 [InlineKeyboardButton(
-                    text="🔙 Back",
+                    text="🏠 Main Menu",
                     callback_data="back_to_main"
                 )]
             ]
@@ -27260,7 +27296,7 @@ You have an active coupon:
             f"{premium_emoji('light', '💡')} کوپن‌ها را می‌توانید از کانال‌های اطلاع‌رسانی یا از ادمین دریافت کنید.\n\n"
             f"❌ برای انصراف /cancel را بفرستید."
         )
-        back_btn_text = "🔙 برگشت به منو"
+        back_btn_text = "🏠 منوی اصلی"
     else:
         text = (
             f"{premium_emoji('gift', '🏷️')} <b>Apply Discount Coupon</b>\n\n"
@@ -27269,7 +27305,7 @@ You have an active coupon:
             f"{premium_emoji('light', '💡')} Coupons can be obtained through announcement channels or from the admin.\n\n"
             f"❌ Send /cancel to abort."
         )
-        back_btn_text = "🔙 Back to Menu"
+        back_btn_text = "🏠 Main Menu"
 
     buttons = [
         [InlineKeyboardButton(
@@ -29253,14 +29289,27 @@ async def handle_wrong_file_type(message: Message):
 def get_order_category_name(order: dict, lang: str = "fa") -> str:
     """
     دریافت نام دسته برای یک سفارش - با fallback چند مرحله‌ای
-    1. از category_name خود سفارش
+    1. از category_name_en / category_name خود سفارش (بر اساس زبان)
     2. از READY_PACKAGES با category_id
     3. رشته خالی
     """
-    # 1️⃣ مستقیم از سفارش
-    name = order.get('category_name')
-    if name and str(name).strip():
-        return str(name).strip()
+    # 1️⃣ مستقیم از سفارش (بر اساس زبان)
+    if lang == "en":
+        name_en = order.get('category_name_en')
+        if name_en and str(name_en).strip():
+            return str(name_en).strip()
+        # fallback به فارسی اگه انگلیسی نبود
+        name_fa = order.get('category_name')
+        if name_fa and str(name_fa).strip():
+            return str(name_fa).strip()
+    else:
+        name_fa = order.get('category_name')
+        if name_fa and str(name_fa).strip():
+            return str(name_fa).strip()
+        # fallback به انگلیسی اگه فارسی نبود
+        name_en = order.get('category_name_en')
+        if name_en and str(name_en).strip():
+            return str(name_en).strip()
 
     # 2️⃣ از READY_PACKAGES با category_id
     cat_id = order.get('category_id')
@@ -29276,7 +29325,7 @@ def get_order_category_name(order: dict, lang: str = "fa") -> str:
 
 def backfill_order_category(order_id: int) -> bool:
     """
-    پر کردن category_name در سفارش از روی category_id
+    پر کردن category_name و category_name_en در سفارش از روی category_id
     برمی‌گرداند True اگه چیزی تغییر کرد
     """
     order = orders.get(str(order_id))
@@ -29288,8 +29337,12 @@ def backfill_order_category(order_id: int) -> bool:
         return False
 
     current_name = order.get('category_name')
-    if current_name and str(current_name).strip():
-        return False  # از قبل پر است
+    current_name_en = order.get('category_name_en')
+
+    # ✅ اگه هر دو پر باشن → کاری نداریم
+    if (current_name and str(current_name).strip()
+        and current_name_en and str(current_name_en).strip()):
+        return False
 
     # جستجو در READY_PACKAGES
     for cat in READY_PACKAGES.get('categories', []):
@@ -29297,13 +29350,24 @@ def backfill_order_category(order_id: int) -> bool:
             name_fa = cat.get('name') or ""
             name_en = cat.get('name_en') or name_fa
 
-            order['category_name'] = name_fa
-            order['category_name_en'] = name_en
-            order['updated_at'] = datetime.now().isoformat()
+            changed = False
+            if not current_name or not str(current_name).strip():
+                order['category_name'] = name_fa
+                changed = True
+            if not current_name_en or not str(current_name_en).strip():
+                order['category_name_en'] = name_en
+                changed = True
 
-            save_json(DB_FILES['orders'], orders)
-            logger.info(f"✅ category_name سفارش #{order_id} از READY_PACKAGES پر شد: {name_fa}")
-            return True
+            if changed:
+                order['updated_at'] = datetime.now().isoformat()
+                save_json(DB_FILES['orders'], orders)
+                logger.info(
+                    f"✅ category_name / name_en سفارش #{order_id} پر شد: "
+                    f"{name_fa} / {name_en}"
+                )
+                return True
+
+            return False
 
     return False
 
