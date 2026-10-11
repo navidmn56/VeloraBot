@@ -28767,6 +28767,90 @@ async def my_configs(callback: CallbackQuery):
     logger.info(f"📁 کاربر {user_id} کانفیگ‌های خود را مشاهده می‌کند - تعداد: {len(configs_list)}")
 
     # ══════════════════════════════════════════════
+    # helpers — کوتاه‌سازی نام دسته
+    # ══════════════════════════════════════════════
+    def build_category_label(raw_name: str) -> str:
+        """ساخت برچسب دسته بدون تکرار 'اشتراک'"""
+        name = (raw_name or "").strip()
+
+        if lang == "fa":
+            # حذف پیشوند "کانفیگ " اگر بود
+            if name.startswith("کانفیگ"):
+                name = name[len("کانفیگ"):].strip()
+            # حذف کاراکترهای اضافی ابتدایی
+            name = name.lstrip("·-— ").strip()
+
+            # ✅ اگه از قبل با "اشتراک" شروع میشه، دست نزن
+            if name.startswith("اشتراک"):
+                base = name
+            elif not name:
+                base = "اشتراک"
+            else:
+                base = f"اشتراک {name}"
+
+            # کوتاه‌سازی طول
+            MAX_LEN = 18
+            if len(base) > MAX_LEN:
+                base = base[:MAX_LEN - 1].rstrip() + "…"
+
+            return base
+
+        else:
+            # انگلیسی
+            if name.lower().startswith("config"):
+                name = name[len("config"):].strip()
+            name = name.lstrip("·-— ").strip()
+
+            if name.lower().endswith("sub") or name.lower().endswith("subscription"):
+                base = name
+            elif not name:
+                base = "Subscription"
+            else:
+                base = f"{name} Sub"
+
+            MAX_LEN = 18
+            if len(base) > MAX_LEN:
+                base = base[:MAX_LEN - 1].rstrip() + "…"
+
+            return base
+
+    def format_volume(vol_gb: float, is_test: bool, is_unlimited: bool) -> str:
+        """نمایش حجم به صورت خوانا (فارسی: گیگ/مگ ، انگلیسی: GB/MB)"""
+        # ✅ نامحدود
+        if is_unlimited and not is_test:
+            return "∞"
+
+        if vol_gb is None or vol_gb == 0:
+            return "∞"
+
+        # محاسبه MB و GB
+        mb = vol_gb * 1024
+
+        # ✅ تست: اگه بالای 1024MB بود → گیگ
+        if is_test:
+            if mb >= 1024:
+                gb = mb / 1024
+                if gb == int(gb):
+                    gb_str = f"{int(gb)}"
+                else:
+                    gb_str = f"{gb:.1f}"
+                return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str}GB"
+            else:
+                mb_str = f"{int(round(mb))}"
+                return f"{mb_str} مگ" if lang == "fa" else f"{mb_str}MB"
+
+        # ─── غیر تست ───
+        if vol_gb < 1:
+            mb_str = f"{int(round(mb))}"
+            return f"{mb_str} مگ" if lang == "fa" else f"{mb_str}MB"
+        elif vol_gb >= 100:
+            gb_str = f"{int(vol_gb)}"
+            return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str}GB"
+        else:
+            gb_str = f"{vol_gb:.0f}"
+            return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str}GB"
+
+    # ══════════════════════════════════════════════
     # حالت خالی — بدون کانفیگ
     # ══════════════════════════════════════════════
     if not configs_list:
@@ -28826,14 +28910,12 @@ async def my_configs(callback: CallbackQuery):
         status = order.get('status', 'approved')
         is_active = (status == 'approved')
 
-        # اطلاعات پایه از سفارش
         usage_percent = None
         days_left = None
         volume_gb = order.get('volume', 0)
         panel_is_active = None
-        is_unlimited = (volume_gb == 0)  # ✅ تشخیص نامحدود از ابتدا
+        is_unlimited = (volume_gb == 0)
 
-        # ✅ فقط برای سفارش‌های فعال، از پنل بگیر
         if email and SENAI_PANEL_ENABLED and is_active:
             try:
                 client_info = await xui_get_client_info(email)
@@ -28841,7 +28923,6 @@ async def my_configs(callback: CallbackQuery):
                 if client_info:
                     panel_is_active = client_info.get('enable', True)
 
-                    # ─── حجم ───
                     total_bytes = client_info.get('totalGB', 0)
                     total_gb = total_bytes / (1024 ** 3) if total_bytes else 0
 
@@ -28852,7 +28933,7 @@ async def my_configs(callback: CallbackQuery):
                         volume_gb = 0
                         is_unlimited = True
 
-                    # ─── مصرف (فقط برای غیر نامحدود) ───
+                    # مصرف (فقط برای غیر نامحدود)
                     if not is_unlimited:
                         traffic = await xui_get_client_traffic(email)
                         up = (traffic.get('up', 0) if traffic else 0) / (1024 ** 3)
@@ -28861,7 +28942,7 @@ async def my_configs(callback: CallbackQuery):
                         if total_gb > 0:
                             usage_percent = min(100, int((used / total_gb) * 100))
 
-                    # ─── انقضا ───
+                    # انقضا
                     expiry = client_info.get('expiryTime', 0)
                     if expiry > 0:
                         try:
@@ -28885,7 +28966,6 @@ async def my_configs(callback: CallbackQuery):
             'is_unlimited': is_unlimited,
         }
 
-    # ✅ دریافت موازی (سریع‌تر)
     config_data = await asyncio.gather(
         *[fetch_one(c) for c in configs_list],
         return_exceptions=False
@@ -28896,7 +28976,7 @@ async def my_configs(callback: CallbackQuery):
     # ══════════════════════════════════════════════
     buttons = []
 
-    # ─── نمایش تمام ساب‌ها (بدون ایموجی) ───
+    # ─── نمایش تمام ساب‌ها ───
     if len(configs_list) > 1:
         buttons.append([InlineKeyboardButton(
             text="نمایش تمام ساب‌ها" if lang == "fa" else "Show All Configs",
@@ -28915,7 +28995,7 @@ async def my_configs(callback: CallbackQuery):
         vol = item['volume_gb']
         is_unlimited = item['is_unlimited']
 
-        # ─── آیکون اصلی (ایموجی یونیکد روی دکمه) ───
+        # ─── آیکون اصلی ───
         if not is_active:
             emoji = "🔴"
         elif is_test:
@@ -28923,40 +29003,16 @@ async def my_configs(callback: CallbackQuery):
         else:
             emoji = "💳"
 
-        # ─── نوع + نام (با کوتاه‌سازی هوشمند) ───
+        # ─── نام/نوع ───
         if is_test:
             label_parts = ["کانفیگ تست" if lang == "fa" else "Test Config"]
         else:
-            name = c.get('category_name') or ("اشتراک" if lang == "fa" else "Sub")
-            name = name.replace("کانفیگ ", "").replace("Config ", "").strip()
+            label_parts = [build_category_label(c.get('category_name') or "")]
 
-            MAX_NAME_LEN = 15
-            if len(name) > MAX_NAME_LEN:
-                name = name[:MAX_NAME_LEN - 1].rstrip() + "…"
+        # ─── حجم ───
+        label_parts.append(format_volume(vol, is_test, is_unlimited))
 
-            if lang == "fa":
-                label_parts = [f"اشتراک {name}"]
-            else:
-                label_parts = [f"{name} Sub"]
-
-        # ─── حجم (با پشتیبانی کامل از نامحدود) ───
-        if is_unlimited and not is_test:
-            label_parts.append("∞")
-        elif is_test:
-            if vol and vol > 0:
-                mb = vol * 1024
-                label_parts.append(f"{int(round(mb))}MB")
-            else:
-                label_parts.append("∞")
-        elif vol < 1:
-            mb = vol * 1024
-            label_parts.append(f"{int(round(mb))}MB")
-        elif vol >= 100:
-            label_parts.append(f"{int(vol)}GB")
-        else:
-            label_parts.append(f"{vol:.0f}GB")
-
-        # ─── مصرف (❌ فقط برای غیر نامحدود) ───
+        # ─── مصرف (فقط برای غیر نامحدود) ───
         if not is_unlimited and usage is not None:
             label_parts.append(f"{usage}%")
 
@@ -28975,7 +29031,7 @@ async def my_configs(callback: CallbackQuery):
         # ─── کنار هم ───
         label = f"{emoji} " + " · ".join(label_parts)
 
-        # ─── محدودیت نهایی طول ───
+        # ─── محدودیت طول نهایی ───
         if len(label) > 60:
             label = label[:57] + "…"
 
@@ -29000,7 +29056,7 @@ async def my_configs(callback: CallbackQuery):
     )])
 
     # ══════════════════════════════════════════════
-    # متن هدر (ایموجی پریمیوم اینجا کار می‌کنه ✅)
+    # متن هدر (با ایموجی پریمیوم)
     # ══════════════════════════════════════════════
     count = len(configs_list)
     if lang == "fa":
