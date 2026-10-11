@@ -10148,7 +10148,7 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
                     style="primary"
                 ),
                 InlineKeyboardButton(
-                    text="🔙 صفحه اصلی",
+                    text="🏠 منوی اصلی",
                     callback_data="back_to_main",
                     style="danger"
                 )
@@ -10180,7 +10180,7 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
                     style="primary"
                 ),
                 InlineKeyboardButton(
-                    text="🔙 صفحه اصلی",
+                    text="🏠 منوی اصلی",
                     callback_data="back_to_main",
                     style="danger"
                 )
@@ -10214,7 +10214,7 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
                     style="primary"
                 ),
                 InlineKeyboardButton(
-                    text="🔙 Main Menu",
+                    text="🏠 Main Menu",
                     callback_data="back_to_main",
                     style="danger"
                 )
@@ -10246,7 +10246,7 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
                     style="primary"
                 ),
                 InlineKeyboardButton(
-                    text="🔙 Main Menu",
+                    text="🏠 Main Menu",
                     callback_data="back_to_main",
                     style="danger"
                 )
@@ -12783,7 +12783,7 @@ async def get_test_service(callback: CallbackQuery):
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🔙 منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                         callback_data="back_to_main",
                         style="danger"
                     )
@@ -14587,7 +14587,7 @@ def get_purchase_keyboard(volume: int, days: int, lang: str = "fa") -> InlineKey
             InlineKeyboardButton(text=f"💰{'پرداخت از موجودی' if lang=='fa' else 'Pay by Balance'}", callback_data="pay_balance", style="success")
         ],
         [
-            InlineKeyboardButton(text=f"🔙 {'صفحه اصلی' if lang=='fa' else 'Main Menu'}", callback_data="back_to_main", style="danger")
+            InlineKeyboardButton(text=f"🏠 {'منوی اصلی' if lang=='fa' else 'Main Menu'}", callback_data="back_to_main", style="danger")
         ]
     ])
     
@@ -14595,7 +14595,7 @@ def get_purchase_keyboard(volume: int, days: int, lang: str = "fa") -> InlineKey
 
 def get_back_only_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"🔙 {'صفحه اصلی' if lang=='fa' else 'Main Menu'}", callback_data="back_to_main", style= "danger")]
+        [InlineKeyboardButton(text=f"🏠 {'منوی اصلی' if lang=='fa' else 'Main Menu'}", callback_data="back_to_main", style= "danger")]
     ])
 
 def get_cancel_inline_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
@@ -15831,7 +15831,7 @@ async def use_coupon(message: Message):
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                     callback_data="back_to_main"
                 )]
             ])
@@ -15843,7 +15843,7 @@ async def use_coupon(message: Message):
     # ✅ دکمه بازگشت
     back_button = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
             callback_data="back_to_main"
         )]
     ])
@@ -15945,8 +15945,9 @@ async def use_coupon(message: Message):
                 style="success"
             )],
             [InlineKeyboardButton(
-                text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-                callback_data="back_to_main"
+                text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                callback_data="back_to_main",
+                style="primary"
             )]
         ])
 
@@ -16048,8 +16049,9 @@ async def use_coupon(message: Message):
             style="success"
         )],
         [InlineKeyboardButton(
-            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-            callback_data="back_to_main"
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main",
+            style="primary"
         )]
     ])
 
@@ -16111,8 +16113,9 @@ async def handle_coupon_code_input(message: Message):
     # ══════════════════════════════════════════════
     back_button = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-            callback_data="back_to_main"
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main",
+            style="primary"
         )]
     ])
 
@@ -16221,8 +16224,9 @@ async def handle_coupon_code_input(message: Message):
                 style="success"
             )],
             [InlineKeyboardButton(
-                text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-                callback_data="back_to_main"
+                text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                callback_data="back_to_main",
+                style="primary"
             )]
         ])
 
@@ -16334,8 +16338,9 @@ async def handle_coupon_code_input(message: Message):
             style="success"
         )],
         [InlineKeyboardButton(
-            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
-            callback_data="back_to_main"
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main",
+            style="primary"
         )]
     ])
 
@@ -16844,7 +16849,7 @@ async def show_ready_categories(callback: CallbackQuery):
 """
         
         buttons = [[InlineKeyboardButton(
-            text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
             callback_data="back_to_main"
         )]]
         try:
@@ -16918,7 +16923,7 @@ Please select a package:{coupon_text}
     
     # ✅✅✅ دکمه بازگشت با پشتیبانی از دو زبان
     buttons.append([InlineKeyboardButton(
-        text=f"{premium_emoji('back', '🔙')} بازگشت به منوی اصلی" if lang == "fa" else f"{premium_emoji('back', '🔙')} Back to Main Menu",
+        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
         callback_data="back_to_main",
         style="danger"
     )])
@@ -17902,7 +17907,7 @@ async def pay_ready_package_balance(callback: CallbackQuery):
                     callback_data="my_configs"
                 )],
                 [InlineKeyboardButton(
-                    text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
+                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                     callback_data="back_to_main"
                 )]
             ])
@@ -18141,6 +18146,7 @@ def get_language_keyboard(user_id: int = None) -> InlineKeyboardMarkup:
     
     # ✅ تشخیص زبان فعلی کاربر
     current_lang = 'fa'  # پیش‌فرض فارسی
+    lang = get_user(user_id).get('lang', 'fa')
     
     if user_id:
         user = get_user(user_id)
@@ -18170,7 +18176,7 @@ def get_language_keyboard(user_id: int = None) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text="🔙 برگشت",
+                text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                 callback_data="back_to_main",
                 style="danger"
             )
@@ -22698,7 +22704,7 @@ async def show_qr_code(callback: CallbackQuery):
                             callback_data=f"show_text_{order_id}"
                         )],
                         [InlineKeyboardButton(
-                            text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
+                            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                             callback_data="back_to_main"
                         )]
                     ])
@@ -23023,7 +23029,7 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     )])
 
     buttons.append([InlineKeyboardButton(
-        text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
+        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
         callback_data="back_to_main",
         style="danger"
     )])
@@ -23320,7 +23326,7 @@ async def show_single_qr(callback: CallbackQuery):
                     callback_data=f"show_text_page_{order_id}_{page}"
                 )],
                 [InlineKeyboardButton(
-                    text="🔙 صفحه اصلی" if lang == "fa" else "🔙 Main Menu",
+                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                     callback_data="back_to_main",
                     style="danger"
                 )]
@@ -29919,9 +29925,9 @@ async def show_all_my_configs(callback: CallbackQuery):
             [
                 InlineKeyboardButton(
                     text=(
-                        "🔙 بازگشت به منوی اصلی"
+                        "🏠 منوی اصلی"
                         if lang == "fa"
-                        else "🔙 Back to Main Menu"
+                        else "🏠 Main Menu"
                     ),
                     callback_data="back_to_main",
                     style="danger"
@@ -30280,7 +30286,7 @@ async def my_account(callback: CallbackQuery):
     # ✅ دکمه برگشت
     buttons.append([
         InlineKeyboardButton(
-            text=f"🔙 {'برگشت' if lang == 'fa' else 'Back'}",
+            text=f"🏠 {'منوی اصلی' if lang == 'fa' else 'Main Menu'}",
             callback_data="back_to_main",
             style="danger"
         )
