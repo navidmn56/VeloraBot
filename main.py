@@ -26365,12 +26365,16 @@ async def cmd_fix_categories(message: Message):
 
     fixed = 0
     already_ok = 0
-    no_category = 0
+    no_category = []
+    not_ready_package = 0
 
     for oid, order in orders.items():
         if not isinstance(order, dict):
             continue
+
+        # فقط بسته‌های آماده
         if order.get('type') not in ('ready_package', 'category_purchase'):
+            not_ready_package += 1
             continue
 
         if order.get('category_name') and str(order.get('category_name')).strip():
@@ -26380,16 +26384,35 @@ async def cmd_fix_categories(message: Message):
         if backfill_order_category(int(oid)):
             fixed += 1
         else:
-            no_category += 1
+            no_category.append({
+                'order_id': oid,
+                'category_id': order.get('category_id'),
+                'package_id': order.get('package_id'),
+                'email': order.get('email', ''),
+            })
 
-    await message.reply(
-        f"✅ گزارش اصلاح category_name\n"
+    # ساخت گزارش
+    text = (
+        f"✅ <b>گزارش اصلاح category_name</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🔧 اصلاح شد: {fixed}\n"
         f"✅ قبلاً درست بود: {already_ok}\n"
-        f"❌ دسته پیدا نشد: {no_category}"
+        f"❌ دسته پیدا نشد: {len(no_category)}\n"
+        f"ℹ️ (غیر بسته آماده): {not_ready_package}\n"
     )
-    
+
+    if no_category:
+        text += "\n<b>📋 لیست سفارش‌های بدون دسته:</b>\n"
+        for item in no_category[:20]:
+            text += (
+                f"\n#{item['order_id']} - "
+                f"cat_id: {item['category_id'] or '—'} - "
+                f"pkg_id: {item['package_id'] or '—'}"
+            )
+        if len(no_category) > 20:
+            text += f"\n\n... و {len(no_category) - 20} مورد دیگر"
+
+    await message.reply(text, parse_mode=ParseMode.HTML)
     
      
 @dp.callback_query(F.data.startswith("set_user_inbound_"))
@@ -31819,10 +31842,19 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                         'status': order.get('status', 'approved'),
                         'type': order.get('type', 'purchase'),
                         'payment_method': order.get('payment_method', 'sync_from_panel'),
+                        'payment_label': order.get('payment_label', ''),
                         'receipt_photo_id': order.get('receipt_photo_id'),
                         'config_id': order.get('config_id'),
                         'notes': order.get('notes', ''),
                         'created_at': order.get('created_at', datetime.now().isoformat()),
+                        # ✅ اینا رو اضافه کن - اطلاعات بسته آماده
+                        'category_id': order.get('category_id'),
+                        'category_name': order.get('category_name'),
+                        'category_name_en': order.get('category_name_en'),
+                        'package_id': order.get('package_id'),
+                        'parent_order_id': order.get('parent_order_id'),
+                        'is_extend': order.get('is_extend', False),
+                        'ip_limit': order.get('ip_limit', 0),
                     }
                     existing_emails.add(email)
         
@@ -31901,6 +31933,26 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 
                 stats['new'] += 1
                 logger.info(f"🆕 اوردر جدید #{order_id} - {email} - کاربر {user_id}")
+            # ✅ اگه سفارش قبلی داشت، این فیلدها رو نگه دار
+            preserved_category_id = None
+            preserved_category_name = None
+            preserved_category_name_en = None
+            preserved_package_id = None
+            preserved_parent_order_id = None
+            preserved_is_extend = False
+            preserved_ip_limit = ip_limit
+            preserved_payment_label = ''
+
+            if old_info:
+                preserved_category_id = old_info.get('category_id')
+                preserved_category_name = old_info.get('category_name')
+                preserved_category_name_en = old_info.get('category_name_en')
+                preserved_package_id = old_info.get('package_id')
+                preserved_parent_order_id = old_info.get('parent_order_id')
+                preserved_is_extend = old_info.get('is_extend', False)
+                preserved_ip_limit = old_info.get('ip_limit', ip_limit)
+                preserved_payment_label = old_info.get('payment_label', '')
+
             orders[str(order_id)] = {
                 'order_id': order_id,
                 'user_id': user_id,
@@ -31918,16 +31970,24 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 'sub_link': sub_link,
                 'panel_client_id': None,
                 'payment_method': payment_method,
+                'payment_label': preserved_payment_label,
                 'rejected_reason': '',
                 'inbound_id': inbound_ids,
                 'inbound_details': client.get('inbound_details', []),
                 'created_at': created_at,
                 'updated_at': datetime.now().isoformat(),
                 'notes': notes,
-                'ip_limit': ip_limit,
+                'ip_limit': preserved_ip_limit,
                 'is_active_in_panel': is_active,
                 'is_test': is_test,
                 'volume_unit': 'GB',
+                # ✅ اینا رو اضافه کن - اطلاعات بسته آماده
+                'category_id': preserved_category_id,
+                'category_name': preserved_category_name,
+                'category_name_en': preserved_category_name_en,
+                'package_id': preserved_package_id,
+                'parent_order_id': preserved_parent_order_id,
+                'is_extend': preserved_is_extend,
             }
             if is_test and volume_gb < 1:
                 display_volume = f"{volume_gb * 1024:.1f}MB"
