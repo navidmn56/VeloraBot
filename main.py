@@ -23125,16 +23125,26 @@ async def pay_card(callback: CallbackQuery):
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
         inbound_ids = full_state.get('inbound_ids', [])
+        category_id = full_state.get('category_id')
+        package_id = full_state.get('package_id')
+
+        # ✅ category_name با fallback چند مرحله‌ای
         category_name = (
             full_state.get('category_name', '')
             if lang == 'fa'
-            else full_state.get(
-                'category_name_en',
-                full_state.get('category_name', '')
-            )
+            else full_state.get('category_name_en', '')
         )
-        category_id = full_state.get('category_id')
-        package_id = full_state.get('package_id')
+
+        # اگه state خالی بود → از READY_PACKAGES
+        if not category_name and category_id:
+            for cat in READY_PACKAGES.get('categories', []):
+                if cat.get('id') == category_id:
+                    category_name = (
+                        cat.get('name') if lang == 'fa'
+                        else cat.get('name_en', cat.get('name'))
+                    )
+                    logger.info(f"✅ category_name از READY_PACKAGES بازیابی شد: {category_name}")
+                    break
         ip_limit = full_state.get('ip_limit', 0)
         order_type = "ready_package"
         
@@ -24116,16 +24126,26 @@ async def pay_balance(callback: CallbackQuery):
         final_price = full_state.get('price', 0)
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
+        category_id = full_state.get('category_id')
+        package_id = full_state.get('package_id')
+
+        # ✅ category_name با fallback چند مرحله‌ای
         category_name = (
             full_state.get('category_name', '')
             if lang == 'fa'
-            else full_state.get(
-                'category_name_en',
-                full_state.get('category_name', '')
-            )
+            else full_state.get('category_name_en', '')
         )
-        category_id = full_state.get('category_id')
-        package_id = full_state.get('package_id')
+
+        # اگه state خالی بود → از READY_PACKAGES
+        if not category_name and category_id:
+            for cat in READY_PACKAGES.get('categories', []):
+                if cat.get('id') == category_id:
+                    category_name = (
+                        cat.get('name') if lang == 'fa'
+                        else cat.get('name_en', cat.get('name'))
+                    )
+                    logger.info(f"✅ category_name از READY_PACKAGES بازیابی شد: {category_name}")
+                    break
         order_type = "ready_package"
         
         volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
@@ -26116,25 +26136,47 @@ async def approve_receipt(callback: CallbackQuery):
         days = order.get('days', 30)
         price = order.get('price', 0)
         inbound_id = order.get('inbound_id')
-        category_name = order.get('category_name', 'بسته آماده')
         package_id = order.get('package_id')
         category_id = order.get('category_id')
+        payment_method = order.get('payment_method', '')
+        payment_label = order.get('payment_label', '')
         parent_order_id = order.get('parent_order_id')
         is_extend = parent_order_id is not None
-        
+
         user_info = get_user(uid)
         user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
         lang = user_info.get('lang', 'fa')
-        
+
+        # ✅ دریافت category_name با fallback + backfill
+        category_name = order.get('category_name')
+        if not category_name or not str(category_name).strip():
+            category_name = get_order_category_name(order, lang)
+            if category_name:
+                try:
+                    _oid = order.get('order_id')
+                    if _oid:
+                        backfill_order_category(int(_oid))
+                        category_name = order.get('category_name') or category_name
+                except Exception as e:
+                    logger.warning(f"خطا در backfill category: {e}")
+
+        if not category_name:
+            category_name = "بسته آماده" if lang == 'fa' else "Ready Package"
+
+        # ─── آیکون دسته ───
         icon = "📦"
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
                 icon = cat.get('icon', '📦')
                 break
-        
+
         cat_name_escaped = html.escape(category_name)
-        logger.info(f"📦 تایید بسته آماده #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - دسته: {category_name} - تمدید: {is_extend}")
-        
+        logger.info(
+            f"📦 تایید بسته آماده #{oid} - کاربر: {uid} - "
+            f"{vol}GB/{days} روز - مبلغ: {price:,} تومان - "
+            f"دسته: {category_name} - تمدید: {is_extend}"
+        )
+                
         user_inbounds = get_user_inbound(uid)
         if user_inbounds:
             if isinstance(user_inbounds, list):
@@ -26315,7 +26357,41 @@ async def set_user_inbound_default(callback: CallbackQuery):
         )
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id)
     
+@dp.message(Command("fix_categories"))
+async def cmd_fix_categories(message: Message):
+    """اصلاح یکجای category_name در همه سفارشات قدیمی"""
+    if message.from_user.id != ADMIN_ID_INT:
+        return
+
+    fixed = 0
+    already_ok = 0
+    no_category = 0
+
+    for oid, order in orders.items():
+        if not isinstance(order, dict):
+            continue
+        if order.get('type') not in ('ready_package', 'category_purchase'):
+            continue
+
+        if order.get('category_name') and str(order.get('category_name')).strip():
+            already_ok += 1
+            continue
+
+        if backfill_order_category(int(oid)):
+            fixed += 1
+        else:
+            no_category += 1
+
+    await message.reply(
+        f"✅ گزارش اصلاح category_name\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔧 اصلاح شد: {fixed}\n"
+        f"✅ قبلاً درست بود: {already_ok}\n"
+        f"❌ دسته پیدا نشد: {no_category}"
+    )
     
+    
+     
 @dp.callback_query(F.data.startswith("set_user_inbound_"))
 async def set_user_inbound(callback: CallbackQuery):
     """تنظیم اینباند برای کاربر (جایگزینی)"""
@@ -27865,7 +27941,19 @@ async def confirm_approve_package(callback: CallbackQuery):
     
     logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی انتخاب شده توسط ادمین: {selected_inbounds}")
     
-    category_name = order.get('category_name', 'بسته آماده')
+    # ✅ category_name با fallback
+    category_name = order.get('category_name')
+    if not category_name or not str(category_name).strip():
+        category_name = get_order_category_name(order, lang)
+        if category_name:
+            try:
+                backfill_order_category(oid)
+            except Exception:
+                pass
+
+    if not category_name:
+        category_name = "بسته آماده" if lang == 'fa' else "Ready Package"
+
     user_info = get_user(uid)
     user_name = user_info.get('name', f'کاربر_{uid}')
     balance = user_info.get('balance', 0)
@@ -27885,7 +27973,13 @@ async def confirm_approve_package(callback: CallbackQuery):
     reply_markup=None
     )
     
-    # ✅ اول وضعیت را تغییر بده
+        
+    try:
+        if order_type in ['ready_package', 'category_purchase']:
+            backfill_order_category(oid)
+            order = orders.get(str(oid))  
+    except Exception as e:
+        logger.warning(f"خطا در backfill: {e}")
     update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     
     await check_referral_bonus(uid)
@@ -28737,6 +28831,67 @@ async def handle_wrong_file_type(message: Message):
                 "PDF, video and other formats are not accepted.",
                 parse_mode=ParseMode.HTML
             )
+            
+            
+def get_order_category_name(order: dict, lang: str = "fa") -> str:
+    """
+    دریافت نام دسته برای یک سفارش - با fallback چند مرحله‌ای
+    1. از category_name خود سفارش
+    2. از READY_PACKAGES با category_id
+    3. رشته خالی
+    """
+    # 1️⃣ مستقیم از سفارش
+    name = order.get('category_name')
+    if name and str(name).strip():
+        return str(name).strip()
+
+    # 2️⃣ از READY_PACKAGES با category_id
+    cat_id = order.get('category_id')
+    if cat_id:
+        for cat in READY_PACKAGES.get('categories', []):
+            if cat.get('id') == cat_id:
+                if lang == "en":
+                    return cat.get('name_en') or cat.get('name') or ""
+                return cat.get('name') or ""
+
+    return ""
+
+
+def backfill_order_category(order_id: int) -> bool:
+    """
+    پر کردن category_name در سفارش از روی category_id
+    برمی‌گرداند True اگه چیزی تغییر کرد
+    """
+    order = orders.get(str(order_id))
+    if not order:
+        return False
+
+    category_id = order.get('category_id')
+    if not category_id:
+        return False
+
+    current_name = order.get('category_name')
+    if current_name and str(current_name).strip():
+        return False  # از قبل پر است
+
+    # جستجو در READY_PACKAGES
+    for cat in READY_PACKAGES.get('categories', []):
+        if cat.get('id') == category_id:
+            name_fa = cat.get('name') or ""
+            name_en = cat.get('name_en') or name_fa
+
+            order['category_name'] = name_fa
+            order['category_name_en'] = name_en
+            order['updated_at'] = datetime.now().isoformat()
+
+            save_json(DB_FILES['orders'], orders)
+            logger.info(f"✅ category_name سفارش #{order_id} از READY_PACKAGES پر شد: {name_fa}")
+            return True
+
+    return False
+
+
+
 @dp.callback_query(F.data == "my_configs")
 async def my_configs(callback: CallbackQuery):
     """نمایش کانفیگ‌های کاربر با اطلاعات زنده از پنل"""
@@ -35418,6 +35573,13 @@ async def view_order(callback: CallbackQuery):
     order_type = order.get('type', 'purchase')
     order_status = order.get('status', 'نامشخص')
     category_name = order.get('category_name')
+    if not category_name or not str(category_name).strip():
+        category_name = get_order_category_name(order, lang)
+        if category_name:
+            try:
+                backfill_order_category(order_id)
+            except Exception as e:
+                logger.warning(f"خطا در backfill category: {e}")
     category_id = order.get('category_id')
     package_id = order.get('package_id')
     payment_method = order.get('payment_method', '')
