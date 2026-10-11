@@ -24865,9 +24865,10 @@ async def pay_balance(callback: CallbackQuery):
         
         # ==================== 1) آلرت ====================
         if lang == "fa":
-            alert_text = f"⚠️ کسری: {shortage:,} تومان"
+            alert_text = "\u200f⚠️ موجودی کافی نیست"
         else:
-            alert_text = f"⚠️ Shortage: {shortage:,} Toman"        
+            alert_text = "⚠️ Insufficient Balance"
+        
         try:
             await callback.answer(alert_text, show_alert=False)
         except Exception as e:
