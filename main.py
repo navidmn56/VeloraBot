@@ -21801,16 +21801,20 @@ async def admin_broadcast_send(message: Message):
             await message.reply("❌ لطفاً یک فایل صوتی ارسال کنید" if lang=="fa" else "❌ Please send an audio file")
             return
         
+        # ✅ تشخیص subtype
+        audio_subtype = None
         if message.audio:
             media_content = message.audio.file_id
             file_name = message.audio.file_name or f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            audio_subtype = 'audio'
         elif message.voice:
             media_content = message.voice.file_id
             file_name = f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg"
+            audio_subtype = 'voice'
         
         caption = message.caption or ""
         parse_mode = detect_safe_parse_mode(caption)
-        logger.info(f"🎵 صوت دریافت شد - file_id: {media_content[:20]}...")
+        logger.info(f"🎵 صوت دریافت شد - subtype: {audio_subtype} - file_id: {media_content[:20]}...")
     
     else:
         await message.reply("❌ نوع پیام نامشخص است" if lang=="fa" else "❌ Unknown message type")
@@ -21863,12 +21867,16 @@ async def admin_broadcast_send(message: Message):
 
 ⚠️ Are you sure you want to send this to all users?
 """
+    # ✅ تشخیص subtype برای voice
+    audio_subtype_value = locals().get('audio_subtype', None)
+
     broadcast_data = {
         'type': broadcast_type,
         'media': media_content,
         'caption': caption,
         'parse_mode': parse_mode,
-        'file_name': file_name
+        'file_name': file_name,
+        'subtype': audio_subtype_value  # ✅ برای voice/audio
     }
     
     user_states[admin_id] = {
@@ -21878,6 +21886,13 @@ async def admin_broadcast_send(message: Message):
     }
     
     buttons = [
+        [
+            InlineKeyboardButton(
+                text="👁️ پیش‌نمایش" if lang == "fa" else "👁️ Preview",
+                callback_data="preview_broadcast",
+                style="primary"
+            )
+        ],
         [
             InlineKeyboardButton(
                 text="✅ بله، ارسال کن" if lang == "fa" else "✅ Yes, send",
@@ -21900,13 +21915,195 @@ async def admin_broadcast_send(message: Message):
             elif broadcast_type == 'file' and media_content:
                 await message.reply_document(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
             elif broadcast_type == 'audio' and media_content:
-                await message.reply_audio(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+                # ✅ تفکیک voice از audio
+                if audio_subtype_value == 'voice':
+                    await message.reply_voice(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+                else:
+                    await message.reply_audio(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
             else:
                 await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"خطا در نمایش تأییدیه: {e}")
-        await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)        
+        await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+
+@dp.callback_query(F.data == "preview_broadcast")
+async def preview_broadcast(callback: CallbackQuery):
+    """پیش‌نمایش پیام همگانی - فقط به ادمین"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    
+    state = user_states.get(admin_id, {})
+    broadcast_data = state.get('broadcast_data', {})
+    users_count = state.get('users_count', 0)
+    
+    if not broadcast_data:
+        await callback.answer(
+            "❌ داده‌ای برای پیش‌نمایش نیست" if lang == "fa" else "❌ No data",
+            show_alert=True
+        )
+        return
+    
+    broadcast_type = broadcast_data.get('type', 'text')
+    media = broadcast_data.get('media')
+    caption = broadcast_data.get('caption', '')
+    parse_mode = broadcast_data.get('parse_mode')
+    subtype = broadcast_data.get('subtype')
+    
+    # ✅ کیبوردی که کاربران خواهند دید (دقیقاً همون)
+    broadcast_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="broadcast_back_to_main",
+            style="primary"
+        )]
+    ])
+    
+    # ✅ هدر پیش‌نمایش
+    type_display = {
+        'text': '📝 متن',
+        'photo': '🖼️ عکس',
+        'file': '📄 فایل',
+        'audio': '🎵 موزیک' if subtype != 'voice' else '🎤 ویس'
+    }.get(broadcast_type, broadcast_type)
+    
+    preview_header = (
+        f"👁️ <b>پیش‌نمایش پیام همگانی</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 کاربران هدف: <b>{users_count}</b>\n"
+        f"📝 نوع: <b>{type_display}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⚠️ <i>دقیقاً همین پیام برای کاربران ارسال می‌شه:</i>"
+    ) if lang == "fa" else (
+        f"👁️ <b>Broadcast Preview</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 Target users: <b>{users_count}</b>\n"
+        f"📝 Type: <b>{type_display}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⚠️ <i>This is exactly what users will see:</i>"
+    )
+    
+    try:
+        await callback.message.answer(preview_header, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"خطا در ارسال هدر پیش‌نمایش: {e}")
+    
+    # ✅ ارسال محتوای واقعی (دقیقاً مثل کاربر)
+    preview_sent = False
+    try:
+        if broadcast_type == 'text':
+            if len(caption) > 4096:
+                parts = [caption[i:i+4096] for i in range(0, len(caption), 4096)]
+                for idx, part in enumerate(parts):
+                    is_last = (idx == len(parts) - 1)
+                    await bot.send_message(
+                        admin_id, part,
+                        parse_mode=parse_mode,
+                        reply_markup=broadcast_keyboard if is_last else None
+                    )
+            else:
+                await bot.send_message(
+                    admin_id, caption,
+                    parse_mode=parse_mode,
+                    reply_markup=broadcast_keyboard
+                )
+            preview_sent = True
         
+        elif broadcast_type == 'photo':
+            if media:
+                await bot.send_photo(
+                    admin_id, media,
+                    caption=caption or None,
+                    parse_mode=parse_mode,
+                    reply_markup=broadcast_keyboard
+                )
+                preview_sent = True
+        
+        elif broadcast_type == 'file':
+            if media:
+                await bot.send_document(
+                    admin_id, media,
+                    caption=caption or None,
+                    parse_mode=parse_mode,
+                    reply_markup=broadcast_keyboard
+                )
+                preview_sent = True
+        
+        elif broadcast_type == 'audio':
+            if media:
+                if subtype == 'voice':
+                    await bot.send_voice(
+                        admin_id, media,
+                        caption=caption or None,
+                        parse_mode=parse_mode,
+                        reply_markup=broadcast_keyboard
+                    )
+                else:
+                    await bot.send_audio(
+                        admin_id, media,
+                        caption=caption or None,
+                        parse_mode=parse_mode,
+                        reply_markup=broadcast_keyboard
+                    )
+                preview_sent = True
+    
+    except Exception as e:
+        logger.error(f"❌ خطا در ارسال پیش‌نمایش: {e}", exc_info=True)
+        await callback.message.answer(
+            f"❌ خطا در پیش‌نمایش:\n<code>{str(e)[:200]}</code>" if lang == "fa"
+            else f"❌ Preview error:\n<code>{str(e)[:200]}</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    # ✅ پیام پایانی با دکمه‌های اقدام
+    if preview_sent:
+        action_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=f"✅ ارسال به {users_count} کاربر" if lang == "fa"
+                     else f"✅ Send to {users_count} users",
+                callback_data="confirm_broadcast",
+                style="success"
+            )],
+            [InlineKeyboardButton(
+                text="👁️ پیش‌نمایش مجدد" if lang == "fa" else "👁️ Preview again",
+                callback_data="preview_broadcast",
+                style="primary"
+            )],
+            [InlineKeyboardButton(
+                text="❌ انصراف کامل" if lang == "fa" else "❌ Cancel",
+                callback_data="admin_panel",
+                style="danger"
+            )]
+        ])
+        
+        footer = (
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <i>پیش‌نمایش کامل شد</i>\n\n"
+            "آیا این پیام برای همه ارسال بشه؟"
+        ) if lang == "fa" else (
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <i>Preview completed</i>\n\n"
+            "Send this to everyone?"
+        )
+        
+        try:
+            await callback.message.answer(
+                footer,
+                reply_markup=action_keyboard,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"خطا در ارسال footer پیش‌نمایش: {e}")
+    
+    try:
+        await callback.answer("👁️ پیش‌نمایش ارسال شد" if lang == "fa" else "👁️ Preview sent")
+    except:
+        pass
+    
+      
 @dp.callback_query(F.data == "broadcast_back_to_main")
 async def broadcast_back_to_main(callback: CallbackQuery):
     """بازگشت به منوی اصلی از پیام همگانی - پیام برودکست پاک می‌شه"""
@@ -21931,11 +22128,9 @@ async def broadcast_back_to_main(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(f"خطا در نمایش منوی اصلی بعد از برودکست: {e}")
-        # fallback: ارسال مستقیم
         try:
             await bot.send_message(
-                user_id,
-                text,
+                user_id, text,
                 reply_markup=get_main_keyboard(is_admin, lang)
             )
         except:
@@ -22041,11 +22236,21 @@ async def confirm_broadcast(callback: CallbackQuery):
     if parse_mode == ParseMode.HTML and clean_caption != caption:
         parse_mode = None
         logger.warning(f"⚠️ متن حاوی کاراکترهای غیرمجاز بود، HTML غیرفعال شد")
+    # ✅ fallbackهای امن
+    subtype = broadcast_data.get('subtype')
+    default_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🏠 منوی اصلی",
+            callback_data="broadcast_back_to_main",
+            style="primary"
+        )]
+    ])
+    
     for i, uid in enumerate(users_list):
+        broadcast_keyboard = default_keyboard  # ✅ مقدار پیشفرض
         try:
             user_id = int(uid)
             
-            # ✅ کیبورد «منوی اصلی» برای هر کاربر (بر اساس زبان خودش)
             user_lang = get_user(user_id).get('lang', 'fa')
             broadcast_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
@@ -22058,7 +22263,6 @@ async def confirm_broadcast(callback: CallbackQuery):
             if broadcast_type == 'text':
                 if len(clean_caption) > 4096:
                     parts = [clean_caption[j:j+4096] for j in range(0, len(clean_caption), 4096)]
-                    # ✅ دکمه فقط روی آخرین بخش
                     for idx, part in enumerate(parts):
                         is_last = (idx == len(parts) - 1)
                         await bot.send_message(
@@ -22078,7 +22282,7 @@ async def confirm_broadcast(callback: CallbackQuery):
                     raise ValueError("media_id is None")
                 await bot.send_photo(
                     user_id, media,
-                    caption=clean_caption,
+                    caption=clean_caption or None,
                     parse_mode=parse_mode,
                     reply_markup=broadcast_keyboard
                 )
@@ -22088,7 +22292,7 @@ async def confirm_broadcast(callback: CallbackQuery):
                     raise ValueError("media_id is None")
                 await bot.send_document(
                     user_id, media,
-                    caption=clean_caption,
+                    caption=clean_caption or None,
                     parse_mode=parse_mode,
                     reply_markup=broadcast_keyboard
                 )
@@ -22096,19 +22300,27 @@ async def confirm_broadcast(callback: CallbackQuery):
             elif broadcast_type == 'audio':
                 if not media:
                     raise ValueError("media_id is None")
-                await bot.send_audio(
-                    user_id, media,
-                    caption=clean_caption,
-                    parse_mode=parse_mode,
-                    reply_markup=broadcast_keyboard
-                )
+                # ✅ تفکیک voice از audio
+                if subtype == 'voice':
+                    await bot.send_voice(
+                        user_id, media,
+                        caption=clean_caption or None,
+                        parse_mode=parse_mode,
+                        reply_markup=broadcast_keyboard
+                    )
+                else:
+                    await bot.send_audio(
+                        user_id, media,
+                        caption=clean_caption or None,
+                        parse_mode=parse_mode,
+                        reply_markup=broadcast_keyboard
+                    )
             
             sent_count += 1
             if (i + 1) % 10 == 0:
                 progress_text = f"⏳ در حال ارسال... {i+1}/{total_users}" if lang=="fa" else f"⏳ Sending... {i+1}/{total_users}"
                 try:
                     await status_msg.edit_text(progress_text)
-                    logger.debug(f"✅ پیام وضعیت بروزرسانی شد: {i+1}/{total_users}")
                 except Exception as e:
                     logger.warning(f"⚠️ خطا در بروزرسانی پیام وضعیت: {e}")
                     try:
@@ -22116,42 +22328,31 @@ async def confirm_broadcast(callback: CallbackQuery):
                     except:
                         pass
                     status_msg = await callback.message.answer(progress_text)
-                    logger.info(f"✅ پیام وضعیت جدید ارسال شد: {progress_text}")
             
             await asyncio.sleep(0.05)
             
         except Exception as e:
             error_str = str(e)
             logger.error(f"❌ خطا در ارسال به کاربر {uid}: {error_str}")
+            
+            # fallback بدون parse_mode
             if "can't parse entities" in error_str and parse_mode == ParseMode.HTML:
                 try:
                     if broadcast_type == 'text':
-                        await bot.send_message(int(uid), clean_caption, parse_mode=None)
+                        await bot.send_message(int(uid), clean_caption, parse_mode=None, reply_markup=broadcast_keyboard)
                     elif broadcast_type == 'photo' and media:
-                        await bot.send_photo(int(uid), media, caption=clean_caption, parse_mode=None)
+                        await bot.send_photo(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
                     elif broadcast_type == 'file' and media:
-                        await bot.send_document(int(uid), media, caption=clean_caption, parse_mode=None)
+                        await bot.send_document(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
                     elif broadcast_type == 'audio' and media:
-                        await bot.send_audio(int(uid), media, caption=clean_caption, parse_mode=None)
+                        if subtype == 'voice':
+                            await bot.send_voice(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
+                        else:
+                            await bot.send_audio(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
                     sent_count += 1
                     continue
                 except Exception as e2:
                     logger.warning(f"⚠️ تلاش مجدد نیز خطا داد: {e2}")
-            
-            if "message caption is too long" in error_str and broadcast_type in ['photo', 'file', 'audio']:
-                try:
-                    if broadcast_type == 'photo' and media:
-                        await bot.send_photo(int(uid), media)
-                    elif broadcast_type == 'file' and media:
-                        await bot.send_document(int(uid), media)
-                    elif broadcast_type == 'audio' and media:
-                        await bot.send_audio(int(uid), media)
-                    sent_count += 1
-                    if clean_caption:
-                        await bot.send_message(int(uid), clean_caption[:4000], parse_mode=parse_mode)
-                    continue
-                except Exception as e3:
-                    logger.warning(f"⚠️ تلاش مجدد بدون کپشن نیز خطا داد: {e3}")
             
             failed_count += 1
             failed_users.append(uid)
