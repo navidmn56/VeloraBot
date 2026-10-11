@@ -28739,131 +28739,295 @@ async def handle_wrong_file_type(message: Message):
             )
 @dp.callback_query(F.data == "my_configs")
 async def my_configs(callback: CallbackQuery):
+    """نمایش کانفیگ‌های کاربر با اطلاعات زنده از پنل"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
+
+    # ✅ چک لیست سیاه
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
-    
+
     await sync_deleted_configs()
     valid_orders = get_valid_orders()
+
     configs_list = [
         o for o in valid_orders.values()
         if o.get('user_id') == user_id
         and o.get('status') in ("approved", "inactive")
         and o.get('config_link')
     ]
+
     if log_system:
-        asyncio.create_task(log_system.log_user_action(user_id, "مشاهده کانفیگ‌ها", f"تعداد: {len(configs_list)}"))
-    
+        asyncio.create_task(log_system.log_user_action(
+            user_id, "مشاهده کانفیگ‌ها", f"تعداد: {len(configs_list)}"
+        ))
+
     logger.info(f"📁 کاربر {user_id} کانفیگ‌های خود را مشاهده می‌کند - تعداد: {len(configs_list)}")
-    
+
+    # ══════════════════════════════════════════════
+    # حالت خالی — بدون کانفیگ
+    # ══════════════════════════════════════════════
     if not configs_list:
         if lang == "fa":
             await send_sticker(user_id, 'order_rejected', '😭')
-            text = f"""
-
-{premium_emoji('config', '📁')} <b>کانفیگ‌های شما</b>
-
-<tg-emoji emoji-id="5240241223632954241">🚫</tg-emoji> شما هیچ کانفیگ فعالی ندارید.
-
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> برای خرید کانفیگ از دکمه زیر استفاده کنید.
-"""
+            text = (
+                f"{premium_emoji('config', '🌐')} <b>کانفیگ‌های من</b>\n\n"
+                f"{premium_emoji('access_denied', '🚫')} شما هیچ کانفیگ فعالی ندارید.\n\n"
+                f"{premium_emoji('light', '💡')} برای خرید کانفیگ از دکمه زیر استفاده کنید."
+            )
         else:
             await send_sticker(user_id, 'order_rejected', '😭')
-            text = f"""
+            text = (
+                f"{premium_emoji('config', '🌐')} <b>My Configs</b>\n\n"
+                f"{premium_emoji('access_denied', '🚫')} You have no active configs.\n\n"
+                f"{premium_emoji('light', '💡')} Purchase a config using the button below."
+            )
 
-{premium_emoji('config', '📁')} <b>My Configs</b>
-
-<tg-emoji emoji-id="5240241223632954241">🚫</tg-emoji> You have no active configs.
-
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> Purchase a config using the button below.
-"""
-        
-        # ✅✅✅ دکمه‌های خرید + بازگشت
         no_config_buttons = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
                 callback_data="buy_service",
-                style="success"  # ✅ استایل سبز
+                style="success"
             )],
             [InlineKeyboardButton(
-                text="🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu",
+                text="🏠 منو اصلی" if lang == "fa" else "🏠 Main Menu",
                 callback_data="back_to_main",
-                style="danger"  # ✅ استایل قرمز
+                style="danger"
             )]
         ])
-        
+
         try:
             await callback.message.delete()
-        except Exception as e:
-            logger.debug(f"نتوانست پیام قبلی را حذف کند: {e}")
-        
-        await callback.message.answer(
-            text, 
-            reply_markup=no_config_buttons, 
-            parse_mode=ParseMode.HTML
-        )
-        
+        except Exception:
+            pass
+
+        await callback.message.answer(text, reply_markup=no_config_buttons, parse_mode=ParseMode.HTML)
+
         try:
             await callback.answer()
-        except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+        except Exception:
+            pass
         return
-    
+
+    # ══════════════════════════════════════════════
+    # مرتب‌سازی: جدیدترین اول
+    # ══════════════════════════════════════════════
     configs_list.sort(key=lambda x: x.get('date', ''), reverse=True)
+
+    # ══════════════════════════════════════════════
+    # دریافت اطلاعات زنده از پنل (به صورت موازی)
+    # ══════════════════════════════════════════════
+    async def fetch_one(order: dict) -> dict:
+        """دریافت اطلاعات زنده یک کانفیگ"""
+        email = extract_email_from_sub_link(order.get('config_link', ''))
+        is_test = order.get('type') == 'test'
+        status = order.get('status', 'approved')
+        is_active = (status == 'approved')
+
+        # اطلاعات پایه از سفارش
+        usage_percent = None
+        days_left = None
+        volume_gb = order.get('volume', 0)
+        panel_is_active = None
+        is_unlimited = (volume_gb == 0)  # ✅ تشخیص نامحدود از ابتدا
+
+        # ✅ فقط برای سفارش‌های فعال، از پنل بگیر
+        if email and SENAI_PANEL_ENABLED and is_active:
+            try:
+                client_info = await xui_get_client_info(email)
+
+                if client_info:
+                    panel_is_active = client_info.get('enable', True)
+
+                    # ─── حجم ───
+                    total_bytes = client_info.get('totalGB', 0)
+                    total_gb = total_bytes / (1024 ** 3) if total_bytes else 0
+
+                    if total_gb > 0:
+                        volume_gb = total_gb
+                        is_unlimited = False
+                    else:
+                        volume_gb = 0
+                        is_unlimited = True
+
+                    # ─── مصرف (فقط برای غیر نامحدود) ───
+                    if not is_unlimited:
+                        traffic = await xui_get_client_traffic(email)
+                        up = (traffic.get('up', 0) if traffic else 0) / (1024 ** 3)
+                        down = (traffic.get('down', 0) if traffic else 0) / (1024 ** 3)
+                        used = up + down
+                        if total_gb > 0:
+                            usage_percent = min(100, int((used / total_gb) * 100))
+
+                    # ─── انقضا ───
+                    expiry = client_info.get('expiryTime', 0)
+                    if expiry > 0:
+                        try:
+                            expire_dt = datetime.fromtimestamp(expiry / 1000)
+                            delta = expire_dt - datetime.now()
+                            days_left = max(0, delta.days)
+                        except Exception:
+                            pass
+
+            except Exception as e:
+                logger.debug(f"⚠️ خطا در دریافت اطلاعات {email}: {e}")
+
+        return {
+            'order': order,
+            'email': email,
+            'is_test': is_test,
+            'is_active': is_active and (panel_is_active is not False),
+            'usage_percent': usage_percent,
+            'days_left': days_left,
+            'volume_gb': volume_gb,
+            'is_unlimited': is_unlimited,
+        }
+
+    # ✅ دریافت موازی (سریع‌تر)
+    config_data = await asyncio.gather(
+        *[fetch_one(c) for c in configs_list],
+        return_exceptions=False
+    )
+
+    # ══════════════════════════════════════════════
+    # ساخت دکمه‌ها
+    # ══════════════════════════════════════════════
     buttons = []
-    buttons.append([InlineKeyboardButton(
-        text="نمایش همه کانفیگ‌ها" if lang == "fa" else "Show All Configs",
-        callback_data="show_all_my_configs",
-        style="primary"
-        
-    )])
-    for c in configs_list:
-        email = extract_email_from_sub_link(c.get("config_link", ""))
-        is_test = c.get("type") == "test"
 
-        label = email if email else f"#{c['order_id']}"
+    # ─── نمایش تمام ساب‌ها (بدون ایموجی) ───
+    if len(configs_list) > 1:
+        buttons.append([InlineKeyboardButton(
+            text="نمایش تمام ساب‌ها" if lang == "fa" else "Show All Configs",
+            callback_data="show_all_my_configs",
+            style="primary"
+        )])
 
+    # ─── هر کانفیگ ───
+    for item in config_data:
+        c = item['order']
+        order_id = c['order_id']
+        is_test = item['is_test']
+        is_active = item['is_active']
+        usage = item['usage_percent']
+        days = item['days_left']
+        vol = item['volume_gb']
+        is_unlimited = item['is_unlimited']
+
+        # ─── آیکون اصلی (ایموجی یونیکد روی دکمه) ───
+        if not is_active:
+            emoji = "🔴"
+        elif is_test:
+            emoji = "🆓"
+        else:
+            emoji = "💳"
+
+        # ─── نوع + نام (با کوتاه‌سازی هوشمند) ───
         if is_test:
-            label = f"{label}" if lang == "fa" else f"{label}"
+            label_parts = ["کانفیگ تست" if lang == "fa" else "Test Config"]
+        else:
+            name = c.get('category_name') or ("اشتراک" if lang == "fa" else "Sub")
+            name = name.replace("کانفیگ ", "").replace("Config ", "").strip()
 
-        style = "danger" if c.get("status") == "inactive" else "success"
+            MAX_NAME_LEN = 15
+            if len(name) > MAX_NAME_LEN:
+                name = name[:MAX_NAME_LEN - 1].rstrip() + "…"
 
-        buttons.append([
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"view_config_{c['order_id']}",
-                style=style
-            )
-        ])
-    buttons.append([
-        InlineKeyboardButton(
-            text="🔙 بازگشت" if lang == "fa" else "Back 🔙",
-            callback_data="back_to_main",
-            style="danger"
-        )
-    ])
-    
+            if lang == "fa":
+                label_parts = [f"اشتراک {name}"]
+            else:
+                label_parts = [f"{name} Sub"]
+
+        # ─── حجم (با پشتیبانی کامل از نامحدود) ───
+        if is_unlimited and not is_test:
+            label_parts.append("∞")
+        elif is_test:
+            if vol and vol > 0:
+                mb = vol * 1024
+                label_parts.append(f"{int(round(mb))}MB")
+            else:
+                label_parts.append("∞")
+        elif vol < 1:
+            mb = vol * 1024
+            label_parts.append(f"{int(round(mb))}MB")
+        elif vol >= 100:
+            label_parts.append(f"{int(vol)}GB")
+        else:
+            label_parts.append(f"{vol:.0f}GB")
+
+        # ─── مصرف (❌ فقط برای غیر نامحدود) ───
+        if not is_unlimited and usage is not None:
+            label_parts.append(f"{usage}%")
+
+        # ─── روز باقی‌مانده ───
+        if days is not None:
+            if lang == "fa":
+                label_parts.append(f"{days}روز")
+            else:
+                label_parts.append(f"{days}d")
+        elif c.get('days'):
+            if lang == "fa":
+                label_parts.append(f"{c['days']}روز")
+            else:
+                label_parts.append(f"{c['days']}d")
+
+        # ─── کنار هم ───
+        label = f"{emoji} " + " · ".join(label_parts)
+
+        # ─── محدودیت نهایی طول ───
+        if len(label) > 60:
+            label = label[:57] + "…"
+
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"view_config_{order_id}",
+            style="success" if is_active else "danger"
+        )])
+
+    # ─── خرید سرویس ───
+    buttons.append([InlineKeyboardButton(
+        text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
+        callback_data="buy_service",
+        style="primary"
+    )])
+
+    # ─── منو اصلی ───
+    buttons.append([InlineKeyboardButton(
+        text="🏠 منو اصلی" if lang == "fa" else "🏠 Main Menu",
+        callback_data="back_to_main",
+        style="danger"
+    )])
+
+    # ══════════════════════════════════════════════
+    # متن هدر (ایموجی پریمیوم اینجا کار می‌کنه ✅)
+    # ══════════════════════════════════════════════
+    count = len(configs_list)
     if lang == "fa":
-        await send_sticker(user_id, 'config', '❤️')
-        text = f"{premium_emoji('config', '📁')} <b>کانفیگ‌های شما</b> ({len(configs_list)})"
+        text = (
+            f"{premium_emoji('config', '🌐')} <b>کانفیگ‌های من ({count})</b>\n\n"
+            f"{premium_emoji('light', '💡')} روی هرکدوم بزن تا لینک و وضعیتش رو ببینی 👇"
+        )
     else:
-        await send_sticker(user_id, 'config', '❤️')
-        text = f"{premium_emoji('config', '📁')} <b>Your Configs</b> ({len(configs_list)})"
-    
+        text = (
+            f"{premium_emoji('config', '🌐')} <b>My Configs ({count})</b>\n\n"
+            f"{premium_emoji('light', '💡')} Tap on any config to see the link and status 👇"
+        )
+
+    # ══════════════════════════════════════════════
+    # ارسال
+    # ══════════════════════════════════════════════
     try:
         await callback.message.delete()
     except Exception as e:
         logger.debug(f"نتوانست پیام قبلی را حذف کند: {e}")
-    
+
     await callback.message.answer(
         text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         parse_mode=ParseMode.HTML
     )
-    
+
     try:
         await callback.answer()
     except Exception as e:
