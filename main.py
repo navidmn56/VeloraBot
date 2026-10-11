@@ -29416,22 +29416,37 @@ async def my_configs(callback: CallbackQuery):
     RLM = "\u200F"
 
     def get_category_name(order: dict):
-        """دریافت نام دسته از سفارش یا از READY_PACKAGES"""
-        # 1️⃣ از خود سفارش
-        name = order.get('category_name')
-        if name and str(name).strip():
-            return str(name).strip()
+        """دریافت نام دسته از سفارش یا از READY_PACKAGES (بر اساس زبان)"""
+        # ✅ مرحله 1: بر اساس زبان، اول از خود سفارش بخون
+        if lang == "en":
+            name = order.get('category_name_en')
+            if name and str(name).strip():
+                # ✅ چک کن که فارسی نباشه (fix باگ قبلی)
+                if not any('\u0600' <= c <= '\u06FF' for c in name):
+                    return str(name).strip()
+        else:
+            name = order.get('category_name')
+            if name and str(name).strip():
+                return str(name).strip()
 
-        # 2️⃣ از READY_PACKAGES با category_id
+        # ✅ مرحله 2: از READY_PACKAGES با category_id
         cat_id = order.get('category_id')
         if cat_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == cat_id:
                     if lang == "en":
-                        return cat.get('name_en') or cat.get('name') or ""
+                        en_name = cat.get('name_en') or ''
+                        # ✅ اگه name_en خالی یا فارسی بود → از دیتابیس استفاده کن
+                        if en_name and not any('\u0600' <= c <= '\u06FF' for c in en_name):
+                            return en_name
+                        # fallback: از فارسی به انگلیسی ساده
+                        return cat.get('name') or ""
                     return cat.get('name') or ""
 
-        return ""
+        # ✅ مرحله 3: fallback نهایی
+        if lang == "en":
+            return order.get('category_name_en') or order.get('category_name') or ""
+        return order.get('category_name') or ""
 
     def build_category_label(raw_name: str) -> str:
         """ساخت برچسب دسته بدون تکرار 'اشتراک'"""
