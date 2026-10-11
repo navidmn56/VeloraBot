@@ -21907,7 +21907,46 @@ async def admin_broadcast_send(message: Message):
         logger.error(f"خطا در نمایش تأییدیه: {e}")
         await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)        
         
-        
+@dp.callback_query(F.data == "broadcast_back_to_main")
+async def broadcast_back_to_main(callback: CallbackQuery):
+    """بازگشت به منوی اصلی از پیام همگانی - پیام برودکست پاک می‌شه"""
+    user_id = callback.from_user.id
+    
+    # ✅ پاک کردن پیام برودکست
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.debug(f"نتوانست پیام برودکست را حذف کند: {e}")
+    
+    # ✅ نمایش منوی اصلی
+    lang = get_user(user_id).get('lang', 'fa')
+    is_admin = (user_id == ADMIN_ID_INT)
+    
+    text = f"{premium_emoji('rocket', '🚀')} منوی اصلی" if lang == "fa" else f"{premium_emoji('rocket', '🚀')} Main Menu"
+    
+    try:
+        await callback.message.answer(
+            text,
+            reply_markup=get_main_keyboard(is_admin, lang)
+        )
+    except Exception as e:
+        logger.error(f"خطا در نمایش منوی اصلی بعد از برودکست: {e}")
+        # fallback: ارسال مستقیم
+        try:
+            await bot.send_message(
+                user_id,
+                text,
+                reply_markup=get_main_keyboard(is_admin, lang)
+            )
+        except:
+            pass
+    
+    try:
+        await callback.answer()
+    except:
+        pass
+
+   
 @dp.callback_query(F.data == "retry_broadcast_failed")
 async def retry_broadcast_failed(callback: CallbackQuery):
     """ارسال مجدد به کاربرانی که پیام را دریافت نکرده‌اند"""
@@ -22006,28 +22045,63 @@ async def confirm_broadcast(callback: CallbackQuery):
         try:
             user_id = int(uid)
             
+            # ✅ کیبورد «منوی اصلی» برای هر کاربر (بر اساس زبان خودش)
+            user_lang = get_user(user_id).get('lang', 'fa')
+            broadcast_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🏠 منوی اصلی" if user_lang == "fa" else "🏠 Main Menu",
+                    callback_data="broadcast_back_to_main",
+                    style="primary"
+                )]
+            ])
+            
             if broadcast_type == 'text':
                 if len(clean_caption) > 4096:
-                    parts = [clean_caption[i:i+4096] for i in range(0, len(clean_caption), 4096)]
-                    for part in parts:
-                        await bot.send_message(user_id, part, parse_mode=parse_mode)
+                    parts = [clean_caption[j:j+4096] for j in range(0, len(clean_caption), 4096)]
+                    # ✅ دکمه فقط روی آخرین بخش
+                    for idx, part in enumerate(parts):
+                        is_last = (idx == len(parts) - 1)
+                        await bot.send_message(
+                            user_id, part,
+                            parse_mode=parse_mode,
+                            reply_markup=broadcast_keyboard if is_last else None
+                        )
                 else:
-                    await bot.send_message(user_id, clean_caption, parse_mode=parse_mode)
+                    await bot.send_message(
+                        user_id, clean_caption,
+                        parse_mode=parse_mode,
+                        reply_markup=broadcast_keyboard
+                    )
                     
             elif broadcast_type == 'photo':
                 if not media:
                     raise ValueError("media_id is None")
-                await bot.send_photo(user_id, media, caption=clean_caption, parse_mode=parse_mode)
+                await bot.send_photo(
+                    user_id, media,
+                    caption=clean_caption,
+                    parse_mode=parse_mode,
+                    reply_markup=broadcast_keyboard
+                )
                 
             elif broadcast_type == 'file':
                 if not media:
                     raise ValueError("media_id is None")
-                await bot.send_document(user_id, media, caption=clean_caption, parse_mode=parse_mode)
+                await bot.send_document(
+                    user_id, media,
+                    caption=clean_caption,
+                    parse_mode=parse_mode,
+                    reply_markup=broadcast_keyboard
+                )
                 
             elif broadcast_type == 'audio':
                 if not media:
                     raise ValueError("media_id is None")
-                await bot.send_audio(user_id, media, caption=clean_caption, parse_mode=parse_mode)
+                await bot.send_audio(
+                    user_id, media,
+                    caption=clean_caption,
+                    parse_mode=parse_mode,
+                    reply_markup=broadcast_keyboard
+                )
             
             sent_count += 1
             if (i + 1) % 10 == 0:
@@ -22241,7 +22315,6 @@ def sanitize_text_for_broadcast(text: str) -> str:
     return text  
 @dp.callback_query(F.data == "admin_broadcast_test")
 async def admin_broadcast_test(callback: CallbackQuery):
-    """ارسال تست به خودم"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -22249,9 +22322,19 @@ async def admin_broadcast_test(callback: CallbackQuery):
     
     await callback.message.edit_text("⏳ در حال ارسال تست...")
     try:
+        # ✅ کیبورد برای تست
+        test_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                callback_data="broadcast_back_to_main",
+                style="primary"
+            )]
+        ])
+        
         await bot.send_message(
             ADMIN_ID_INT,
-            "📢 <b>تست پیام همگانی</b>\n\n✅ اگر این پیام را میبینید، سیستم پیام همگانی کار میکند!\n\n<i>این یک پیام تست است.</i>"
+            "📢 <b>تست پیام همگانی</b>\n\n✅ اگر این پیام را می‌بینید، سیستم پیام همگانی کار می‌کند!\n\n<i>این یک پیام تست است.</i>",
+            reply_markup=test_keyboard
         )
         await callback.message.edit_text(
             "✅ تست با موفقیت ارسال شد!",
