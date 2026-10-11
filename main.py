@@ -28767,20 +28767,41 @@ async def my_configs(callback: CallbackQuery):
     logger.info(f"📁 کاربر {user_id} کانفیگ‌های خود را مشاهده می‌کند - تعداد: {len(configs_list)}")
 
     # ══════════════════════════════════════════════
-    # helpers — کوتاه‌سازی نام دسته
+    # Helpers
     # ══════════════════════════════════════════════
+
+    # 🔹 RLM برای مجبور کردن RTL
+    RLM = "\u200F"
+
+    def get_category_name(order: dict):
+        """دریافت نام دسته از سفارش یا از READY_PACKAGES"""
+        # 1️⃣ از خود سفارش
+        name = order.get('category_name')
+        if name and str(name).strip():
+            return str(name).strip()
+
+        # 2️⃣ از READY_PACKAGES با category_id
+        cat_id = order.get('category_id')
+        if cat_id:
+            for cat in READY_PACKAGES.get('categories', []):
+                if cat.get('id') == cat_id:
+                    if lang == "en":
+                        return cat.get('name_en') or cat.get('name') or ""
+                    return cat.get('name') or ""
+
+        return ""
+
     def build_category_label(raw_name: str) -> str:
         """ساخت برچسب دسته بدون تکرار 'اشتراک'"""
         name = (raw_name or "").strip()
 
         if lang == "fa":
-            # حذف پیشوند "کانفیگ " اگر بود
+            # حذف "کانفیگ " از ابتدا اگر بود
             if name.startswith("کانفیگ"):
                 name = name[len("کانفیگ"):].strip()
-            # حذف کاراکترهای اضافی ابتدایی
-            name = name.lstrip("·-— ").strip()
+            name = name.lstrip("·-—: ").strip()
 
-            # ✅ اگه از قبل با "اشتراک" شروع میشه، دست نزن
+            # ✅ اگه از قبل با "اشتراک" شروع میشه، دیگه اضافه نکن
             if name.startswith("اشتراک"):
                 base = name
             elif not name:
@@ -28788,18 +28809,15 @@ async def my_configs(callback: CallbackQuery):
             else:
                 base = f"اشتراک {name}"
 
-            # کوتاه‌سازی طول
             MAX_LEN = 18
             if len(base) > MAX_LEN:
                 base = base[:MAX_LEN - 1].rstrip() + "…"
-
             return base
 
         else:
-            # انگلیسی
             if name.lower().startswith("config"):
                 name = name[len("config"):].strip()
-            name = name.lstrip("·-— ").strip()
+            name = name.lstrip("·-—: ").strip()
 
             if name.lower().endswith("sub") or name.lower().endswith("subscription"):
                 base = name
@@ -28811,35 +28829,28 @@ async def my_configs(callback: CallbackQuery):
             MAX_LEN = 18
             if len(base) > MAX_LEN:
                 base = base[:MAX_LEN - 1].rstrip() + "…"
-
             return base
 
     def format_volume(vol_gb: float, is_test: bool, is_unlimited: bool) -> str:
-        """نمایش حجم به صورت خوانا (فارسی: گیگ/مگ ، انگلیسی: GB/MB)"""
-        # ✅ نامحدود
+        """نمایش حجم (فارسی: گیگ/مگ ، انگلیسی: GB/MB)"""
         if is_unlimited and not is_test:
             return "∞"
-
         if vol_gb is None or vol_gb == 0:
             return "∞"
 
-        # محاسبه MB و GB
         mb = vol_gb * 1024
 
-        # ✅ تست: اگه بالای 1024MB بود → گیگ
+        # تست: اگه بالای 1024MB بود → گیگ
         if is_test:
             if mb >= 1024:
                 gb = mb / 1024
-                if gb == int(gb):
-                    gb_str = f"{int(gb)}"
-                else:
-                    gb_str = f"{gb:.1f}"
+                gb_str = f"{int(gb)}" if gb == int(gb) else f"{gb:.1f}"
                 return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str}GB"
             else:
                 mb_str = f"{int(round(mb))}"
                 return f"{mb_str} مگ" if lang == "fa" else f"{mb_str}MB"
 
-        # ─── غیر تست ───
+        # غیر تست
         if vol_gb < 1:
             mb_str = f"{int(round(mb))}"
             return f"{mb_str} مگ" if lang == "fa" else f"{mb_str}MB"
@@ -28849,6 +28860,32 @@ async def my_configs(callback: CallbackQuery):
         else:
             gb_str = f"{vol_gb:.0f}"
             return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str}GB"
+
+    def format_time_left(expire_dt: datetime) -> str:
+        """نمایش زمان باقی‌مانده با واحد مناسب"""
+        delta = expire_dt - datetime.now()
+        secs = int(delta.total_seconds())
+
+        if secs <= 0:
+            return "منقضی" if lang == "fa" else "Expired"
+
+        # کمتر از 1 دقیقه → ثانیه
+        if secs < 60:
+            return f"{secs} ثانیه" if lang == "fa" else f"{secs}s"
+
+        # کمتر از 1 ساعت → دقیقه
+        if secs < 3600:
+            mins = secs // 60
+            return f"{mins} دقیقه" if lang == "fa" else f"{mins}m"
+
+        # کمتر از 1 روز → ساعت
+        if secs < 86400:
+            hours = secs // 3600
+            return f"{hours} ساعت" if lang == "fa" else f"{hours}h"
+
+        # بیشتر از 1 روز → روز
+        days = secs // 86400
+        return f"{days} روز" if lang == "fa" else f"{days}d"
 
     # ══════════════════════════════════════════════
     # حالت خالی — بدون کانفیگ
@@ -28901,17 +28938,16 @@ async def my_configs(callback: CallbackQuery):
     configs_list.sort(key=lambda x: x.get('date', ''), reverse=True)
 
     # ══════════════════════════════════════════════
-    # دریافت اطلاعات زنده از پنل (به صورت موازی)
+    # دریافت اطلاعات زنده از پنل (موازی)
     # ══════════════════════════════════════════════
     async def fetch_one(order: dict) -> dict:
-        """دریافت اطلاعات زنده یک کانفیگ"""
         email = extract_email_from_sub_link(order.get('config_link', ''))
         is_test = order.get('type') == 'test'
         status = order.get('status', 'approved')
         is_active = (status == 'approved')
 
         usage_percent = None
-        days_left = None
+        time_left_text = None
         volume_gb = order.get('volume', 0)
         panel_is_active = None
         is_unlimited = (volume_gb == 0)
@@ -28923,6 +28959,7 @@ async def my_configs(callback: CallbackQuery):
                 if client_info:
                     panel_is_active = client_info.get('enable', True)
 
+                    # حجم
                     total_bytes = client_info.get('totalGB', 0)
                     total_gb = total_bytes / (1024 ** 3) if total_bytes else 0
 
@@ -28933,7 +28970,7 @@ async def my_configs(callback: CallbackQuery):
                         volume_gb = 0
                         is_unlimited = True
 
-                    # مصرف (فقط برای غیر نامحدود)
+                    # مصرف
                     if not is_unlimited:
                         traffic = await xui_get_client_traffic(email)
                         up = (traffic.get('up', 0) if traffic else 0) / (1024 ** 3)
@@ -28947,13 +28984,17 @@ async def my_configs(callback: CallbackQuery):
                     if expiry > 0:
                         try:
                             expire_dt = datetime.fromtimestamp(expiry / 1000)
-                            delta = expire_dt - datetime.now()
-                            days_left = max(0, delta.days)
+                            time_left_text = format_time_left(expire_dt)
                         except Exception:
                             pass
 
             except Exception as e:
                 logger.debug(f"⚠️ خطا در دریافت اطلاعات {email}: {e}")
+
+        # ✅ fallback: اگه پنل نداد، از days سفارش استفاده کن
+        if time_left_text is None and order.get('days'):
+            d = order['days']
+            time_left_text = f"{d} روز" if lang == "fa" else f"{d}d"
 
         return {
             'order': order,
@@ -28961,7 +29002,7 @@ async def my_configs(callback: CallbackQuery):
             'is_test': is_test,
             'is_active': is_active and (panel_is_active is not False),
             'usage_percent': usage_percent,
-            'days_left': days_left,
+            'time_left_text': time_left_text,
             'volume_gb': volume_gb,
             'is_unlimited': is_unlimited,
         }
@@ -28991,11 +29032,11 @@ async def my_configs(callback: CallbackQuery):
         is_test = item['is_test']
         is_active = item['is_active']
         usage = item['usage_percent']
-        days = item['days_left']
+        time_left = item['time_left_text']
         vol = item['volume_gb']
         is_unlimited = item['is_unlimited']
 
-        # ─── آیکون اصلی ───
+        # آیکون اصلی
         if not is_active:
             emoji = "🔴"
         elif is_test:
@@ -29003,37 +29044,30 @@ async def my_configs(callback: CallbackQuery):
         else:
             emoji = "💳"
 
-        # ─── نام/نوع ───
+        # نام/نوع
         if is_test:
             label_parts = ["کانفیگ تست" if lang == "fa" else "Test Config"]
         else:
-            label_parts = [build_category_label(c.get('category_name') or "")]
+            cat_name = get_category_name(c)
+            label_parts = [build_category_label(cat_name)]
 
-        # ─── حجم ───
+        # حجم
         label_parts.append(format_volume(vol, is_test, is_unlimited))
 
-        # ─── مصرف (فقط برای غیر نامحدود) ───
+        # مصرف (فقط غیر نامحدود)
         if not is_unlimited and usage is not None:
             label_parts.append(f"{usage}%")
 
-        # ─── روز باقی‌مانده ───
-        if days is not None:
-            if lang == "fa":
-                label_parts.append(f"{days}روز")
-            else:
-                label_parts.append(f"{days}d")
-        elif c.get('days'):
-            if lang == "fa":
-                label_parts.append(f"{c['days']}روز")
-            else:
-                label_parts.append(f"{c['days']}d")
+        # زمان باقی‌مانده
+        if time_left:
+            label_parts.append(time_left)
 
-        # ─── کنار هم ───
-        label = f"{emoji} " + " · ".join(label_parts)
+        # کنار هم + RLM برای RTL
+        label = f"{RLM}{emoji} " + " · ".join(label_parts)
 
-        # ─── محدودیت طول نهایی ───
-        if len(label) > 60:
-            label = label[:57] + "…"
+        # محدودیت طول
+        if len(label) > 64:
+            label = label[:61] + "…"
 
         buttons.append([InlineKeyboardButton(
             text=label,
@@ -29041,14 +29075,14 @@ async def my_configs(callback: CallbackQuery):
             style="success" if is_active else "danger"
         )])
 
-    # ─── خرید سرویس ───
+    # خرید سرویس
     buttons.append([InlineKeyboardButton(
         text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
         callback_data="buy_service",
         style="primary"
     )])
 
-    # ─── منو اصلی ───
+    # منو اصلی
     buttons.append([InlineKeyboardButton(
         text="🏠 منو اصلی" if lang == "fa" else "🏠 Main Menu",
         callback_data="back_to_main",
@@ -29056,7 +29090,7 @@ async def my_configs(callback: CallbackQuery):
     )])
 
     # ══════════════════════════════════════════════
-    # متن هدر (با ایموجی پریمیوم)
+    # متن هدر
     # ══════════════════════════════════════════════
     count = len(configs_list)
     if lang == "fa":
