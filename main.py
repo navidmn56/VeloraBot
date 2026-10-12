@@ -12075,6 +12075,28 @@ def extract_email_from_sub_link(sub_link: str) -> Optional[str]:
     if parts:
         return parts[-1]  # آخرین قسمت = email
     return None
+def build_sub_link_from_client(email: str, client_data: dict = None) -> str:
+    """
+    ساخت لینک ساب بر اساس subId (اولویت) یا email (fallback)
+    
+    Args:
+        email: ایمیل کلاینت (fallback)
+        client_data: دیکشنری کلاینت از پنل (اگه موجود باشه)
+    
+    Returns:
+        لینک ساب کامل
+    """
+    # ✅ اول subId رو چک کن (منبع اصلی)
+    if client_data and isinstance(client_data, dict):
+        sub_id = client_data.get('subId', '') or ''
+        if sub_id.strip():
+            return f"{SENAI_SUB_URL}/sub/{sub_id}"
+    
+    # ✅ fallback به email (برای کلاینت‌های قدیمی که subId ندارن)
+    if email:
+        return f"{SENAI_SUB_URL}/sub/{email}"
+    
+    return ""
 
 async def xui_get_client_traffic(email: str) -> Optional[dict]:
     """دریافت ترافیک کلاینت"""
@@ -13758,6 +13780,7 @@ async def emergency_backup_from_panel():
                             'inbound_ids': [],
                             'inbound_details': [],
                             'ip_limit': client.get('limitIp', 0),
+                            'subId': client.get('subId', '') or email,
                             'user_name': user_name
                         }
                     else:
@@ -13902,7 +13925,9 @@ async def emergency_backup_from_panel():
                 except:
                     days = 30
             
-            sub_link = f"{SENAI_SUB_URL}/sub/{email}"
+
+            sub_link = build_sub_link_from_client(email, client)
+            sub_id_value = client.get('subId', '') or email
             inbound_ids = client.get('inbound_ids', [])
             
             price = 0
@@ -13925,6 +13950,7 @@ async def emergency_backup_from_panel():
                 'config_id': None,
                 'receipt_photo_id': None,
                 'email': email,
+                'sub_id': sub_id_value,
                 'sub_link': sub_link,
                 'panel_client_id': None,
                 'payment_method': 'emergency_restore',
@@ -32590,7 +32616,8 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                             'order_type': order_type,
                             'inbound_ids': [],
                             'inbound_details': [],
-                            'ip_limit': client.get('limitIp', 0)
+                            'ip_limit': client.get('limitIp', 0),
+                            'subId': client.get('subId', '') or email
                         }
                     
                     clients_dict[email]['inbound_ids'].append(inbound_id)
@@ -32736,7 +32763,8 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
             total_gb_from_panel = client.get('totalGB', 0) / (1024**3)
             total_gb_from_panel = round(total_gb_from_panel, 6)
             
-            sub_link = f"{SENAI_SUB_URL}/sub/{email}"
+            sub_link = build_sub_link_from_client(email, client)
+            sub_id_value = client.get('subId', '') or email
             inbound_ids = client.get('inbound_ids', [])
             is_test = order_type == 'test' or email.startswith('test_') or email.startswith('t')
             old_info = old_order_info.get(email)
@@ -32825,6 +32853,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 'config_id': config_id,
                 'receipt_photo_id': receipt_photo_id,
                 'email': email,
+                'sub_id': sub_id_value,
                 'sub_link': sub_link,
                 'panel_client_id': None,
                 'payment_method': payment_method,
