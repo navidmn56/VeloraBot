@@ -10806,6 +10806,8 @@ async def xui_create_client_with_inbound(
                     comment_text = comment_text[:97] + "..."
                 
                 logger.info(f"📝 کامنت: {comment_text}")
+                import secrets
+                sub_id = secrets.token_urlsafe(16)
                 bulk_data = [
                     {
                         "client": {
@@ -10814,7 +10816,7 @@ async def xui_create_client_with_inbound(
                             "expiryTime": expiry_time,
                             "totalGB": total_bytes,  # 0 = نامحدود
                             "limitIp": ip_limit,  # ✅ محدودیت IP
-                            "subId": email,
+                            "subId": sub_id,
                             "resetStrategy": "no_reset",
                             "comment": comment_text  # ✅ فرمت قدیمی
                         },
@@ -10849,6 +10851,15 @@ async def xui_create_client_with_inbound(
                                     logger.info(f"   👤 محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
                                     logger.info(f"   📡 اینباندها: {valid_inbound_ids}")
                                     logger.info(f"   📝 کامنت: {comment_text}")
+                                    try:
+                                        actual_client = await xui_get_client_info(email)
+                                        if actual_client:
+                                            actual_sub_id = actual_client.get('subId', '') or email
+                                            logger.info(f"   🔗 subId واقعی از پنل: {actual_sub_id}")
+                                            return f"{SENAI_SUB_URL}/sub/{actual_sub_id}"
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ خطا در دریافت subId واقعی: {e}")
+                                    
                                     return f"{SENAI_SUB_URL}/sub/{email}"
                                 else:
                                     error_msg = data.get('msg', 'Unknown error')
@@ -12077,26 +12088,52 @@ def extract_email_from_sub_link(sub_link: str) -> Optional[str]:
     return None
 def build_sub_link_from_client(email: str, client_data: dict = None) -> str:
     """
-    ساخت لینک ساب بر اساس subId (اولویت) یا email (fallback)
-    
-    Args:
-        email: ایمیل کلاینت (fallback)
-        client_data: دیکشنری کلاینت از پنل (اگه موجود باشه)
-    
-    Returns:
-        لینک ساب کامل
+    ساخت لینک ساب با اولویت subId (نه email)
     """
-    # ✅ اول subId رو چک کن (منبع اصلی)
     if client_data and isinstance(client_data, dict):
         sub_id = client_data.get('subId', '') or ''
         if sub_id.strip():
             return f"{SENAI_SUB_URL}/sub/{sub_id}"
     
-    # ✅ fallback به email (برای کلاینت‌های قدیمی که subId ندارن)
+    # fallback به email
     if email:
         return f"{SENAI_SUB_URL}/sub/{email}"
     
     return ""
+def get_order_client_email(order: dict) -> Optional[str]:
+    """
+    دریافت email کلاینت از سفارش (نه subId!)
+    
+    ⚠️ توجه: این تابع فقط email رو برمی‌گردونه چون API پنل با email کار می‌کنه.
+    برای ساخت لینک ساب از build_sub_link_from_client استفاده کن.
+    """
+    # ✅ اول از فیلد email سفارش
+    email = order.get('email', '')
+    if email and str(email).strip():
+        return str(email).strip()
+    
+    # ⚠️ این fallback فقط زمانی استفاده می‌شه که email نداریم
+    # ولی ممکنه اشتباه باشه چون آخر لینک subId هست نه email
+    logger.warning(
+        f"⚠️ [get_order_client_email] سفارش #{order.get('order_id')} "
+        f"email نداره - نمی‌تونیم به API پنل درخواست بدیم"
+    )
+    return None
+async def find_email_by_sub_id(sub_id: str) -> Optional[str]:
+    """پیدا کردن email کلاینت با subId (برای مواقعی که email رو نداریم)"""
+    if not sub_id:
+        return None
+    try:
+        inbounds = await xui_get_inbounds()
+        for inbound in inbounds:
+            settings = inbound.get('settings', {})
+            clients = settings.get('clients', [])
+            for client in clients:
+                if client.get('subId') == sub_id:
+                    return client.get('email', '')
+    except Exception as e:
+        logger.error(f"❌ خطا در جستجوی subId: {e}")
+    return None
 
 async def xui_get_client_traffic(email: str) -> Optional[dict]:
     """دریافت ترافیک کلاینت"""
@@ -13516,10 +13553,7 @@ async def extend_service_start(callback: CallbackQuery):
     
     # ✅✅✅ بررسی وجود کانفیگ در پنل (فقط اگر پنل فعال باشد)
     if SENAI_PANEL_ENABLED:
-        email = (
-            order.get('email') 
-            or extract_email_from_sub_link(order.get('config_link', ''))
-        )
+        email = get_order_client_email(order)
         
         # اگه ایمیل پیدا نشد، سرویس ناقص است
         if not email:
@@ -13603,11 +13637,12 @@ async def extend_service_start(callback: CallbackQuery):
         )
     
     # ✅ ذخیره state تمدید
+    resolved_email = get_order_client_email(order) or order.get('email') or None
     user_states[user_id] = {
         'extend_order_id': order_id,
         'current_volume': order.get('volume', 0),
         'current_days': order.get('days', 0),
-        'email': order.get('email'),
+        'email': resolved_email,
         'is_extend': True,
         'timestamp': datetime.now().isoformat()
     }
@@ -23014,7 +23049,7 @@ async def show_qr_code(callback: CallbackQuery):
     logger.info(f"اطلاعات سفارش: volume={order.get('volume')}, days={order.get('days')}, link={order.get('config_link')[:30]}...")
     
     try:
-        email = extract_email_from_sub_link(order.get('config_link', ''))
+        email = get_order_client_email(order)
         
         if email and SENAI_PANEL_ENABLED:
             links = await xui_get_client_links(email)
@@ -23172,7 +23207,7 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
     if not order:
         return [], None
 
-    email = extract_email_from_sub_link(order.get('config_link', ''))
+    email = get_order_client_email(order)
     links = []
 
     if email and SENAI_PANEL_ENABLED:
@@ -30004,7 +30039,7 @@ async def my_configs(callback: CallbackQuery):
     # دریافت اطلاعات زنده از پنل (موازی)
     # ══════════════════════════════════════════════
     async def fetch_one(order: dict) -> dict:
-        email = extract_email_from_sub_link(order.get('config_link', ''))
+        email = get_order_client_email(order)
         is_test = order.get('type') == 'test'
         status = order.get('status', 'approved')
         is_active = (status == 'approved')
@@ -30431,7 +30466,7 @@ async def view_single_config(callback: CallbackQuery):
         await callback.message.delete()
     except:
         pass
-    email = extract_email_from_sub_link(order.get('config_link', ''))
+    email = get_order_client_email(order)
     caption = get_config_caption(order_id, order['volume'], order['days'], order['price'], order['config_link'], lang)
     
     if email and SENAI_PANEL_ENABLED:
@@ -30474,7 +30509,7 @@ async def refresh_config_info(callback: CallbackQuery):
         await callback.answer("❌ کانفیگ یافت نشد" if lang=='fa' else "❌ Config not found", show_alert=True)
         return
     
-    email = extract_email_from_sub_link(order['config_link'])
+    email = get_order_client_email(order)
     if not email or not SENAI_PANEL_ENABLED:
         await callback.answer("❌ اطلاعات در دسترس نیست" if lang=='fa' else "❌ Info unavailable", show_alert=True)
         return
@@ -32983,7 +33018,7 @@ async def sync_single_config(order_id: int) -> bool:
         logger.warning(f"⚠️ سفارش #{order_id} برای همگام‌سازی معتبر نیست")
         return False
     
-    email = extract_email_from_sub_link(order.get('config_link', ''))
+    email = get_order_client_email(order)
     if not email:
         logger.warning(f"⚠️ ایمیل سفارش #{order_id} یافت نشد")
         return False
@@ -37709,7 +37744,7 @@ async def admin_view_config_detail(callback: CallbackQuery):
     else:
         ip_display = f"تعداد کاربر: {ip_limit} دستگاه"
     
-    email = extract_email_from_sub_link(order.get('config_link', ''))
+    email = get_order_client_email(order)
     if not email:
         await callback.answer("❌ اطلاعات در دسترس نیست", show_alert=True)
         return
