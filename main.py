@@ -12407,6 +12407,8 @@ async def save_feedback(user_id: int, order_id: int, rating: str, comment: str =
         logger.info(f"بازخورد جدید از کاربر {user_id} برای سفارش #{order_id} ذخیره شد")
     except Exception as e:
         logger.error(f"خطا در ارسال بازخورد به ادمین: {e}")
+        
+        
 def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = None) -> InlineKeyboardMarkup:
     """کیبورد اصلی با پشتیبانی از وضعیت تایید کاربر و سقف تست"""
     show_approval_warning = False
@@ -12443,61 +12445,62 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             can_take_test = True
     
     if lang == "fa":
-        buttons = [
-            [
-                InlineKeyboardButton(text=f"🌐 کانفیگ‌های من", callback_data="my_configs", style= "primary"),
-                InlineKeyboardButton(text=f"🛒 خرید سرویس", callback_data="buy_service" if is_approved else "noop", style="success" if is_approved else "danger")
-            ],
-            [
-                InlineKeyboardButton(text=f"💰 افزایش موجودی", callback_data="increase_balance" if is_approved else "noop", style ="primary"),
-                InlineKeyboardButton(text=f"👤 حساب کاربری", callback_data="my_account" if is_approved else "noop", style ="primary")
-            ],
-            [
-                InlineKeyboardButton(text=f"👥 دعوت از دوستان", callback_data="invite_friends", style="primary"),
-            ],
-            [
-                InlineKeyboardButton(text=f"🏷️ اعمال کوپن", callback_data="apply_coupon", style="primary")
-            ]
-        ]
+        buttons = []
+        
+        # ─── ردیف هشدار تایید ادمین (اگه لازم بود) ───
         if show_approval_warning:
-            buttons.insert(0, [
+            buttons.append([
                 InlineKeyboardButton(
                     text="⚠️ در انتظار تایید ادمین",
                     callback_data="noop",
                     style="danger"
                 )
             ])
-        if AI_FEATURE_ENABLED:
-            buttons[2].append(InlineKeyboardButton(text=f"🤖 چت با AI", callback_data="ai_chat", style="primary"))
         
-        # ✅ دکمه تست - فقط اگه کاربر تست باقی داره
+        # ─── ردیف ۱: خرید سرویس (تنها) ───
+        buttons.append([
+            InlineKeyboardButton(
+                text="🛒 خرید سرویس",
+                callback_data="buy_service" if is_approved else "noop",
+                style="success" if is_approved else "danger"
+            )
+        ])
+        
+        # ─── ردیف ۲: حساب کاربری | کانفیگ‌های من ───
+        buttons.append([
+            InlineKeyboardButton(text="👤 حساب کاربری", callback_data="my_account" if is_approved else "noop"),
+            InlineKeyboardButton(text="🌐 کانفیگ‌های من", callback_data="my_configs")
+        ])
+        
+        # ─── ردیف ۳: اعمال کوپن | افزایش موجودی ───
+        buttons.append([
+            InlineKeyboardButton(text="🏷️ اعمال کوپن", callback_data="apply_coupon", style="primary"),
+            InlineKeyboardButton(text="💰 افزایش موجودی", callback_data="increase_balance" if is_approved else "noop")
+        ])
+        
+        # ─── ردیف ۴: دعوت از دوستان | چت با AI ───
+        row_4 = [InlineKeyboardButton(text="👥 دعوت از دوستان", callback_data="invite_friends", style="primary")]
+        if AI_FEATURE_ENABLED:
+            row_4.append(InlineKeyboardButton(text="🤖 چت با AI", callback_data="ai_chat", style="primary"))
+        buttons.append(row_4)
+        
+        # ─── ردیف ۵: کانفیگ خوش‌آمد (فقط اگه تست باقی مونده) ───
         if TEST_SERVICE_STATUS.get('enabled', False) and can_take_test:
             buttons.append([
-                InlineKeyboardButton(text=f"🎁 کانفیگ خوش آمد", callback_data="get_test_service", style="primary")
+                InlineKeyboardButton(text="🎁 کانفیگ خوش‌آمد", callback_data="get_test_service", style="primary")
             ])
         
-        buttons.append([   
-            InlineKeyboardButton(text=f"🌎 تغییر زبان", callback_data="change_language")
+        # ─── ردیف ۶: تغییر زبان ───
+        buttons.append([
+            InlineKeyboardButton(text="🌎 تغییر زبان", callback_data="change_language")
         ])
+    
     else:
-        buttons = [
-            [
-                InlineKeyboardButton(text=f"🌐 My Configs", callback_data="my_configs", style = "primary"),
-                InlineKeyboardButton(text=f"🛒 Buy Service", callback_data="buy_service" if is_approved else "noop", style="success" if is_approved else "danger")
-            ],
-            [
-                InlineKeyboardButton(text=f"💰 Increase Balance", callback_data="increase_balance" if is_approved else "noop", style= "primary"),
-                InlineKeyboardButton(text=f"👤 My Account", callback_data="my_account" if is_approved else "noop", style = "primary")
-            ],
-            [
-                InlineKeyboardButton(text=f"👥 Invite Friends", callback_data="invite_friends", style="primary"),
-            ],
-            [
-                InlineKeyboardButton(text=f"🏷️ Apply coupon", callback_data="apply_coupon", style="primary")
-            ]
-        ]
+        buttons = []
+        
+        # ─── ردیف هشدار تایید ادمین (اگه لازم بود) ───
         if show_approval_warning:
-            buttons.insert(0, [
+            buttons.append([
                 InlineKeyboardButton(
                     text="⚠️ Pending Admin Approval",
                     callback_data="noop",
@@ -12505,21 +12508,49 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 )
             ])
         
-        if AI_FEATURE_ENABLED:
-            buttons[2].append(InlineKeyboardButton(text=f"🤖 Chat with AI", callback_data="ai_chat", style="primary"))
+        # ─── ردیف ۱: خرید سرویس (تنها) ───
+        buttons.append([
+            InlineKeyboardButton(
+                text="🛒 Buy Service",
+                callback_data="buy_service" if is_approved else "noop",
+                style="success" if is_approved else "danger"
+            )
+        ])
         
-        # ✅ دکمه تست - فقط اگه کاربر تست باقی داره
+        # ─── ردیف ۲: حساب کاربری | کانفیگ‌های من ───
+        buttons.append([
+            InlineKeyboardButton(text="👤 My Account", callback_data="my_account" if is_approved else "noop"),
+            InlineKeyboardButton(text="🌐 My Configs", callback_data="my_configs")
+        ])
+        
+        # ─── ردیف ۳: اعمال کوپن | افزایش موجودی ───
+        buttons.append([
+            InlineKeyboardButton(text="🏷️ Apply coupon", callback_data="apply_coupon", style="primary"),
+            InlineKeyboardButton(text="💰 Increase Balance", callback_data="increase_balance" if is_approved else "noop")
+        ])
+        
+        # ─── ردیف ۴: دعوت از دوستان | چت با AI ───
+        row_4 = [InlineKeyboardButton(text="👥 Invite Friends", callback_data="invite_friends", style="primary")]
+        if AI_FEATURE_ENABLED:
+            row_4.append(InlineKeyboardButton(text="🤖 Chat with AI", callback_data="ai_chat", style="primary"))
+        buttons.append(row_4)
+        
+        # ─── ردیف ۵: کانفیگ خوش‌آمد (فقط اگه تست باقی مونده) ───
         if TEST_SERVICE_STATUS.get('enabled', False) and can_take_test:
             buttons.append([
-                InlineKeyboardButton(text=f"🎁 Welcome Config", callback_data="get_test_service", style="primary")
+                InlineKeyboardButton(text="🎁 Welcome Config", callback_data="get_test_service", style="primary")
             ])
-            
-        buttons.append([   
-            InlineKeyboardButton(text=f"🌎 Change Language", callback_data="change_language")
+        
+        # ─── ردیف ۶: تغییر زبان ───
+        buttons.append([
+            InlineKeyboardButton(text="🌎 Change Language", callback_data="change_language")
         ])
     
+    # ─── ردیف آخر: پنل ادمین (فقط ادمین) ───
     if is_admin:
-        buttons.append([InlineKeyboardButton(text=f"👑 {'پنل ادمین' if lang=='fa' else 'Admin Panel'}", callback_data="admin_panel")])
+        buttons.append([
+            InlineKeyboardButton(text=f"👑 {'پنل ادمین' if lang=='fa' else 'Admin Panel'}", callback_data="admin_panel")
+        ])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
