@@ -12449,8 +12449,8 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 InlineKeyboardButton(text=f"🛒 خرید سرویس", callback_data="buy_service" if is_approved else "noop", style="success" if is_approved else "danger")
             ],
             [
-                InlineKeyboardButton(text=f"💰 افزایش موجودی", callback_data="increase_balance" if is_approved else "noop"),
-                InlineKeyboardButton(text=f"👤 حساب کاربری", callback_data="my_account" if is_approved else "noop")
+                InlineKeyboardButton(text=f"💰 افزایش موجودی", callback_data="increase_balance" if is_approved else "noop", style ="primary"),
+                InlineKeyboardButton(text=f"👤 حساب کاربری", callback_data="my_account" if is_approved else "noop", style ="primary")
             ],
             [
                 InlineKeyboardButton(text=f"👥 دعوت از دوستان", callback_data="invite_friends", style="primary"),
@@ -12486,8 +12486,8 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 InlineKeyboardButton(text=f"🛒 Buy Service", callback_data="buy_service" if is_approved else "noop", style="success" if is_approved else "danger")
             ],
             [
-                InlineKeyboardButton(text=f"💰 Increase Balance", callback_data="increase_balance" if is_approved else "noop"),
-                InlineKeyboardButton(text=f"👤 My Account", callback_data="my_account" if is_approved else "noop")
+                InlineKeyboardButton(text=f"💰 Increase Balance", callback_data="increase_balance" if is_approved else "noop", style= "primary"),
+                InlineKeyboardButton(text=f"👤 My Account", callback_data="my_account" if is_approved else "noop", style = "primary")
             ],
             [
                 InlineKeyboardButton(text=f"👥 Invite Friends", callback_data="invite_friends", style="primary"),
@@ -14364,7 +14364,7 @@ async def exit_ai_chat(callback: CallbackQuery):
     
     await callback.message.edit_text(
         text,
-        reply_markup=get_main_keyboard(is_admin, lang)
+        reply_markup=get_main_keyboard(is_admin, lang, user_id)
     )
     
     try:
@@ -17064,7 +17064,7 @@ async def cancel_extend(callback: CallbackQuery):
     else:
         text = f"{premium_emoji('rocket', '🚀')} Main Menu"
     
-    keyboard = get_main_keyboard(is_admin, lang)
+    keyboard = get_main_keyboard(is_admin, lang, user_id)
     
     try:
         await callback.message.edit_text(
@@ -21726,7 +21726,7 @@ async def back_to_main(callback: CallbackQuery):
     else:
         text = f"{premium_emoji('rocket', '🚀')} Main Menu"
     if callback.message.content_type == 'text':
-        await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang))
+        await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang, user_id))
     else:
         try:
             await callback.message.delete()
@@ -21736,7 +21736,7 @@ async def back_to_main(callback: CallbackQuery):
         await bot.send_message(
             callback.message.chat.id,
             text,
-            reply_markup=get_main_keyboard(is_admin, lang)
+            reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     
     try:
@@ -22312,14 +22312,14 @@ async def broadcast_back_to_main(callback: CallbackQuery):
     try:
         await callback.message.answer(
             text,
-            reply_markup=get_main_keyboard(is_admin, lang)
+            reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     except Exception as e:
         logger.error(f"خطا در نمایش منوی اصلی بعد از برودکست: {e}")
         try:
             await bot.send_message(
                 user_id, text,
-                reply_markup=get_main_keyboard(is_admin, lang)
+                reply_markup=get_main_keyboard(is_admin, lang, user_id)
             )
         except:
             pass
@@ -24549,12 +24549,12 @@ async def cancel_order_direct(callback: CallbackQuery):
     if lang == "fa":
         await callback.message.edit_text(
             f"{premium_emoji('rocket', '🚀')} منوی اصلی",
-            reply_markup=get_main_keyboard(is_admin, lang)
+            reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     else:
         await callback.message.edit_text(
             f"{premium_emoji('rocket', '🚀')} Main Menu",
-            reply_markup=get_main_keyboard(is_admin, lang)
+            reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     
     try:
@@ -25583,7 +25583,7 @@ async def cancel_payment(callback: CallbackQuery):
     else:
         text = f"{premium_emoji('danger', '❌')} Payment cancelled\n\n🏷️ Your coupon is still valid."
     
-    await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang))
+    await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang, user_id))
     try:
         await callback.answer()
     except Exception as e:
@@ -26098,7 +26098,7 @@ async def handle_receipt(message: Message):
     try:
         await message.reply(
             "🚀 منوی اصلی" if lang=='fa' else "🚀 Main Menu",
-            reply_markup=get_main_keyboard(is_admin, lang)
+            reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     except Exception as e:
         logger.warning(f"خطا در ارسال منوی اصلی: {e}")
@@ -26106,7 +26106,7 @@ async def handle_receipt(message: Message):
             await bot.send_message(
                 user_id,
                 "🚀 منوی اصلی" if lang=='fa' else "🚀 Main Menu",
-                reply_markup=get_main_keyboard(is_admin, lang)
+                reply_markup=get_main_keyboard(is_admin, lang, user_id)
             )
         except Exception as e2:
             logger.error(f"خطا در ارسال منوی اصلی (تلاش دوم): {e2}")
