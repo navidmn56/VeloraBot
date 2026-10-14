@@ -12460,7 +12460,7 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         # ─── ردیف ۱: خرید سرویس (تنها) ───
         buttons.append([
             InlineKeyboardButton(
-                text="🛒 خرید سرویس",
+                text="🛒 خرید کانفیگ",
                 callback_data="buy_service" if is_approved else "noop",
                 style="success" if is_approved else "danger"
             )
@@ -12468,14 +12468,14 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         
         # ─── ردیف ۲: حساب کاربری | کانفیگ‌های من ───
         buttons.append([
-            InlineKeyboardButton(text="👤 حساب کاربری", callback_data="my_account" if is_approved else "noop"),
-            InlineKeyboardButton(text="🌐 کانفیگ‌های من", callback_data="my_configs")
+            InlineKeyboardButton(text="👤 حساب کاربری", callback_data="my_account" if is_approved else "noop", style="primary"),
+            InlineKeyboardButton(text="🌐 کانفیگ‌های من", callback_data="my_configs", style="primary")
         ])
         
         # ─── ردیف ۳: اعمال کوپن | افزایش موجودی ───
         buttons.append([
             InlineKeyboardButton(text="🏷️ اعمال کوپن", callback_data="apply_coupon", style="primary"),
-            InlineKeyboardButton(text="💰 افزایش موجودی", callback_data="increase_balance" if is_approved else "noop")
+            InlineKeyboardButton(text="💰 افزایش موجودی", callback_data="increase_balance" if is_approved else "noop", style="primary")
         ])
         
         # ─── ردیف ۴: دعوت از دوستان | چت با AI ───
@@ -12511,7 +12511,7 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         # ─── ردیف ۱: خرید سرویس (تنها) ───
         buttons.append([
             InlineKeyboardButton(
-                text="🛒 Buy Service",
+                text="🛒 Buy Config",
                 callback_data="buy_service" if is_approved else "noop",
                 style="success" if is_approved else "danger"
             )
@@ -12519,14 +12519,14 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         
         # ─── ردیف ۲: حساب کاربری | کانفیگ‌های من ───
         buttons.append([
-            InlineKeyboardButton(text="👤 My Account", callback_data="my_account" if is_approved else "noop"),
-            InlineKeyboardButton(text="🌐 My Configs", callback_data="my_configs")
+            InlineKeyboardButton(text="👤 My Account", callback_data="my_account" if is_approved else "noop", style="primary"),
+            InlineKeyboardButton(text="🌐 My Configs", callback_data="my_configs", style="primary")
         ])
         
         # ─── ردیف ۳: اعمال کوپن | افزایش موجودی ───
         buttons.append([
             InlineKeyboardButton(text="🏷️ Apply coupon", callback_data="apply_coupon", style="primary"),
-            InlineKeyboardButton(text="💰 Increase Balance", callback_data="increase_balance" if is_approved else "noop")
+            InlineKeyboardButton(text="💰 Increase Balance", callback_data="increase_balance" if is_approved else "noop", style="primary")
         ])
         
         # ─── ردیف ۴: دعوت از دوستان | چت با AI ───
