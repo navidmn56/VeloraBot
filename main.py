@@ -12408,7 +12408,7 @@ async def save_feedback(user_id: int, order_id: int, rating: str, comment: str =
     except Exception as e:
         logger.error(f"خطا در ارسال بازخورد به ادمین: {e}")
 def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = None) -> InlineKeyboardMarkup:
-    """کیبورد اصلی با پشتیبانی از وضعیت تایید کاربر"""
+    """کیبورد اصلی با پشتیبانی از وضعیت تایید کاربر و سقف تست"""
     show_approval_warning = False
     is_approved = True
     
@@ -12423,10 +12423,29 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             if not is_approved:
                 show_approval_warning = True
     
+    # ═══════════════════════════════════════════
+    # ✅ بررسی سقف تست کاربر
+    # ═══════════════════════════════════════════
+    can_take_test = True
+    
+    if user_id and not is_admin:
+        try:
+            uid = str(user_id)
+            user_test_data = USER_TEST_USAGE.get(uid, {})
+            test_count = user_test_data.get('count', 0)
+            
+            user_settings = get_user_test_settings(user_id)
+            max_tests = user_settings.get('max_tests', TEST_SERVICE_STATUS.get('max_tests', 1))
+            
+            can_take_test = test_count < max_tests
+        except Exception as e:
+            logger.warning(f"خطا در بررسی سقف تست کاربر {user_id}: {e}")
+            can_take_test = True
+    
     if lang == "fa":
         buttons = [
             [
-                InlineKeyboardButton(text=f"📁 کانفیگ‌های من", callback_data="my_configs"),
+                InlineKeyboardButton(text=f"🌐 کانفیگ‌های من", callback_data="my_configs", style= "primary"),
                 InlineKeyboardButton(text=f"🛒 خرید سرویس", callback_data="buy_service" if is_approved else "noop", style="success" if is_approved else "danger")
             ],
             [
@@ -12449,19 +12468,21 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 )
             ])
         if AI_FEATURE_ENABLED:
-            buttons[2].append(InlineKeyboardButton(text=f"🤖 {'چت با AI' if lang=='fa' else 'Chat with AI'}", callback_data="ai_chat", style="primary"))
-        if TEST_SERVICE_STATUS.get('enabled', False):
+            buttons[2].append(InlineKeyboardButton(text=f"🤖 چت با AI", callback_data="ai_chat", style="primary"))
+        
+        # ✅ دکمه تست - فقط اگه کاربر تست باقی داره
+        if TEST_SERVICE_STATUS.get('enabled', False) and can_take_test:
             buttons.append([
-                InlineKeyboardButton(text=f"🧪 دریافت تست رایگان", callback_data="get_test_service", style="primary")
+                InlineKeyboardButton(text=f"🎁 کانفیگ خوش آمد", callback_data="get_test_service", style="primary")
             ])
         
         buttons.append([   
-            InlineKeyboardButton(text=f"🌐 تغییر زبان", callback_data="change_language")
+            InlineKeyboardButton(text=f"🌎 تغییر زبان", callback_data="change_language")
         ])
     else:
         buttons = [
             [
-                InlineKeyboardButton(text=f"📁 My Configs", callback_data="my_configs"),
+                InlineKeyboardButton(text=f"🌐 My Configs", callback_data="my_configs", style = "primary"),
                 InlineKeyboardButton(text=f"🛒 Buy Service", callback_data="buy_service" if is_approved else "noop", style="success" if is_approved else "danger")
             ],
             [
@@ -12485,15 +12506,16 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             ])
         
         if AI_FEATURE_ENABLED:
-            buttons[2].append(InlineKeyboardButton(text=f"🤖 {'چت با AI' if lang=='fa' else 'Chat with AI'}", callback_data="ai_chat", style="primary"))
+            buttons[2].append(InlineKeyboardButton(text=f"🤖 Chat with AI", callback_data="ai_chat", style="primary"))
         
-        if TEST_SERVICE_STATUS.get('enabled', False):
+        # ✅ دکمه تست - فقط اگه کاربر تست باقی داره
+        if TEST_SERVICE_STATUS.get('enabled', False) and can_take_test:
             buttons.append([
-                InlineKeyboardButton(text=f"🧪 Free Tier", callback_data="get_test_service", style="primary")
+                InlineKeyboardButton(text=f"🎁 Welcome Config", callback_data="get_test_service", style="primary")
             ])
             
         buttons.append([   
-            InlineKeyboardButton(text=f"🌐 Change Language", callback_data="change_language")
+            InlineKeyboardButton(text=f"🌎 Change Language", callback_data="change_language")
         ])
     
     if is_admin:
