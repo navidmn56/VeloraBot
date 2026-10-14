@@ -12255,19 +12255,27 @@ def get_config_caption(
     order = orders.get(str(order_id))
     is_test = False
     category_name = ""
+    category_name_en = ""
     
     if order:
         is_test = order.get('type') == 'test'
         category_name = order.get('category_name', '') or ''
+        category_name_en = order.get('category_name_en', '') or ''
     
     # ─── عنوان ───
     if is_test:
         title_emoji = premium_emoji('gift', '🎁')
         title = f"{title_emoji} کانفیگ خوش‌آمد رایگان" if lang == "fa" else f"{title_emoji} Free Welcome Config"
-    elif category_name:
-        clean_name = category_name.replace("کانفیگ ", "").strip()
+    elif category_name or category_name_en:
         title_emoji = premium_emoji('globe', '🌐')
-        title = f"{title_emoji} کانفیگ {clean_name}" if lang == "fa" else f"{title_emoji} {category_name}"
+        if lang == "fa":
+            clean_name = category_name.replace("کانفیگ ", "").strip()
+            title = f"{title_emoji} کانفیگ {clean_name}"
+        else:
+            # ✅ برای انگلیسی از name_en استفاده کن
+            display_name = category_name_en if category_name_en else category_name
+            clean_name = display_name.replace("Config ", "").strip()
+            title = f"{title_emoji} {clean_name}"
     else:
         title_emoji = premium_emoji('config', '📦')
         title = f"{title_emoji} کانفیگ شما" if lang == "fa" else f"{title_emoji} Your Config"
