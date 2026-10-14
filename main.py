@@ -30156,75 +30156,74 @@ async def show_all_my_configs(callback: CallbackQuery):
         )
         return
 
-    # جدیدترین کانفیگ‌ها اول
-    configs_list.sort(
-        key=lambda x: x.get('date', ''),
-        reverse=True
-    )
+    configs_list.sort(key=lambda x: x.get('date', ''), reverse=True)
 
     # ─────────────────────────────────────
-    # Body (بدون هدر)
+    # Body
     # ─────────────────────────────────────
     text = ""
 
     for i, c in enumerate(configs_list, 1):
 
         order_id = c.get('order_id', '?')
-        volume = c.get('volume', '?')
-        days = c.get('days', '?')
-        price = c.get('price', 0)
+        volume = c.get('volume', 0)
         config_link = c.get('config_link', '')
-
-        sub_link = c.get('sub_link', '')
-
-        # نام کانفیگ
-        if sub_link:
-            label = sub_link.split('/')[-1]
-            if len(label) > 25:
-                label = label[:22] + '...'
-        else:
-            email = c.get('email', '')
-            label = email if email else f"Config-{order_id}"
-
-        # قیمت
+        email = c.get('email', '')
         is_test = c.get('type') == 'test'
+        category_name = c.get('category_name', '') or ''
 
+        # ─── عنوان ───
         if is_test:
-            price_display_fa = "رایگان"
-            price_display_en = "Free"
+            title_emoji = premium_emoji('gift', '🎁')
+            title = f"{title_emoji} کانفیگ خوش‌آمد رایگان" if lang == "fa" else f"{title_emoji} Free Welcome Config"
+        elif category_name:
+            clean_name = category_name.replace("کانفیگ ", "").strip()
+            title_emoji = premium_emoji('globe', '🌐')
+            title = f"{title_emoji} کانفیگ {clean_name}" if lang == "fa" else f"{title_emoji} {category_name}"
         else:
-            price_display_fa = f"{price:,} تومان"
-            price_display_en = f"{price:,} Toman"
+            title_emoji = premium_emoji('config', '📦')
+            title = f"{title_emoji} کانفیگ شما" if lang == "fa" else f"{title_emoji} Your Config"
 
-        # ─────────────────────────────────
-        # Persian
-        # ─────────────────────────────────
+        # ─── حجم ───
+        if volume == 0:
+            volume_display = "نامحدود" if lang == "fa" else "Unlimited"
+        else:
+            # حجم‌های کمتر از 1 رو مگ نشون بده
+            if volume < 1:
+                mb = volume * 1024
+                volume_display = f"{mb:.0f} مگ" if lang == "fa" else f"{mb:.0f} MB"
+            else:
+                v = f"{volume:.1f}".rstrip('0').rstrip('.')
+                volume_display = f"{v} گیگ" if lang == "fa" else f"{v} GB"
+
+        # ─── اطلاعات ترافیک از پنل ───
+        traffic_info = ""
+        if email and SENAI_PANEL_ENABLED:
+            try:
+                client_info = await xui_get_client_info(email)
+                if client_info:
+                    traffic_data = await xui_get_client_traffic(email)
+                    traffic_info = format_traffic_info(client_info, traffic_data, lang)
+            except Exception as e:
+                logger.debug(f"Error fetching traffic for {email}: {e}")
+
+        # ─── لینک ───
+        link_emoji = premium_emoji('link', '🔗')
+
         if lang == "fa":
             text += f"""
-🔹 <b>#{i} | {label}</b>
+{title} ({volume_display}){traffic_info}
 
-📦 حجم: <b>{volume}GB</b>
-⏱ مدت: <b>{days} روز</b>
-💰 قیمت: <b>{price_display_fa}</b>
-
-🔗 <b>لینک اتصال:</b>
+{link_emoji} <b>لینک اشتراک</b>
 <a href="{config_link}">{config_link}</a>
 
    ━━━━━━━━━━━━━━━━━━━━
 """
-
-        # ─────────────────────────────────
-        # English
-        # ─────────────────────────────────
         else:
             text += f"""
-🔹 <b>#{i} | {label}</b>
+{title} ({volume_display}){traffic_info}
 
-📦 Volume: <b>{volume}GB</b>
-⏱ Duration: <b>{days} days</b>
-💰 Price: <b>{price_display_en}</b>
-
-🔗 <b>Connection Link:</b>
+{link_emoji} <b>Subscription Link</b>
 <a href="{config_link}">{config_link}</a>
 
    ━━━━━━━━━━━━━━━━━━━━
@@ -30237,23 +30236,15 @@ async def show_all_my_configs(callback: CallbackQuery):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=(
-                        "🔙 کانفیگ‌های من"
-                        if lang == "fa"
-                        else "🔙 My Configs"
-                    ),
-                    callback_data="my_configs"
+                    text="🔙 کانفیگ‌های من" if lang == "fa" else "🔙 My Configs",
+                    callback_data="my_configs",
+                    style="primary"
                 ),
                 InlineKeyboardButton(
-                    text=(
-                        "🏠 منوی اصلی"
-                        if lang == "fa"
-                        else "🏠 Main Menu"
-                    ),
+                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                     callback_data="back_to_main",
-                    style="primary"
+                    style="danger"
                 )
-                
             ]
         ]
     )
@@ -30262,7 +30253,6 @@ async def show_all_my_configs(callback: CallbackQuery):
     # Long message → TXT file
     # ─────────────────────────────────────
     if len(text) > 4000:
-
         from io import BytesIO
         from aiogram.types import BufferedInputFile
 
@@ -30270,26 +30260,13 @@ async def show_all_my_configs(callback: CallbackQuery):
         file_buffer.write(text.encode('utf-8'))
         file_buffer.seek(0)
 
-        filename = (
-            f"configs_{user_id}_"
-            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        )
-
-        input_file = BufferedInputFile(
-            file_buffer.read(),
-            filename=filename
-        )
+        filename = f"configs_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        input_file = BufferedInputFile(file_buffer.read(), filename=filename)
 
         if lang == "fa":
-            caption = (
-                f"📂 <b>کانفیگ‌های شما</b>\n"
-                f"📊 تعداد: <b>{len(configs_list)}</b>"
-            )
+            caption = f"📂 <b>کانفیگ‌های شما</b>\n📊 تعداد: <b>{len(configs_list)}</b>"
         else:
-            caption = (
-                f"📂 <b>Your Configurations</b>\n"
-                f"📊 Total: <b>{len(configs_list)}</b>"
-            )
+            caption = f"📂 <b>Your Configurations</b>\n📊 Total: <b>{len(configs_list)}</b>"
 
         try:
             await callback.message.delete()
@@ -30313,17 +30290,12 @@ async def show_all_my_configs(callback: CallbackQuery):
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
-
         except Exception as e:
-            logger.warning(
-                f"خطا در ویرایش لیست کانفیگ‌ها: {e}"
-            )
-
+            logger.warning(f"خطا در ویرایش لیست کانفیگ‌ها: {e}")
             try:
                 await callback.message.delete()
             except Exception:
                 pass
-
             await callback.message.answer(
                 text,
                 reply_markup=keyboard,
@@ -30333,9 +30305,7 @@ async def show_all_my_configs(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(
-            f"خطا در callback.answer: {e}"
-        )
+        logger.warning(f"خطا در callback.answer: {e}")
         
 @dp.callback_query(F.data.startswith("view_config_"))
 async def view_single_config(callback: CallbackQuery):
@@ -30343,25 +30313,46 @@ async def view_single_config(callback: CallbackQuery):
     user_id = callback.from_user.id
     order_id = int(callback.data.split("_")[2])
     lang = get_user(user_id).get('lang', 'fa')
-    
+
     order = orders.get(str(order_id))
     if not order or order.get('user_id') != user_id:
         await send_sticker(user_id, 'balance_insufficient', '⚠️💰')
-        await callback.answer("❌ کانفیگ یافت نشد" if lang=='fa' else "❌ Config not found", show_alert=True)
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == 'fa' else "❌ Config not found",
+            show_alert=True
+        )
         return
+
     try:
         await callback.message.delete()
-    except:
+    except Exception:
         pass
+
     email = get_order_client_email(order)
-    caption = get_config_caption(order_id, order['volume'], order['days'], order['price'], order['config_link'], lang)
-    
+
+    # ─── دریافت اطلاعات ترافیک از پنل (قبل از ساخت کپشن) ───
+    traffic_info = ""
     if email and SENAI_PANEL_ENABLED:
-        client_info = await xui_get_client_info(email)
-        if client_info:
-            lang = get_user(user_id).get('lang', 'fa')
-            traffic_data = await xui_get_client_traffic(email)
-            caption += "\n" + format_traffic_info(client_info, traffic_data, lang)
+        try:
+            client_info = await xui_get_client_info(email)
+            if client_info:
+                traffic_data = await xui_get_client_traffic(email)
+                traffic_info = format_traffic_info(client_info, traffic_data, lang)
+        except Exception as e:
+            logger.error(f"Error fetching traffic for config view: {e}")
+
+    # ─── ساخت کپشن با ترتیب صحیح ───
+    caption = get_config_caption(
+        order_id,
+        order['volume'],
+        order['days'],
+        order['price'],
+        order['config_link'],
+        lang,
+        traffic_info
+    )
+
+    # ─── ارسال عکس یا پیام ───
     try:
         qr_img = generate_qr_code(order['config_link'], order_id)
         await bot.send_photo(
@@ -30371,14 +30362,15 @@ async def view_single_config(callback: CallbackQuery):
             parse_mode=ParseMode.HTML,
             reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
         )
-    except:
+    except Exception as e:
+        logger.error(f"خطا در ارسال عکس: {e}")
         await bot.send_message(
             user_id,
             caption,
             parse_mode=ParseMode.HTML,
             reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
         )
-    
+
     try:
         await callback.answer()
     except Exception as e:
