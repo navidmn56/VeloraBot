@@ -16773,17 +16773,25 @@ async def show_ready_packages_menu(target):
 
 @dp.callback_query(F.data == "show_ready_categories")
 async def show_ready_categories(callback: CallbackQuery):
-    """نمایش دسته‌بندی‌های بسته‌های آماده - با پشتیبانی از دو زبان"""
+    """نمایش دسته‌بندی‌های بسته‌های آماده - با پشتیبانی از دو زبان و حالت تمدید"""
     user_id = callback.from_user.id
     
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
-        await callback.answer("⛔ دسترسی مسدود شده" if get_user(user_id).get('lang', 'fa') == 'fa' else "⛔ Access blocked", show_alert=True)
+        await callback.answer(
+            "⛔ دسترسی مسدود شده" if get_user(user_id).get('lang', 'fa') == 'fa'
+            else "⛔ Access blocked",
+            show_alert=True
+        )
         return
     
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
-        await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
+        await callback.answer(
+            "❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa"
+            else "❌ Please verify your membership first!",
+            show_alert=True
+        )
         return
     
     if not await check_shop_status_and_notify(user_id, callback):
@@ -16791,11 +16799,16 @@ async def show_ready_categories(callback: CallbackQuery):
     
     lang = get_user(user_id).get('lang', 'fa')
     user_state = user_states.get(user_id, {})
+    
+    # ✅ بررسی حالت تمدید
+    is_extend = user_state.get('is_extend', False)
+    extend_order_id = user_state.get('extend_order_id')
+    
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
-    # ✅✅✅ بررسی اعتبار کوپن با تابع کمکی
+    # ✅ بررسی اعتبار کوپن
     if coupon_applied and coupon_code:
         is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
         if not is_valid:
@@ -16803,7 +16816,6 @@ async def show_ready_categories(callback: CallbackQuery):
             coupon_applied = False
             coupon_code = None
             coupon_discount = 0
-            # پاک کردن از user_states
             if user_id in user_states:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
@@ -16812,6 +16824,7 @@ async def show_ready_categories(callback: CallbackQuery):
             logger.info(f"✅ [show_ready_categories] کوپن {coupon_code} معتبر: {reason}")
     
     logger.info(f"🔍 [show_ready_categories] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
+    logger.info(f"🔄 [show_ready_categories] حالت تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
     
     categories = [c for c in READY_PACKAGES.get('categories', []) if c.get('is_active', True)]
     
@@ -16834,14 +16847,22 @@ async def show_ready_categories(callback: CallbackQuery):
             callback_data="back_to_main"
         )]]
         try:
-            await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+            await callback.message.edit_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                parse_mode=ParseMode.HTML
+            )
         except Exception as e:
             if "message to edit not found" in str(e) or "there is no text in the message to edit" in str(e):
                 try:
                     await callback.message.delete()
                 except:
                     pass
-                await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+                await callback.message.answer(
+                    text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                    parse_mode=ParseMode.HTML
+                )
             else:
                 raise
         
@@ -16850,7 +16871,7 @@ async def show_ready_categories(callback: CallbackQuery):
     
     categories.sort(key=lambda x: x.get('order', 999))
     
-    # ✅✅✅ متن کوپن با پشتیبانی از دو زبان
+    # ✅ ساخت متن کوپن
     coupon_text = ""
     if coupon_applied and coupon_code:
         if lang == "fa":
@@ -16858,7 +16879,6 @@ async def show_ready_categories(callback: CallbackQuery):
         else:
             coupon_text = f"\n\n🏷️ <b>Active Coupon:</b> {coupon_code} ({coupon_discount}%)"
         
-        # ✅ حفظ کوپن در user_states
         if user_id not in user_states:
             user_states[user_id] = {}
         user_states[user_id]['coupon_code'] = coupon_code
@@ -16868,20 +16888,52 @@ async def show_ready_categories(callback: CallbackQuery):
     else:
         logger.warning(f"⚠️ [show_ready_categories] کوپنی برای کاربر {user_id} یافت نشد")
     
-    # ✅✅✅ متن اصلی با پشتیبانی از دو زبان
-    if lang == "fa":
-        text = f"""
-{premium_emoji('config', '📦')} <b>انتخاب بسته آماده</b>
+    # ═══════════════════════════════════════════
+    # ✅ متن متفاوت برای تمدید vs خرید
+    # ═══════════════════════════════════════════
+    if is_extend and extend_order_id:
+        # ───── حالت تمدید ─────
+        config_emoji = premium_emoji('config', '📦')
+        warning_emoji = premium_emoji('danger', '⚠️')
+        light_emoji = premium_emoji('light', '💡')
+        
+        if lang == "fa":
+            text = f"""{config_emoji} <b>انتخاب بسته برای تمدید</b>
 
-لطفاً بسته مورد نظر را انتخاب کنید:{coupon_text}
+{warning_emoji} <b>توجه مهم:</b>
+اگه بسته‌ی فعلی سرویس شما با بسته‌ای که انتخاب می‌کنید <b>متفاوت</b> باشه،
+احتمال <b>قطع شدن لینک‌های فعلی</b> شما وجود داره و باید <b>لینک جدید</b> رو از ساب‌لینک بردارید.
+
+{light_emoji} لطفاً بسته‌ی مورد نظرت رو انتخاب کن 👇{coupon_text}
+"""
+        else:
+            text = f"""{config_emoji} <b>Select Package to Extend</b>
+
+{warning_emoji} <b>Important Notice:</b>
+If your current service package differs from the one you select,
+there's a chance your <b>current links will be disconnected</b>,
+and you'll need to get a <b>new link</b> from the subscription.
+
+{light_emoji} Please select your desired package 👇{coupon_text}
 """
     else:
-        text = f"""
-{premium_emoji('config', '📦')} <b>Select Ready Package</b>
+        # ───── حالت خرید عادی ─────
+        config_emoji = premium_emoji('config', '📦')
+        
+        if lang == "fa":
+            text = f"""{config_emoji} <b>انتخاب بسته آماده</b>
 
-Please select a package:{coupon_text}
+لطفاً بسته مورد نظرت را انتخاب کن 👇{coupon_text}
+"""
+        else:
+            text = f"""{config_emoji} <b>Select Ready Package</b>
+
+Please select your desired package 👇{coupon_text}
 """
     
+    # ═══════════════════════════════════════════
+    # ساخت دکمه‌ها
+    # ═══════════════════════════════════════════
     buttons = []
     
     for cat in categories:
@@ -16890,7 +16942,6 @@ Please select a package:{coupon_text}
         active_packages = [p for p in cat.get('packages', []) if p.get('is_active', True)]
         package_count = len(active_packages)
         
-        # ✅✅✅ متن دکمه با پشتیبانی از دو زبان
         if lang == "fa":
             button_text = f"{icon} {name} ({package_count} بسته)"
         else:
@@ -16902,26 +16953,114 @@ Please select a package:{coupon_text}
             style="primary"
         )])
     
-    # ✅✅✅ دکمه بازگشت با پشتیبانی از دو زبان
+    # ✅ دکمه بازگشت (اگه تمدید بود، انصراف از تمدید)
+    if is_extend and extend_order_id:
+        back_text = "❌ انصراف از تمدید" if lang == "fa" else "❌ Cancel Extension"
+        back_callback = f"cancel_extend_{extend_order_id}"
+    else:
+        back_text = "🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu"
+        back_callback = "back_to_main"
+    
     buttons.append([InlineKeyboardButton(
-        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
-        callback_data="back_to_main",
+        text=back_text,
+        callback_data=back_callback,
         style="danger"
     )])
     
+    # ═══════════════════════════════════════════
+    # ارسال/ویرایش پیام
+    # ═══════════════════════════════════════════
     try:
-        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+        await callback.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode=ParseMode.HTML
+        )
     except Exception as e:
         if "message to edit not found" in str(e) or "there is no text in the message to edit" in str(e):
             try:
                 await callback.message.delete()
             except:
                 pass
-            await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+            await callback.message.answer(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                parse_mode=ParseMode.HTML
+            )
+        elif "message is not modified" in str(e):
+            pass
         else:
             raise
     
     await callback.answer()
+@dp.callback_query(F.data.startswith("cancel_extend_"))
+async def cancel_extend(callback: CallbackQuery):
+    """انصراف از تمدید سرویس - هشدار توست + بازگشت به منوی اصلی"""
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    
+    try:
+        extend_order_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا", show_alert=True)
+        return
+    
+    # ─── حفظ کوپن ───
+    user_state = user_states.get(user_id, {})
+    coupon_code = user_state.get('coupon_code')
+    coupon_discount = user_state.get('coupon_discount')
+    coupon_applied = user_state.get('coupon_applied', False)
+    
+    # ─── پاک کردن state تمدید ───
+    if user_id in user_states:
+        user_states.pop(user_id, None)
+    
+    # ─── بازیابی کوپن ───
+    if coupon_applied and coupon_code:
+        user_states[user_id] = {
+            'coupon_code': coupon_code,
+            'coupon_discount': coupon_discount,
+            'coupon_applied': True
+        }
+        logger.info(f"🏷️ [cancel_extend] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
+    
+    # ─── هشدار توست (خودش محو می‌شه) ───
+    toast_text = (
+        "❌ تمدید سرویس لغو شد" if lang == "fa"
+        else "❌ Service extension cancelled"
+    )
+    try:
+        await callback.answer(toast_text, show_alert=False)
+    except Exception as e:
+        logger.warning(f"خطا در نمایش توست: {e}")
+    
+    # ─── بازگشت به منوی اصلی ───
+    is_admin = (user_id == ADMIN_ID_INT)
+    
+    if lang == "fa":
+        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
+    else:
+        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
+    
+    keyboard = get_main_keyboard(is_admin, lang)
+    
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=keyboard,
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML
+            )
 
 @dp.message(Command("test_keyboard"))
 async def cmd_test_keyboard(message: Message):
@@ -16962,7 +17101,7 @@ async def cmd_test_keyboard(message: Message):
         
 @dp.callback_query(F.data.startswith("show_category_packages_"))
 async def show_category_packages(callback: CallbackQuery):
-    """نمایش بسته‌های موجود در یک دسته با نمایش تعداد کاربر"""
+    """نمایش بسته‌های موجود در یک دسته - با پشتیبانی از حالت تمدید"""
     user_id = callback.from_user.id
     
     if user_id in BLACKLIST:
@@ -16972,7 +17111,11 @@ async def show_category_packages(callback: CallbackQuery):
     
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
-        await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
+        await callback.answer(
+            "❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa"
+            else "❌ Please verify your membership first!",
+            show_alert=True
+        )
         return
     
     if not await check_shop_status_and_notify(user_id, callback):
@@ -16997,6 +17140,11 @@ async def show_category_packages(callback: CallbackQuery):
     lang = get_user(user_id).get('lang', 'fa')
     user = get_user(user_id)
     balance = user.get('balance', 0)
+    
+    # ✅ بررسی حالت تمدید
+    user_state = user_states.get(user_id, {})
+    is_extend = user_state.get('is_extend', False)
+    extend_order_id = user_state.get('extend_order_id')
     
     packages = [p for p in category.get('packages', []) if p.get('is_active', True)]
     
@@ -17033,8 +17181,35 @@ async def show_category_packages(callback: CallbackQuery):
     name = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
     desc = category.get('description') if lang == "fa" else category.get('description_en', category.get('description'))
     
-    if lang == "fa":
-        text = f"""
+    # ═══════════════════════════════════════════
+    # ✅ متن متفاوت برای تمدید vs خرید
+    # ═══════════════════════════════════════════
+    if is_extend and extend_order_id:
+        # ───── حالت تمدید ─────
+        if lang == "fa":
+            text = f"""
+{premium_emoji('config', icon)} <b>{name}</b>
+
+{premium_emoji('note', '📝')} {desc}
+
+{premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
+
+🔄 <b>چقدر میخوای تمدید کنی</b> 👇
+"""
+        else:
+            text = f"""
+{premium_emoji('config', icon)} <b>{name}</b>
+
+{premium_emoji('note', '📝')} {desc}
+
+{premium_emoji('wallet', '💰')} Your Balance: {balance:,} Toman
+
+🔄 <b>How much do you want to extend</b> 👇
+"""
+    else:
+        # ───── حالت خرید عادی ─────
+        if lang == "fa":
+            text = f"""
 {premium_emoji('config', icon)} <b>{name}</b>
 
 {premium_emoji('note', '📝')} {desc}
@@ -17043,8 +17218,8 @@ async def show_category_packages(callback: CallbackQuery):
 
 لطفاً یکی از بسته‌های زیر را انتخاب کنید:
 """
-    else:
-        text = f"""
+        else:
+            text = f"""
 {premium_emoji('config', icon)} <b>{name}</b>
 
 {premium_emoji('note', '📝')} {desc}
@@ -17054,6 +17229,9 @@ async def show_category_packages(callback: CallbackQuery):
 Please select a package:
 """
     
+    # ═══════════════════════════════════════════
+    # ساخت دکمه‌ها
+    # ═══════════════════════════════════════════
     buttons = []
     
     for pkg in packages:
@@ -17092,12 +17270,19 @@ Please select a package:
             )
         ])
     
+    back_text = "🔙 بازگشت به دسته‌ها" if lang == "fa" else "🔙 Back to Categories"
+    
+    back_callback = "show_ready_categories"
+    
     buttons.append([InlineKeyboardButton(
-        text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
-        callback_data="show_ready_categories",
+        text=back_text,
+        callback_data=back_callback,
         style="danger"
     )])
     
+    # ═══════════════════════════════════════════
+    # ارسال/ویرایش پیام
+    # ═══════════════════════════════════════════
     try:
         await callback.message.edit_text(
             text,
