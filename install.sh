@@ -898,13 +898,52 @@ stop_service_if_active() {
     if service_is_active; then
         SERVICE_WAS_ACTIVE=1
     fi
+    
     log_info "Stopping ${SERVICE_NAME} (if present)..."
+    
+    # ─── مرحله ۱: توقف معمولی ───
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    sleep 1
-    if service_is_active; then
-        log_warning "Service did not stop cleanly, forcing..."
-        systemctl kill -s SIGKILL "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    
+    # ─── مرحله ۲: انتظار برای توقف کامل (حداکثر 15 ثانیه) ───
+    local i=0
+    while (( i < 15 )) && service_is_active; do
         sleep 1
+        (( i++ )) || true
+    done
+    
+    # ─── مرحله ۳: اگه هنوز فعاله، kill سخت ───
+    if service_is_active; then
+        log_warning "Service did not stop cleanly, sending SIGKILL..."
+        systemctl kill -s SIGKILL "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        sleep 2
+    fi
+    
+    # ─── مرحله ۴: اگه بازم فعاله، mask کن (جلوگیری از هر راه‌اندازی) ───
+    if service_is_active; then
+        log_warning "Service is stubborn - using mask to prevent auto-restart..."
+        systemctl mask "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        sleep 1
+    fi
+    
+    # ─── مرحله ۵: پاک کردن حالت failed ───
+    systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    
+    # ─── بررسی نهایی ───
+    if service_is_active; then
+        log_error "❌ Failed to stop ${SERVICE_NAME}!"
+        return 1
+    fi
+    
+    log_success "${SERVICE_NAME} stopped."
+    return 0
+}
+unmask_service_after_update() {
+    # اگه سرویس mask شده بود، unmask کن
+    if systemctl is-enabled "${SERVICE_NAME}" 2>&1 | grep -q "masked"; then
+        log_info "Unmasking ${SERVICE_NAME}..."
+        systemctl unmask "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
     fi
 }
 
@@ -1009,19 +1048,25 @@ create_systemd_service() {
 
 start_service_and_check() {
     draw_step "Starting VeloraBot"
+    
+    # ─── اطمینان از unmask بودن ───
+    if systemctl is-enabled "${SERVICE_NAME}" 2>&1 | grep -q "masked"; then
+        log_warning "Service is masked, unmasking..."
+        systemctl unmask "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    fi
+    
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
-
     systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
     systemctl restart "${SERVICE_NAME}"
-
+    
     log_info "Waiting for service to stabilize..."
     sleep 15
-
+    
     local restarts
     restarts="$(systemctl show "${SERVICE_NAME}" -p NRestarts --value 2>/dev/null || echo 0)"
     [[ -n "${restarts}" ]] || restarts=0
-
+    
     if ! service_is_active; then
         log_error "${SERVICE_NAME} failed to start."
         printf '\n%s\n%s\n' "Recent service logs:" "------------------------------------------------------------"
@@ -1029,7 +1074,7 @@ start_service_and_check() {
         printf '%s\n' "------------------------------------------------------------"
         return 1
     fi
-
+    
     if [[ "${restarts}" != "0" ]]; then
         log_error "${SERVICE_NAME} is in a restart loop (NRestarts=${restarts})."
         printf '\n%s\n%s\n' "Recent service logs:" "------------------------------------------------------------"
@@ -1037,7 +1082,7 @@ start_service_and_check() {
         printf '%s\n' "------------------------------------------------------------"
         return 1
     fi
-
+    
     if [[ -n "${BOT_TOKEN}" && "${BOT_TOKEN}" != "None" ]]; then
         log_info "Verifying Telegram bot token (getMe)..."
         if printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "${BOT_TOKEN}" \
@@ -1047,7 +1092,7 @@ start_service_and_check() {
             log_warning "Could not verify bot token via getMe (network or token issue)."
         fi
     fi
-
+    
     log_success "${SERVICE_NAME} is running (NRestarts=0)."
     return 0
 }
@@ -1055,10 +1100,19 @@ start_service_and_check() {
 # ============================================================
 # Python venv
 # ============================================================
-
 create_virtual_environment_if_needed() {
     local recreate=0
+    local reason=""
+    local req_file=""
 
+    # ─── پیدا کردن requirements.txt (ترجیح: نسخه release) ───
+    if [[ -n "${RELEASE_ROOT:-}" && -f "${RELEASE_ROOT}/requirements.txt" ]]; then
+        req_file="${RELEASE_ROOT}/requirements.txt"
+    elif [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
+        req_file="${INSTALL_DIR}/requirements.txt"
+    fi
+
+    # ─── بررسی ۱: تغییر نسخه‌ی پایتون ───
     if [[ -x "${VENV_DIR}/bin/python" ]]; then
         local venv_major_minor target_major_minor
         venv_major_minor="$("${VENV_DIR}/bin/python" -c \
@@ -1068,13 +1122,40 @@ create_virtual_environment_if_needed() {
             'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 
         if [[ "${venv_major_minor}" != "${target_major_minor}" ]]; then
-            log_warning "Existing venv uses Python ${venv_major_minor}, but target is ${target_major_minor}."
-            log_warning "Recreating the virtual environment..."
-            rm -rf "${VENV_DIR}"
             recreate=1
+            reason="Python version changed (${venv_major_minor} → ${target_major_minor})"
         fi
     fi
 
+    # ─── بررسی ۲: تغییر محتوای requirements.txt ───
+    if [[ -x "${VENV_DIR}/bin/python" ]] && (( recreate == 0 )) && [[ -n "${req_file}" ]]; then
+        local current_hash stored_hash hash_file
+        hash_file="${VENV_DIR}/.requirements.hash"
+        current_hash="$(sha256sum "${req_file}" 2>/dev/null | awk '{print $1}')"
+
+        if [[ -f "${hash_file}" ]]; then
+            stored_hash="$(tr -d '\r\n' < "${hash_file}")"
+            if [[ "${current_hash}" != "${stored_hash}" ]]; then
+                recreate=1
+                reason="requirements.txt content changed"
+                log_info "  Requirements hash: ${stored_hash:0:12} → ${current_hash:0:12}"
+            else
+                log_info "requirements.txt unchanged (hash: ${current_hash:0:12})"
+            fi
+        else
+            # ─── نصب قدیمی بدون هش - برای اطمینان بازسازی می‌کنیم ───
+            recreate=1
+            reason="No requirements hash found (legacy installation detected)"
+        fi
+    fi
+
+    # ─── بازسازی در صورت نیاز ───
+    if (( recreate == 1 )); then
+        log_warning "Recreating virtual environment: ${reason}"
+        rm -rf "${VENV_DIR}"
+    fi
+
+    # ─── ساخت venv در صورت نبودن ───
     if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
         draw_step "Creating Python Virtual Environment"
         log_info "Creating ${VENV_DIR} with ${PYTHON_BIN}..."
@@ -1082,10 +1163,18 @@ create_virtual_environment_if_needed() {
         "${PYTHON_BIN}" -m venv "${VENV_DIR}"
         VENV_CREATED=1
         log_success "Python virtual environment created."
-    elif (( recreate == 0 )); then
+    else
         log_info "Existing Python virtual environment will be preserved."
     fi
 
+    # ─── ذخیره‌ی هش فعلی برای بار بعد ───
+    if [[ -n "${req_file}" && -f "${req_file}" ]]; then
+        sha256sum "${req_file}" 2>/dev/null | awk '{print $1}' \
+            > "${VENV_DIR}/.requirements.hash" || true
+        log_info "Saved requirements hash for future comparison."
+    fi
+
+    # ─── اعتبارسنجی نهایی ───
     [[ -x "${VENV_DIR}/bin/python" ]] || die "Virtual environment is invalid."
     "${VENV_DIR}/bin/python" --version
     "${VENV_DIR}/bin/python" -m pip --version >/dev/null || die "pip is missing."
@@ -2470,36 +2559,72 @@ watchdog_status() {
 }
 
 stop_service_manual() {
-    draw_step "Stop VeloraBot Service"
-
-    if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
-        log_warning "${SERVICE_NAME} is already inactive."
+    draw_step "Stop VeloraBot Service (Permanent)"
+    
+    if ! systemctl is-active --quiet "${SERVICE_NAME}" && \
+       ! systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        log_warning "${SERVICE_NAME} is already stopped and disabled."
         return 0
     fi
-
-    printf 'This will STOP the VeloraBot service on this server.\n' > /dev/tty
-    printf 'Use this after a successful migration to another server.\n\n' > /dev/tty
-
+    
+    printf 'This will STOP and DISABLE the VeloraBot service on this server.\n' > /dev/tty
+    printf 'Use this after a successful migration to another server.\n' > /dev/tty
+    printf 'The service will NOT auto-restart after this operation.\n\n' > /dev/tty
+    
     if ! ask_yes_no "Stop the service now? [y/N]: " "n"; then
         log_info "Cancelled."
         return 0
     fi
-
+    
+    # ─── مرحله ۱: توقف سرویس ───
+    log_info "Stopping ${SERVICE_NAME}..."
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    sleep 1
-
+    
+    # ─── مرحله ۲: انتظار برای توقف کامل ───
+    local i=0
+    while (( i < 15 )) && systemctl is-active --quiet "${SERVICE_NAME}"; do
+        sleep 1
+        (( i++ )) || true
+    done
+    
+    # ─── مرحله ۳: kill سخت در صورت نیاز ───
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
-        log_error "Failed to stop the service."
+        log_warning "Forcing stop with SIGKILL..."
+        systemctl kill -s SIGKILL "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        sleep 2
+    fi
+    
+    # ─── مرحله ۴: غیرفعال کردن auto-start ───
+    log_info "Disabling auto-start on boot..."
+    systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    
+    # ─── مرحله ۵: mask کردن سرویس (جلوگیری از هر راه‌اندازی) ───
+    log_info "Masking service to prevent any restart..."
+    systemctl mask "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    
+    # ─── مرحله ۶: پاک کردن حالت failed ───
+    systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    
+    # ─── بررسی نهایی ───
+    if systemctl is-active --quiet "${SERVICE_NAME}"; then
+        log_error "❌ Failed to stop the service!"
         return 1
     fi
-
-    log_success "Service stopped."
-
-    if ask_yes_no "Also disable auto-start on boot? [y/N]: " "n"; then
-        systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        log_success "Auto-start disabled."
-    fi
-
+    
+    log_success "Service stopped and masked successfully."
+    
+    printf '\n' > /dev/tty
+    printf '%bStatus:%b\n' "${BOLD}" "${NC}" > /dev/tty
+    printf '  Service : %bSTOPPED%b\n' "${RED}" "${NC}" > /dev/tty
+    printf '  Auto-start : %bDISABLED%b\n' "${RED}" "${NC}" > /dev/tty
+    printf '  Masked  : %bYES (no auto-restart possible)%b\n' "${RED}" "${NC}" > /dev/tty
+    printf '\n' > /dev/tty
+    printf '%bTo re-enable later, run:%b\n' "${BOLD}" "${NC}" > /dev/tty
+    printf '  sudo systemctl unmask %s\n' "${SERVICE_NAME}" > /dev/tty
+    printf '  sudo systemctl enable %s\n' "${SERVICE_NAME}" > /dev/tty
+    printf '  sudo systemctl start %s\n' "${SERVICE_NAME}" > /dev/tty
+    printf '\n' > /dev/tty
+    
     return 0
 }
 # ============================================================
@@ -3174,9 +3299,10 @@ update_existing() {
     [[ -d "${INSTALL_DIR}" ]] || die "${INSTALL_DIR} does not exist."
 
     validate_release_for_update
-    create_virtual_environment_if_needed
+    
 
     stop_service_if_active
+    create_virtual_environment_if_needed
 
     local saved_config=""
     if [[ -f "${CONFIG_FILE}" ]]; then
@@ -3259,6 +3385,7 @@ update_existing() {
 
     fix_permissions
     create_systemd_service
+    unmask_service_after_update
 
     if ! start_service_and_check; then
         die "Updated application failed the service health check."
@@ -3391,6 +3518,7 @@ repair_only() {
     validate_python_source
     fix_permissions
     create_systemd_service
+    unmask_service_after_update
 
     if ! start_service_and_check; then
         die "Repair failed: service did not start."
