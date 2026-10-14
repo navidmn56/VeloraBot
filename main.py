@@ -9890,41 +9890,39 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
     order = orders.get(str(order_id))
     is_test = False
     ip_limit = 0
-    inbound_info = ""
+    email = None
     
     if order:
         is_test = order.get('type') == 'test'
         ip_limit = order.get('ip_limit', 0)
-        
-        inbound_id = order.get('inbound_id')
-        if inbound_id:
-            if isinstance(inbound_id, list):
-                count = len(inbound_id)
-            else:
-                count = 1
-
-            if lang == "fa":
-                inbound_info = f"📦 تعداد کانفیگ‌ها: {count} عدد"
-            else:
-                inbound_info = f"📦 Number of configurations: {count}"
-    volume_display = format_volume(volume, is_test=is_test)
+        email = order.get('email')
     
-    if ip_limit == 0:
-        ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
-    elif ip_limit == 1:
-        ip_display = "👤 تعداد کاربر: ۱ دستگاه" if lang == "fa" else "👤 Users: 1 Device"
-    else:
-        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه" if lang == "fa" else f"👤 Users: {ip_limit} Devices"
-    caption = get_config_caption(order_id, volume, days, price, config_link, lang)
+    # ─── ترافیک (async) ───
+    traffic_info = ""
+    if email and SENAI_PANEL_ENABLED:
+        try:
+            client_info = await xui_get_client_info(email)
+            if client_info:
+                traffic_data = await xui_get_client_traffic(email)
+                traffic_info = format_traffic_info(client_info, traffic_data, lang)
+        except Exception as e:
+            logger.error(f"Error fetching traffic: {e}")
     
+    # ─── کپشن ───
+    caption = get_config_caption(order_id, volume, days, price, config_link, lang, traffic_info)
+    
+    # ─── پیام تست (خوش‌آمدگویی) ───
     if is_test:
+        gift_emoji = premium_emoji('gift', '🎁')
+        light_emoji = premium_emoji('light', '💡')
+        home_emoji = premium_emoji('home', '🏠')
+        
         if lang == "fa":
-            caption += f"\n🧪 <b>این یک سرویس تست رایگان است.</b>\n💡 برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+            caption += f"\n\n{gift_emoji} <b>این یک سرویس خوش‌آمدگویی است.</b>\n{light_emoji} امیدواریم تجربه‌ی خوبی داشته باشید.\n{home_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
         else:
-            caption += f"\n🧪 <b>This is a free test service.</b>\n💡 To purchase full service, use the main menu."
-    if inbound_info:
-        caption += f"\n\n{inbound_info}"
+            caption += f"\n\n{gift_emoji} <b>This is a welcome service.</b>\n{light_emoji} We hope you have a great experience.\n{home_emoji} To purchase full service, use the main menu."
     
+    # ─── ارسال ───
     try:
         qr_img = generate_qr_code(config_link, order_id)
         await bot.send_photo(
@@ -9948,7 +9946,7 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
 async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: Union[int, float], days: int, 
                                           price: int, config_link: str, lang: str = "fa", 
                                           edit_message: Message = None):
-    """ارسال کانفیگ با قابلیت ویرایش پیام قبلی و نمایش هوشمند حجم"""
+    """ارسال کانفیگ با قابلیت ویرایش پیام قبلی"""
     
     if chat_id not in user_states:
         user_states[chat_id] = {}
@@ -9963,44 +9961,18 @@ async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: U
     
     order = orders.get(str(order_id))
     is_test = False
-    inbound_info = ""
-    ip_limit = 0
     
     if order:
         is_test = order.get('type') == 'test'
-        ip_limit = order.get('ip_limit', 0)
-        inbound_id = order.get('inbound_id')
-        if inbound_id:
-            if isinstance(inbound_id, list):
-                inbound_info = f"📡 اینباندها: {len(inbound_id)} عدد"
-            else:
-                inbound_info = f"📡 اینباند: {inbound_id}"
-    if isinstance(volume, float):
-        volume_mb = volume * 1024
-    else:
-        volume_mb = volume
     
-    volume_display = format_volume(volume_mb)
-    
-    if ip_limit == 0:
-        ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
-    elif ip_limit == 1:
-        ip_display = "👤 تعداد کاربر: ۱ دستگاه" if lang == "fa" else "👤 Users: 1 Device"
-    else:
-        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه" if lang == "fa" else f"👤 Users: {ip_limit} Devices"
-    
-    caption = get_config_caption(order_id, volume, days, price, config_link, lang)
+    # ✅ await کن
+    caption = await get_config_caption(order_id, volume, days, price, config_link, lang)
     
     if is_test:
         if lang == "fa":
-            caption += f"\n\n{ip_display}\n\n🧪 <b>این یک سرویس تست رایگان است.</b>\n💡 برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+            caption += f"\n\n🎁 <b>این یک سرویس خوش آمد گویی است.</b>\n🏠 برای خرید سرویس کامل از منوی اصلی اقدام کنید."
         else:
-            caption += f"\n\n{ip_display}\n\n🧪 <b>This is a free test service.</b>\n💡 To purchase full service, use the main menu."
-    else:
-        caption += f"\n\n{ip_display}"
-    
-    if inbound_info:
-        caption += f"\n\n{inbound_info}"
+            caption += f"\n\n🎁 <b>This is a welcome service.</b>\n🏠 To purchase full service, use the main menu."
     
     try:
         qr_img = generate_qr_code(config_link, order_id)
@@ -10010,25 +9982,14 @@ async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: U
                 await edit_message.delete()
             except:
                 pass
-            
-            await bot.send_photo(
-                chat_id, 
-                qr_img, 
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
-            )
-        else:
-            await bot.send_photo(
-                chat_id, 
-                qr_img, 
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
-            )
         
-        logger.info(f"QR Code با دکمه تبدیل برای سفارش #{order_id} به کاربر {chat_id} ارسال شد")
-        
+        await bot.send_photo(
+            chat_id, 
+            qr_img, 
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
+        )
     except Exception as e:
         logger.error(f"خطا در ارسال QR Code: {e}")
         
@@ -10107,9 +10068,8 @@ def delete_config(config_id: int) -> bool:
     return False
 
 def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "fa") -> InlineKeyboardMarkup:
-    """ساخت کیبورد نمایش کانفیگ - دکمه تمدید برای سرویس تست حذف میشه"""
+    """ساخت کیبورد نمایش کانفیگ با دکمه‌های پلتفرم"""
     
-    # ✅✅✅ بررسی اینکه آیا سرویس تست است
     order = orders.get(str(order_id))
     is_test = False
     
@@ -10121,138 +10081,60 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
             or (order.get('email', '') or '').startswith('test_')
         )
     
-    logger.debug(f"🔍 [get_config_view_keyboard] سفارش #{order_id} - is_test: {is_test}")
+    buttons = []
     
-    if lang == "fa":
-        if show_qr:
-            buttons = [
-                [InlineKeyboardButton(
-                    text="📝 مشاهده متن کانفیگ",
-                    callback_data=f"show_text_{order_id}",
-                    style="primary"
-                )],
-            ]
-            
-            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
-            if not is_test:
-                buttons.append([InlineKeyboardButton(
-                    text="🔄 تمدید سرویس",
-                    callback_data=f"extend_service_{order_id}",
-                    style="success"
-                )])
-            
-            buttons.append([
-                InlineKeyboardButton(
-                    text="📁 لیست کانفیگ‌ها",
-                    callback_data="my_configs",
-                    style="primary"
-                ),
-                InlineKeyboardButton(
-                    text="🏠 منوی اصلی",
-                    callback_data="back_to_main",
-                    style="danger"
-                )
-            ])
-            
-            return InlineKeyboardMarkup(inline_keyboard=buttons)
-        
-        else:
-            buttons = [
-                [InlineKeyboardButton(
-                    text="📱 تبدیل به QR Code",
-                    callback_data=f"show_qr_{order_id}",
-                    style="primary"
-                )],
-            ]
-            
-            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
-            if not is_test:
-                buttons.append([InlineKeyboardButton(
-                    text="🔄 تمدید سرویس",
-                    callback_data=f"extend_service_{order_id}",
-                    style="success"
-                )])
-            
-            buttons.append([
-                InlineKeyboardButton(
-                    text="📁 لیست کانفیگ‌ها",
-                    callback_data="my_configs",
-                    style="primary"
-                ),
-                InlineKeyboardButton(
-                    text="🏠 منوی اصلی",
-                    callback_data="back_to_main",
-                    style="danger"
-                )
-            ])
-            
-            return InlineKeyboardMarkup(inline_keyboard=buttons)
+    # ─── ردیف 1: تمدید همین سرویس ───
+    if not is_test:
+        buttons.append([InlineKeyboardButton(
+            text="🔄 تمدید همین سرویس" if lang == "fa" else "🔄 Extend This Service",
+            callback_data=f"extend_service_{order_id}",
+            style="success"
+        )])
     
+    # ─── ردیف 2: QR / متن ───
+    if show_qr:
+        buttons.append([InlineKeyboardButton(
+            text="📝 متن کانفیگ" if lang == "fa" else "📝 Config Text",
+            callback_data=f"show_text_{order_id}",
+            style="primary"
+        )])
     else:
-        # انگلیسی
-        if show_qr:
-            buttons = [
-                [InlineKeyboardButton(
-                    text="📝 View Config Text",
-                    callback_data=f"show_text_{order_id}",
-                    style="primary"
-                )],
-            ]
-            
-            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
-            if not is_test:
-                buttons.append([InlineKeyboardButton(
-                    text="🔄 Extend Service",
-                    callback_data=f"extend_service_{order_id}",
-                    style="success"
-                )])
-            
-            buttons.append([
-                InlineKeyboardButton(
-                    text="📁 Configs List",
-                    callback_data="my_configs",
-                    style="primary"
-                ),
-                InlineKeyboardButton(
-                    text="🏠 Main Menu",
-                    callback_data="back_to_main",
-                    style="danger"
-                )
-            ])
-            
-            return InlineKeyboardMarkup(inline_keyboard=buttons)
-        
-        else:
-            buttons = [
-                [InlineKeyboardButton(
-                    text="📱 Convert to QR Code",
-                    callback_data=f"show_qr_{order_id}",
-                    style="primary"
-                )],
-            ]
-            
-            # ✅ فقط اگه سرویس تست نبود، دکمه تمدید اضافه کن
-            if not is_test:
-                buttons.append([InlineKeyboardButton(
-                    text="🔄 Extend Service",
-                    callback_data=f"extend_service_{order_id}",
-                    style="success"
-                )])
-            
-            buttons.append([
-                InlineKeyboardButton(
-                    text="📁 Configs List",
-                    callback_data="my_configs",
-                    style="primary"
-                ),
-                InlineKeyboardButton(
-                    text="🏠 Main Menu",
-                    callback_data="back_to_main",
-                    style="danger"
-                )
-            ])
-            
-            return InlineKeyboardMarkup(inline_keyboard=buttons)
+        buttons.append([InlineKeyboardButton(
+            text="📱 تبدیل به QR Code" if lang == "fa" else "📱 Convert to QR Code",
+            callback_data=f"show_qr_{order_id}",
+            style="primary"
+        )])
+    
+    # ─── ردیف 3: پلتفرم‌ها (اندروید | آیفون | ویندوز) ───
+    buttons.append([
+        InlineKeyboardButton(
+            text="📱 اندروید" if lang == "fa" else "📱 Android",
+            url="https://github.com/2dust/v2rayng"
+        ),
+        InlineKeyboardButton(
+            text="🍏 آیفون" if lang == "fa" else "🍏 iOS",
+            url="https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690"
+        ),
+        InlineKeyboardButton(
+            text="💻 ویندوز" if lang == "fa" else "💻 Windows",
+            url="https://github.com/2dust/v2rayn"
+        )
+    ])
+    
+    # ─── ردیف 4: کانفیگ‌های من | منوی اصلی ───
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 کانفیگ‌های من" if lang == "fa" else "🔙 My Configs",
+            callback_data="my_configs",
+        ),
+        InlineKeyboardButton(
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main",
+            style="primary"
+        )
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
             
             
 
@@ -12179,7 +12061,7 @@ def progress_bar(percent: float, length: int = 10) -> str:
 
 
 def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") -> str:
-    """نمایش ساده وضعیت مصرف با ایموجی پرمیوم - دو زبانه"""
+    """نمایش ترافیک به ترتیب: نوار → مصرف → اعتبار"""
     
     if not client:
         return ""
@@ -12195,11 +12077,7 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
     download_emoji = premium_emoji('download', '📥')
     
     # ─── محاسبه زمان باقی‌مانده ───
-    if lang == "fa":
-        time_left_text = "نامحدود"
-    else:
-        time_left_text = "Unlimited"
-    
+    time_left_text = "نامحدود" if lang == "fa" else "Unlimited"
     if expiry > 0:
         try:
             expire_dt = datetime.fromtimestamp(expiry / 1000)
@@ -12226,7 +12104,6 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
                     else:
                         time_left_text = f"{to_persian_digits(minutes)} دقیقه دیگه"
                 else:
-                    # ✅ انگلیسی تمیز
                     if days > 0 and hours > 0:
                         time_left_text = f"{days}d {hours}h left"
                     elif days > 0:
@@ -12285,7 +12162,7 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
     used_str = fmt_size(used_gb)
     total_str = fmt_size(total_gb)
     
-    # ─── خروجی ───
+    # ─── خروجی به ترتیب: نوار → مصرف → اعتبار ───
     if lang == "fa":
         percent_str = to_persian_digits(f"{percent_int}٪")
         return (
@@ -12319,16 +12196,18 @@ def generate_qr_code(data: str, order_id: int):
     bio.seek(0)
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
 
-def get_config_caption(order_id: int, volume: Union[int, float], days: int, price: int, config_link: str, lang: str = "fa") -> str:
-    """کپشن زیبا با ایموجی پرمیوم - دو زبانه"""
+async def get_config_caption(order_id: int, volume: Union[int, float], days: int, price: int, config_link: str, lang: str = "fa") -> str:
+    """ساخت کپشن با اطلاعات کامل + ترافیک به ترتیب صحیح"""
     
     order = orders.get(str(order_id))
     is_test = False
     category_name = ""
+    email = None
     
     if order:
         is_test = order.get('type') == 'test'
         category_name = order.get('category_name', '') or ''
+        email = order.get('email')
     
     # ─── عنوان ───
     if is_test:
@@ -12350,23 +12229,33 @@ def get_config_caption(order_id: int, volume: Union[int, float], days: int, pric
     else:
         volume_display = format_volume(volume, is_test=False)
     
-    # ✅ اصلاح: فقط برای فارسی "GB" و "MB" رو تبدیل کن
     if lang == "fa":
         volume_display = volume_display.replace("GB", "گیگ").replace("MB", "مگ")
     
-    # ─── ایموجی لینک ───
+    # ─── اطلاعات ترافیک (نوار پیشرفت + مصرف + اعتبار) ───
+    traffic_info = ""
+    if email and SENAI_PANEL_ENABLED:
+        try:
+            client_info = await xui_get_client_info(email)
+            if client_info:
+                traffic_data = await xui_get_client_traffic(email)
+                traffic_info = format_traffic_info(client_info, traffic_data, lang)
+        except Exception as e:
+            logger.error(f"Error fetching traffic for caption: {e}")
+    
+    # ─── لینک ───
     link_emoji = premium_emoji('link', '🔗')
     
     if lang == "fa":
-        caption = f"""{title} ({volume_display})
+        caption = f"""{title} ({volume_display}){traffic_info}
 
 {link_emoji} <b>لینک اشتراک</b>
-<code>{config_link}</code>"""
+<a href="{config_link}">{config_link}</a>"""
     else:
-        caption = f"""{title} ({volume_display})
+        caption = f"""{title} ({volume_display}){traffic_info}
 
 {link_emoji} <b>Subscription Link</b>
-<code>{config_link}</code>"""
+<a href="{config_link}">{config_link}</a>"""
     
     return caption
 async def process_referral(new_id: int, ref_id: int):
@@ -12711,60 +12600,7 @@ async def get_test_service(callback: CallbackQuery):
                 pass
             await send_config_with_qr_option(user_id, order_id, volume_gb, days, 0, sub_link, lang)
             
-            
-            if ip_limit == 0:
-                ip_display = "♾️ نامحدود"
-            elif ip_limit == 1:
-                ip_display = "۱ دستگاه"
-            else:
-                ip_display = f"{ip_limit} دستگاه"
-            
-            
-            remaining_tests = max_tests - (test_count + 1)
-            remaining_text = str(remaining_tests) if remaining_tests > 0 else "۰"
-            
-            if lang == "fa":
-                success_text = f"""
-🧪 <b>تست سرویس فعال شد!</b>
 
-{test_message}
-
-🔢 تعداد تست‌های باقیمانده: {remaining_text}
-💡 برای خرید سرویس کامل از منوی اصلی اقدام کنید.
-"""
-            else:
-                success_text = f"""
-🧪 <b>Test service activated!</b>
-
-{test_message}
-
-🔢 Remaining tests: {remaining_text}
-💡 To purchase full service, use the main menu.
-"""
-            
-            success_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
-                        callback_data="buy_service",
-                        style="success"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
-                        callback_data="back_to_main",
-                        style="danger"
-                    )
-                ]
-            ])
-
-            await bot.send_message(
-                user_id,
-                success_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=success_keyboard
-            )
             
             
             inbound_display = test_inbound_ids if test_inbound_ids else 'پیش‌فرض'
@@ -30425,7 +30261,7 @@ async def view_single_config(callback: CallbackQuery):
     except:
         pass
     email = get_order_client_email(order)
-    caption = get_config_caption(order_id, order['volume'], order['days'], order['price'], order['config_link'], lang)
+    caption = await get_config_caption(order_id, order['volume'], order['days'], order['price'], order['config_link'], lang)
     
     if email and SENAI_PANEL_ENABLED:
         client_info = await xui_get_client_info(email)
