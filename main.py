@@ -12465,61 +12465,84 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
 
 @dp.callback_query(F.data == "get_test_service")
 async def get_test_service(callback: CallbackQuery):
-    """دریافت تست سرویس توسط کاربر - نسخه کامل اصلاح شده"""
+    """دریافت تست سرویس توسط کاربر - نسخه نهایی"""
     user_id = callback.from_user.id
+    
+    # ═══════════════════════════════════════════
+    # ۱. بررسی‌های امنیتی و دسترسی
+    # ═══════════════════════════════════════════
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
+    
     if not await check_membership(user_id):
         lang = get_user(user_id).get('lang', 'fa')
-        await callback.answer("❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa" else "❌ Please verify your membership first!", show_alert=True)
-        return
-    if not TEST_SERVICE_STATUS.get('enabled', False):
-        lang = get_user(user_id).get('lang', 'fa')
         await callback.answer(
-            "❌ تست سرویس در حال حاضر غیرفعال است!" if lang == "fa" else "❌ Test service is currently disabled!",
+            "❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa"
+            else "❌ Please verify your membership first!",
             show_alert=True
         )
         return
     
+    if not TEST_SERVICE_STATUS.get('enabled', False):
+        lang = get_user(user_id).get('lang', 'fa')
+        await callback.answer(
+            "❌ تست سرویس در حال حاضر غیرفعال است!" if lang == "fa"
+            else "❌ Test service is currently disabled!",
+            show_alert=True
+        )
+        return
+    
+    # ═══════════════════════════════════════════
+    # ۲. دریافت تنظیمات تست کاربر
+    # ═══════════════════════════════════════════
     lang = get_user(user_id).get('lang', 'fa')
+    
     default_volume_mb = TEST_SERVICE_STATUS.get('volume_mb', 1024)
     default_days = TEST_SERVICE_STATUS.get('days', 3)
     default_max_tests = TEST_SERVICE_STATUS.get('max_tests', 1)
     default_ip_limit = TEST_SERVICE_STATUS.get('ip_limit', 0)
+    
     user_settings = get_user_test_settings(user_id)
     volume_mb = user_settings.get('volume_mb', default_volume_mb)
     days = user_settings.get('days', default_days)
     max_tests = user_settings.get('max_tests', default_max_tests)
     ip_limit = user_settings.get('ip_limit', default_ip_limit)
+    
+    # ─── محاسبه حجم ───
     if volume_mb == 0:
-        volume_gb = 0  # 0 = نامحدود
+        volume_gb = 0
         volume_display = "نامحدود"
     else:
-        volume_gb = volume_mb / 1024  # تبدیل به گیگابایت برای پنل
-        volume_display = format_volume(volume_mb, is_test=True)  # نمایش هوشمند
+        volume_gb = volume_mb / 1024
+        volume_display = format_volume(volume_mb, is_test=True)
+    
     logger.info(f"🧪 تست برای کاربر {user_id}:")
     logger.info(f"  📦 حجم: {volume_mb} MB ({volume_gb} GB) - {volume_display}")
     logger.info(f"  ⏱ مدت: {days} روز")
     logger.info(f"  🔢 حداکثر تست: {max_tests}")
     logger.info(f"  👤 محدودیت IP: {ip_limit}")
+    
+    # ═══════════════════════════════════════════
+    # ۳. بررسی سقف تست کاربر
+    # ═══════════════════════════════════════════
     uid = str(user_id)
     user_test_data = USER_TEST_USAGE.get(uid, {})
     test_count = user_test_data.get('count', 0)
     
     if test_count >= max_tests:
-        if lang == "fa":
-            await callback.answer(
-                f"⚠️ شما قبلاً از سقف تست مجاز ({max_tests} بار) استفاده کرده‌اید!",
-                show_alert=True
-            )
-        else:
-            await callback.answer(
-                f"⚠️ You have already reached the test limit ({max_tests} times)!",
-                show_alert=True
-            )
+        await callback.answer(
+            f"⚠️ شما قبلاً از سقف تست مجاز ({max_tests} بار) استفاده کرده‌اید!"
+            if lang == "fa"
+            else f"⚠️ You have already reached the test limit ({max_tests} times)!",
+            show_alert=True
+        )
         return
+    
+    # ═══════════════════════════════════════════
+    # ۴. تعیین اینباندهای تست
+    # ═══════════════════════════════════════════
     test_inbound_ids = TEST_SERVICE_STATUS.get('inbound_ids', [])
     
     if not test_inbound_ids:
@@ -12535,54 +12558,59 @@ async def get_test_service(callback: CallbackQuery):
             if default_ids:
                 test_inbound_ids = default_ids
                 logger.info(f"📌 استفاده از اینباندهای پیش‌فرض برای تست: {test_inbound_ids}")
-    test_message = TEST_SERVICE_STATUS.get('message', '🎁 یک سرویس تست {volume} / {days} روز برای شما فعال شد!')
-    test_message = test_message.format(volume=volume_display, days=days)
-    try:
-        await callback.message.edit_text(
-            "⏳ در حال ساخت سرویس تست..." if lang == "fa" else "⏳ Creating test service..."
-        )
-    except Exception as e:
-        err = str(e)
-        if "message to edit not found" in err or "message is not modified" in err:
-            # پیام قبلی حذف شده - یه پیام موقت جدید بفرست
-            try:
-                loading_msg = await callback.message.answer(
-                    "⏳ در حال ساخت سرویس تست..." if lang == "fa" else "⏳ Creating test service..."
-                )
-                # ذخیره‌ش کن برای حذف بعدی
-                if user_id not in user_states:
-                    user_states[user_id] = {}
-                user_states[user_id]['_loading_msg_id'] = loading_msg.message_id
-            except Exception:
-                pass
-        else:
-            logger.warning(f"خطا در edit پیام لودینگ: {e}")
     
+    # ═══════════════════════════════════════════
+    # ۵. ارسال پیام لودینگ
+    # ═══════════════════════════════════════════
+    loading_text = "⏳ در حال ساخت سرویس تست..." if lang == "fa" else "⏳ Creating test service..."
+    loading_msg = None
+    
+    try:
+        if callback.message.text:
+            await callback.message.edit_text(loading_text)
+            loading_msg = callback.message
+        else:
+            loading_msg = await callback.message.answer(loading_text)
+    except Exception:
+        try:
+            loading_msg = await callback.message.answer(loading_text)
+        except Exception as e2:
+            logger.warning(f"خطا در ارسال پیام لودینگ: {e2}")
+    
+    # ═══════════════════════════════════════════
+    # ۶. ساخت سرویس تست
+    # ═══════════════════════════════════════════
     try:
         email = f"test_{user_id}_{int(datetime.now().timestamp())}"
         user_info = get_user(user_id)
         user_name = user_info.get('name', f'کاربر_{user_id}')
         
         sub_link = await xui_create_client_with_inbound(
-            email, 
-            volume_gb,  # مقدار اعشاری (مثلاً 0.05 برای 50MB)
+            email,
+            volume_gb,
             days,
-            user_name, 
-            user_id, 
+            user_name,
+            user_id,
             test_inbound_ids,
             ip_limit=ip_limit
         )
         
+        # ───────────────────────────────────────
+        # ۶.۱. ساخت موفق
+        # ───────────────────────────────────────
         if sub_link:
             order_id = create_order(user_id, volume_gb, days, 0, "test", ip_limit=ip_limit)
-            update_order(order_id, 
-                        status='approved', 
-                        config_link=sub_link,
-                        sub_link=sub_link,
-                        email=email,
-                        payment_method='test',
-                        inbound_id=test_inbound_ids,
-                        approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            update_order(
+                order_id,
+                status='approved',
+                config_link=sub_link,
+                sub_link=sub_link,
+                email=email,
+                payment_method='test',
+                inbound_id=test_inbound_ids,
+                approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            
             USER_TEST_USAGE[uid] = {
                 'count': test_count + 1,
                 'last_test': datetime.now().isoformat(),
@@ -12595,6 +12623,8 @@ async def get_test_service(callback: CallbackQuery):
                     'ip_limit': ip_limit
                 }
             }
+            
+            # ─── نوتیفیکیشن ادمین ───
             await send_admin_notification('test', {
                 'user_id': user_id,
                 'volume': volume_mb,
@@ -12605,59 +12635,103 @@ async def get_test_service(callback: CallbackQuery):
                 'inbound_ids': test_inbound_ids,
                 'ip_limit': ip_limit
             })
+            
+            # ─── ذخیره test_usage.json ───
             try:
                 test_file = os.path.join(DATA_DIR, "test_usage.json")
                 with open(test_file, 'w', encoding='utf-8') as f:
                     json.dump(USER_TEST_USAGE, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 logger.error(f"خطا در ذخیره تست یوزر: {e}")
-            # ─── حذف پیام لودینگ ───
-            try:
-                await callback.message.delete()
-            except Exception:
-                pass
             
-            # اگه پیام لودینگ جدا فرستادیم، اون رو هم حذف کن
-            try:
-                loading_id = user_states.get(user_id, {}).get('_loading_msg_id')
-                if loading_id:
-                    await bot.delete_message(user_id, loading_id)
-                    user_states[user_id].pop('_loading_msg_id', None)
-            except Exception:
-                pass
+            # ─── حذف پیام لودینگ ───
+            deleted = False
+            if loading_msg:
+                try:
+                    await loading_msg.delete()
+                    deleted = True
+                except Exception as e:
+                    logger.debug(f"خطا در حذف پیام لودینگ: {e}")
+            
+            if not deleted:
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
+            
+            # ─── ارسال عکس QR با کپشن ───
             await send_config_with_qr_option(user_id, order_id, volume_gb, days, 0, sub_link, lang)
             
-
-            
-            
+            # ─── لاگ ───
             inbound_display = test_inbound_ids if test_inbound_ids else 'پیش‌فرض'
-            logger.info(f"🧪 کاربر {user_id} تست سرویس دریافت کرد - سفارش #{order_id} - {volume_display}/{days} روز - اینباندها: {inbound_display} - IP Limit: {ip_limit}")
+            logger.info(
+                f"🧪 کاربر {user_id} تست سرویس دریافت کرد - "
+                f"سفارش #{order_id} - {volume_display}/{days} روز - "
+                f"اینباندها: {inbound_display} - IP Limit: {ip_limit}"
+            )
             
             if log_system:
                 await log_system.log_user_action(
                     user_id,
                     "دریافت تست سرویس",
-                    f"سفارش #{order_id} | {volume_display}/{days} روز | اینباندها: {inbound_display} | IP Limit: {ip_limit}"
+                    f"سفارش #{order_id} | {volume_display}/{days} روز | "
+                    f"اینباندها: {inbound_display} | IP Limit: {ip_limit}"
                 )
             
-            await callback.answer("✅ سرویس تست فعال شد!" if lang == "fa" else "✅ Test service activated!")
-            
-        else:
-            
-            error_msg = "❌ خطا در ساخت سرویس تست. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error creating test service. Please try again."
-            await callback.message.edit_text(
-                error_msg,
-                reply_markup=get_back_only_keyboard(lang)
+            await callback.answer(
+                "✅ سرویس تست فعال شد!" if lang == "fa" else "✅ Test service activated!"
             )
-            logger.error(f"❌ خطا در ساخت تست برای کاربر {user_id}")
+        
+        # ───────────────────────────────────────
+        # ۶.۲. خطا در ساخت
+        # ───────────────────────────────────────
+        else:
+            if loading_msg:
+                try:
+                    await loading_msg.delete()
+                except Exception:
+                    pass
             
+            error_msg = (
+                "❌ خطا در ساخت سرویس تست. لطفاً دوباره تلاش کنید."
+                if lang == "fa"
+                else "❌ Error creating test service. Please try again."
+            )
+            try:
+                await callback.message.answer(
+                    error_msg,
+                    reply_markup=get_back_only_keyboard(lang)
+                )
+            except Exception:
+                pass
+            
+            logger.error(f"❌ خطا در ساخت تست برای کاربر {user_id}")
+    
+    # ───────────────────────────────────────
+    # ۶.۳. خطای غیرمنتظره
+    # ───────────────────────────────────────
     except Exception as e:
         logger.error(f"❌ خطا در دریافت تست: {e}", exc_info=True)
-        await callback.message.edit_text(
-            "❌ خطا در پردازش درخواست. لطفاً بعداً تلاش کنید." if lang == "fa" else "❌ Error processing request. Please try again later.",
-            reply_markup=get_back_only_keyboard(lang)
-        )
+        
+        if loading_msg:
+            try:
+                await loading_msg.delete()
+            except Exception:
+                pass
+        
+        try:
+            await callback.message.answer(
+                "❌ خطا در پردازش درخواست. لطفاً بعداً تلاش کنید."
+                if lang == "fa"
+                else "❌ Error processing request. Please try again later.",
+                reply_markup=get_back_only_keyboard(lang)
+            )
+        except Exception:
+            pass
     
+    # ═══════════════════════════════════════════
+    # ۷. پاسخ نهایی callback
+    # ═══════════════════════════════════════════
     try:
         await callback.answer()
     except Exception as e:
