@@ -23138,7 +23138,7 @@ async def _delete_downloaded_files(user_id: int, chat_id: int = None):
     
 
 async def _render_config_page(callback: CallbackQuery, order_id: int, page: int = 0):
-    """نمایش صفحه‌بندی‌شده کانفیگ"""
+    """نمایش صفحه‌بندی‌شده کانفیگ - بدون هدر و بدون دکمه بروزرسانی"""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
 
@@ -23167,24 +23167,7 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     end_idx = min(start_idx + CONFIG_PAGE_SIZE, total_links)
     page_links = links[start_idx:end_idx]
 
-    # ==================== ساخت متن ====================
-    if lang == "fa":
-        header = (
-            f"📡 <b>لینک‌های کانفیگ #{order_id}</b>\n"
-            f"👤 نام: <code>{display_email}</code>\n"
-            f"📄 صفحه <b>{page + 1}</b> از <b>{total_pages}</b>\n"
-            f"📊 مجموع لینک‌ها: <b>{total_links}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        )
-    else:
-        header = (
-            f"📡 <b>Config Links #{order_id}</b>\n"
-            f"👤 Name: <code>{display_email}</code>\n"
-            f"📄 Page <b>{page + 1}</b> of <b>{total_pages}</b>\n"
-            f"📊 Total links: <b>{total_links}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        )
-
+    # ==================== ساخت متن (بدون هدر) ====================
     body = ""
     for local_idx, link in enumerate(page_links):
         abs_idx = start_idx + local_idx + 1
@@ -23204,12 +23187,11 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
 
         body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{display_link}</code>\n\n"
 
-    text = header + body
+    text = body.strip()
 
-    # اگه به هر دلیل از 4000 کاراکتر گذشت (لینک خیلی طولانی)، هشدار بده
+    # اگه خیلی طولانی شد، کوتاه‌سازی کن
     if len(text) > 4000:
         logger.warning(f"⚠️ صفحه {page + 1} سفارش #{order_id} طولانی شد: {len(text)} کاراکتر")
-        # کوتاه‌سازی: فقط 2 لینک اول صفحه رو نشون بده
         truncated_body = ""
         for local_idx, link in enumerate(page_links[:2]):
             abs_idx = start_idx + local_idx + 1
@@ -23223,11 +23205,11 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
                 display_link = f"{link}#{display_email}"
             truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{display_link}</code>\n\n"
 
-        text = header + truncated_body
+        text = truncated_body.strip()
         if lang == "fa":
-            text += "⚠️ <i>به دلیل طولانی بودن، فقط ۲ لینک نمایش داده شد.</i>"
+            text += "\n\n⚠️ <i>به دلیل طولانی بودن، فقط ۲ لینک نمایش داده شد.</i>"
         else:
-            text += "⚠️ <i>Due to length, only 2 links are shown.</i>"
+            text += "\n\n⚠️ <i>Due to length, only 2 links are shown.</i>"
 
     # ==================== ساخت کیبورد ====================
     buttons = []
@@ -23272,27 +23254,19 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     COPY_LIMIT = 256
 
     if len(all_links_text) <= COPY_LIMIT:
-        # جا میشه → کپی مستقیم
         buttons.append([InlineKeyboardButton(
             text="📋 کپی همه لینک‌ها" if lang == "fa" else "📋 Copy All Links",
             copy_text=CopyTextButton(text=all_links_text),
             style="success"
         )])
     else:
-        # جا نمیشه → فایل می‌فرستیم
         buttons.append([InlineKeyboardButton(
             text="📋 کپی همه لینک‌ها" if lang == "fa" else "📋 Copy All Links",
             callback_data=f"copy_all_links_file_{order_id}",
             style="success"
         )])
-    
-    # --- دکمه‌های عملیات ---
-    buttons.append([InlineKeyboardButton(
-        text="🔄 بروزرسانی" if lang == "fa" else "🔄 Refresh",
-        callback_data=f"show_text_refresh_{order_id}_{page}",
-        style="primary"
-    )])
 
+    # --- دکمه‌های عملیات (بدون بروزرسانی) ---
     buttons.append([InlineKeyboardButton(
         text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
         callback_data="back_to_main",
