@@ -12468,8 +12468,9 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         
         # ─── ردیف ۲: حساب کاربری | کانفیگ‌های من ───
         buttons.append([
-            InlineKeyboardButton(text="👤 حساب کاربری", callback_data="my_account" if is_approved else "noop", style="primary"),
-            InlineKeyboardButton(text="🌐 کانفیگ‌های من", callback_data="my_configs", style="primary")
+            InlineKeyboardButton(text="🌐 کانفیگ‌های من", callback_data="my_configs", style="primary"),
+            InlineKeyboardButton(text="👤 حساب کاربری", callback_data="my_account" if is_approved else "noop", style="primary")
+            
         ])
         
         # ─── ردیف ۳: اعمال کوپن | افزایش موجودی ───
@@ -12519,8 +12520,9 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         
         # ─── ردیف ۲: حساب کاربری | کانفیگ‌های من ───
         buttons.append([
-            InlineKeyboardButton(text="👤 My Account", callback_data="my_account" if is_approved else "noop", style="primary"),
-            InlineKeyboardButton(text="🌐 My Configs", callback_data="my_configs", style="primary")
+            InlineKeyboardButton(text="🌐 My Configs", callback_data="my_configs", style="primary"),
+            InlineKeyboardButton(text="👤 My Account", callback_data="my_account" if is_approved else "noop", style="primary")
+            
         ])
         
         # ─── ردیف ۳: اعمال کوپن | افزایش موجودی ───
@@ -25053,10 +25055,10 @@ async def pay_balance(callback: CallbackQuery):
         else:
             text = (
                 f"⚠️ <b>Insufficient balance.</b>\n"
-                f"‏\n"
-                f"‏Price: <b>{final_price:,} Toman</b>\n"
-                f"‏Your balance: <b>{balance:,} Toman</b>\n"
-                f"‏Shortage: <b>{shortage:,} Toman</b>"
+                f"\n"
+                f"Price: <b>{final_price:,} Toman</b>\n"
+                f"Your balance: <b>{balance:,} Toman</b>\n"
+                f"Shortage: <b>{shortage:,} Toman</b>"
             )
             btn_increase = "➕ Increase Balance"
             btn_main = "🏠 Main Menu"
