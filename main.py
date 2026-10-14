@@ -9922,18 +9922,19 @@ async def send_config_with_qr_option(
     if is_test:
         gift_emoji = premium_emoji('gift', '🎁')
         light_emoji = premium_emoji('light', '💡')
+        home_emoji = premium_emoji('home', '🏠')
         
         if lang == "fa":
             caption += (
                 f"\n\n{gift_emoji} <b>این یک سرویس خوش‌آمدگویی است.</b>\n"
                 f"{light_emoji} امیدواریم تجربه‌ی خوبی داشته باشید.\n"
-                f"{light_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+                f"{home_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
             )
         else:
             caption += (
                 f"\n\n{gift_emoji} <b>This is a welcome service.</b>\n"
                 f"{light_emoji} We hope you have a great experience.\n"
-                f"{light_emoji} To purchase full service, use the main menu."
+                f"{home_emoji} To purchase full service, use the main menu."
             )
     
     # ─── ارسال ───
@@ -10008,18 +10009,18 @@ async def send_config_with_qr_option_edit(
     if is_test:
         gift_emoji = premium_emoji('gift', '🎁')
         light_emoji = premium_emoji('light', '💡')
-        
+        home_emoji = premium_emoji('home', '🏠')
         if lang == "fa":
             caption += (
                 f"\n\n{gift_emoji} <b>این یک سرویس خوش‌آمدگویی است.</b>\n"
                 f"{light_emoji} امیدواریم تجربه‌ی خوبی داشته باشید.\n"
-                f"{light_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+                f"{home_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
             )
         else:
             caption += (
                 f"\n\n{gift_emoji} <b>This is a welcome service.</b>\n"
                 f"{light_emoji} We hope you have a great experience.\n"
-                f"{light_emoji} To purchase full service, use the main menu."
+                f"{home_emoji} To purchase full service, use the main menu."
             )
     
     # ─── حذف پیام قبلی ───
