@@ -23237,7 +23237,7 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             ))
 
         nav_row.append(InlineKeyboardButton(
-            text=f"📄 {page + 1}/{total_pages}",
+            text=f"{page + 1}/{total_pages}",
             callback_data="noop"
         ))
 
@@ -30163,28 +30163,10 @@ async def show_all_my_configs(callback: CallbackQuery):
     )
 
     # ─────────────────────────────────────
-    # Header
+    # Body (بدون هدر)
     # ─────────────────────────────────────
-    if lang == "fa":
-        text = f"""
-📂 <b>کانفیگ‌های شما</b>
-   ━━━━━━━━━━━━━━━━━━━━
-📊 <b>تعداد کانفیگ‌ها:</b> {len(configs_list)}
-🕐 {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
-   ━━━━━━━━━━━━━━━━━━━━
-"""
-    else:
-        text = f"""
-📂 <b>Your Configurations</b>
-   ━━━━━━━━━━━━━━━━━━━━
-📊 <b>Total Configs:</b> {len(configs_list)}
-🕐 {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
-   ━━━━━━━━━━━━━━━━━━━━
-"""
+    text = ""
 
-    # ─────────────────────────────────────
-    # Configs
-    # ─────────────────────────────────────
     for i, c in enumerate(configs_list, 1):
 
         order_id = c.get('order_id', '?')
@@ -30226,7 +30208,7 @@ async def show_all_my_configs(callback: CallbackQuery):
 💰 قیمت: <b>{price_display_fa}</b>
 
 🔗 <b>لینک اتصال:</b>
-<code>{config_link}</code>
+<a href="{config_link}">{config_link}</a>
 
    ━━━━━━━━━━━━━━━━━━━━
 """
@@ -30243,7 +30225,7 @@ async def show_all_my_configs(callback: CallbackQuery):
 💰 Price: <b>{price_display_en}</b>
 
 🔗 <b>Connection Link:</b>
-<code>{config_link}</code>
+<a href="{config_link}">{config_link}</a>
 
    ━━━━━━━━━━━━━━━━━━━━
 """
@@ -30256,15 +30238,12 @@ async def show_all_my_configs(callback: CallbackQuery):
             [
                 InlineKeyboardButton(
                     text=(
-                        "📁 بازگشت به کانفیگ‌های من"
+                        "🔙 کانفیگ‌های من"
                         if lang == "fa"
-                        else "📁 Back to My Configs"
+                        else "🔙 My Configs"
                     ),
-                    callback_data="my_configs",
-                    style="primary"
-                )
-            ],
-            [
+                    callback_data="my_configs"
+                ),
                 InlineKeyboardButton(
                     text=(
                         "🏠 منوی اصلی"
@@ -30272,8 +30251,9 @@ async def show_all_my_configs(callback: CallbackQuery):
                         else "🏠 Main Menu"
                     ),
                     callback_data="back_to_main",
-                    style="danger"
+                    style="primary"
                 )
+                
             ]
         ]
     )
