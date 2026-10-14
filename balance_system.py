@@ -571,7 +571,7 @@ async def cancel_increase_balance(callback: CallbackQuery):
     await callback.message.answer(
         f"{_main.premium_emoji('rocket', '🚀')} "
         f"{'منوی اصلی' if lang=='fa' else 'Main Menu'}",
-        reply_markup=_main.get_main_keyboard(is_admin, lang),
+        reply_markup=_main.get_main_keyboard(is_admin, lang, user_id),
         parse_mode=ParseMode.HTML
     )
 
@@ -621,7 +621,7 @@ async def process_balance_amount(message: Message):
         await message.answer(
             f"{_main.premium_emoji('rocket', '🚀')} "
             f"{'منوی اصلی' if lang=='fa' else 'Main Menu'}",
-            reply_markup=_main.get_main_keyboard(is_admin, lang)
+            reply_markup=_main.get_main_keyboard(is_admin, lang, user_id)
         )
         return
 
