@@ -30202,18 +30202,66 @@ async def my_configs(callback: CallbackQuery):
         )
 
     # ══════════════════════════════════════════════
-    # ارسال
+    # ویرایش پیام قبلی (به جای حذف و ارسال مجدد)
     # ══════════════════════════════════════════════
-    try:
-        await callback.message.delete()
-    except Exception as e:
-        logger.debug(f"نتوانست پیام قبلی را حذف کند: {e}")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback.message.answer(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-        parse_mode=ParseMode.HTML
-    )
+    try:
+        # حالت ۱: پیام قبلی متنی هست → ویرایش
+        await callback.message.edit_text(
+            text,
+            reply_markup=keyboard,
+            parse_mode=ParseMode.HTML
+        )
+        logger.debug(f"✅ پیام کانفیگ‌های کاربر {user_id} ویرایش شد")
+
+    except Exception as e:
+        err = str(e)
+
+        if "message is not modified" in err:
+            # کاربر دوباره کلیک کرده - محتوا یکیه
+            logger.debug("پیام تغییر نکرده - بدون ویرایش")
+
+        elif "there is no text in the message to edit" in err:
+            # پیام قبلی عکس/فایل/ویدیو بوده → حذف و ارسال جدید
+            logger.debug("پیام قبلی رسانه‌ای بوده - حذف و ارسال جدید")
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(
+                text,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML
+            )
+
+        elif "message to edit not found" in err:
+            # پیام قبلی حذف شده → ارسال جدید
+            logger.debug("پیام قبلی یافت نشد - ارسال جدید")
+            try:
+                await callback.message.answer(
+                    text,
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception as e2:
+                logger.error(f"خطا در ارسال پیام جدید: {e2}")
+
+        else:
+            # هر خطای دیگه - fallback
+            logger.warning(f"خطا در ویرایش پیام: {e}")
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            try:
+                await callback.message.answer(
+                    text,
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception as e2:
+                logger.error(f"خطا در ارسال پیام جدید: {e2}")
 
     try:
         await callback.answer()
