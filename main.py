@@ -12179,7 +12179,7 @@ def progress_bar(percent: float, length: int = 10) -> str:
 
 
 def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") -> str:
-    """نمایش ساده وضعیت مصرف با ایموجی پرمیوم"""
+    """نمایش ساده وضعیت مصرف با ایموجی پرمیوم - دو زبانه"""
     
     if not client:
         return ""
@@ -12192,9 +12192,14 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
     # ─── ایموجی‌های پرمیوم ───
     stats_emoji = premium_emoji('amar', '📊')
     time_emoji = premium_emoji('hourglass', '⏳')
+    download_emoji = premium_emoji('download', '📥')
     
     # ─── محاسبه زمان باقی‌مانده ───
-    time_left_text = "نامحدود" if lang == "fa" else "Unlimited"
+    if lang == "fa":
+        time_left_text = "نامحدود"
+    else:
+        time_left_text = "Unlimited"
+    
     if expiry > 0:
         try:
             expire_dt = datetime.fromtimestamp(expiry / 1000)
@@ -12206,6 +12211,7 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
             else:
                 days = total_seconds // 86400
                 hours = (total_seconds % 86400) // 3600
+                minutes = (total_seconds % 3600) // 60
                 
                 if lang == "fa":
                     if days > 0 and hours > 0:
@@ -12213,23 +12219,25 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
                     elif days > 0:
                         time_left_text = f"{to_persian_digits(days)} روز دیگه"
                     elif hours > 0:
-                        minutes = (total_seconds % 3600) // 60
                         if minutes > 0:
                             time_left_text = f"{to_persian_digits(hours)} ساعت و {to_persian_digits(minutes)} دقیقه دیگه"
                         else:
                             time_left_text = f"{to_persian_digits(hours)} ساعت دیگه"
                     else:
-                        minutes = (total_seconds % 3600) // 60
                         time_left_text = f"{to_persian_digits(minutes)} دقیقه دیگه"
                 else:
+                    # ✅ انگلیسی تمیز
                     if days > 0 and hours > 0:
-                        time_left_text = f"{days}d {hours}h"
+                        time_left_text = f"{days}d {hours}h left"
                     elif days > 0:
-                        time_left_text = f"{days} days"
+                        time_left_text = f"{days} days left"
                     elif hours > 0:
-                        time_left_text = f"{hours}h"
+                        if minutes > 0:
+                            time_left_text = f"{hours}h {minutes}m left"
+                        else:
+                            time_left_text = f"{hours}h left"
                     else:
-                        time_left_text = f"{(total_seconds % 3600) // 60}min"
+                        time_left_text = f"{minutes}min left"
         except Exception:
             pass
     
@@ -12259,19 +12267,25 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
     
     # ─── فرمت مصرف ───
     def fmt_size(gb_val):
-        if gb_val >= 1:
-            val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
-            return f"{val} گیگ" if lang == "fa" else f"{val} GB"
+        if lang == "fa":
+            if gb_val >= 1:
+                val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
+                return f"{val} گیگ"
+            else:
+                mb = gb_val * 1024
+                return f"{mb:.0f} مگ"
         else:
-            mb = gb_val * 1024
-            return f"{mb:.0f} مگ" if lang == "fa" else f"{mb:.0f} MB"
+            if gb_val >= 1:
+                val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
+                return f"{val} GB"
+            else:
+                mb = gb_val * 1024
+                return f"{mb:.0f} MB"
     
     used_str = fmt_size(used_gb)
     total_str = fmt_size(total_gb)
     
-    # ─── ایموجی مصرف ───
-    download_emoji = premium_emoji('download', '📥')
-    
+    # ─── خروجی ───
     if lang == "fa":
         percent_str = to_persian_digits(f"{percent_int}٪")
         return (
@@ -12306,7 +12320,7 @@ def generate_qr_code(data: str, order_id: int):
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
 
 def get_config_caption(order_id: int, volume: Union[int, float], days: int, price: int, config_link: str, lang: str = "fa") -> str:
-    """کپشن زیبا با ایموجی پرمیوم"""
+    """کپشن زیبا با ایموجی پرمیوم - دو زبانه"""
     
     order = orders.get(str(order_id))
     is_test = False
@@ -12316,7 +12330,7 @@ def get_config_caption(order_id: int, volume: Union[int, float], days: int, pric
         is_test = order.get('type') == 'test'
         category_name = order.get('category_name', '') or ''
     
-    # ─── عنوان با ایموجی پرمیوم ───
+    # ─── عنوان ───
     if is_test:
         title_emoji = premium_emoji('gift', '🎁')
         title = f"{title_emoji} کانفیگ خوش‌آمد رایگان" if lang == "fa" else f"{title_emoji} Free Welcome Config"
@@ -12336,7 +12350,9 @@ def get_config_caption(order_id: int, volume: Union[int, float], days: int, pric
     else:
         volume_display = format_volume(volume, is_test=False)
     
-    volume_display = volume_display.replace("GB", "گیگ").replace("MB", "مگ")
+    # ✅ اصلاح: فقط برای فارسی "GB" و "MB" رو تبدیل کن
+    if lang == "fa":
+        volume_display = volume_display.replace("GB", "گیگ").replace("MB", "مگ")
     
     # ─── ایموجی لینک ───
     link_emoji = premium_emoji('link', '🔗')
