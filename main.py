@@ -12162,196 +12162,129 @@ async def xui_get_client_traffic(email: str) -> Optional[dict]:
         logger.error(f"❌ خطا در دریافت ترافیک: {e}")
         return None
 
+PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 
-def progress_bar(percent: float, length: int = 12) -> str:
-    """ساخت نوار پیشرفت"""
-
+def to_persian_digits(text) -> str:
+    """تبدیل اعداد انگلیسی به فارسی"""
+    return "".join(
+        PERSIAN_DIGITS[int(ch)] if ch.isdigit() else ch
+        for ch in str(text)
+    )
+def progress_bar(percent: float, length: int = 10) -> str:
+    """نوار پیشرفت با کاراکتر بلوک"""
     percent = max(0, min(100, percent))
     filled = round(length * percent / 100)
     empty = length - filled
-
-    if percent < 50:
-        color = "🟩"
-    elif percent < 80:
-        color = "🟨"
-    else:
-        color = "🟥"
-
-    return color * filled + "⬜" * empty
+    return "█" * filled + "░" * empty
 
 
 def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") -> str:
-    """نمایش اطلاعات کانفیگ با پشتیبانی کامل از دو زبان فارسی و انگلیسی"""
+    """نمایش ساده وضعیت مصرف با ایموجی پرمیوم"""
     
     if not client:
-        if lang == "fa":
-            return "❌ اطلاعاتی در دسترس نیست."
-        else:
-            return "❌ No information available."
-
-    enabled = client.get("enable", True)
-    status_emoji = premium_emoji('success', '✅') if enabled else premium_emoji('cancel', '❌')
+        return ""
     
-    if lang == "fa":
-        status = f"{status_emoji} {'فعال' if enabled else 'غیرفعال'}"
-    else:
-        status = f"{status_emoji} {'Active' if enabled else 'Inactive'}"
-
     total_bytes = client.get("totalGB", 0)
-    if total_bytes == 0:
-        total_display = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
-    else:
-        total_gb = total_bytes / (1024 ** 3)
-        email = client.get("email", "")
-        is_test = email.startswith("test_")
-        
-        if is_test:
-            total_mb = total_gb * 1024
-            total_display = format_volume(total_mb, is_test=True)
-        else:
-            total_display = format_volume(total_gb, is_test=False)
-
-    ip_limit = client.get("limitIp", 0)
-    if lang == "fa":
-        if ip_limit == 0:
-            ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: ♾️ نامحدود"
-        elif ip_limit == 1:
-            ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: ۱ دستگاه"
-        else:
-            ip_display = f"{premium_emoji('user', '👤')} تعداد کاربر: {ip_limit} دستگاه"
-    else:
-        if ip_limit == 0:
-            ip_display = f"{premium_emoji('user', '👤')} Users: ♾️ Unlimited"
-        elif ip_limit == 1:
-            ip_display = f"{premium_emoji('user', '👤')} Users: 1 Device"
-        else:
-            ip_display = f"{premium_emoji('user', '👤')} Users: {ip_limit} Devices"
-
-    if total_bytes > 0:
-        total_gb = total_bytes / (1024 ** 3)
-        up = 0
-        down = 0
-        if traffic:
-            up = traffic.get("up", 0) / (1024 ** 3)
-            down = traffic.get("down", 0) / (1024 ** 3)
-        
-        used = up + down
-        remain = max(0, total_gb - used)
-        percent = (used / total_gb * 100) if total_gb else 0
-        percent = min(percent, 100)
-        
-        email = client.get("email", "")
-        is_test = email.startswith("test_")
-        
-        # ✅ نمایش مصرف و باقیمانده بر اساس زبان
-        if lang == "fa":
-            if is_test:
-                used_mb = used * 1024
-                remain_mb = remain * 1024
-                used_display = "0 MB" if used <= 0 else f"{round(used_mb, 2)} MB"
-                remain_display = "0 MB" if remain <= 0 else f"{round(remain_mb, 2)} MB"
-            else:
-                if used <= 0:
-                    used_display = "0 MB"
-                elif used < 1:
-                    used_display = f"{round(used * 1024, 2)} MB"
-                else:
-                    used_display = f"{round(used, 2)} GB"
-                
-                if remain <= 0:
-                    remain_display = "0 MB"
-                elif remain < 1:
-                    remain_display = f"{round(remain * 1024, 2)} MB"
-                else:
-                    remain_display = f"{round(remain, 2)} GB"
-        else:
-            # زبان انگلیسی
-            if is_test:
-                used_mb = used * 1024
-                remain_mb = remain * 1024
-                used_display = "0 MB" if used <= 0 else f"{round(used_mb, 2)} MB"
-                remain_display = "0 MB" if remain <= 0 else f"{round(remain_mb, 2)} MB"
-            else:
-                if used <= 0:
-                    used_display = "0 MB"
-                elif used < 1:
-                    used_display = f"{round(used * 1024, 2)} MB"
-                else:
-                    used_display = f"{round(used, 2)} GB"
-                
-                if remain <= 0:
-                    remain_display = "0 MB"
-                elif remain < 1:
-                    remain_display = f"{round(remain * 1024, 2)} MB"
-                else:
-                    remain_display = f"{round(remain, 2)} GB"
-        
-        bar = progress_bar(percent)
-        
-        # ✅ بخش حجم بر اساس زبان
-        if lang == "fa":
-            volume_info = f"""
-{premium_emoji('box','📦')} حجم کل: {total_display}
-{premium_emoji('upload','📤')} مصرف: {used_display}
-{premium_emoji('download','📥')} باقی‌مانده: {remain_display}
-
-{premium_emoji('amar','📊')} میزان مصرف
-
-{bar} {percent:.0f}%
-"""
-        else:
-            volume_info = f"""
-{premium_emoji('box','📦')} Total Volume: {total_display}
-{premium_emoji('upload','📤')} Used: {used_display}
-{premium_emoji('download','📥')} Remaining: {remain_display}
-
-{premium_emoji('amar','📊')} Usage
-
-{bar} {percent:.0f}%
-"""
-    else:
-        if lang == "fa":
-            volume_info = f"""
-{premium_emoji('box','📦')} حجم کل: ♾️ نامحدود
-"""
-        else:
-            volume_info = f"""
-{premium_emoji('box','📦')} Total Volume: ♾️ Unlimited
-"""
-
     expiry = client.get("expiryTime", 0)
-    days_left = "♾️" if lang == "fa" else "♾️ Unlimited"
-
+    email = client.get("email", "")
+    is_test = email.startswith("test_")
+    
+    # ─── ایموجی‌های پرمیوم ───
+    stats_emoji = premium_emoji('amar', '📊')
+    time_emoji = premium_emoji('hourglass', '⏳')
+    
+    # ─── محاسبه زمان باقی‌مانده ───
+    time_left_text = "نامحدود" if lang == "fa" else "Unlimited"
     if expiry > 0:
         try:
-            expire_time = datetime.fromtimestamp(expiry / 1000)
-            delta = expire_time - datetime.now()
-
-            if delta.total_seconds() <= 0:
-                days_left = "منقضی" if lang == "fa" else "Expired"
-            elif delta.days == 0:
-                hours = max(1, int(delta.total_seconds() // 3600))
-                days_left = f"{hours} ساعت" if lang == "fa" else f"{hours} Hours"
+            expire_dt = datetime.fromtimestamp(expiry / 1000)
+            delta = expire_dt - datetime.now()
+            total_seconds = int(delta.total_seconds())
+            
+            if total_seconds <= 0:
+                time_left_text = "منقضی شده" if lang == "fa" else "Expired"
             else:
-                days_left = f"{delta.days} روز" if lang == "fa" else f"{delta.days} Days"
-
-        except Exception as e:
-            logger.error(e)
-            days_left = "❌"
-
-    # ✅ بخش پایانی بر اساس زبان
+                days = total_seconds // 86400
+                hours = (total_seconds % 86400) // 3600
+                
+                if lang == "fa":
+                    if days > 0 and hours > 0:
+                        time_left_text = f"{to_persian_digits(days)} روز و {to_persian_digits(hours)} ساعت دیگه"
+                    elif days > 0:
+                        time_left_text = f"{to_persian_digits(days)} روز دیگه"
+                    elif hours > 0:
+                        minutes = (total_seconds % 3600) // 60
+                        if minutes > 0:
+                            time_left_text = f"{to_persian_digits(hours)} ساعت و {to_persian_digits(minutes)} دقیقه دیگه"
+                        else:
+                            time_left_text = f"{to_persian_digits(hours)} ساعت دیگه"
+                    else:
+                        minutes = (total_seconds % 3600) // 60
+                        time_left_text = f"{to_persian_digits(minutes)} دقیقه دیگه"
+                else:
+                    if days > 0 and hours > 0:
+                        time_left_text = f"{days}d {hours}h"
+                    elif days > 0:
+                        time_left_text = f"{days} days"
+                    elif hours > 0:
+                        time_left_text = f"{hours}h"
+                    else:
+                        time_left_text = f"{(total_seconds % 3600) // 60}min"
+        except Exception:
+            pass
+    
+    # ─── حجم نامحدود ───
+    if total_bytes == 0:
+        if lang == "fa":
+            return f"\n{time_emoji} اعتبار: {time_left_text}"
+        else:
+            return f"\n{time_emoji} Expiry: {time_left_text}"
+    
+    # ─── محاسبه مصرف ───
+    total_gb = total_bytes / (1024 ** 3)
+    
+    up = 0
+    down = 0
+    if traffic:
+        up = traffic.get("up", 0) / (1024 ** 3)
+        down = traffic.get("down", 0) / (1024 ** 3)
+    
+    used_gb = up + down
+    percent = (used_gb / total_gb * 100) if total_gb > 0 else 0
+    percent = min(percent, 100)
+    percent_int = int(round(percent))
+    
+    # ─── نوار پیشرفت ───
+    bar = progress_bar(percent, length=10)
+    
+    # ─── فرمت مصرف ───
+    def fmt_size(gb_val):
+        if gb_val >= 1:
+            val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
+            return f"{val} گیگ" if lang == "fa" else f"{val} GB"
+        else:
+            mb = gb_val * 1024
+            return f"{mb:.0f} مگ" if lang == "fa" else f"{mb:.0f} MB"
+    
+    used_str = fmt_size(used_gb)
+    total_str = fmt_size(total_gb)
+    
+    # ─── ایموجی مصرف ───
+    download_emoji = premium_emoji('download', '📥')
+    
     if lang == "fa":
-        return f"""
-{status}
-{volume_info}
-{premium_emoji('hourglass','⏳')} اعتبار: {days_left}
-"""
+        percent_str = to_persian_digits(f"{percent_int}٪")
+        return (
+            f"\n{stats_emoji} {bar} {percent_str}\n"
+            f"{download_emoji} مصرف: {used_str} از {total_str}\n"
+            f"{time_emoji} اعتبار: {time_left_text}"
+        )
     else:
-        return f"""
-{status}
-{volume_info}
-{premium_emoji('hourglass','⏳')} Expiry: {days_left}
-"""
+        return (
+            f"\n{stats_emoji} {bar} {percent_int}%\n"
+            f"{download_emoji} Used: {used_str} of {total_str}\n"
+            f"{time_emoji} Expiry: {time_left_text}"
+        )
 from aiogram.types import BufferedInputFile
 
 def generate_qr_code(data: str, order_id: int):
@@ -12373,92 +12306,53 @@ def generate_qr_code(data: str, order_id: int):
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
 
 def get_config_caption(order_id: int, volume: Union[int, float], days: int, price: int, config_link: str, lang: str = "fa") -> str:
-    """ساخت کپشن برای عکس QR Code با تشخیص تست یا خرید"""
+    """کپشن زیبا با ایموجی پرمیوم"""
     
     order = orders.get(str(order_id))
     is_test = False
-    ip_limit = 0
+    category_name = ""
     
     if order:
         is_test = order.get('type') == 'test'
-        ip_limit = order.get('ip_limit', 0)
+        category_name = order.get('category_name', '') or ''
+    
+    # ─── عنوان با ایموجی پرمیوم ───
+    if is_test:
+        title_emoji = premium_emoji('gift', '🎁')
+        title = f"{title_emoji} کانفیگ خوش‌آمد رایگان" if lang == "fa" else f"{title_emoji} Free Welcome Config"
+    elif category_name:
+        clean_name = category_name.replace("کانفیگ ", "").strip()
+        title_emoji = premium_emoji('globe', '🌐')
+        title = f"{title_emoji} کانفیگ {clean_name}" if lang == "fa" else f"{title_emoji} {category_name}"
+    else:
+        title_emoji = premium_emoji('config', '📦')
+        title = f"{title_emoji} کانفیگ شما" if lang == "fa" else f"{title_emoji} Your Config"
+    
+    # ─── حجم ───
     if volume is None or volume == 0 or (isinstance(volume, float) and volume < 0.001):
         volume_display = "نامحدود" if lang == "fa" else "Unlimited"
+    elif is_test:
+        volume_display = format_volume(volume * 1024, is_test=True)
     else:
-        if is_test:
-            volume_display = format_volume(volume *1024, is_test=True)
-        else:
-            volume_display = format_volume(volume, is_test=False)
+        volume_display = format_volume(volume, is_test=False)
     
-    if ip_limit == 0:
-        ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
-    elif ip_limit == 1:
-        ip_display = "👤 تعداد کاربر: ۱ دستگاه" if lang == "fa" else "👤 Users: 1 Device"
-    else:
-        ip_display = f"👤 تعداد کاربر: {ip_limit} دستگاه" if lang == "fa" else f"👤 Users: {ip_limit} Devices"
+    volume_display = volume_display.replace("GB", "گیگ").replace("MB", "مگ")
+    
+    # ─── ایموجی لینک ───
+    link_emoji = premium_emoji('link', '🔗')
     
     if lang == "fa":
-        if is_test:
-            return f"""
-{premium_emoji('success','✅')} <b>سفارش تست #{order_id} تایید شد!</b>
+        caption = f"""{title} ({volume_display})
 
-{premium_emoji('box','📦')} <b>حجم:</b> {volume_display}
-{premium_emoji('hourglass','⏱')} <b>مدت:</b> {days} روز
-{ip_display}
-{premium_emoji('test','🧪')} <b>نوع:</b> تست رایگان
-
-{premium_emoji('link','🔗')} <b>لینک اتصال:</b>
-<code>{config_link}</code>
-
-{premium_emoji('qr','📱')} <b>کد QR قابل اسکن</b>
-
-"""
-        else:
-            return f"""
-{premium_emoji('success','✅')} <b>سفارش #{order_id} تایید شد!</b>
-
-{premium_emoji('box','📦')} <b>حجم:</b> {volume_display}
-{premium_emoji('hourglass','⏱')} <b>مدت:</b> {days} روز
-{ip_display}
-{premium_emoji('money','💰')} <b>قیمت:</b> {price:,} تومان
-
-{premium_emoji('link','🔗')} <b>لینک اتصال:</b>
-<code>{config_link}</code>
-
-{premium_emoji('qr','📱')} <b>کد QR قابل اسکن</b>
-
-"""
+{link_emoji} <b>لینک اشتراک</b>
+<code>{config_link}</code>"""
     else:
-        if is_test:
-            return f"""
-{premium_emoji('success','✅')} <b>Test Order #{order_id} approved!</b>
+        caption = f"""{title} ({volume_display})
 
-{premium_emoji('box','📦')} <b>Volume:</b> {volume_display}
-{premium_emoji('hourglass','⏱')} <b>Duration:</b> {days} days
-{ip_display}
-{premium_emoji('test','🧪')} <b>Type:</b> Free Test
-
-{premium_emoji('link','🔗')} <b>Config Link:</b>
-<code>{config_link}</code>
-
-{premium_emoji('qr','📱')} <b>QR Code for scanning</b>
-
-"""
-        else:
-            return f"""
-{premium_emoji('success','✅')} <b>Order #{order_id} approved!</b>
-
-{premium_emoji('box','📦')} <b>Volume:</b> {volume_display}
-{premium_emoji('hourglass','⏱')} <b>Duration:</b> {days} days
-{ip_display}
-{premium_emoji('money','💰')} <b>Price:</b> {price:,} Toman
-
-{premium_emoji('link','🔗')} <b>Config Link:</b>
-<code>{config_link}</code>
-
-{premium_emoji('qr','📱')} <b>QR Code for scanning</b>
-
-"""
+{link_emoji} <b>Subscription Link</b>
+<code>{config_link}</code>"""
+    
+    return caption
 async def process_referral(new_id: int, ref_id: int):
     """پردازش رفرال - فقط برای کاربران جدید"""
     uid = str(new_id)
