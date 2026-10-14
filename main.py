@@ -12164,9 +12164,9 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
     # ─── حجم نامحدود ───
     if total_bytes == 0:
         if lang == "fa":
-            return f"\n{time_emoji} اعتبار: {time_left_text}"
+            return f"\n\n{time_emoji} اعتبار: {time_left_text}"
         else:
-            return f"\n{time_emoji} Expiry: {time_left_text}"
+            return f"\n\n{time_emoji} Expiry: {time_left_text}"
     
     # ─── محاسبه مصرف ───
     total_gb = total_bytes / (1024 ** 3)
@@ -12209,13 +12209,15 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
     if lang == "fa":
         percent_str = to_persian_digits(f"{percent_int}٪")
         return (
-            f"\n{stats_emoji} {bar} {percent_str}\n"
+            f"\n\n{stats_emoji} {bar} {percent_str}\n"
+            f"\n"
             f"{download_emoji} مصرف: {used_str} از {total_str}\n"
             f"{time_emoji} اعتبار: {time_left_text}"
         )
     else:
         return (
-            f"\n{stats_emoji} {bar} {percent_int}%\n"
+            f"\n\n{stats_emoji} {bar} {percent_int}%\n"
+            f"\n"
             f"{download_emoji} Used: {used_str} of {total_str}\n"
             f"{time_emoji} Expiry: {time_left_text}"
         )
