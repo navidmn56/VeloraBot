@@ -12537,9 +12537,26 @@ async def get_test_service(callback: CallbackQuery):
                 logger.info(f"📌 استفاده از اینباندهای پیش‌فرض برای تست: {test_inbound_ids}")
     test_message = TEST_SERVICE_STATUS.get('message', '🎁 یک سرویس تست {volume} / {days} روز برای شما فعال شد!')
     test_message = test_message.format(volume=volume_display, days=days)
-    await callback.message.edit_text(
-        "⏳ در حال ساخت سرویس تست..." if lang == "fa" else "⏳ Creating test service..."
-    )
+    try:
+        await callback.message.edit_text(
+            "⏳ در حال ساخت سرویس تست..." if lang == "fa" else "⏳ Creating test service..."
+        )
+    except Exception as e:
+        err = str(e)
+        if "message to edit not found" in err or "message is not modified" in err:
+            # پیام قبلی حذف شده - یه پیام موقت جدید بفرست
+            try:
+                loading_msg = await callback.message.answer(
+                    "⏳ در حال ساخت سرویس تست..." if lang == "fa" else "⏳ Creating test service..."
+                )
+                # ذخیره‌ش کن برای حذف بعدی
+                if user_id not in user_states:
+                    user_states[user_id] = {}
+                user_states[user_id]['_loading_msg_id'] = loading_msg.message_id
+            except Exception:
+                pass
+        else:
+            logger.warning(f"خطا در edit پیام لودینگ: {e}")
     
     try:
         email = f"test_{user_id}_{int(datetime.now().timestamp())}"
@@ -12594,9 +12611,19 @@ async def get_test_service(callback: CallbackQuery):
                     json.dump(USER_TEST_USAGE, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 logger.error(f"خطا در ذخیره تست یوزر: {e}")
+            # ─── حذف پیام لودینگ ───
             try:
                 await callback.message.delete()
-            except:
+            except Exception:
+                pass
+            
+            # اگه پیام لودینگ جدا فرستادیم، اون رو هم حذف کن
+            try:
+                loading_id = user_states.get(user_id, {}).get('_loading_msg_id')
+                if loading_id:
+                    await bot.delete_message(user_id, loading_id)
+                    user_states[user_id].pop('_loading_msg_id', None)
+            except Exception:
                 pass
             await send_config_with_qr_option(user_id, order_id, volume_gb, days, 0, sub_link, lang)
             
