@@ -12268,14 +12268,37 @@ def get_config_caption(
         title = f"{title_emoji} کانفیگ خوش‌آمد رایگان" if lang == "fa" else f"{title_emoji} Free Welcome Config"
     elif category_name or category_name_en:
         title_emoji = premium_emoji('globe', '🌐')
+        
         if lang == "fa":
-            clean_name = category_name.replace("کانفیگ ", "").strip()
-            title = f"{title_emoji} کانفیگ {clean_name}"
+            # حذف پیشوند "کانفیگ" اگه وجود داشت
+            clean_name = category_name
+            if clean_name.startswith("کانفیگ"):
+                clean_name = clean_name[len("کانفیگ"):].strip()
+            clean_name = clean_name.lstrip(" -—_:").strip()
+            
+            # ✅ اگه اسم خالی بود، فقط "کانفیگ" بنویس
+            if clean_name:
+                title = f"{title_emoji} کانفیگ {clean_name}"
+            else:
+                title = f"{title_emoji} کانفیگ شما"
         else:
-            # ✅ برای انگلیسی از name_en استفاده کن
             display_name = category_name_en if category_name_en else category_name
-            clean_name = display_name.replace("Config ", "").strip()
-            title = f"{title_emoji} {clean_name}"
+            
+            # حذف پیشوند "Config" اگه وجود داشت
+            clean_name = display_name
+            for prefix in ["Config ", "config ", "Config-", "Config_"]:
+                if clean_name.startswith(prefix):
+                    clean_name = clean_name[len(prefix):]
+                    break
+            if clean_name.lower().startswith("config"):
+                clean_name = clean_name[len("config"):].strip()
+            clean_name = clean_name.lstrip(" -—_:").strip()
+            
+            # ✅ اگه اسم خالی بود، فقط "Config" بنویس
+            if clean_name:
+                title = f"{title_emoji} {clean_name} Config"
+            else:
+                title = f"{title_emoji} Your Config"
     else:
         title_emoji = premium_emoji('config', '📦')
         title = f"{title_emoji} کانفیگ شما" if lang == "fa" else f"{title_emoji} Your Config"
