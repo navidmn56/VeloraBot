@@ -10814,13 +10814,13 @@ async def xui_create_client_with_inbound(
                             "email": email,
                             "enable": True,
                             "expiryTime": expiry_time,
-                            "totalGB": total_bytes,  # 0 = نامحدود
-                            "limitIp": ip_limit,  # ✅ محدودیت IP
+                            "totalGB": total_bytes,
+                            "limitIp": ip_limit,
                             "subId": sub_id,
                             "resetStrategy": "no_reset",
-                            "comment": comment_text  # ✅ فرمت قدیمی
+                            "comment": comment_text
                         },
-                        "inboundIds": valid_inbound_ids  # ✅ لیست اینباندها
+                        "inboundIds": valid_inbound_ids
                     }
                 ]
                 logger.info(f"📤 ارسال به پنل: {json.dumps(bulk_data, indent=2)[:500]}...")
@@ -10838,7 +10838,7 @@ async def xui_create_client_with_inbound(
                         cookies={"3x-ui": cookie},
                         headers=headers,
                         json=bulk_data,
-                        timeout=aiohttp.ClientTimeout(total=30)  # افزایش تایم‌اوت
+                        timeout=aiohttp.ClientTimeout(total=30)
                     ) as response:
                         response_text = await response.text()
                         logger.info(f"📥 پاسخ پنل: Status {response.status}")
@@ -11038,13 +11038,13 @@ class GeminiClient:
         """ارسال پیام به Gemini با مدیریت خودکار توکن"""
         estimated_tokens = len(user_message) // 4 + 100  # 100 توکن برای System Prompt
         if len(user_message) < 50:
-            max_tokens = 300  # سوال کوتاه
+            max_tokens = 300
         elif len(user_message) < 100:
-            max_tokens = 500  # سوال متوسط
+            max_tokens = 500 
         elif len(user_message) < 200:
-            max_tokens = 800  # سوال بلند
+            max_tokens = 800 
         else:
-            max_tokens = 1024  # سوال خیلی بلند
+            max_tokens = 1024 
         if GEMINI_MAX_TOKENS > max_tokens:
             max_tokens = GEMINI_MAX_TOKENS
         
@@ -11071,7 +11071,7 @@ class GeminiClient:
                         "maxOutputTokens": max_tokens,
                         "topP": 0.9,
                         "topK": 40,
-                        "stopSequences": ["\n\n\n"]  # توقف در صورت 3 خط خالی
+                        "stopSequences": ["\n\n\n"] 
                     }
                 }
                 url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"

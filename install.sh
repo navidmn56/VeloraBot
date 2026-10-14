@@ -562,60 +562,105 @@ install_system_dependencies() {
 ensure_modern_python() {
     local py candidate=""
 
-    for py in python3.13 python3.12 python3.11; do
+    # ─── مرحله 1: جستجوی پایتون 3.14 نصب‌شده ───
+    log_info "Searching for an installed Python 3.14 or newer..."
+    for py in python3.14 python3.13 python3.12 python3.11; do
         if command -v "${py}" >/dev/null 2>&1; then
             if "${py}" -c \
                 "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
                 2>/dev/null; then
                 candidate="${py}"
+                log_success "Found installed ${py} ($(${py} --version 2>&1))"
                 break
             fi
         fi
     done
 
+    # ─── مرحله 2: چک کردن python3 پیش‌فرض ───
     if [[ -z "${candidate}" ]]; then
         if command -v python3 >/dev/null 2>&1 && \
            python3 -c \
                "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
                2>/dev/null; then
             candidate="python3"
+            log_success "Using default python3 ($(python3 --version 2>&1))"
         fi
     fi
 
+    # ─── مرحله 3: نصب پایتون 3.14 از deadsnakes PPA ───
     if [[ -z "${candidate}" ]]; then
-        log_warning "No Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ found. Trying to install one..."
+        log_warning "No Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ found. Installing Python 3.14..."
+
+        # اطمینان از نصب بودن ابزارهای لازم
+        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+            software-properties-common gnupg ca-certificates 2>/dev/null || true
+
+        # اضافه کردن deadsnakes PPA (شامل Python 3.14)
+        log_info "Adding deadsnakes PPA (contains Python 3.14)..."
+        add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 || true
+        apt-get -o DPkg::Lock::Timeout=120 update -qq 2>/dev/null || true
+
+        # تلاش برای نصب Python 3.14
+        log_info "Attempting to install python3.14, python3.14-venv, python3.14-dev..."
+        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+            python3.14 python3.14-venv python3.14-dev 2>&1 | \
+            tee -a "${LOG_FILE}" || true
+
+        if command -v python3.14 >/dev/null 2>&1 && \
+           python3.14 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,14) else 1)" 2>/dev/null; then
+            candidate="python3.14"
+            log_success "Python 3.14 installed successfully!"
+        fi
+    fi
+
+    # ─── مرحله 4: عقب‌نشینی به 3.13 ───
+    if [[ -z "${candidate}" ]]; then
+        log_warning "Python 3.14 not available. Trying Python 3.13..."
 
         apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
-            python3.12 python3.12-venv python3.12-dev 2>/dev/null || true
+            python3.13 python3.13-venv python3.13-dev 2>&1 | \
+            tee -a "${LOG_FILE}" || true
 
-        if ! command -v python3.12 >/dev/null 2>&1; then
-            log_info "python3.12 not in apt repos. Adding deadsnakes PPA..."
-            apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
-                software-properties-common 2>/dev/null || true
-            add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 || true
-            apt-get -o DPkg::Lock::Timeout=120 update -qq 2>/dev/null || true
-            apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
-                python3.12 python3.12-venv python3.12-dev 2>/dev/null || true
+        if command -v python3.13 >/dev/null 2>&1 && \
+           python3.13 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,13) else 1)" 2>/dev/null; then
+            candidate="python3.13"
+            log_success "Python 3.13 installed successfully!"
         fi
-
-        if ! command -v python3.12 >/dev/null 2>&1; then
-            apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
-                python3.11 python3.11-venv python3.11-dev 2>/dev/null || true
-        fi
-
-        for py in python3.12 python3.11; do
-            if command -v "${py}" >/dev/null 2>&1 && \
-               "${py}" -c \
-                   "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
-                   2>/dev/null; then
-                candidate="${py}"
-                break
-            fi
-        done
     fi
 
+    # ─── مرحله 5: عقب‌نشینی به 3.12 ───
     if [[ -z "${candidate}" ]]; then
-        die "Could not install Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+. Install it manually and re-run the installer."
+        log_warning "Python 3.13 not available. Trying Python 3.12..."
+
+        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+            python3.12 python3.12-venv python3.12-dev 2>&1 | \
+            tee -a "${LOG_FILE}" || true
+
+        if command -v python3.12 >/dev/null 2>&1 && \
+           python3.12 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
+            candidate="python3.12"
+            log_success "Python 3.12 installed successfully!"
+        fi
+    fi
+
+    # ─── مرحله 6: عقب‌نشینی به 3.11 ───
+    if [[ -z "${candidate}" ]]; then
+        log_warning "Python 3.12 not available. Trying Python 3.11..."
+
+        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+            python3.11 python3.11-venv python3.11-dev 2>&1 | \
+            tee -a "${LOG_FILE}" || true
+
+        if command -v python3.11 >/dev/null 2>&1 && \
+           python3.11 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
+            candidate="python3.11"
+            log_success "Python 3.11 installed successfully!"
+        fi
+    fi
+
+    # ─── نتیجه ───
+    if [[ -z "${candidate}" ]]; then
+        die "Could not install Python 3.11+. Install it manually and re-run the installer."
     fi
 
     PYTHON_BIN="${candidate}"
