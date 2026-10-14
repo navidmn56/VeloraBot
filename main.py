@@ -9872,8 +9872,15 @@ def find_pending_order(user_id: int) -> Optional[dict]:
     
     return latest_order
 
-async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[int, float], days: int, 
-                                     price: int, config_link: str, lang: str = "fa"):
+async def send_config_with_qr_option(
+    chat_id: int,
+    order_id: int,
+    volume: Union[int, float],
+    days: int,
+    price: int,
+    config_link: str,
+    lang: str = "fa"
+):
     """ارسال کانفیگ با QR Code"""
     
     if chat_id not in user_states:
@@ -9889,15 +9896,13 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
     
     order = orders.get(str(order_id))
     is_test = False
-    ip_limit = 0
     email = None
     
     if order:
         is_test = order.get('type') == 'test'
-        ip_limit = order.get('ip_limit', 0)
         email = order.get('email')
     
-    # ─── ترافیک (async) ───
+    # ─── دریافت اطلاعات ترافیک از پنل ───
     traffic_info = ""
     if email and SENAI_PANEL_ENABLED:
         try:
@@ -9906,28 +9911,37 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
                 traffic_data = await xui_get_client_traffic(email)
                 traffic_info = format_traffic_info(client_info, traffic_data, lang)
         except Exception as e:
-            logger.error(f"Error fetching traffic: {e}")
+            logger.error(f"Error fetching traffic for caption: {e}")
     
-    # ─── کپشن ───
-    caption = get_config_caption(order_id, volume, days, price, config_link, lang, traffic_info)
+    # ─── ساخت کپشن ───
+    caption = get_config_caption(
+        order_id, volume, days, price, config_link, lang, traffic_info
+    )
     
-    # ─── پیام تست (خوش‌آمدگویی) ───
+    # ─── پیام تست ───
     if is_test:
         gift_emoji = premium_emoji('gift', '🎁')
         light_emoji = premium_emoji('light', '💡')
-        home_emoji = premium_emoji('home', '🏠')
         
         if lang == "fa":
-            caption += f"\n\n{gift_emoji} <b>این یک سرویس خوش‌آمدگویی است.</b>\n{light_emoji} امیدواریم تجربه‌ی خوبی داشته باشید.\n{home_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+            caption += (
+                f"\n\n{gift_emoji} <b>این یک سرویس خوش‌آمدگویی است.</b>\n"
+                f"{light_emoji} امیدواریم تجربه‌ی خوبی داشته باشید.\n"
+                f"{light_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+            )
         else:
-            caption += f"\n\n{gift_emoji} <b>This is a welcome service.</b>\n{light_emoji} We hope you have a great experience.\n{home_emoji} To purchase full service, use the main menu."
+            caption += (
+                f"\n\n{gift_emoji} <b>This is a welcome service.</b>\n"
+                f"{light_emoji} We hope you have a great experience.\n"
+                f"{light_emoji} To purchase full service, use the main menu."
+            )
     
     # ─── ارسال ───
     try:
         qr_img = generate_qr_code(config_link, order_id)
         await bot.send_photo(
-            chat_id, 
-            qr_img, 
+            chat_id,
+            qr_img,
             caption=caption,
             parse_mode=ParseMode.HTML,
             reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
@@ -9936,17 +9950,24 @@ async def send_config_with_qr_option(chat_id: int, order_id: int, volume: Union[
     except Exception as e:
         logger.error(f"خطا در ارسال QR Code: {e}")
         await bot.send_message(
-            chat_id, 
+            chat_id,
             caption,
             parse_mode=ParseMode.HTML,
             reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
         )
         
         
-async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: Union[int, float], days: int, 
-                                          price: int, config_link: str, lang: str = "fa", 
-                                          edit_message: Message = None):
-    """ارسال کانفیگ با قابلیت ویرایش پیام قبلی"""
+async def send_config_with_qr_option_edit(
+    chat_id: int,
+    order_id: int,
+    volume: Union[int, float],
+    days: int,
+    price: int,
+    config_link: str,
+    lang: str = "fa",
+    edit_message: Message = None
+):
+    """ارسال کانفیگ با امکان حذف پیام قبلی"""
     
     if chat_id not in user_states:
         user_states[chat_id] = {}
@@ -9961,46 +9982,67 @@ async def send_config_with_qr_option_edit(chat_id: int, order_id: int, volume: U
     
     order = orders.get(str(order_id))
     is_test = False
+    email = None
     
     if order:
         is_test = order.get('type') == 'test'
+        email = order.get('email')
     
-    # ✅ await کن
-    caption = await get_config_caption(order_id, volume, days, price, config_link, lang)
+    # ─── دریافت اطلاعات ترافیک ───
+    traffic_info = ""
+    if email and SENAI_PANEL_ENABLED:
+        try:
+            client_info = await xui_get_client_info(email)
+            if client_info:
+                traffic_data = await xui_get_client_traffic(email)
+                traffic_info = format_traffic_info(client_info, traffic_data, lang)
+        except Exception as e:
+            logger.error(f"Error fetching traffic for caption: {e}")
     
+    # ─── ساخت کپشن ───
+    caption = get_config_caption(
+        order_id, volume, days, price, config_link, lang, traffic_info
+    )
+    
+    # ─── پیام تست ───
     if is_test:
+        gift_emoji = premium_emoji('gift', '🎁')
+        light_emoji = premium_emoji('light', '💡')
+        
         if lang == "fa":
-            caption += f"\n\n🎁 <b>این یک سرویس خوش آمد گویی است.</b>\n🏠 برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+            caption += (
+                f"\n\n{gift_emoji} <b>این یک سرویس خوش‌آمدگویی است.</b>\n"
+                f"{light_emoji} امیدواریم تجربه‌ی خوبی داشته باشید.\n"
+                f"{light_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
+            )
         else:
-            caption += f"\n\n🎁 <b>This is a welcome service.</b>\n🏠 To purchase full service, use the main menu."
+            caption += (
+                f"\n\n{gift_emoji} <b>This is a welcome service.</b>\n"
+                f"{light_emoji} We hope you have a great experience.\n"
+                f"{light_emoji} To purchase full service, use the main menu."
+            )
     
+    # ─── حذف پیام قبلی ───
+    if edit_message:
+        try:
+            await edit_message.delete()
+        except Exception:
+            pass
+    
+    # ─── ارسال ───
     try:
         qr_img = generate_qr_code(config_link, order_id)
-        
-        if edit_message:
-            try:
-                await edit_message.delete()
-            except:
-                pass
-        
         await bot.send_photo(
-            chat_id, 
-            qr_img, 
+            chat_id,
+            qr_img,
             caption=caption,
             parse_mode=ParseMode.HTML,
             reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
         )
     except Exception as e:
         logger.error(f"خطا در ارسال QR Code: {e}")
-        
-        if edit_message:
-            try:
-                await edit_message.delete()
-            except:
-                pass
-        
         await bot.send_message(
-            chat_id, 
+            chat_id,
             caption,
             parse_mode=ParseMode.HTML,
             reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
@@ -12196,18 +12238,24 @@ def generate_qr_code(data: str, order_id: int):
     bio.seek(0)
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
 
-async def get_config_caption(order_id: int, volume: Union[int, float], days: int, price: int, config_link: str, lang: str = "fa") -> str:
-    """ساخت کپشن با اطلاعات کامل + ترافیک به ترتیب صحیح"""
+def get_config_caption(
+    order_id: int,
+    volume: Union[int, float],
+    days: int,
+    price: int,
+    config_link: str,
+    lang: str = "fa",
+    traffic_info: str = ""   # ✅ پارامتر جدید
+) -> str:
+    """ساخت کپشن با اطلاعات کامل + ترافیک"""
     
     order = orders.get(str(order_id))
     is_test = False
     category_name = ""
-    email = None
     
     if order:
         is_test = order.get('type') == 'test'
         category_name = order.get('category_name', '') or ''
-        email = order.get('email')
     
     # ─── عنوان ───
     if is_test:
@@ -12231,17 +12279,6 @@ async def get_config_caption(order_id: int, volume: Union[int, float], days: int
     
     if lang == "fa":
         volume_display = volume_display.replace("GB", "گیگ").replace("MB", "مگ")
-    
-    # ─── اطلاعات ترافیک (نوار پیشرفت + مصرف + اعتبار) ───
-    traffic_info = ""
-    if email and SENAI_PANEL_ENABLED:
-        try:
-            client_info = await xui_get_client_info(email)
-            if client_info:
-                traffic_data = await xui_get_client_traffic(email)
-                traffic_info = format_traffic_info(client_info, traffic_data, lang)
-        except Exception as e:
-            logger.error(f"Error fetching traffic for caption: {e}")
     
     # ─── لینک ───
     link_emoji = premium_emoji('link', '🔗')
@@ -30362,7 +30399,7 @@ async def view_single_config(callback: CallbackQuery):
     except:
         pass
     email = get_order_client_email(order)
-    caption = await get_config_caption(order_id, order['volume'], order['days'], order['price'], order['config_link'], lang)
+    caption = get_config_caption(order_id, order['volume'], order['days'], order['price'], order['config_link'], lang)
     
     if email and SENAI_PANEL_ENABLED:
         client_info = await xui_get_client_info(email)
