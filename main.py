@@ -17161,7 +17161,7 @@ and you'll need to get a <b>new link</b> from the subscription.
         if lang == "fa":
             text = f"""{config_emoji} <b>انتخاب بسته آماده</b>
 
-بسته مورد نظرت را انتخاب کن 👇{coupon_text}
+بسته مورد نظرت رو انتخاب کن 👇{coupon_text}
 """
         else:
             text = f"""{config_emoji} <b>Select Ready Package</b>
