@@ -17142,7 +17142,7 @@ async def show_ready_categories(callback: CallbackQuery):
 اگه بسته‌ی فعلی سرویس شما با بسته‌ای که انتخاب می‌کنید <b>متفاوت</b> باشه،
 احتمال <b>قطع شدن لینک‌های فعلی</b> شما وجود داره و باید <b>لینک جدید</b> رو از ساب‌لینک بردارید.
 
-{light_emoji} لطفاً بسته‌ی مورد نظرت رو انتخاب کن 👇{coupon_text}
+بسته‌ی مورد نظرت رو انتخاب کن 👇{coupon_text}
 """
         else:
             text = f"""{config_emoji} <b>Select Package to Extend</b>
@@ -17152,7 +17152,7 @@ If your current service package differs from the one you select,
 there's a chance your <b>current links will be disconnected</b>,
 and you'll need to get a <b>new link</b> from the subscription.
 
-{light_emoji} Please select your desired package 👇{coupon_text}
+select your desired package 👇{coupon_text}
 """
     else:
         # ───── حالت خرید عادی ─────
@@ -30941,7 +30941,7 @@ async def my_account(callback: CallbackQuery):
         RLM = "\u200F"  # Right-to-Left Mark
 
         text = (
-        f"{RLM}{premium_emoji('user1', '👤')} <b>حساب کاربری</b>\n\n"
+        f"{RLM}{premium_emoji('user1', '👤')} <b>حساب کاربری</b>\n"
         f"{RLM}   ━━━━━━━━━━━━━━━━━━━━\n"
         f"{RLM}{premium_emoji('id', '🆔')} <b>آیدی:</b> {user_id}\n"
         f"{RLM}{premium_emoji('user', '👤')} <b>نام:</b> {user_name_escaped}\n"
