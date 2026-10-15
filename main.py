@@ -12643,7 +12643,7 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         # ─── ردیف ۱: خرید سرویس (تنها) ───
         buttons.append([
             InlineKeyboardButton(
-                text="🛒 خرید کانفیگ",
+                text="🛒 خرید سرویس",
                 callback_data="buy_service" if is_approved else "noop",
                 style="success" if is_approved else "danger"
             )
@@ -12695,7 +12695,7 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         # ─── ردیف ۱: خرید سرویس (تنها) ───
         buttons.append([
             InlineKeyboardButton(
-                text="🛒 Buy Config",
+                text="🛒 Buy Service",
                 callback_data="buy_service" if is_approved else "noop",
                 style="success" if is_approved else "danger"
             )
@@ -17454,7 +17454,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
 
-لطفاً یکی از بسته‌های زیر را انتخاب کنید:
+لطفا حجم و روز مورد نظرت رو انتخاب کن 👇
 """
         else:
             text = f"""
@@ -17464,7 +17464,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} Your Balance: {balance:,} Toman
 
-Please select a package:
+Please select the volume and days you want 👇
 """
     
     # ═══════════════════════════════════════════
@@ -30475,12 +30475,12 @@ async def my_configs(callback: CallbackQuery):
     if lang == "fa":
         text = (
             f"{premium_emoji('config', '🌐')} <b>کانفیگ‌های من ({count})</b>\n\n"
-            f"{premium_emoji('light', '💡')} روی هرکدوم بزن تا لینک و وضعیتش رو ببینی 👇"
+            f"روی هرکدوم بزن تا لینک و وضعیتش رو ببینی 👇"
         )
     else:
         text = (
             f"{premium_emoji('config', '🌐')} <b>My Configs ({count})</b>\n\n"
-            f"{premium_emoji('light', '💡')} Tap on any config to see the link and status 👇"
+            f"Tap on any config to see the link and status 👇"
         )
 
     # ══════════════════════════════════════════════
@@ -31316,7 +31316,7 @@ async def invite_friends(callback: CallbackQuery):
 <tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> لینک دعوت شما:
 <code>{link}</code>
 
-<tg-emoji emoji-id="5199749070830197566">🎁</tg-emoji> پاداش: {referral_bonus:,} تومان به ازای هر خرید دوست شما
+<tg-emoji emoji-id="5199749070830197566">🎁</tg-emoji> پاداش: {referral_bonus:,} تومان به ازای اولین خرید دوستان شما
 <tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> دعوت موفق: {ref_count}
 """
     else:
@@ -31326,7 +31326,7 @@ async def invite_friends(callback: CallbackQuery):
 <tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> Your invite link:
 <code>{link}</code>
 
-<tg-emoji emoji-id="5199749070830197566">🎁</tg-emoji> Bonus: {referral_bonus:,} Toman per friend purchase
+<tg-emoji emoji-id="5199749070830197566">🎁</tg-emoji> Bonus: {referral_bonus:,} Toman on your friends' first purchase
 <tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> Successful referrals: {ref_count}
 """
     try:
@@ -35443,7 +35443,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.7.40"
+    version = "v1.7.41"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
