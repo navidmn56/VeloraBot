@@ -12044,21 +12044,162 @@ def get_order_client_email(order: dict) -> Optional[str]:
         f"email نداره - نمی‌تونیم به API پنل درخواست بدیم"
     )
     return None
-async def find_email_by_sub_id(sub_id: str) -> Optional[str]:
-    """پیدا کردن email کلاینت با subId (برای مواقعی که email رو نداریم)"""
+# ═══════════════════════════════════════════
+# ✅ کش subId → email
+# ═══════════════════════════════════════════
+_subid_to_email_cache: Dict[str, tuple] = {}   # {sub_id: (timestamp, email_or_None)}
+_subid_cache_ttl = 300   # 5 دقیقه
+_subid_cache_negative_ttl = 60   # 60 ثانیه برای not-found
+
+
+async def find_email_by_sub_id(sub_id: str, use_cache: bool = True) -> Optional[str]:
+    """
+    پیدا کردن email کلاینت با subId (با کش)
+    
+    Args:
+        sub_id: شناسه ساب‌لینک (آخرین بخش URL)
+        use_cache: اگه False باشه، کش رو نادیده می‌گیره
+    
+    Returns:
+        email یا None
+    """
     if not sub_id:
         return None
+    
+    # ─── چک کش ───
+    if use_cache and sub_id in _subid_to_email_cache:
+        cache_time, cached_email = _subid_to_email_cache[sub_id]
+        age = (datetime.now() - cache_time).total_seconds()
+        
+        if cached_email:
+            # کش مثبت - 5 دقیقه اعتبار
+            if age < _subid_cache_ttl:
+                logger.debug(f"📦 [find_email_by_sub_id] cache hit: {sub_id[:15]}... → {cached_email}")
+                return cached_email
+        else:
+            # کش منفی - 60 ثانیه اعتبار (شاید کلاینت جدید اضافه شده باشه)
+            if age < _subid_cache_negative_ttl:
+                logger.debug(f"📦 [find_email_by_sub_id] negative cache: {sub_id[:15]}...")
+                return None
+    
+    # ─── جستجو توی پنل ───
     try:
         inbounds = await xui_get_inbounds()
         for inbound in inbounds:
             settings = inbound.get('settings', {})
             clients = settings.get('clients', [])
             for client in clients:
-                if client.get('subId') == sub_id:
-                    return client.get('email', '')
+                if client.get('subId', '') == sub_id:
+                    email = client.get('email', '')
+                    if email:
+                        # ✅ ذخیره توی کش مثبت
+                        _subid_to_email_cache[sub_id] = (datetime.now(), email)
+                        logger.info(f"✅ [find_email_by_sub_id] {sub_id[:15]}... → {email}")
+                        return email
     except Exception as e:
-        logger.error(f"❌ خطا در جستجوی subId: {e}")
+        logger.error(f"❌ [find_email_by_sub_id] خطا: {e}")
+        # اگه خطا داد، از کش قبلی استفاده کن (اگه بود)
+        if sub_id in _subid_to_email_cache:
+            _, cached_email = _subid_to_email_cache[sub_id]
+            if cached_email:
+                return cached_email
+        return None
+    
+    # ─── ذخیره توی کش منفی ───
+    _subid_to_email_cache[sub_id] = (datetime.now(), None)
+    logger.debug(f"⏭️ [find_email_by_sub_id] not found: {sub_id[:15]}...")
     return None
+
+
+def clear_subid_cache(sub_id: str = None):
+    """پاک کردن کش subId → email"""
+    global _subid_to_email_cache
+    if sub_id:
+        _subid_to_email_cache.pop(sub_id, None)
+        logger.debug(f"🧹 کش subId پاک شد: {sub_id[:15]}...")
+    else:
+        _subid_to_email_cache.clear()
+        logger.info("🧹 کل کش subId پاک شد")
+
+
+# ═══════════════════════════════════════════
+# ✅ get_order_client_email (sync) - بدون تغییر ساختار
+# ═══════════════════════════════════════════
+def get_order_client_email(order: dict) -> Optional[str]:
+    """
+    دریافت email کلاینت از سفارش (sync)
+    فقط از فیلد email مستقیم استفاده می‌کنه
+    
+    ⚠️ برای fallback به subId، از get_order_client_email_async استفاده کن
+    """
+    email = order.get('email', '')
+    if email and str(email).strip():
+        return str(email).strip()
+    
+    logger.debug(
+        f"⚠️ [get_order_client_email] سفارش #{order.get('order_id')} "
+        f"email مستقیم نداره"
+    )
+    return None
+
+
+# ═══════════════════════════════════════════
+# ✅ get_order_client_email_async - با fallback به subId
+# ═══════════════════════════════════════════
+async def get_order_client_email_async(order: dict) -> Optional[str]:
+    """
+    دریافت email کلاینت از سفارش (async)
+    
+    ترتیب:
+    ۱. از فیلد email مستقیم
+    ۲. از sub_link → subId → query به پنل
+    ۳. ذخیره email پیدا شده توی سفارش (به‌روزرسانی خودکار)
+    """
+    order_id = order.get('order_id')
+    
+    # ─── مرحله ۱: email مستقیم ───
+    email = order.get('email', '')
+    if email and str(email).strip():
+        return str(email).strip()
+    
+    # ─── مرحله ۲: از sub_link ───
+    sub_link = order.get('sub_link', '') or order.get('config_link', '')
+    if not sub_link:
+        logger.warning(
+            f"⚠️ [get_order_client_email_async] سفارش #{order_id} "
+            f"نه email داره نه sub_link"
+        )
+        return None
+    
+    try:
+        sub_id = sub_link.rstrip('/').split('/')[-1]
+        if not sub_id:
+            return None
+    except Exception:
+        return None
+    
+    # ─── جستجو توی پنل ───
+    found_email = await find_email_by_sub_id(sub_id)
+    
+    if found_email:
+        # ✅ ذخیره توی سفارش برای بارهای بعد
+        if order_id:
+            try:
+                update_order(order_id, email=found_email)
+                logger.info(
+                    f"💾 [get_order_client_email_async] email سفارش "
+                    f"#{order_id} ذخیره شد: {found_email}"
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ خطا در ذخیره email: {e}")
+        return found_email
+    
+    logger.warning(
+        f"⚠️ [get_order_client_email_async] سفارش #{order_id} "
+        f"email پیدا نشد (subId: {sub_id[:15]}...)"
+    )
+    return None
+
 
 async def xui_get_client_traffic(email: str) -> Optional[dict]:
     """دریافت ترافیک کلاینت"""
@@ -12086,6 +12227,7 @@ async def xui_get_client_traffic(email: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"❌ خطا در دریافت ترافیک: {e}")
         return None
+
 
 PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 
@@ -35292,7 +35434,7 @@ def is_ai_question(text: str) -> bool:
     return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.7.30"
+    version = "v1.7.40"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
@@ -40715,30 +40857,33 @@ async def init_alert_system():
         # تعیین مسیر فایل کش
         cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
         
-        # ایجاد نمونه سیستم هشدار با log_system
+        # ✅ ایجاد نمونه سیستم هشدار با پارامترهای جدید
         alert_system = AlertSystem(
             bot=bot,
             orders_getter=get_valid_orders,
             user_getter=get_user,
-            extract_email_func=extract_email_from_sub_link,
+            extract_email_func=None,                          # دیگه استفاده نمی‌شه (نگه‌داری برای سازگاری)
             cache_file=cache_file,
-            log_system=log_system
+            log_system=log_system,
+            find_email_by_sub_id_func=find_email_by_sub_id,   # ✅ تابع جدید برای resolve subId → email
+            update_order_func=update_order                     # ✅ تابع جدید برای ذخیره email در سفارش
         )
         
         # ✅ اعمال تنظیمات بارگذاری شده
         alert_system.update_settings(alert_system_settings)
         
-        # شروع کارگر پسزمینه
+        # شروع کارگر پس‌زمینه
         asyncio.create_task(alert_system.run_alert_worker())
         
-        logger.info("✅ سیستم هشدار با موفقیت راهاندازی شد")
-        logger.info(f"📊 آستانههای حجم: {alert_system.volume_thresholds}٪ + اتمام خودکار")
-        logger.info(f"📅 آستانههای انقضا: {alert_system.expiry_warnings} روز + انقضای خودکار")
+        logger.info("✅ سیستم هشدار با موفقیت راه‌اندازی شد")
+        logger.info(f"📊 آستانه‌های حجم: {alert_system.volume_thresholds}٪ + اتمام خودکار")
+        logger.info(f"📅 آستانه‌های انقضا: {alert_system.expiry_warnings} روز + انقضای خودکار")
+        logger.info(f"🔍 resolve email: {'✅ فعال' if alert_system.find_email_by_sub_id else '❌ غیرفعال'}")
         
         return alert_system
         
     except Exception as e:
-        logger.error(f"❌ خطا در راهاندازی سیستم هشدار: {e}", exc_info=True)
+        logger.error(f"❌ خطا در راه‌اندازی سیستم هشدار: {e}", exc_info=True)
         return None
 
 @dp.message(Command("check_alerts"))
