@@ -5774,10 +5774,18 @@ def save_all(save_blacklist: bool = True):
 
 @dp.errors()
 async def errors_handler(event: types.ErrorEvent):
-    """هندلر خطاهای عمومی برای دیباگ (نسخه جایگزین)"""
+    """هندلر خطاهای عمومی"""
     exception = event.exception
     update = event.update
     
+    error_str = str(exception)
+    
+    # ✅ نادیده گرفتن خطاهای timeout در callback.answer
+    if "query is too old" in error_str or "query ID is invalid" in error_str:
+        logger.debug(f"callback.answer timeout - نادیده گرفته شد")
+        return True  # نکش ربات رو
+    
+    # بقیه‌ی خطاها
     error_text = f"""
 ⚠️ <b>خطا در ربات</b>
 
