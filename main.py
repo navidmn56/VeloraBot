@@ -17432,7 +17432,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
 
-🔄 <b>چقدر میخوای تمدید کنی</b> 👇
+<b>چقدر میخوای تمدید کنی</b> 👇
 """
         else:
             text = f"""
@@ -17442,7 +17442,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} Your Balance: {balance:,} Toman
 
-🔄 <b>How much do you want to extend</b> 👇
+<b>How much do you want to extend</b> 👇
 """
     else:
         # ───── حالت خرید عادی ─────
@@ -17454,7 +17454,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
 
-لطفا حجم و روز مورد نظرت رو انتخاب کن 👇
+<b>لطفا حجم و روز مورد نظرت رو انتخاب کن</b> 👇
 """
         else:
             text = f"""
@@ -17464,7 +17464,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} Your Balance: {balance:,} Toman
 
-Please select the volume and days you want 👇
+<b>Please select the volume and days you want</b> 👇
 """
     
     # ═══════════════════════════════════════════
