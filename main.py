@@ -30938,25 +30938,26 @@ async def my_account(callback: CallbackQuery):
     logger.debug(f"کاربر {user_id} حساب کاربری خود را مشاهده می‌کند - کل خریدها: {total_purchases}, کانفیگ فعال: {len(active_configs)}")
     
     if lang == "fa":
-        text = f"""
-{premium_emoji('user1', '👤')} <b>حساب کاربری</b>
+        RLM = "\u200F"  # Right-to-Left Mark
 
-   ━━━━━━━━━━━━━━━━━━━━
-{premium_emoji('id', '🆔')} <b>آیدی:</b> {user_id}
-{premium_emoji('user', '👤')} <b>نام:</b> {user_name_escaped}
-{premium_emoji('wallet', '💰')} <b>موجودی:</b> {user.get('balance', 0):,} تومان
-{premium_emoji('invite', '👥')} <b>تعداد دعوت:</b> {ref_count}
-{premium_emoji('config', '📦')} <b>کل خریدها:</b> {total_purchases}
-{premium_emoji('renew', '🔄')} <b>تعداد تمدیدها:</b> {total_extends}
-{premium_emoji('config', '🟢')} <b>کانفیگ فعال:</b> {len(active_configs)}
-{premium_emoji('calendar', '📅')} <b>عضویت:</b> {join_date_escaped}
-{coupon_info}
-{premium_emoji('star', '📊')} <b>وضعیت سفارشات:</b>
-{premium_emoji('success', '✅')} <b>تایید شده:</b> {len(approved_purchases)}
-{premium_emoji('hourglass', '⏳')} <b>در انتظار تایید:</b> {len(pending_orders)}
-{premium_emoji('fail', '🚫')} <b>رد شده:</b> {len(rejected_orders)}
-{premium_emoji('hourglass', '⏳')} <b>در انتظار پرداخت:</b> {len(awaiting_payment_orders)}
-"""
+        text = (
+        f"{RLM}{premium_emoji('user1', '👤')} <b>حساب کاربری</b>\n\n"
+        f"{RLM}   ━━━━━━━━━━━━━━━━━━━━\n"
+        f"{RLM}{premium_emoji('id', '🆔')} <b>آیدی:</b> {user_id}\n"
+        f"{RLM}{premium_emoji('user', '👤')} <b>نام:</b> {user_name_escaped}\n"
+        f"{RLM}{premium_emoji('wallet', '💰')} <b>موجودی:</b> {user.get('balance', 0):,} تومان\n"
+        f"{RLM}{premium_emoji('invite', '👥')} <b>تعداد دعوت:</b> {ref_count}\n"
+        f"{RLM}{premium_emoji('config', '📦')} <b>کل خریدها:</b> {total_purchases}\n"
+        f"{RLM}{premium_emoji('renew', '🔄')} <b>تعداد تمدیدها:</b> {total_extends}\n"
+        f"{RLM}{premium_emoji('config', '🟢')} <b>کانفیگ فعال:</b> {len(active_configs)}\n"
+        f"{RLM}{premium_emoji('calendar', '📅')} <b>عضویت:</b> {join_date_escaped}\n"
+        f"{RLM}{coupon_info.lstrip() if coupon_info else ''}\n"
+        f"{RLM}{premium_emoji('star', '📊')} <b>وضعیت سفارشات:</b>\n"
+        f"{RLM}{premium_emoji('success', '✅')} <b>تایید شده:</b> {len(approved_purchases)}\n"
+        f"{RLM}{premium_emoji('hourglass', '⏳')} <b>در انتظار تایید:</b> {len(pending_orders)}\n"
+        f"{RLM}{premium_emoji('fail', '🚫')} <b>رد شده:</b> {len(rejected_orders)}\n"
+        f"{RLM}{premium_emoji('hourglass', '⏳')} <b>در انتظار پرداخت:</b> {len(awaiting_payment_orders)}\n"
+        )
     else:
         text = f"""
 {premium_emoji('user1', '👤')} <b>My Account</b>
