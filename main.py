@@ -17161,12 +17161,12 @@ and you'll need to get a <b>new link</b> from the subscription.
         if lang == "fa":
             text = f"""{config_emoji} <b>انتخاب بسته آماده</b>
 
-لطفاً بسته مورد نظرت را انتخاب کن 👇{coupon_text}
+بسته مورد نظرت را انتخاب کن 👇{coupon_text}
 """
         else:
             text = f"""{config_emoji} <b>Select Ready Package</b>
 
-Please select your desired package 👇{coupon_text}
+select your desired package 👇{coupon_text}
 """
     
     # ═══════════════════════════════════════════
@@ -17454,7 +17454,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
 
-<b>لطفا حجم و روز مورد نظرت رو انتخاب کن</b> 👇
+حجم و روز مورد نظرت رو انتخاب کن 👇
 """
         else:
             text = f"""
@@ -17464,7 +17464,7 @@ async def show_category_packages(callback: CallbackQuery):
 
 {premium_emoji('wallet', '💰')} Your Balance: {balance:,} Toman
 
-<b>Please select the volume and days you want</b> 👇
+select the volume and days you want 👇
 """
     
     # ═══════════════════════════════════════════
