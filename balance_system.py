@@ -86,6 +86,134 @@ def _get_log_system():
         return None
     return getattr(_main, 'log_system', None)
 
+def _build_balance_receipt_text(order: dict, lang: str = "fa", mode: str = "card") -> str:
+    """
+    ساخت متن درخواست رسید برای شارژ حساب
+    - اگه تابع اصلی (build_receipt_text) در دسترس باشه، ازش استفاده می‌کنه
+    - در غیر این صورت fallback می‌کنه به نسخه داخلی
+    """
+    # ✅ اولویت: استفاده از تابع اصلی
+    if _main is not None:
+        main_builder = getattr(_main, 'build_receipt_text', None)
+        if callable(main_builder):
+            try:
+                return main_builder(order, lang, mode)
+            except Exception as e:
+                logger = getattr(_main, 'logger', None)
+                if logger:
+                    logger.warning(f"⚠️ خطا در build_receipt_text: {e} - fallback")
+    
+    # ─── fallback: نسخه داخلی (در صورت نبود تابع اصلی) ───
+    return _build_balance_receipt_text_fallback(order, lang, mode)
+
+
+def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: str = "card") -> str:
+    """نسخه fallback داخلی"""
+    RLM = "\u200F"
+    
+    order_id = order.get('order_id', '?')
+    amount = order.get('amount', 0) or order.get('price', 0)
+    amount_display = f"{amount:,} تومان" if lang == "fa" else f"{amount:,} Toman"
+    
+    premium_emoji = getattr(_main, 'premium_emoji', lambda n, f: f)
+    card_emoji = premium_emoji('card', '💳')
+    money_emoji = premium_emoji('money', '💰')
+    id_emoji = premium_emoji('id', '🆔')
+    user_emoji = premium_emoji('user', '👤')
+    star_emoji = premium_emoji('star', '🏦')
+    note_emoji = premium_emoji('note', '📝')
+    receipt_emoji = premium_emoji('receipt', '📸')
+    info_emoji = premium_emoji('info', 'ℹ️')
+    label_emoji = premium_emoji('label', '📋')
+    wallet_emoji = premium_emoji('wallet', '💰')
+    
+    # پشتیبانی
+    support_username = getattr(_main, 'SUPPORT_USERNAME', '') or "@my_name_is_navid"
+    support_display = support_username.strip() if support_username.strip() else "@my_name_is_navid"
+    
+    bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
+    bank_card_holder = getattr(_main, 'BANK_CARD_HOLDER', '')
+    bank_name = getattr(_main, 'BANK_NAME', '')
+    
+    card_num = ' '.join([bank_card_number[i:i+4] for i in range(0, 16, 4)])
+    
+    if mode == "reminder":
+        # فقط یادآوری ساده
+        if lang == "fa":
+            return (
+                f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش شارژ</b>\n\n"
+                f"{RLM}{id_emoji} شماره سفارش: <code>#{order_id}</code>\n"
+                f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
+                f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
+                f"{RLM}لطفاً تصویر واضح فیش واریزی را در همین گفت‌وگو ارسال کنید.\n\n"
+                f"{RLM}💡 نکات مهم:\n"
+                f"{RLM}• تصویر باید واضح و خوانا باشد\n"
+                f"{RLM}• کل فیش در کادر عکس باشد\n"
+                f"{RLM}• شماره پیگیری مشخص باشد"
+            )
+        else:
+            return (
+                f"{receipt_emoji} <b>Top-Up Receipt Request</b>\n\n"
+                f"{id_emoji} Order number: <code>#{order_id}</code>\n"
+                f"{money_emoji} Top-up amount: <b>{amount_display}</b>\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"Please send a clear photo of the payment receipt in this chat.\n\n"
+                f"💡 Important tips:\n"
+                f"• The photo must be clear and readable\n"
+                f"• The entire receipt should be in the frame\n"
+                f"• The tracking number should be visible"
+            )
+    
+    # mode == "card"
+    if lang == "fa":
+        return (
+            f"{RLM}{wallet_emoji} <b>اطلاعات پرداخت افزایش موجودی</b>\n\n"
+            f"{RLM}سفارش شماره <code>#{order_id}</code>\n\n"
+            f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
+            f"{RLM}{label_emoji} <b>مشخصات شارژ</b>\n"
+            f"{RLM}• نوع عملیات: افزایش موجودی کیف پول\n"
+            f"{RLM}• مبلغ شارژ: <code>{amount_display}</code>\n\n"
+            f"{RLM}{money_emoji} <b>مبلغ قابل پرداخت</b>\n\n"
+            f"{RLM}<b>{amount_display}</b>\n\n"
+            f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
+            f"{RLM}{card_emoji} <b>اطلاعات واریز وجه</b>\n\n"
+            f"{RLM}<b>شماره کارت</b>\n"
+            f"{RLM}<code>{card_num}</code>\n\n"
+            f"{RLM}{user_emoji} <b>به نام:</b> <code>{bank_card_holder}</code>\n\n"
+            f"{RLM}{star_emoji} <b>بانک:</b> <code>{bank_name}</code>\n\n"
+            f"{RLM}{info_emoji} <b>پشتیبانی:</b> {support_display}\n\n"
+            f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
+            f"{RLM}{note_emoji} <b>مراحل افزایش موجودی</b>\n\n"
+            f"{RLM}۱. مبلغ دقیق را به شماره کارت بالا واریز کنید.\n"
+            f"{RLM}۲. تصویر واضح رسید پرداخت را در همین گفت‌وگو ارسال کنید.\n"
+            f"{RLM}۳. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید نگه دارید.\n\n"
+            f"{RLM}{receipt_emoji} پس از تأیید، مبلغ به موجودی شما اضافه می‌شود."
+        )
+    else:
+        return (
+            f"{wallet_emoji} <b>Balance Top-Up Payment</b>\n\n"
+            f"Order <code>#{order_id}</code>\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"{label_emoji} <b>Top-Up Details</b>\n"
+            f"• Operation: Wallet balance top-up\n"
+            f"• Amount: <code>{amount_display}</code>\n\n"
+            f"{money_emoji} <b>Amount to Pay</b>\n\n"
+            f"<b>{amount_display}</b>\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"{card_emoji} <b>Payment Information</b>\n\n"
+            f"<b>Card Number</b>\n"
+            f"<code>{card_num}</code>\n\n"
+            f"{user_emoji} <b>Holder:</b> <code>{bank_card_holder}</code>\n\n"
+            f"{star_emoji} <b>Bank:</b> <code>{bank_name}</code>\n\n"
+            f"{info_emoji} <b>Support:</b> {support_display}\n\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"{note_emoji} <b>Steps to Top-Up</b>\n\n"
+            f"1. Transfer the exact amount to the card above.\n"
+            f"2. Send a clear photo of the receipt in this chat.\n"
+            f"3. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
+            f"{receipt_emoji} After confirmation, the amount will be added to your balance."
+        )
+
 
 def get_balance_quick_amounts() -> List[Dict[str, Any]]:
     """دریافت مبالغ پیشنهادی از ارزان‌ترین بسته هر دسته"""
@@ -389,54 +517,18 @@ async def quick_amount_selected(callback: CallbackQuery):
     # ─── ساخت سفارش ───
     order_id = create_balance_order(user_id, amount)
 
-    card_num = ' '.join([
-        _main.BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)
-    ])
-
-    if lang == "fa":
-        text = f"""
-{_main.premium_emoji('card', '💳')} <b>پرداخت برای شارژ حساب</b>
-
-{_main.premium_emoji('id', '🆔')} <b>شماره پیگیری:</b> #{order_id}
-{_main.premium_emoji('money', '💰')} <b>مبلغ:</b> {amount:,} تومان
-
-{_main.premium_emoji('card', '💳')} <b>شماره کارت:</b>
-<code>{card_num}</code>
-
-{_main.premium_emoji('user', '👤')} <b>به نام:</b> {_main.BANK_CARD_HOLDER}
-{_main.premium_emoji('star', '🏦')} <b>بانک:</b> {_main.BANK_NAME}
-
-{_main.premium_emoji('receipt', '📸')} لطفاً تصویر فیش واریزی را ارسال کنید
-"""
-    else:
-        text = f"""
-{_main.premium_emoji('card', '💳')} <b>Balance Top-up Payment</b>
-
-{_main.premium_emoji('id', '🆔')} <b>Order Number:</b> #{order_id}
-{_main.premium_emoji('money', '💰')} <b>Amount:</b> {amount:,} Toman
-
-{_main.premium_emoji('card', '💳')} <b>Card Number:</b>
-<code>{card_num}</code>
-
-{_main.premium_emoji('user', '👤')} <b>Account Holder:</b> {_main.BANK_CARD_HOLDER}
-{_main.premium_emoji('star', '🏦')} <b>Bank:</b> {_main.BANK_NAME}
-
-{_main.premium_emoji('receipt', '📸')} Please send the receipt photo
-"""
+    order = _main.orders.get(str(order_id))
+    text = _build_balance_receipt_text(order, lang, mode="card")
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"📋 {'کپی مبلغ (ریال)' if lang=='fa' else 'Copy Amount (Rial)'} ({amount * 10:,})",
+            text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({amount * 10:,})",
             copy_text=CopyTextButton(text=str(amount * 10))
         )],
         [
+            
             InlineKeyboardButton(
-                text=f"📸 {'ارسال فیش' if lang=='fa' else 'Send Receipt'}",
-                callback_data=f"send_receipt_{order_id}",
-                style="primary"
-            ),
-            InlineKeyboardButton(
-                text=f"❌ {'انصراف' if lang=='fa' else 'Cancel'}",
+                text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel Payment'}",
                 callback_data=f"cancel_order_{order_id}",
                 style="danger"
             )
@@ -644,54 +736,18 @@ async def process_balance_amount(message: Message):
 
             order_id = create_balance_order(user_id, amount)
 
-            card_num = ' '.join([
-                _main.BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)
-            ])
-
-            if lang == "fa":
-                text = f"""
-{_main.premium_emoji('card', '💳')} <b>پرداخت برای شارژ حساب</b>
-
-{_main.premium_emoji('id', '🆔')} <b>شماره پیگیری:</b> #{order_id}
-{_main.premium_emoji('money', '💰')} <b>مبلغ:</b> {amount:,} تومان
-
-{_main.premium_emoji('card', '💳')} <b>شماره کارت:</b>
-<code>{card_num}</code>
-
-{_main.premium_emoji('user', '👤')} <b>به نام:</b> {_main.BANK_CARD_HOLDER}
-{_main.premium_emoji('star', '🏦')} <b>بانک:</b> {_main.BANK_NAME}
-
-{_main.premium_emoji('receipt', '📸')} لطفاً تصویر فیش واریزی را ارسال کنید
-"""
-            else:
-                text = f"""
-{_main.premium_emoji('card', '💳')} <b>Balance Top-up Payment</b>
-
-{_main.premium_emoji('id', '🆔')} <b>Order Number:</b> #{order_id}
-{_main.premium_emoji('money', '💰')} <b>Amount:</b> {amount:,} Toman
-
-{_main.premium_emoji('card', '💳')} <b>Card Number:</b>
-<code>{card_num}</code>
-
-{_main.premium_emoji('user', '👤')} <b>Account Holder:</b> {_main.BANK_CARD_HOLDER}
-{_main.premium_emoji('star', '🏦')} <b>Bank:</b> {_main.BANK_NAME}
-
-{_main.premium_emoji('receipt', '📸')} Please send the receipt photo
-"""
+            order = _main.orders.get(str(order_id))
+            text = _build_balance_receipt_text(order, lang, mode="card")
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=f"📋 {'کپی مبلغ (ریال)' if lang=='fa' else 'Copy Amount (Rial)'} ({amount * 10:,})",
+                    text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({amount * 10:,})",
                     copy_text=CopyTextButton(text=str(amount * 10))
                 )],
                 [
+                    
                     InlineKeyboardButton(
-                        text=f"📸 {'ارسال فیش' if lang=='fa' else 'Send Receipt'}",
-                        callback_data=f"send_receipt_{order_id}",
-                        style="primary"
-                    ),
-                    InlineKeyboardButton(
-                        text=f"❌ {'انصراف' if lang=='fa' else 'Cancel'}",
+                        text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel payment'}",
                         callback_data=f"cancel_order_{order_id}",
                         style="danger"
                     )
