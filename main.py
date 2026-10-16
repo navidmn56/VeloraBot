@@ -768,22 +768,7 @@ async def show_inbound_manager(
     update_existing: bool = False,
     extra_data: dict = None
 ):
-    """
-    صفحه پیشرفته مدیریت اینباندها
-    
-    Args:
-        message: پیام برای ویرایش
-        title: عنوان صفحه
-        current_inbound_ids: لیست اینباندهای فعلی
-        callback_data_prefix: پیشوند برای کالبک‌ها (مثلاً 'category_1' یا 'test_service')
-        save_callback: کالبک برای ذخیره (با {prefix} ساخته می‌شود)
-        back_callback: کالبک برای برگشت (اختیاری)
-        admin_id: آیدی ادمین
-        show_default_button: نمایش دکمه انتخاب پیش‌فرض
-        show_clear_button: نمایش دکمه پاک کردن همه
-        update_existing: آپدیت پیام موجود یا ارسال جدید
-        extra_data: اطلاعات اضافی برای ذخیره (مثل category_id)
-    """
+    """صفحه پیشرفته مدیریت اینباندها (با فیلتر نامعتبرها)"""
     if admin_id != ADMIN_ID_INT:
         return
     
@@ -796,12 +781,22 @@ async def show_inbound_manager(
         await message.answer("❌ هیچ اینباند فعالی یافت نشد")
         return
     
+    # ✅ لیست اعتبارسنجی
+    valid_ids = {ib.get('id') for ib in active_inbounds}
+    
     temp_key = f"{callback_data_prefix}_{admin_id}"
     if temp_key in TEMP_INBOUND_SELECTION:
         current_list = TEMP_INBOUND_SELECTION[temp_key]
     else:
         current_list = current_inbound_ids.copy() if current_inbound_ids else []
         TEMP_INBOUND_SELECTION[temp_key] = current_list.copy()
+    
+    # ✅ فیلتر اینباندهای نامعتبر
+    invalid_ids = [ib for ib in current_list if ib not in valid_ids]
+    if invalid_ids:
+        logger.warning(f"⚠️ [show_inbound_manager] اینباندهای نامعتبر حذف شدند: {invalid_ids}")
+        current_list = [ib for ib in current_list if ib in valid_ids]
+        TEMP_INBOUND_SELECTION[temp_key] = current_list
     
     if back_callback and extra_data:
         back_key = f"{callback_data_prefix}_{admin_id}_back"
@@ -881,6 +876,12 @@ async def show_inbound_manager(
     
     if action_buttons:
         buttons.append(action_buttons)
+        # ✅ دکمه انتخاب همه
+    buttons.append([InlineKeyboardButton(
+        text="✅ انتخاب همه" if lang == "fa" else "✅ Select All",
+        callback_data=f"inbound_selectall_{callback_data_prefix}",
+        style="success"
+    )])
     
     save_buttons = [
         InlineKeyboardButton(
@@ -923,10 +924,43 @@ async def show_inbound_manager(
                 await message.delete()
             except:
                 pass
-            await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
-            
+            await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)            
 
-
+@dp.callback_query(F.data.startswith("inbound_selectall_"))
+async def inbound_selectall(callback: CallbackQuery):
+    """انتخاب همه اینباندها در صفحه مدیریت اینباند (عمومی)"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    prefix = callback.data.replace("inbound_selectall_", "")
+    temp_key = f"{prefix}_{callback.from_user.id}"
+    
+    inbounds = await xui_get_inbounds()
+    active_inbounds = [i for i in inbounds if i.get('enable', True)]
+    all_ids = [i.get('id') for i in active_inbounds if i.get('id')]
+    
+    if not all_ids:
+        await callback.answer("❌ هیچ اینباند فعالی یافت نشد", show_alert=True)
+        return
+    
+    TEMP_INBOUND_SELECTION[temp_key] = all_ids
+    
+    await callback.answer(f"✅ {len(all_ids)} اینباند انتخاب شد", show_alert=True)
+    
+    back_key = f"{prefix}_{callback.from_user.id}_back"
+    extra_data = INBOUND_BACK_DATA.get(back_key, {}).get('extra_data', {})
+    
+    await show_inbound_manager(
+        message=callback.message,
+        title="مدیریت اینباندها",
+        current_inbound_ids=all_ids,
+        callback_data_prefix=prefix,
+        save_callback=f"inbound_save_{prefix}",
+        back_callback=f"inbound_back_{prefix}",
+        admin_id=callback.from_user.id,
+        update_existing=True,
+        extra_data=extra_data
+    )
 @dp.callback_query(F.data.startswith("inbound_toggle_"))
 async def inbound_toggle(callback: CallbackQuery):
     """تغییر وضعیت یک اینباند (عمومی)"""
@@ -4818,6 +4852,11 @@ async def admin_inbound_default_setting(callback: CallbackQuery):
             style="primary" if is_selected else None
         )])
     buttons.append([InlineKeyboardButton(
+        text="✅ انتخاب همه" if lang=="fa" else "✅ Select All",
+        callback_data="admin_inbound_select_all_defaults",
+        style="success"
+    )])
+    buttons.append([InlineKeyboardButton(
         text="✅ ذخیره تنظیمات" if lang=="fa" else "✅ Save Settings",
         callback_data="admin_inbound_save_defaults",
         style="success"
@@ -4919,7 +4958,35 @@ async def admin_inbound_clear_defaults(callback: CallbackQuery):
     )
     await admin_inbound_default_setting(callback)
         
-        
+@dp.callback_query(F.data == "admin_inbound_select_all_defaults")
+async def admin_inbound_select_all_defaults(callback: CallbackQuery):
+    """انتخاب همه اینباندهای فعال به عنوان پیش‌فرض"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    
+    inbounds = await xui_get_inbounds()
+    active_inbounds = [i for i in inbounds if i.get('enable', True)]
+    all_ids = [i.get('id') for i in active_inbounds if i.get('id')]
+    
+    if not all_ids:
+        await callback.answer(
+            "❌ هیچ اینباند فعالی یافت نشد" if lang == "fa" else "❌ No active inbounds",
+            show_alert=True
+        )
+        return
+    
+    configs_pool['default_inbound_ids'] = all_ids
+    save_all()
+    
+    logger.info(f"✅ {len(all_ids)} اینباند به عنوان پیش‌فرض انتخاب شد: {all_ids}")
+    
+    await callback.answer(
+        f"✅ {len(all_ids)} اینباند انتخاب شد" if lang == "fa" else f"✅ {len(all_ids)} inbounds selected",
+        show_alert=True
+    )
+    await admin_inbound_default_setting(callback)     
         
         
 async def auto_save_worker():
@@ -10840,6 +10907,42 @@ def get_user_inbound(user_id: int) -> Optional[Union[int, List[int]]]:
         return default_ids
     
     return None
+
+async def filter_valid_inbounds(inbound_ids) -> list:
+    """
+    فیلتر کردن اینباندهای نامعتبر
+    فقط اینباندهایی که توی پنل وجود دارن و فعال هستن رو برمی‌گردونه
+    """
+    if not inbound_ids:
+        return []
+    
+    # نرمال‌سازی به لیست
+    if not isinstance(inbound_ids, list):
+        inbound_ids = [inbound_ids]
+    
+    # حذف None و مقادیر خالی
+    inbound_ids = [ib for ib in inbound_ids if ib]
+    
+    if not inbound_ids:
+        return []
+    
+    # گرفتن اینباندهای فعال پنل
+    try:
+        inbounds = await xui_get_inbounds()
+        active_inbound_ids = {i.get('id') for i in inbounds if i.get('enable', True)}
+    except Exception as e:
+        logger.error(f"❌ [filter_valid_inbounds] خطا در دریافت اینباندها: {e}")
+        return inbound_ids  # اگه پنل در دسترس نبود، دست نزن
+    
+    # فیلتر
+    valid = [ib for ib in inbound_ids if ib in active_inbound_ids]
+    invalid = [ib for ib in inbound_ids if ib not in active_inbound_ids]
+    
+    if invalid:
+        logger.warning(f"⚠️ [filter_valid_inbounds] اینباندهای نامعتبر حذف شدند: {invalid}")
+    
+    return valid
+
 async def xui_safe_request(method: str, endpoint: str, **kwargs) -> Optional[dict]:
     """درخواست امن به پنل با رعایت محدودیت‌ها
     
@@ -27399,7 +27502,7 @@ async def approve_receipt(callback: CallbackQuery):
     
 @dp.callback_query(F.data.startswith("select_user_inbound_"))
 async def select_user_inbound(callback: CallbackQuery):
-    """انتخاب اینباند برای کاربر"""
+    """انتخاب اینباند برای کاربر - با بارگذاری و فیلتر اینباندهای فعلی"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -27410,8 +27513,39 @@ async def select_user_inbound(callback: CallbackQuery):
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
+    
+    # ✅ اولویت اول: اینباندهای سفارش
+    current_inbounds = []
+    order = orders.get(str(oid))
+    if order:
+        order_inbounds = order.get('inbound_id', [])
+        if isinstance(order_inbounds, list):
+            current_inbounds = [ib for ib in order_inbounds if ib]
+        elif order_inbounds:
+            current_inbounds = [order_inbounds]
+    
+    # ✅ اولویت دوم: انتخاب کاربر
+    if not current_inbounds:
+        user_inbounds = get_user_inbound(uid)
+        if isinstance(user_inbounds, list):
+            current_inbounds = user_inbounds.copy()
+        elif user_inbounds:
+            current_inbounds = [user_inbounds]
+    
+    # ✅ فیلتر نامعتبرها
+    current_inbounds = await filter_valid_inbounds(current_inbounds)
+    
+    # ✅ اگه بعد از فیلتر خالی شد، پیش‌فرض بذار
+    if not current_inbounds:
+        default_ids = configs_pool.get('default_inbound_ids', [])
+        if default_ids:
+            current_inbounds = await filter_valid_inbounds(default_ids)
+    
+    # ✅ حالا بریز توی TEMP
     temp_key = f"{uid}_{oid}"
-    TEMP_INBOUND_SELECTION[temp_key] = []
+    TEMP_INBOUND_SELECTION[temp_key] = current_inbounds
+    
+    logger.info(f"📡 [select_user_inbound] اینباندهای فیلترشده برای کاربر {uid} سفارش #{oid}: {current_inbounds}")
     
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id)
     
@@ -27606,7 +27740,7 @@ async def remove_user_inbound(callback: CallbackQuery):
     
 @dp.callback_query(F.data.startswith("select_multiple_inbounds_"))
 async def select_multiple_inbounds(callback: CallbackQuery):
-    """انتخاب چندین اینباند برای کاربر"""
+    """انتخاب چندین اینباند برای کاربر (با فیلتر)"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -27626,13 +27760,18 @@ async def select_multiple_inbounds(callback: CallbackQuery):
         await callback.answer("❌ هیچ اینباند فعالی یافت نشد", show_alert=True)
         return
     
+    # ✅ اینباندهای فعلی
     current_inbounds = get_user_inbound(uid)
     if isinstance(current_inbounds, list):
-        current_list = current_inbounds
+        current_list = current_inbounds.copy()
     elif current_inbounds:
         current_list = [current_inbounds]
     else:
         current_list = []
+    
+    # ✅ فیلتر نامعتبرها
+    current_list = await filter_valid_inbounds(current_list)
+    
     inbound_names = {}
     for ib in active_inbounds:
         inbound_id = ib.get('id')
@@ -27640,6 +27779,7 @@ async def select_multiple_inbounds(callback: CallbackQuery):
         protocol = ib.get('protocol', '').upper()
         port = ib.get('port', '')
         inbound_names[inbound_id] = f"{remark} - {protocol}:{port}"
+    
     current_names = [inbound_names.get(ib_id, f"ID: {ib_id}") for ib_id in current_list]
     
     if lang == "fa":
@@ -27747,7 +27887,7 @@ async def toggle_user_inbound(callback: CallbackQuery):
     
       
 async def show_inbound_selection(message: types.Message, uid: int, oid: int, admin_id: int, update_existing: bool = False):
-    """نمایش صفحه انتخاب اینباند با دکمه‌های کلاسیک"""
+    """نمایش صفحه انتخاب اینباند با دکمه‌های کلاسیک (با فیلتر اینباندهای نامعتبر)"""
     if admin_id != ADMIN_ID_INT:
         return
     
@@ -27758,6 +27898,10 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
     if not active_inbounds:
         await message.answer("❌ هیچ اینباند فعالی یافت نشد")
         return
+    
+    # ✅ لیست اعتبارسنجی اینباندهای فعال
+    valid_ids = {ib.get('id') for ib in active_inbounds}
+    
     temp_key = f"{uid}_{oid}"
     if temp_key in TEMP_INBOUND_SELECTION:
         current_list = TEMP_INBOUND_SELECTION[temp_key]
@@ -27770,6 +27914,14 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
         else:
             current_list = []
         TEMP_INBOUND_SELECTION[temp_key] = current_list.copy()
+    
+    # ✅ فیلتر اینباندهای نامعتبر
+    invalid_ids = [ib for ib in current_list if ib not in valid_ids]
+    if invalid_ids:
+        logger.warning(f"⚠️ [show_inbound_selection] اینباندهای نامعتبر حذف شدند: {invalid_ids}")
+        current_list = [ib for ib in current_list if ib in valid_ids]
+        TEMP_INBOUND_SELECTION[temp_key] = current_list
+    
     inbound_names = {}
     for ib in active_inbounds:
         inbound_id = ib.get('id')
@@ -27810,12 +27962,20 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
             callback_data=f"toggle_inbound_{uid}_{inbound_id}_{oid}",
             style="success" if is_selected else None
         )])
+    
     buttons.append([
+        InlineKeyboardButton(
+            text="✅ انتخاب همه" if lang == "fa" else "✅ Select All",
+            callback_data=f"select_all_inbounds_{uid}_{oid}",
+            style="success"
+        ),
         InlineKeyboardButton(
             text="📌 انتخاب پیش‌فرض" if lang == "fa" else "📌 Select Default",
             callback_data=f"default_inbounds_{uid}_{oid}",
             style="primary"
-        ),
+        )
+    ])
+    buttons.append([
         InlineKeyboardButton(
             text="🗑 پاک کردن همه" if lang == "fa" else "🗑 Clear All",
             callback_data=f"clear_inbounds_{uid}_{oid}",
@@ -27861,8 +28021,7 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
                 await message.delete()
             except:
                 pass
-            await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
-            
+            await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)            
             
             
             
@@ -28125,7 +28284,40 @@ async def clear_inbounds(callback: CallbackQuery):
     await callback.answer("🗑 همه اینباندها پاک شدند", show_alert=True)
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id, update_existing=True)
     
-       
+@dp.callback_query(F.data.startswith("select_all_inbounds_"))
+async def select_all_inbounds(callback: CallbackQuery):
+    """انتخاب همه اینباندهای فعال برای کاربر"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    parts = callback.data.split("_")
+    try:
+        uid = int(parts[3])
+        oid = int(parts[4])
+    except (ValueError, IndexError):
+        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        return
+    
+    inbounds = await xui_get_inbounds()
+    active_inbounds = [i for i in inbounds if i.get('enable', True)]
+    all_ids = [i.get('id') for i in active_inbounds if i.get('id')]
+    
+    if not all_ids:
+        await callback.answer("❌ هیچ اینباند فعالی یافت نشد", show_alert=True)
+        return
+    
+    temp_key = f"{uid}_{oid}"
+    TEMP_INBOUND_SELECTION[temp_key] = all_ids
+    
+    await callback.answer(
+        f"✅ {len(all_ids)} اینباند انتخاب شد",
+        show_alert=True
+    )
+    await show_inbound_selection(
+        callback.message, uid, oid, callback.from_user.id,
+        update_existing=True
+    )
+    
 @dp.callback_query(F.data.startswith("save_inbounds_"))
 async def save_inbounds(callback: CallbackQuery):
     """ذخیره تنظیمات و بازگشت"""
@@ -28241,28 +28433,7 @@ Your changes were not saved.
     )
     
     
-@dp.callback_query(F.data.startswith("select_user_inbound_"))
-async def select_user_inbound(callback: CallbackQuery):
-    """انتخاب اینباند برای کاربر"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    parts = callback.data.split("_")
-    try:
-        uid = int(parts[3])
-        oid = int(parts[4])
-    except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    temp_key = f"{uid}_{oid}"
-    TEMP_INBOUND_SELECTION[temp_key] = []
-    
-    await show_inbound_selection(callback.message, uid, oid, callback.from_user.id)
-    
-    try:
-        await callback.answer()
-    except:
-        pass
+
 
        
 @dp.callback_query(F.data.startswith("clear_user_inbounds_"))
@@ -28892,7 +29063,7 @@ async def cmd_cleanup_orders(message: Message):
 
 @dp.callback_query(F.data.startswith("confirm_approve_package_"))
 async def confirm_approve_package(callback: CallbackQuery):
-    """تایید نهایی بسته آماده - با تشخیص کامل تمدید و جایگزینی اینباندها"""
+    """تایید نهایی بسته آماده - با تشخیص کامل تمدید و فیلتر اینباندها"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
     
@@ -28906,12 +29077,11 @@ async def confirm_approve_package(callback: CallbackQuery):
     if not order:
         return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
     
-    # ✅✅✅ بررسی وضعیت قبلی سفارش - مهمترین بخش برای جلوگیری از دوبار پردازش
+    # ✅ بررسی وضعیت قبلی سفارش
     current_status = order.get('status')
     
-    # اگر قبلاً تایید شده باشد
     if current_status == 'approved':
-        logger.warning(f"⚠️ سفارش #{oid} قبلاً تایید شده است! جلوگیری از تایید مجدد")
+        logger.warning(f"⚠️ سفارش #{oid} قبلاً تایید شده است!")
         await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
         try:
             await callback.message.delete()
@@ -28919,7 +29089,6 @@ async def confirm_approve_package(callback: CallbackQuery):
             pass
         return
     
-    # اگر قبلاً رد شده باشد
     if current_status in ['rejected', 'cancelled', 'deleted']:
         logger.warning(f"⚠️ سفارش #{oid} قبلاً رد/لغو شده است! وضعیت: {current_status}")
         await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
@@ -28929,10 +29098,9 @@ async def confirm_approve_package(callback: CallbackQuery):
             pass
         return
     
-    # ✅✅✅ بررسی تمدید قبلاً انجام شده
     if order.get('is_extend'):
         if order.get('new_volume') and order.get('new_days'):
-            logger.warning(f"⚠️ تمدید سفارش #{oid} قبلاً انجام شده است! (new_volume={order.get('new_volume')}, new_days={order.get('new_days')})")
+            logger.warning(f"⚠️ تمدید سفارش #{oid} قبلاً انجام شده است!")
             await callback.answer("⚠️ این تمدید قبلاً انجام شده است!", show_alert=True)
             try:
                 await callback.message.delete()
@@ -28940,10 +29108,9 @@ async def confirm_approve_package(callback: CallbackQuery):
                 pass
             return
     
-    # ✅✅✅ بررسی وجود کانفیگ برای خرید جدید
     if not order.get('is_extend'):
         if order.get('config_link') or order.get('email'):
-            logger.warning(f"⚠️ سفارش #{oid} قبلاً پردازش شده و کانفیگ ساخته شده است!")
+            logger.warning(f"⚠️ سفارش #{oid} قبلاً پردازش شده است!")
             await callback.answer("⚠️ این سفارش قبلاً پردازش شده است!", show_alert=True)
             try:
                 await callback.message.delete()
@@ -28951,7 +29118,6 @@ async def confirm_approve_package(callback: CallbackQuery):
                 pass
             return
     
-    # ✅✅✅ بررسی parent_order_id برای تمدید
     parent_order_id = order.get('parent_order_id')
     if parent_order_id:
         for existing_oid, existing_order in orders.items():
@@ -28961,7 +29127,6 @@ async def confirm_approve_package(callback: CallbackQuery):
                     existing_order.get('status') == 'approved' and
                     existing_order.get('new_volume')):
                     
-                    # ✅ فقط اگه کمتر از 5 دقیقه پیش تمدید شده، بلاک کن
                     approved_date_str = existing_order.get('approved_date', '')
                     if approved_date_str:
                         try:
@@ -28977,8 +29142,6 @@ async def confirm_approve_package(callback: CallbackQuery):
                         except Exception as e:
                             logger.warning(f"خطا در parse تاریخ: {e}")
     
-    # اگه بیش از 5 دقیقه گذشته باشه، اجازه تمدید جدید بده
-    
     # ==================== ادامه کد اصلی ====================
     uid = order['user_id']
     vol = order.get('volume', 0)
@@ -28988,13 +29151,9 @@ async def confirm_approve_package(callback: CallbackQuery):
     is_extend = parent_order_id is not None
     user_state = user_states.get(uid, {})
     
-    # ✅✅✅ خواندن is_extend از چند منبع (به ترتیب اولویت)
     parent_order_id = order.get('parent_order_id')
-    
-    # اول از خود سفارش
     is_extend = order.get('is_extend', False) or (parent_order_id is not None)
     
-    # اگه نبود، از user_states
     if not is_extend:
         user_state = user_states.get(uid, {})
         is_extend = user_state.get('is_extend', False)
@@ -29002,7 +29161,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             parent_order_id = user_state.get('extend_order_id')
     
     logger.info(f"🔍 [confirm_approve_package] is_extend={is_extend}, parent_order_id={parent_order_id}")
-    logger.info(f"🔍 [confirm_approve_package] user_state={user_states.get(uid, {})}")    
+    
     payment_method = order.get('payment_method', 'unknown')
     order_type = order.get('type', 'purchase')
     
@@ -29048,7 +29207,9 @@ async def confirm_approve_package(callback: CallbackQuery):
     
     logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_method} → {payment_type} ({payment_label})")
     
-    # ✅ انتخاب اینباندها
+    # ============================================================
+    # ✅ جمع‌آوری selected_inbounds از اولویت‌های مختلف
+    # ============================================================
     selected_inbounds = get_user_inbound(uid)
     
     if not selected_inbounds:
@@ -29079,7 +29240,21 @@ async def confirm_approve_package(callback: CallbackQuery):
     if not isinstance(selected_inbounds, list):
         selected_inbounds = [selected_inbounds] if selected_inbounds else []
     
-    logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی انتخاب شده توسط ادمین: {selected_inbounds}")
+    # ✅ ✅ ✅ فیلتر اینباندهای نامعتبر
+    selected_inbounds = await filter_valid_inbounds(selected_inbounds)
+    
+    if not selected_inbounds:
+        default_ids = configs_pool.get('default_inbound_ids', [])
+        selected_inbounds = await filter_valid_inbounds(default_ids)
+        
+        if not selected_inbounds:
+            await callback.answer(
+                "❌ هیچ اینباند معتبری یافت نشد! لطفاً ابتدا اینباندها را بررسی کنید.",
+                show_alert=True
+            )
+            return
+    
+    logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی فیلترشده: {selected_inbounds}")
     
     # ✅ category_name با fallback
     category_name = order.get('category_name')
@@ -29104,23 +29279,28 @@ async def confirm_approve_package(callback: CallbackQuery):
     
     logger.info(f"📦 [confirm_approve_package] سفارش #{oid} - کاربر: {uid} - تمدید: {is_extend} - parent_order_id: {parent_order_id}")
     logger.info(f"📦 [confirm_approve_package] حجم: {vol}GB - مدت: {days} روز - قیمت: {price:,} تومان")
-    logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی انتخاب شده: {selected_inbounds}")
     logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_label}")
     
     await safe_edit_message(
-    callback,
-    f"⏳ در حال پردازش بسته #{oid}...",
-    reply_markup=None
+        callback,
+        f"⏳ در حال پردازش بسته #{oid}...",
+        reply_markup=None
     )
     
-        
     try:
         if order_type in ['ready_package', 'category_purchase']:
             backfill_order_category(oid)
-            order = orders.get(str(oid))  
+            order = orders.get(str(oid))
     except Exception as e:
         logger.warning(f"خطا در backfill: {e}")
-    update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    # ✅✅✅ اینباندهای فیلترشده رو توی سفارش ذخیره کن
+    update_order(
+        oid,
+        status='approved',
+        approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        inbound_id=selected_inbounds
+    )
     
     await check_referral_bonus(uid)
     coupon_consumed = consume_coupon(uid)
@@ -29141,7 +29321,6 @@ async def confirm_approve_package(callback: CallbackQuery):
             old_email = parent_order.get('email', '')
             old_inbound = parent_order.get('inbound_id', [])
             logger.info(f"📊 [confirm_approve_package] سفارش اصلی: حجم={old_volume}GB, مدت={old_days} روز")
-            logger.info(f"📡 [confirm_approve_package] اینباندهای سفارش اصلی: {old_inbound}")
         else:
             logger.warning(f"⚠️ [confirm_approve_package] سفارش اصلی #{parent_order_id} یافت نشد!")
             old_volume = 0
@@ -29161,24 +29340,21 @@ async def confirm_approve_package(callback: CallbackQuery):
                 current_inbounds = [current_inbounds] if current_inbounds else []
             logger.info(f"📡 [confirm_approve_package] اینباندهای فعلی از user_inbound_selection: {current_inbounds}")
         
+        # ✅ اینباندهای نهایی = همون فیلترشده‌ها
         final_inbounds = selected_inbounds.copy()
         
-        logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی (فقط انتخاب شده توسط ادمین): {final_inbounds}")
+        logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی فیلترشده: {final_inbounds}")
         
         if final_inbounds:
             save_user_inbound_selection(uid, final_inbounds)
             logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی برای کاربر {uid} ذخیره شد: {final_inbounds}")
         
-        # ✅ استخراج اطلاعات کتگوری از سفارش + state (با fallback امن)
         _state = user_states.get(uid, {})
-
-        # ✅ از order اول (چون همیشه dict هست)
         _cat_id = order.get('category_id')
         _cat_name = order.get('category_name')
         _cat_name_en = order.get('category_name_en')
         _pkg_id = order.get('package_id')
-
-        # ✅ اگه توی سفارش نبود، از state بگیر
+        
         if _cat_id is None:
             _cat_id = _state.get('category_id')
         if not _cat_name:
@@ -29187,8 +29363,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             _cat_name_en = _state.get('category_name_en')
         if _pkg_id is None:
             _pkg_id = _state.get('package_id')
-
-        # ✅ اگه هنوز category_name خالی بود، از READY_PACKAGES بگیر
+        
         if not _cat_name and _cat_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == _cat_id:
@@ -29196,14 +29371,14 @@ async def confirm_approve_package(callback: CallbackQuery):
                     _cat_name_en = cat.get('name_en', _cat_name)
                     logger.info(f"✅ category_name از READY_PACKAGES بازیابی شد: {_cat_name}")
                     break
-
+        
         success = await extend_service(
-            parent_order_id, 
-            uid, 
-            vol, 
+            parent_order_id,
+            uid,
+            vol,
             days,
-            final_inbounds,
-            ip_limit,
+            new_inbounds=final_inbounds,      # ✅ اینباندهای فیلترشده
+            new_ip_limit=ip_limit,
             new_category_id=_cat_id,
             new_category_name=_cat_name,
             new_category_name_en=_cat_name_en,
@@ -29215,7 +29390,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             new_volume = updated_parent.get('volume', 0) if updated_parent else old_volume + vol
             new_days = updated_parent.get('days', 0) if updated_parent else old_days + days
             
-            update_order(oid, 
+            update_order(oid,
                         new_volume=new_volume,
                         new_days=new_days,
                         old_volume=old_volume,
@@ -29256,7 +29431,9 @@ async def confirm_approve_package(callback: CallbackQuery):
                 await callback.message.delete()
             except:
                 pass
+            
             await send_sticker(uid, 'order_approved', '✅')
+            
             if lang == "fa":
                 success_text = "✅ <b>سرویس با موفقیت تمدید شد!</b>"
             else:
@@ -29265,7 +29442,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             await bot.send_message(uid, success_text, parse_mode=ParseMode.HTML)
             
             await callback.message.answer(
-                f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد!\n{payment_emoji} {payment_label}",
+                f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد!\n{payment_emoji} {payment_label}\n📡 اینباندها: {final_inbounds}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
@@ -29314,7 +29491,13 @@ async def confirm_approve_package(callback: CallbackQuery):
     # ==================== بخش خرید جدید ====================
     if SENAI_PANEL_ENABLED:
         email = f"user{uid}_{int(datetime.now().timestamp())}"
-        sub = await xui_create_client_with_inbound(email, vol, days, user_name, uid, selected_inbounds, ip_limit=ip_limit)
+        
+        # ✅ از اینباندهای فیلترشده استفاده کن (نه چیز دیگه)
+        sub = await xui_create_client_with_inbound(
+            email, vol, days, user_name, uid,
+            selected_inbounds,
+            ip_limit=ip_limit
+        )
         
         if sub:
             update_order(oid, config_link=sub, email=email, payment_method=payment_method, inbound_id=selected_inbounds)
@@ -29472,9 +29655,10 @@ async def select_inbound_for_order(callback: CallbackQuery):
     await approve_receipt(callback)
 @dp.callback_query(F.data.startswith("confirm_approve_"))
 async def confirm_approve_with_inbound(callback: CallbackQuery):
-    """تایید نهایی سفارش با اینباند انتخاب شده - با تشخیص تمدید"""
+    """تایید نهایی سفارش با اینباند انتخاب شده - با تشخیص تمدید و فیلتر اینباند"""
     if callback.from_user.id != ADMIN_ID_INT:
         return await callback.answer("⛔", show_alert=True)
+    
     try:
         oid = int(callback.data.split("_")[2])
     except (ValueError, IndexError):
@@ -29502,19 +29686,55 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
     
     user_info = get_user(uid)
     raw_name = user_info.get('name', f'کاربر_{uid}')
-    # ✅ پاکسازی اسم برای کامنت پنل
-    user_name_panel = raw_name
-    # ✅ escape اسم برای پیام HTML ادمین
-    user_name = html.escape(raw_name)
+    user_name_panel = raw_name          # برای کامنت پنل (خام)
+    user_name = html.escape(raw_name)   # برای پیام HTML
     lang = user_info.get('lang', 'fa')
     
     await send_sticker(uid, 'order_approved', '✅')
     
     logger.info(f"📝 تایید نهایی سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
-    update_order(oid, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    # ============================================================
+    # ✅ فیلتر اینباندها (قبل از هر کاری)
+    # ============================================================
+    inbound_id = get_user_inbound(uid)
+    
+    if isinstance(inbound_id, list):
+        inbound_id = [ib for ib in inbound_id if ib]
+    elif inbound_id:
+        inbound_id = [inbound_id]
+    else:
+        inbound_id = []
+    
+    inbound_id = await filter_valid_inbounds(inbound_id)
+    
+    if not inbound_id:
+        default_ids = configs_pool.get('default_inbound_ids', [])
+        inbound_id = await filter_valid_inbounds(default_ids)
+        
+        if not inbound_id:
+            await callback.answer(
+                "❌ هیچ اینباند معتبری یافت نشد! لطفاً ابتدا اینباندها را بررسی کنید.",
+                show_alert=True
+            )
+            return
+    
+    logger.info(f"📡 [confirm_approve_with_inbound] اینباندهای نهایی: {inbound_id}")
+    
+    # ============================================================
+    # به‌روزرسانی سفارش و کوپن و رفرال
+    # ============================================================
+    update_order(
+        oid,
+        status='approved',
+        approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        inbound_id=inbound_id,   # ✅ اینباندهای فیلترشده رو ذخیره کن
+    )
+    
     coupon_consumed = consume_coupon(uid)
     if coupon_consumed:
         logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
+    
     if not is_extend:
         referral_result = await check_referral_bonus(uid)
         if referral_result:
@@ -29534,15 +29754,22 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             callback,
             f"⏳ در حال تمدید سرویس #{parent_order_id}..."
         )
+        
         _state = user_states.get(uid, {})
         _cat_id = order.get('category_id') or _state.get('category_id')
         _cat_name = order.get('category_name') or _state.get('category_name')
         _cat_name_en = order.get('category_name_en') or _state.get('category_name_en')
         _pkg_id = order.get('package_id') or _state.get('package_id')
-
+        ip_limit = order.get('ip_limit', 0)
+        
         try:
             success = await extend_service(
-                parent_order_id, uid, vol, days,
+                parent_order_id,
+                uid,
+                vol,
+                days,
+                new_inbounds=inbound_id,      # ✅ اینباندهای فیلترشده پاس بده
+                new_ip_limit=ip_limit,        # ✅ ip_limit هم پاس بده
                 new_category_id=_cat_id,
                 new_category_name=_cat_name,
                 new_category_name_en=_cat_name_en,
@@ -29559,23 +29786,15 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                 user_states[uid].pop('current_volume', None)
                 user_states[uid].pop('current_days', None)
             
-            # ✅✅✅ پیام ساده به کاربر برای تمدید موفق
             try:
                 if lang == "fa":
-                    await bot.send_message(
-                        uid,
-                        "✅ سرویس شما با موفقیت تمدید شد."
-                    )
+                    await bot.send_message(uid, "✅ سرویس شما با موفقیت تمدید شد.")
                 else:
-                    await bot.send_message(
-                        uid,
-                        "✅ Your service has been extended successfully."
-                    )
+                    await bot.send_message(uid, "✅ Your service has been extended successfully.")
                 logger.info(f"📨 پیام تایید تمدید به کاربر {uid} ارسال شد")
             except Exception as e:
                 logger.error(f"❌ خطا در ارسال پیام به کاربر {uid}: {e}")
             
-            # پیام به ادمین
             if lang == "fa":
                 success_text = f"""
 ✅ <b>سرویس با موفقیت تمدید شد!</b>
@@ -29585,6 +29804,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
 📦 +{vol}GB به حجم اضافه شد
 ⏱ +{days} روز به مدت اضافه شد
 💰 مبلغ پرداختی: {price:,} تومان
+📡 اینباندها: {', '.join(map(str, inbound_id))}
 
 ✅ سرویس کاربر تمدید شد.
 """
@@ -29597,6 +29817,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
 📦 +{vol}GB added to volume
 ⏱ +{days} days added to duration
 💰 Amount paid: {price:,} Toman
+📡 Inbounds: {', '.join(map(str, inbound_id))}
 
 ✅ User's service has been extended.
 """
@@ -29619,7 +29840,6 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
             
-            # ✅ اطلاع به کاربر در صورت خطا
             try:
                 if lang == "fa":
                     await bot.send_message(
@@ -29636,7 +29856,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             
             await safe_edit_message(
                 callback,
-                f"❌ خطا در تمدید سرویس. موجودی کاربر برگشت داده شد." if lang == "fa" else "❌ Error extending service. Balance refunded.",
+                "❌ خطا در تمدید سرویس. موجودی کاربر برگشت داده شد." if lang == "fa" else "❌ Error extending service. Balance refunded.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
@@ -29657,11 +29877,13 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
         )
         
         email = f"user{uid}_{int(datetime.now().timestamp())}"
-        inbound_id = get_user_inbound(uid)
         ip_limit = order.get('ip_limit', 0)
         
-        # ✅ استفاده از اسم پاکسازی شده برای پنل
-        sub = await xui_create_client_with_inbound(email, vol, days, user_name_panel, uid, inbound_id, ip_limit=ip_limit)
+        # ✅ دیگه inbound_id رو از get_user_inbound نمی‌گیریم - همون فیلترشده استفاده می‌کنیم
+        sub = await xui_create_client_with_inbound(
+            email, vol, days, user_name_panel, uid,
+            inbound_id, ip_limit=ip_limit
+        )
         
         if sub:
             update_order(oid, config_link=sub, email=email, payment_method='card')
@@ -29670,9 +29892,11 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                 await log_system.log_config_created(uid, oid, email, vol, days)
                 await log_system.log_order_approved(oid, uid, vol, days, price)
             
-            CustomLogger.log_event('ORDER_APPROVED', 
-                f'سفارش #{oid} تایید شد - {vol}GB/{days} روز - {price:,} تومان - اینباند: {inbound_id or "پیش‌فرض"}', 
-                uid)
+            CustomLogger.log_event(
+                'ORDER_APPROVED',
+                f'سفارش #{oid} تایید شد - {vol}GB/{days} روز - {price:,} تومان - اینباند: {inbound_id or "پیش‌فرض"}',
+                uid
+            )
             
             await send_config_with_qr_option(uid, oid, vol, days, price, sub, lang)
             
@@ -29685,7 +29909,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             except Exception as e:
                 logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
             
-            inbound_info = f"اینباند: {inbound_id or 'پیش‌فرض'}"
+            inbound_info = f"اینباند: {', '.join(map(str, inbound_id)) or 'پیش‌فرض'}"
             
             success_text = f"""
 ✅ سفارش #{oid} با موفقیت تایید شد!
@@ -29708,7 +29932,6 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             )
             
             logger.info(f"✅ سفارش #{oid} با موفقیت تایید شد - کلاینت ساخته شد")
-            
         else:
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
