@@ -1053,8 +1053,21 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
     days = order.get('days', 0)
     parent_order_id = order.get('parent_order_id')
     is_extend = parent_order_id is not None or order.get('is_extend', False)
-    category_name = order.get('category_name') or order.get('category_name_en') or ''
+    # ✅ انتخاب نام بر اساس زبان کاربر
+    if lang == "en":
+        category_name = order.get('category_name_en') or order.get('category_name') or ''
+    else:
+        category_name = order.get('category_name') or order.get('category_name_en') or ''
     category_id = order.get('category_id')
+        # ✅ اگه هنوز خالی بود، از READY_PACKAGES بگیر
+    if not category_name and category_id:
+        for cat in READY_PACKAGES.get('categories', []):
+            if cat.get('id') == category_id:
+                if lang == "en":
+                    category_name = cat.get('name_en') or cat.get('name') or ''
+                else:
+                    category_name = cat.get('name') or ''
+                break
     is_balance_charge = (order_type == 'balance_charge')
     
     icon = "📦"
