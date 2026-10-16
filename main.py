@@ -1053,16 +1053,13 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
     days = order.get('days', 0)
     parent_order_id = order.get('parent_order_id')
     is_extend = parent_order_id is not None or order.get('is_extend', False)
-    category_id = order.get('category_id')
-    is_balance_charge = (order_type == 'balance_charge')
-    
     # ✅ انتخاب نام بر اساس زبان کاربر
     if lang == "en":
         category_name = order.get('category_name_en') or order.get('category_name') or ''
     else:
         category_name = order.get('category_name') or order.get('category_name_en') or ''
-    
-    # ✅ اگه هنوز خالی بود، از READY_PACKAGES بگیر
+    category_id = order.get('category_id')
+        # ✅ اگه هنوز خالی بود، از READY_PACKAGES بگیر
     if not category_name and category_id:
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
@@ -1071,6 +1068,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 else:
                     category_name = cat.get('name') or ''
                 break
+    is_balance_charge = (order_type == 'balance_charge')
     
     icon = "📦"
     if category_id:
@@ -1090,7 +1088,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
     reload_emoji = premium_emoji('reload', '🔄')
     wallet_emoji = premium_emoji('wallet', '💰')
     note_emoji = premium_emoji('note', '📝')
-    label_emoji = premium_emoji('label', '🏷️')
     
     if volume == 0:
         volume_display = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
@@ -1100,34 +1097,8 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
         volume_display = f"{volume} GB"
     
     support_display = SUPPORT_USERNAME.strip() if SUPPORT_USERNAME and SUPPORT_USERNAME.strip() else "@my_name_is_navid"
-    
-    # ✅ محاسبه قیمت با تخفیف
-    original_price = order.get('original_price', 0) or 0
-    coupon_discount = order.get('coupon_discount', 0) or 0
-    has_discount = (
-        coupon_discount > 0 
-        and original_price > 0 
-        and original_price != price
-    )
-    
-    if lang == "fa":
-        if has_discount:
-            price_display = (
-                f"<s>{original_price:,}</s> → <b>{price:,} تومان</b> "
-                f"({label_emoji} {coupon_discount}%)"
-            )
-        else:
-            price_display = f"<b>{price:,} تومان</b>"
-    else:
-        if has_discount:
-            price_display = (
-                f"<s>{original_price:,}</s> → <b>{price:,} Toman</b> "
-                f"({label_emoji} {coupon_discount}%)"
-            )
-        else:
-            price_display = f"<b>{price:,} Toman</b>"
-    
-    amount_display = price_display
+    price_display = f"{price:,} تومان" if lang == "fa" else f"{price:,} Toman"
+    amount_display = f"{price:,} تومان" if lang == "fa" else f"{price:,} Toman"
     
     # ─── tips block ───
     if lang == "fa":
@@ -1151,14 +1122,14 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
             return (
                 f"{RLM}{receipt_emoji} <b>فیش دریافت شد</b>\n\n"
                 f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
-                f"{RLM}{money_emoji} مبلغ: {price_display}\n\n"
+                f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
                 f"{RLM}⏳ در انتظار تأیید ادمین..."
             )
         else:
             return (
                 f"{receipt_emoji} <b>Receipt Received</b>\n\n"
                 f"{id_emoji} Order: <code>#{order_id}</code>\n"
-                f"{money_emoji} Amount: {price_display}\n\n"
+                f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
                 f"⏳ Waiting for admin approval..."
             )
     
@@ -1193,7 +1164,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                     f"{RLM}{config_emoji} سرویس: {category_display}\n"
                     f"{RLM}📊 حجم اضافه: {volume_display}\n"
                     f"{RLM}⏱ مدت اضافه: {days} روز\n"
-                    f"{RLM}{money_emoji} مبلغ: {price_display}\n\n"
+                    f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
                     f"{card_block}\n\n"
                     f"{tips_block}\n\n"
                     f"{final_line}"
@@ -1205,7 +1176,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                     f"{config_emoji} Service: {category_display}\n"
                     f"📊 Volume to add: {volume_display}\n"
                     f"⏱ Duration to add: {days} days\n"
-                    f"{money_emoji} Amount: {price_display}\n\n"
+                    f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
                     f"{card_block}\n\n"
                     f"{tips_block}\n\n"
                     f"{final_line}"
@@ -1217,7 +1188,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 return (
                     f"{RLM}{wallet_emoji} <b>پرداخت افزایش موجودی</b>\n\n"
                     f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
-                    f"{RLM}{money_emoji} مبلغ شارژ: {price_display}\n\n"
+                    f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
                     f"{card_block}\n\n"
                     f"{tips_block}\n\n"
                     f"{final_line}"
@@ -1226,7 +1197,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 return (
                     f"{wallet_emoji} <b>Balance Top-Up Payment</b>\n\n"
                     f"{id_emoji} Order: <code>#{order_id}</code>\n"
-                    f"{money_emoji} Amount: {price_display}\n\n"
+                    f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
                     f"{card_block}\n\n"
                     f"{tips_block}\n\n"
                     f"{final_line}"
@@ -1240,7 +1211,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{RLM}{config_emoji} سرویس: {category_display}\n"
                 f"{RLM}📊 حجم: {volume_display}\n"
                 f"{RLM}⏱ مدت: {days} روز\n"
-                f"{RLM}{money_emoji} مبلغ: {price_display}\n\n"
+                f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
                 f"{card_block}\n\n"
                 f"{tips_block}\n\n"
                 f"{final_line}"
@@ -1252,7 +1223,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{config_emoji} Service: {category_display}\n"
                 f"📊 Volume: {volume_display}\n"
                 f"⏱ Duration: {days} days\n"
-                f"{money_emoji} Amount: {price_display}\n\n"
+                f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
                 f"{card_block}\n\n"
                 f"{tips_block}\n\n"
                 f"{final_line}"
@@ -1264,7 +1235,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
             return (
                 f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش شارژ</b>\n\n"
                 f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
-                f"{RLM}{money_emoji} مبلغ شارژ: {price_display}\n\n"
+                f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
                 f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
                 f"{RLM}1. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
                 f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
@@ -1273,7 +1244,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
             return (
                 f"{receipt_emoji} <b>Top-Up Receipt Request</b>\n\n"
                 f"{id_emoji} Order: <code>#{order_id}</code>\n"
-                f"{money_emoji} Amount: {price_display}\n\n"
+                f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
                 f"{note_emoji} <b>Important Notes:</b>\n"
                 f"1. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
                 f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
@@ -1283,7 +1254,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
         return (
             f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش</b>\n\n"
             f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
-            f"{RLM}{money_emoji} مبلغ: {price_display}\n\n"
+            f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
             f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
             f"{RLM}1. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
             f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
@@ -1292,7 +1263,7 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
         return (
             f"{receipt_emoji} <b>Receipt Request</b>\n\n"
             f"{id_emoji} Order: <code>#{order_id}</code>\n"
-            f"{money_emoji} Amount: {price_display}\n\n"
+            f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
             f"{note_emoji} <b>Important Notes:</b>\n"
             f"1. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
             f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
@@ -24415,9 +24386,6 @@ async def pay_card(callback: CallbackQuery):
                             status='approved',
                             approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             payment_method='free_coupon_extend',
-                            original_price=original_price,
-                            coupon_discount=discount_percent,
-                            coupon_code=coupon_code if coupon_applied else None,
                             payment_label='🎁 رایگان (تمدید)',
                             parent_order_id=extend_order_id,
                             is_extend=True)
