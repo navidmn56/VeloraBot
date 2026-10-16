@@ -1162,8 +1162,8 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                     f"{RLM}{reload_emoji} <b>پرداخت تمدید سرویس</b>\n\n"
                     f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code> | سرویس اصلی: <code>#{parent_order_id}</code>\n"
                     f"{RLM}{config_emoji} سرویس: {category_display}\n"
-                    f"{RLM}📊 حجم اضافه: <code>{volume_display}</code>\n"
-                    f"{RLM}⏱ مدت اضافه: <code>{days} روز</code>\n"
+                    f"{RLM}📊 حجم اضافه: {volume_display}\n"
+                    f"{RLM}⏱ مدت اضافه: {days} روز\n"
                     f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
                     f"{card_block}\n\n"
                     f"{tips_block}\n\n"
@@ -1174,8 +1174,8 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                     f"{reload_emoji} <b>Extension Payment</b>\n\n"
                     f"{id_emoji} Order: <code>#{order_id}</code> | Original: <code>#{parent_order_id}</code>\n"
                     f"{config_emoji} Service: {category_display}\n"
-                    f"📊 Volume to add: <code>{volume_display}</code>\n"
-                    f"⏱ Duration to add: <code>{days} days</code>\n"
+                    f"📊 Volume to add: {volume_display}\n"
+                    f"⏱ Duration to add: {days} days\n"
                     f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
                     f"{card_block}\n\n"
                     f"{tips_block}\n\n"
@@ -1209,8 +1209,8 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{RLM}{config_emoji} <b>اطلاعات پرداخت سفارش</b>\n\n"
                 f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
                 f"{RLM}{config_emoji} سرویس: {category_display}\n"
-                f"{RLM}📊 حجم: <code>{volume_display}</code>\n"
-                f"{RLM}⏱ مدت: <code>{days} روز</code>\n"
+                f"{RLM}📊 حجم: {volume_display}\n"
+                f"{RLM}⏱ مدت: {days} روز\n"
                 f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
                 f"{card_block}\n\n"
                 f"{tips_block}\n\n"
@@ -1221,8 +1221,8 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{config_emoji} <b>Payment Details</b>\n\n"
                 f"{id_emoji} Order: <code>#{order_id}</code>\n"
                 f"{config_emoji} Service: {category_display}\n"
-                f"📊 Volume: <code>{volume_display}</code>\n"
-                f"⏱ Duration: <code>{days} days</code>\n"
+                f"📊 Volume: {volume_display}\n"
+                f"⏱ Duration: {days} days\n"
                 f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
                 f"{card_block}\n\n"
                 f"{tips_block}\n\n"
@@ -24583,21 +24583,23 @@ async def pay_card(callback: CallbackQuery):
     volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
     order = orders.get(str(order_id))
     text = build_receipt_text(order, lang, mode="card")
+    # ✅ شماره کارت بدون فاصله برای کپی
+    card_num_copy = BANK_CARD_NUMBER.replace(' ', '').replace('-', '')
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({final_price * 10:,})",
-                copy_text=CopyTextButton(text=str(final_price * 10))
-            )
-        ],
-        [
-    
-            InlineKeyboardButton(
-                text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel Payment'}", 
-                callback_data=f"cancel_order_{order_id}",
-                style="danger"
-            )
-        ]
+        [InlineKeyboardButton(
+            text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({final_price * 10:,})",
+            copy_text=CopyTextButton(text=str(final_price * 10))
+        )],
+        [InlineKeyboardButton(
+            text=f"💳 {'کپی شماره کارت' if lang=='fa' else 'Copy Card Number'}",
+            copy_text=CopyTextButton(text=card_num_copy)
+        )],
+        [InlineKeyboardButton(
+            text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel Payment'}", 
+            callback_data=f"cancel_order_{order_id}",
+            style="danger"
+        )]
     ])
     
     await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)

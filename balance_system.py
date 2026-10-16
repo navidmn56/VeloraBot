@@ -492,20 +492,26 @@ async def quick_amount_selected(callback: CallbackQuery):
 
     order = _main.orders.get(str(order_id))
     text = _build_balance_receipt_text(order, lang, mode="card")
+    
+
+    # ✅ شماره کارت بدون فاصله برای کپی
+    bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
+    card_num_copy = bank_card_number.replace(' ', '').replace('-', '')
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({amount * 10:,})",
             copy_text=CopyTextButton(text=str(amount * 10))
         )],
-        [
-            
-            InlineKeyboardButton(
-                text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel Payment'}",
-                callback_data=f"cancel_order_{order_id}",
-                style="danger"
-            )
-        ]
+        [InlineKeyboardButton(
+            text=f"💳 {'کپی شماره کارت' if lang=='fa' else 'Copy Card Number'}",
+            copy_text=CopyTextButton(text=card_num_copy)
+        )],
+        [InlineKeyboardButton(
+            text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel Payment'}",
+            callback_data=f"cancel_order_{order_id}",
+            style="danger"
+        )]
     ])
 
     try:
@@ -712,19 +718,24 @@ async def process_balance_amount(message: Message):
             order = _main.orders.get(str(order_id))
             text = _build_balance_receipt_text(order, lang, mode="card")
 
+            # ✅ شماره کارت بدون فاصله برای کپی
+            bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
+            card_num_copy = bank_card_number.replace(' ', '').replace('-', '')
+
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
                     text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({amount * 10:,})",
                     copy_text=CopyTextButton(text=str(amount * 10))
                 )],
-                [
-                    
-                    InlineKeyboardButton(
-                        text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel payment'}",
-                        callback_data=f"cancel_order_{order_id}",
-                        style="danger"
-                    )
-                ]
+                [InlineKeyboardButton(
+                    text=f"💳 {'کپی شماره کارت' if lang=='fa' else 'Copy Card Number'}",
+                    copy_text=CopyTextButton(text=card_num_copy)
+                )],
+                [InlineKeyboardButton(
+                    text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel payment'}",
+                    callback_data=f"cancel_order_{order_id}",
+                    style="danger"
+                )]
             ])
 
             await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
