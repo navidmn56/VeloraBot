@@ -108,7 +108,7 @@ def _build_balance_receipt_text(order: dict, lang: str = "fa", mode: str = "card
 
 
 def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: str = "card") -> str:
-    """نسخه fallback داخلی"""
+    """نسخه fallback داخلی (فقط اگه build_receipt_text در دسترس نباشه)"""
     RLM = "\u200F"
     
     order_id = order.get('order_id', '?')
@@ -124,10 +124,8 @@ def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: st
     note_emoji = premium_emoji('note', '📝')
     receipt_emoji = premium_emoji('receipt', '📸')
     info_emoji = premium_emoji('info', 'ℹ️')
-    label_emoji = premium_emoji('label', '📋')
     wallet_emoji = premium_emoji('wallet', '💰')
     
-    # پشتیبانی
     support_username = getattr(_main, 'SUPPORT_USERNAME', '') or "@my_name_is_navid"
     support_display = support_username.strip() if support_username.strip() else "@my_name_is_navid"
     
@@ -138,80 +136,55 @@ def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: st
     card_num = ' '.join([bank_card_number[i:i+4] for i in range(0, 16, 4)])
     
     if mode == "reminder":
-        # فقط یادآوری ساده
         if lang == "fa":
             return (
                 f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش شارژ</b>\n\n"
-                f"{RLM}{id_emoji} شماره سفارش: <code>#{order_id}</code>\n"
+                f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
                 f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
-                f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                f"{RLM}لطفاً تصویر واضح فیش واریزی را در همین گفت‌وگو ارسال کنید.\n\n"
-                f"{RLM}💡 نکات مهم:\n"
-                f"{RLM}• تصویر باید واضح و خوانا باشد\n"
-                f"{RLM}• کل فیش در کادر عکس باشد\n"
-                f"{RLM}• شماره پیگیری مشخص باشد"
+                f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
+                f"{RLM}1. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
+                f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
             )
         else:
             return (
                 f"{receipt_emoji} <b>Top-Up Receipt Request</b>\n\n"
-                f"{id_emoji} Order number: <code>#{order_id}</code>\n"
-                f"{money_emoji} Top-up amount: <b>{amount_display}</b>\n\n"
-                f"━━━━━━━━━━━━━━━━━━\n\n"
-                f"Please send a clear photo of the payment receipt in this chat.\n\n"
-                f"💡 Important tips:\n"
-                f"• The photo must be clear and readable\n"
-                f"• The entire receipt should be in the frame\n"
-                f"• The tracking number should be visible"
+                f"{id_emoji} Order: <code>#{order_id}</code>\n"
+                f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
+                f"{note_emoji} <b>Important Notes:</b>\n"
+                f"1. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
+                f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
             )
     
     # mode == "card"
     if lang == "fa":
         return (
-            f"{RLM}{wallet_emoji} <b>اطلاعات پرداخت افزایش موجودی</b>\n\n"
-            f"{RLM}سفارش شماره <code>#{order_id}</code>\n\n"
-            f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-            f"{RLM}{label_emoji} <b>مشخصات شارژ</b>\n"
-            f"{RLM}• نوع عملیات: افزایش موجودی کیف پول\n"
-            f"{RLM}• مبلغ شارژ: <code>{amount_display}</code>\n\n"
-            f"{RLM}{money_emoji} <b>مبلغ قابل پرداخت</b>\n\n"
-            f"{RLM}<b>{amount_display}</b>\n\n"
-            f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-            f"{RLM}{card_emoji} <b>اطلاعات واریز وجه</b>\n\n"
-            f"{RLM}<b>شماره کارت</b>\n"
-            f"{RLM}<code>{card_num}</code>\n\n"
-            f"{RLM}{user_emoji} <b>به نام:</b> <code>{bank_card_holder}</code>\n\n"
-            f"{RLM}{star_emoji} <b>بانک:</b> <code>{bank_name}</code>\n\n"
-            f"{RLM}{info_emoji} <b>پشتیبانی:</b> {support_display}\n\n"
-            f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-            f"{RLM}{note_emoji} <b>مراحل افزایش موجودی</b>\n\n"
-            f"{RLM}۱. مبلغ دقیق را به شماره کارت بالا واریز کنید.\n"
-            f"{RLM}۲. تصویر واضح رسید پرداخت را در همین گفت‌وگو ارسال کنید.\n"
-            f"{RLM}۳. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید نگه دارید.\n\n"
-            f"{RLM}{receipt_emoji} پس از تأیید، مبلغ به موجودی شما اضافه می‌شود."
+            f"{RLM}{wallet_emoji} <b>پرداخت افزایش موجودی</b>\n\n"
+            f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
+            f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
+            f"{RLM}{card_emoji} <b>شماره کارت</b>\n"
+            f"{RLM}<code>{card_num}</code>\n"
+            f"{RLM}{user_emoji} به نام: {bank_card_holder}\n"
+            f"{RLM}{star_emoji} بانک: {bank_name}\n"
+            f"{RLM}{info_emoji} پشتیبانی: {support_display}\n\n"
+            f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
+            f"{RLM}1. مبلغ دقیق سفارش را واریز کنید.\n"
+            f"{RLM}2. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
+            f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
         )
     else:
         return (
             f"{wallet_emoji} <b>Balance Top-Up Payment</b>\n\n"
-            f"Order <code>#{order_id}</code>\n\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"{label_emoji} <b>Top-Up Details</b>\n"
-            f"• Operation: Wallet balance top-up\n"
-            f"• Amount: <code>{amount_display}</code>\n\n"
-            f"{money_emoji} <b>Amount to Pay</b>\n\n"
-            f"<b>{amount_display}</b>\n\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"{card_emoji} <b>Payment Information</b>\n\n"
-            f"<b>Card Number</b>\n"
-            f"<code>{card_num}</code>\n\n"
-            f"{user_emoji} <b>Holder:</b> <code>{bank_card_holder}</code>\n\n"
-            f"{star_emoji} <b>Bank:</b> <code>{bank_name}</code>\n\n"
-            f"{info_emoji} <b>Support:</b> {support_display}\n\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"{note_emoji} <b>Steps to Top-Up</b>\n\n"
-            f"1. Transfer the exact amount to the card above.\n"
-            f"2. Send a clear photo of the receipt in this chat.\n"
-            f"3. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
-            f"{receipt_emoji} After confirmation, the amount will be added to your balance."
+            f"{id_emoji} Order: <code>#{order_id}</code>\n"
+            f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
+            f"{card_emoji} <b>Card Number</b>\n"
+            f"<code>{card_num}</code>\n"
+            f"{user_emoji} Holder: {bank_card_holder}\n"
+            f"{star_emoji} Bank: {bank_name}\n"
+            f"{info_emoji} Support: {support_display}\n\n"
+            f"{note_emoji} <b>Important Notes:</b>\n"
+            f"1. Transfer the exact order amount.\n"
+            f"2. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
+            f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
         )
 
 
