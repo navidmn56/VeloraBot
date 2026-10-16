@@ -24415,6 +24415,9 @@ async def pay_card(callback: CallbackQuery):
                             status='approved',
                             approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             payment_method='free_coupon_extend',
+                            original_price=original_price,
+                            coupon_discount=discount_percent,
+                            coupon_code=coupon_code if coupon_applied else None,
                             payment_label='🎁 رایگان (تمدید)',
                             parent_order_id=extend_order_id,
                             is_extend=True)
