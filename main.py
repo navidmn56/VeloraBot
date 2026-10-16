@@ -1043,23 +1043,9 @@ async def inbound_default(callback: CallbackQuery):
     )
 
 def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") -> str:
-    """
-    ساخت متن یکپارچه درخواست رسید پرداخت
-    
-    Args:
-        order: dict سفارش
-        lang: زبان
-        mode: 
-            - "reminder": فقط یادآوری ساده (بدون کارت)
-            - "card": با اطلاعات کارت (صفحه پرداخت)
-            - "waiting": در انتظار بررسی
-    
-    Returns:
-        str: متن آماده
-    """
+    """متن یکپارچه درخواست رسید پرداخت"""
     RLM = "\u200F"
     
-    # ✅ اطلاعات سفارش
     order_id = order.get('order_id', '?')
     order_type = order.get('type', 'purchase')
     price = order.get('price', 0) or order.get('amount', 0)
@@ -1069,8 +1055,8 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
     is_extend = parent_order_id is not None or order.get('is_extend', False)
     category_name = order.get('category_name') or order.get('category_name_en') or ''
     category_id = order.get('category_id')
+    is_balance_charge = (order_type == 'balance_charge')
     
-    # ✅ آیکون دسته
     icon = "📦"
     if category_id:
         for cat in READY_PACKAGES.get('categories', []):
@@ -1078,21 +1064,18 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 icon = cat.get('icon', '📦')
                 break
     
-    # ✅ ایموجی‌های پریمیوم
     card_emoji = premium_emoji('card', '💳')
     money_emoji = premium_emoji('money', '💰')
     id_emoji = premium_emoji('id', '🆔')
     user_emoji = premium_emoji('user', '👤')
     star_emoji = premium_emoji('star', '🏦')
-    note_emoji = premium_emoji('note', '📝')
     config_emoji = premium_emoji('config', icon)
-    time_emoji = premium_emoji('time', '⏱')
     receipt_emoji = premium_emoji('receipt', '📸')
     info_emoji = premium_emoji('info', 'ℹ️')
     reload_emoji = premium_emoji('reload', '🔄')
-    label_emoji = premium_emoji('label', '📋')
+    wallet_emoji = premium_emoji('wallet', '💰')
+    note_emoji = premium_emoji('note', '📝')
     
-    # ✅ حجم نمایش
     if volume == 0:
         volume_display = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
     elif volume < 1:
@@ -1100,260 +1083,177 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
     else:
         volume_display = f"{volume} GB"
     
-    # ✅ پشتیبانی
     support_display = SUPPORT_USERNAME.strip() if SUPPORT_USERNAME and SUPPORT_USERNAME.strip() else "@my_name_is_navid"
-    
-    # ✅ قیمت
     price_display = f"{price:,} تومان" if lang == "fa" else f"{price:,} Toman"
+    amount_display = f"{price:,} تومان" if lang == "fa" else f"{price:,} Toman"
     
-    # ============================================================
-    # حالت شارژ حساب (balance_charge)
-    # ============================================================
-    is_balance_charge = (order_type == 'balance_charge')
-    amount = order.get('amount', 0) or order.get('price', 0)
-    amount_display = f"{amount:,} تومان" if lang == "fa" else f"{amount:,} Toman"
+    # ─── tips block ───
+    if lang == "fa":
+        tips_block = (
+            f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
+            f"{RLM}1. مبلغ دقیق سفارش را واریز کنید.\n"
+            f"{RLM}2. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید."
+        )
+        final_line = f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
+    else:
+        tips_block = (
+            f"{note_emoji} <b>Important Notes:</b>\n"
+            f"1. Transfer the exact order amount.\n"
+            f"2. Keep order <code>#{order_id}</code> until payment is confirmed."
+        )
+        final_line = f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
     
-    if is_balance_charge and mode in ("card", "reminder"):
-        card_num = ' '.join([BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)])
-        wallet_emoji = premium_emoji('wallet', '💰')
-        
-        if mode == "card":
-            # با اطلاعات کارت
-            if lang == "fa":
-                return (
-                    f"{RLM}{wallet_emoji} <b>اطلاعات پرداخت افزایش موجودی</b>\n\n"
-                    f"{RLM}سفارش شماره <code>#{order_id}</code>\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{label_emoji} <b>مشخصات شارژ</b>\n"
-                    f"{RLM}• نوع عملیات: افزایش موجودی کیف پول\n"
-                    f"{RLM}• مبلغ شارژ: <code>{amount_display}</code>\n\n"
-                    f"{RLM}{money_emoji} <b>مبلغ قابل پرداخت</b>\n\n"
-                    f"{RLM}<b>{amount_display}</b>\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{card_emoji} <b>اطلاعات واریز وجه</b>\n\n"
-                    f"{RLM}<b>شماره کارت</b>\n"
-                    f"{RLM}<code>{card_num}</code>\n\n"
-                    f"{RLM}{user_emoji} <b>به نام:</b> <code>{BANK_CARD_HOLDER}</code>\n\n"
-                    f"{RLM}{star_emoji} <b>بانک:</b> <code>{BANK_NAME}</code>\n\n"
-                    f"{RLM}{info_emoji} <b>پشتیبانی:</b> {support_display}\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{note_emoji} <b>مراحل افزایش موجودی</b>\n\n"
-                    f"{RLM}۱. مبلغ دقیق را به شماره کارت بالا واریز کنید.\n"
-                    f"{RLM}۲. تصویر واضح رسید پرداخت را در همین گفت‌وگو ارسال کنید.\n"
-                    f"{RLM}۳. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید نگه دارید.\n\n"
-                    f"{RLM}{receipt_emoji} پس از تأیید، مبلغ به موجودی شما اضافه می‌شود."
-                )
-            else:
-                return (
-                    f"{wallet_emoji} <b>Balance Top-Up Payment</b>\n\n"
-                    f"Order <code>#{order_id}</code>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{label_emoji} <b>Top-Up Details</b>\n"
-                    f"• Operation: Wallet balance top-up\n"
-                    f"• Amount: <code>{amount_display}</code>\n\n"
-                    f"{money_emoji} <b>Amount to Pay</b>\n\n"
-                    f"<b>{amount_display}</b>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{card_emoji} <b>Payment Information</b>\n\n"
-                    f"<b>Card Number</b>\n"
-                    f"<code>{card_num}</code>\n\n"
-                    f"{user_emoji} <b>Holder:</b> <code>{BANK_CARD_HOLDER}</code>\n\n"
-                    f"{star_emoji} <b>Bank:</b> <code>{BANK_NAME}</code>\n\n"
-                    f"{info_emoji} <b>Support:</b> {support_display}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{note_emoji} <b>Steps to Top-Up</b>\n\n"
-                    f"1. Transfer the exact amount to the card above.\n"
-                    f"2. Send a clear photo of the receipt in this chat.\n"
-                    f"3. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
-                    f"{receipt_emoji} After confirmation, the amount will be added to your balance."
-                )
-        else:
-            # mode == "reminder"
-            if lang == "fa":
-                return (
-                    f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش شارژ</b>\n\n"
-                    f"{RLM}{id_emoji} شماره سفارش: <code>#{order_id}</code>\n"
-                    f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}لطفاً تصویر واضح فیش واریزی را در همین گفت‌وگو ارسال کنید.\n\n"
-                    f"{RLM}💡 نکات مهم:\n"
-                    f"{RLM}• تصویر باید واضح و خوانا باشد\n"
-                    f"{RLM}• کل فیش در کادر عکس باشد\n"
-                    f"{RLM}• شماره پیگیری مشخص باشد"
-                )
-            else:
-                return (
-                    f"{receipt_emoji} <b>Top-Up Receipt Request</b>\n\n"
-                    f"{id_emoji} Order number: <code>#{order_id}</code>\n"
-                    f"{money_emoji} Top-up amount: <b>{amount_display}</b>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"Please send a clear photo of the payment receipt in this chat.\n\n"
-                    f"💡 Important tips:\n"
-                    f"• The photo must be clear and readable\n"
-                    f"• The entire receipt should be in the frame\n"
-                    f"• The tracking number should be visible"
-                )
-    # ============================================================
-    # mode = "waiting" → فقط در انتظار بررسی
-    # ============================================================
+    # ─── waiting ───
     if mode == "waiting":
         if lang == "fa":
             return (
                 f"{RLM}{receipt_emoji} <b>فیش دریافت شد</b>\n\n"
-                f"{RLM}{id_emoji} شماره سفارش: <code>#{order_id}</code>\n"
+                f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
                 f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
-                f"{RLM}⏳ در انتظار تأیید ادمین...\n"
-                f"{RLM}پس از بررسی، نتیجه به اطلاع شما می‌رسد."
+                f"{RLM}⏳ در انتظار تأیید ادمین..."
             )
         else:
             return (
                 f"{receipt_emoji} <b>Receipt Received</b>\n\n"
-                f"{id_emoji} Order number: <code>#{order_id}</code>\n"
+                f"{id_emoji} Order: <code>#{order_id}</code>\n"
                 f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
-                f"⏳ Waiting for admin approval...\n"
-                f"You will be notified after review."
+                f"⏳ Waiting for admin approval..."
             )
     
-    # ============================================================
-    # mode = "card" → با اطلاعات کارت
-    # ============================================================
+    # ─── card ───
     if mode == "card":
         card_num = ' '.join([BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)])
         category_display = category_name if category_name else ("بسته آماده" if lang == "fa" else "Ready Package")
         
-        if is_extend:
-            # تمدید
-            if lang == "fa":
-                return (
-                    f"{RLM}{reload_emoji} <b>اطلاعات پرداخت تمدید سرویس</b>\n\n"
-                    f"{RLM}سفارش شماره <code>#{order_id}</code>\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{label_emoji} <b>مشخصات تمدید</b>\n"
-                    f"{RLM}• سرویس اصلی: <code>#{parent_order_id}</code>\n"
-                    f"{RLM}• نوع سرویس: {category_display}\n"
-                    f"{RLM}• حجم اضافه: <code>{volume_display}</code>\n"
-                    f"{RLM}• مدت اضافه: <code>{days} روز</code>\n\n"
-                    f"{RLM}{money_emoji} <b>مبلغ قابل پرداخت</b>\n\n"
-                    f"{RLM}<b>{price_display}</b>\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{card_emoji} <b>اطلاعات واریز وجه</b>\n\n"
-                    f"{RLM}<b>شماره کارت</b>\n"
-                    f"{RLM}<code>{card_num}</code>\n\n"
-                    f"{RLM}{user_emoji} <b>به نام:</b> <code>{BANK_CARD_HOLDER}</code>\n\n"
-                    f"{RLM}{star_emoji} <b>بانک:</b> <code>{BANK_NAME}</code>\n\n"
-                    f"{RLM}{info_emoji} <b>پشتیبانی:</b> {support_display}\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{note_emoji} <b>مراحل تکمیل تمدید</b>\n\n"
-                    f"{RLM}۱. مبلغ دقیق را به شماره کارت بالا واریز کنید.\n"
-                    f"{RLM}۲. تصویر واضح رسید پرداخت را در همین گفت‌وگو ارسال کنید.\n"
-                    f"{RLM}۳. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید نگه دارید.\n\n"
-                    f"{RLM}{receipt_emoji} پس از ارسال رسید، منتظر بررسی پرداخت بمانید."
-                )
-            else:
-                return (
-                    f"{reload_emoji} <b>Extension Payment Details</b>\n\n"
-                    f"Order <code>#{order_id}</code>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{label_emoji} <b>Extension Details</b>\n"
-                    f"• Original service: <code>#{parent_order_id}</code>\n"
-                    f"• Service type: {category_display}\n"
-                    f"• Volume to add: <code>{volume_display}</code>\n"
-                    f"• Duration to add: <code>{days} days</code>\n\n"
-                    f"{money_emoji} <b>Amount to Pay</b>\n\n"
-                    f"<b>{price_display}</b>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{card_emoji} <b>Payment Information</b>\n\n"
-                    f"<b>Card Number</b>\n"
-                    f"<code>{card_num}</code>\n\n"
-                    f"{user_emoji} <b>Holder:</b> <code>{BANK_CARD_HOLDER}</code>\n\n"
-                    f"{star_emoji} <b>Bank:</b> <code>{BANK_NAME}</code>\n\n"
-                    f"{info_emoji} <b>Support:</b> {support_display}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{note_emoji} <b>Steps to Complete</b>\n\n"
-                    f"1. Transfer the exact amount to the card above.\n"
-                    f"2. Send a clear photo of the receipt in this chat.\n"
-                    f"3. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
-                    f"{receipt_emoji} Wait for the payment review after sending the receipt."
-                )
+        if lang == "fa":
+            card_block = (
+                f"{RLM}{card_emoji} <b>شماره کارت</b>\n"
+                f"{RLM}<code>{card_num}</code>\n"
+                f"{RLM}{user_emoji} به نام: {BANK_CARD_HOLDER}\n"
+                f"{RLM}{star_emoji} بانک: {BANK_NAME}\n"
+                f"{RLM}{info_emoji} پشتیبانی: {support_display}"
+            )
         else:
-            # خرید عادی
+            card_block = (
+                f"{card_emoji} <b>Card Number</b>\n"
+                f"<code>{card_num}</code>\n"
+                f"{user_emoji} Holder: {BANK_CARD_HOLDER}\n"
+                f"{star_emoji} Bank: {BANK_NAME}\n"
+                f"{info_emoji} Support: {support_display}"
+            )
+        
+        # ─── تمدید ───
+        if is_extend:
             if lang == "fa":
                 return (
-                    f"{RLM}{config_emoji} <b>اطلاعات پرداخت سفارش</b>\n\n"
-                    f"{RLM}سفارش شماره <code>#{order_id}</code>\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{label_emoji} <b>مشخصات بسته</b>\n"
-                    f"{RLM}• نوع سرویس: {category_display}\n"
-                    f"{RLM}• حجم: <code>{volume_display}</code>\n"
-                    f"{RLM}• مدت اعتبار: <code>{days} روز</code>\n\n"
-                    f"{RLM}{money_emoji} <b>مبلغ قابل پرداخت</b>\n\n"
-                    f"{RLM}<b>{price_display}</b>\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{card_emoji} <b>اطلاعات واریز وجه</b>\n\n"
-                    f"{RLM}<b>شماره کارت</b>\n"
-                    f"{RLM}<code>{card_num}</code>\n\n"
-                    f"{RLM}{user_emoji} <b>به نام:</b> <code>{BANK_CARD_HOLDER}</code>\n\n"
-                    f"{RLM}{star_emoji} <b>بانک:</b> <code>{BANK_NAME}</code>\n\n"
-                    f"{RLM}{info_emoji} <b>پشتیبانی:</b> {support_display}\n\n"
-                    f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{RLM}{note_emoji} <b>مراحل تکمیل سفارش</b>\n\n"
-                    f"{RLM}۱. مبلغ دقیق را به شماره کارت بالا واریز کنید.\n"
-                    f"{RLM}۲. تصویر واضح رسید پرداخت را در همین گفت‌وگو ارسال کنید.\n"
-                    f"{RLM}۳. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
-                    f"{RLM}{receipt_emoji} پس از ارسال رسید، منتظر بررسی پرداخت بمانید."
+                    f"{RLM}{reload_emoji} <b>پرداخت تمدید سرویس</b>\n\n"
+                    f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code> | سرویس اصلی: <code>#{parent_order_id}</code>\n"
+                    f"{RLM}{config_emoji} سرویس: {category_display}\n"
+                    f"{RLM}📊 حجم اضافه: <code>{volume_display}</code>\n"
+                    f"{RLM}⏱ مدت اضافه: <code>{days} روز</code>\n"
+                    f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
+                    f"{card_block}\n\n"
+                    f"{tips_block}\n\n"
+                    f"{final_line}"
                 )
             else:
                 return (
-                    f"{config_emoji} <b>Payment Details</b>\n\n"
-                    f"Order <code>#{order_id}</code>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{label_emoji} <b>Package Details</b>\n"
-                    f"• Service type: {category_display}\n"
-                    f"• Volume: <code>{volume_display}</code>\n"
-                    f"• Duration: <code>{days} days</code>\n\n"
-                    f"{money_emoji} <b>Amount to Pay</b>\n\n"
-                    f"<b>{price_display}</b>\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{card_emoji} <b>Payment Information</b>\n\n"
-                    f"<b>Card Number</b>\n"
-                    f"<code>{card_num}</code>\n\n"
-                    f"{user_emoji} <b>Holder:</b> <code>{BANK_CARD_HOLDER}</code>\n\n"
-                    f"{star_emoji} <b>Bank:</b> <code>{BANK_NAME}</code>\n\n"
-                    f"{info_emoji} <b>Support:</b> {support_display}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{note_emoji} <b>Steps to Complete</b>\n\n"
-                    f"1. Transfer the exact amount to the card above.\n"
-                    f"2. Send a clear photo of the receipt in this chat.\n"
-                    f"3. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
-                    f"{receipt_emoji} Wait for the payment review after sending the receipt."
+                    f"{reload_emoji} <b>Extension Payment</b>\n\n"
+                    f"{id_emoji} Order: <code>#{order_id}</code> | Original: <code>#{parent_order_id}</code>\n"
+                    f"{config_emoji} Service: {category_display}\n"
+                    f"📊 Volume to add: <code>{volume_display}</code>\n"
+                    f"⏱ Duration to add: <code>{days} days</code>\n"
+                    f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
+                    f"{card_block}\n\n"
+                    f"{tips_block}\n\n"
+                    f"{final_line}"
                 )
+        
+        # ─── شارژ حساب ───
+        if is_balance_charge:
+            if lang == "fa":
+                return (
+                    f"{RLM}{wallet_emoji} <b>پرداخت افزایش موجودی</b>\n\n"
+                    f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
+                    f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
+                    f"{card_block}\n\n"
+                    f"{tips_block}\n\n"
+                    f"{final_line}"
+                )
+            else:
+                return (
+                    f"{wallet_emoji} <b>Balance Top-Up Payment</b>\n\n"
+                    f"{id_emoji} Order: <code>#{order_id}</code>\n"
+                    f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
+                    f"{card_block}\n\n"
+                    f"{tips_block}\n\n"
+                    f"{final_line}"
+                )
+        
+        # ─── خرید عادی ───
+        if lang == "fa":
+            return (
+                f"{RLM}{config_emoji} <b>اطلاعات پرداخت سفارش</b>\n\n"
+                f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
+                f"{RLM}{config_emoji} سرویس: {category_display}\n"
+                f"{RLM}📊 حجم: <code>{volume_display}</code>\n"
+                f"{RLM}⏱ مدت: <code>{days} روز</code>\n"
+                f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
+                f"{card_block}\n\n"
+                f"{tips_block}\n\n"
+                f"{final_line}"
+            )
+        else:
+            return (
+                f"{config_emoji} <b>Payment Details</b>\n\n"
+                f"{id_emoji} Order: <code>#{order_id}</code>\n"
+                f"{config_emoji} Service: {category_display}\n"
+                f"📊 Volume: <code>{volume_display}</code>\n"
+                f"⏱ Duration: <code>{days} days</code>\n"
+                f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
+                f"{card_block}\n\n"
+                f"{tips_block}\n\n"
+                f"{final_line}"
+            )
     
-    # ============================================================
-    # mode = "reminder" (پیش‌فرض) → فقط یادآوری ساده
-    # ============================================================
+    # ─── reminder ───
+    if is_balance_charge:
+        if lang == "fa":
+            return (
+                f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش شارژ</b>\n\n"
+                f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
+                f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
+                f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
+                f"{RLM}1. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
+                f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
+            )
+        else:
+            return (
+                f"{receipt_emoji} <b>Top-Up Receipt Request</b>\n\n"
+                f"{id_emoji} Order: <code>#{order_id}</code>\n"
+                f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
+                f"{note_emoji} <b>Important Notes:</b>\n"
+                f"1. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
+                f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
+            )
+    
     if lang == "fa":
         return (
             f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش</b>\n\n"
-            f"{RLM}{id_emoji} شماره سفارش: <code>#{order_id}</code>\n"
+            f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
             f"{RLM}{money_emoji} مبلغ: <b>{price_display}</b>\n\n"
-            f"{RLM}━━━━━━━━━━━━━━━━━━\n\n"
-            f"{RLM}لطفاً تصویر واضح فیش واریزی را در همین گفت‌وگو ارسال کنید.\n\n"
-            f"{RLM}💡 نکات مهم:\n"
-            f"{RLM}• تصویر باید واضح و خوانا باشد\n"
-            f"{RLM}• کل فیش در کادر عکس باشد\n"
-            f"{RLM}• شماره پیگیری مشخص باشد"
+            f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
+            f"{RLM}1. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
+            f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
         )
     else:
         return (
             f"{receipt_emoji} <b>Receipt Request</b>\n\n"
-            f"{id_emoji} Order number: <code>#{order_id}</code>\n"
+            f"{id_emoji} Order: <code>#{order_id}</code>\n"
             f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
-            f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"Please send a clear photo of the payment receipt in this chat.\n\n"
-            f"💡 Important tips:\n"
-            f"• The photo must be clear and readable\n"
-            f"• The entire receipt should be in the frame\n"
-            f"• The tracking number should be visible"
+            f"{note_emoji} <b>Important Notes:</b>\n"
+            f"1. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
+            f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
         )
         
         
