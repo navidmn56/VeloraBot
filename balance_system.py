@@ -622,10 +622,13 @@ async def cancel_increase_balance(callback: CallbackQuery):
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
 
+    # ✅ چک واقعی کوپن
+    has_real_coupon = bool(coupon_applied and coupon_code)
+
     if user_id in _main.user_states:
         _main.user_states.pop(user_id, None)
 
-    if coupon_applied and coupon_code:
+    if has_real_coupon:
         _main.user_states[user_id] = {
             'coupon_code': coupon_code,
             'coupon_discount': coupon_discount,
@@ -639,9 +642,18 @@ async def cancel_increase_balance(callback: CallbackQuery):
 
     is_admin = (user_id == _main.ADMIN_ID_INT)
 
+    # ✅ ساخت متن - خط کوپن فقط اگه واقعاً کوپن داشت
+    if lang == "fa":
+        text = f"{_main.premium_emoji('rocket', '🚀')} منوی اصلی"
+        if has_real_coupon:
+            text += f"\n\n🏷️ کوپن شما همچنان معتبر است."
+    else:
+        text = f"{_main.premium_emoji('rocket', '🚀')} Main Menu"
+        if has_real_coupon:
+            text += f"\n\n🏷️ Your coupon is still valid."
+
     await callback.message.answer(
-        f"{_main.premium_emoji('rocket', '🚀')} "
-        f"{'منوی اصلی' if lang=='fa' else 'Main Menu'}",
+        text,
         reply_markup=_main.get_main_keyboard(is_admin, lang, user_id),
         parse_mode=ParseMode.HTML
     )

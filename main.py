@@ -24710,6 +24710,8 @@ async def send_receipt_reminder(callback: CallbackQuery):
         await callback.answer()
     except:
         pass
+    
+    
 @dp.callback_query(F.data.startswith("cancel_order_"))
 async def cancel_order_direct(callback: CallbackQuery):
     """انصراف مستقیم از سفارش توسط کاربر - کوپن باقی می‌ماند"""
@@ -24717,9 +24719,11 @@ async def cancel_order_direct(callback: CallbackQuery):
         logger.debug(f"⏩ کالبک cancel_order_admin به هندلر ادمین هدایت شد: {callback.data}")
         await cancel_order_admin(callback)
         return
+    
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
     parts = callback.data.split("_")
+    
     if len(parts) < 3:
         await callback.answer("❌ فرمت کالبک نامعتبر", show_alert=True)
         return
@@ -24729,12 +24733,16 @@ async def cancel_order_direct(callback: CallbackQuery):
     except ValueError:
         await callback.answer("❌ خطا در پردازش سفارش", show_alert=True)
         return
+    
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
-    logger.info(f"🔍 [cancel_order_direct] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
+    # ✅ چک واقعی: کوپن باید هم applied باشه هم code داشته باشه
+    has_real_coupon = bool(coupon_applied and coupon_code)
+    
+    logger.info(f"🔍 [cancel_order_direct] کوپن: code={coupon_code}, applied={coupon_applied}, has_real={has_real_coupon}")
     
     order = orders.get(str(order_id))
     if order:
@@ -24757,24 +24765,22 @@ async def cancel_order_direct(callback: CallbackQuery):
                 )
             
             if lang == "fa":
-                await callback.answer(
-                    f"✅ سفارش #{order_id} با موفقیت لغو شد",
-                    show_alert=True
-                )
+                await callback.answer(f"✅ سفارش #{order_id} با موفقیت لغو شد", show_alert=True)
             else:
-                await callback.answer(
-                    f"✅ Order #{order_id} cancelled successfully",
-                    show_alert=True
-                )
+                await callback.answer(f"✅ Order #{order_id} cancelled successfully", show_alert=True)
         else:
             if lang == "fa":
                 await callback.answer("❌ این سفارش قابل لغو نیست", show_alert=True)
             else:
                 await callback.answer("❌ This order cannot be cancelled", show_alert=True)
             return
+    
+    # ✅ پاک کردن state
     if user_id in user_states:
         user_states.pop(user_id, None)
-    if coupon_applied and coupon_code:
+    
+    # ✅ بازیابی کوپن فقط اگه واقعاً وجود داشت
+    if has_real_coupon:
         user_states[user_id] = {
             'coupon_code': coupon_code,
             'coupon_discount': coupon_discount if coupon_discount else 0,
@@ -24782,18 +24788,32 @@ async def cancel_order_direct(callback: CallbackQuery):
         }
         logger.info(f"🏷️ [cancel_order_direct] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
         save_coupon_to_user_db(user_id)
+    
     is_admin = (user_id == ADMIN_ID_INT)
     
-    
-    
+    # ✅ ساخت متن پیام - خط کوپن فقط اگه کوپن واقعی داشت
     if lang == "fa":
+        text = f"{premium_emoji('danger', '❌')} پرداخت لغو شد"
+        if has_real_coupon:
+            text += f"\n\n🏷️ کوپن شما همچنان معتبر است."
+    else:
+        text = f"{premium_emoji('danger', '❌')} Payment cancelled"
+        if has_real_coupon:
+            text += f"\n\n🏷️ Your coupon is still valid."
+    
+    try:
         await callback.message.edit_text(
-            f"{premium_emoji('rocket', '🚀')} منوی اصلی",
+            text,
             reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
-    else:
-        await callback.message.edit_text(
-            f"{premium_emoji('rocket', '🚀')} Main Menu",
+    except Exception as e:
+        # اگه پیام قابل ویرایش نبود (مثلاً با عکس بود)
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        await callback.message.answer(
+            text,
             reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     
@@ -24801,7 +24821,6 @@ async def cancel_order_direct(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-
    
 
     
@@ -25818,10 +25837,16 @@ async def cancel_payment(callback: CallbackQuery):
         }
         logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} در cancel_payment حفظ شد")
     
+    has_real_coupon = bool(coupon_applied and coupon_code)
+    
     if lang == "fa":
-        text = f"{premium_emoji('danger', '❌')} پرداخت لغو شد\n\n🏷️ کوپن شما همچنان معتبر است."
+        text = f"{premium_emoji('danger', '❌')} پرداخت لغو شد"
+        if has_real_coupon:
+            text += f"\n\n🏷️ کوپن شما همچنان معتبر است."
     else:
-        text = f"{premium_emoji('danger', '❌')} Payment cancelled\n\n🏷️ Your coupon is still valid."
+        text = f"{premium_emoji('danger', '❌')} Payment cancelled"
+        if has_real_coupon:
+            text += f"\n\n🏷️ Your coupon is still valid."
     
     await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang, user_id))
     try:
