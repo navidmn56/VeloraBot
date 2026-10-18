@@ -3,7 +3,6 @@ openrouter_client = None
 gemini_error_message = None 
 openrouter_error_message = None 
 user_ai_requests = {}
-from config import GEMINI_SYSTEM_PROMPT, refresh_gemini_prompt
 import asyncio
 import json
 import logging
@@ -16,21 +15,18 @@ from balance_system import (
 import time
 import html
 import hashlib
-from typing import Dict, Optional, List, Union
 import shutil
 import secrets
-from typing import List, Dict, Optional, Tuple
 import psutil
 from google import genai
 from google.genai import types
-from datetime import datetime
 import re
 import traceback
-from datetime import datetime, timedelta
 from io import BytesIO
-from typing import Dict, Optional
 from urllib import response
 import aiohttp
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple, Union
 import unicodedata
 import qrcode
 from yarl import URL
@@ -47,6 +43,17 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     CopyTextButton,
+    BufferedInputFile,
+)
+from config import (
+    BOT_TOKEN, ADMIN_ID, LOG_BOT_TOKEN, LOG_CHANNEL_ID, SUPPORT_USERNAME,
+    BANK_CARD_NUMBER, BANK_CARD_HOLDER, BANK_NAME,
+    SENAI_PANEL_URL, SENAI_PANEL_USERNAME, SENAI_PANEL_PASSWORD, SENAI_SUB_URL,
+    GEMINI_API_KEY, GEMINI_SYSTEM_PROMPT, refresh_gemini_prompt,
+    GEMINI_ENABLED, GEMINI_MODEL, GEMINI_TEMPERATURE, GEMINI_MAX_TOKENS, GEMINI_DAILY_LIMIT,
+    OPENROUTER_ENABLED, OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODELS,
+    OPENROUTER_TEMPERATURE, OPENROUTER_MAX_TOKENS, OPENROUTER_TOP_P, OPENROUTER_DAILY_LIMIT,
+    OPENROUTER_SYSTEM_PROMPT, AUTO_AI_RESPONSE,
 )
 
 
@@ -129,7 +136,7 @@ async def real_ping(host: str, timeout: int = 2) -> Optional[float]:
     
     return await smart_ping(host, timeout)
 
-from config import BOT_TOKEN, ADMIN_ID, BANK_CARD_NUMBER, BANK_CARD_HOLDER, BANK_NAME, SENAI_PANEL_URL,SENAI_PANEL_USERNAME,SENAI_PANEL_PASSWORD,SENAI_SUB_URL,LOG_BOT_TOKEN,LOG_CHANNEL_ID,SUPPORT_USERNAME
+
 SENAI_PANEL_ENABLED = True
 TEMP_INBOUND_SELECTION = {}
 INBOUND_BACK_DATA = {}
@@ -198,28 +205,7 @@ READY_PACKAGES = {
     ],
     'last_updated': datetime.now().isoformat()
 }
-from config import (
-    OPENROUTER_ENABLED,
-    GEMINI_API_KEY,
-    GEMINI_ENABLED,
-    GEMINI_MODEL,
-    GEMINI_TEMPERATURE,
-    GEMINI_MAX_TOKENS,
-    GEMINI_DAILY_LIMIT,
-    GEMINI_SYSTEM_PROMPT,
-    
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_MODELS,
-    OPENROUTER_TEMPERATURE,
-    OPENROUTER_MAX_TOKENS,
-    OPENROUTER_TOP_P,
-    OPENROUTER_DAILY_LIMIT,
-    OPENROUTER_SYSTEM_PROMPT,
-   
-    AUTO_AI_RESPONSE,  
-    
-)
+
 log_system = None
 
 
@@ -457,11 +443,8 @@ def save_json(file_path: str, data) -> bool:
             return False
         
         _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
-        
-        # ✅ جدید: Refresh کردن پرامپت هوش مصنوعی بعد از ذخیره configs.json
         if filename == 'configs.json':
             try:
-                # import داخل تابع برای جلوگیری از circular import
                 from config import refresh_gemini_prompt
                 refresh_gemini_prompt()
                 logger.info("🔄 GEMINI_SYSTEM_PROMPT بعد از ذخیره configs.json به‌روزرسانی شد")
@@ -515,11 +498,8 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
             
             logger.info(f"✅ {filename} بارگذاری شد - {len(data) if isinstance(data, dict) else 'N/A'} آیتم")
             logger.info(f"   نمونه داده: {str(list(data.keys())[:3]) if isinstance(data, dict) and data else 'خالی'}")
-            
-            # ✅ جدید: Refresh کردن پرامپت بعد از بارگذاری configs.json
             if filename == 'configs.json':
                 try:
-                    # import داخل تابع برای جلوگیری از circular import
                     from config import refresh_gemini_prompt
                     refresh_gemini_prompt()
                     logger.info("🔄 GEMINI_SYSTEM_PROMPT بعد از بارگذاری configs.json به‌روزرسانی شد")
@@ -539,9 +519,6 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
         logger.error(f"❌ خطا در بارگذاری {filename}: {e}", exc_info=True)
         return {}
     
-
-
-
 
 COUPONS_FILE = os.path.join(DATA_DIR, "coupons.json")
 
@@ -577,12 +554,8 @@ def is_coupon_valid_for_user(coupon_code: str, user_id: int) -> tuple:
     coupon = COUPONS.get(coupon_code)
     if not coupon:
         return False, "کوپن در دیتابیس نیست"
-    
-    # بررسی وضعیت
     if coupon.get('status') != 'active':
         return False, f"وضعیت: {coupon.get('status')}"
-    
-    # بررسی تاریخ انقضا
     expiry_date = coupon.get('expiry_date')
     if expiry_date:
         try:
@@ -595,12 +568,9 @@ def is_coupon_valid_for_user(coupon_code: str, user_id: int) -> tuple:
     coupon_type = coupon.get('coupon_type', 'normal')
     
     if coupon_type == 'admin_special':
-        # بررسی قفل بودن
         locked_user_id = coupon.get('locked_user_id')
         if locked_user_id and locked_user_id != user_id:
             return False, f"قفل شده برای کاربر {locked_user_id}"
-        
-        # بررسی تعداد استفاده
         user_usage = coupon.get('user_usage', {})
         user_used_count = user_usage.get(str(user_id), 0)
         max_usage = coupon.get('usage_limit', 1)
@@ -610,7 +580,6 @@ def is_coupon_valid_for_user(coupon_code: str, user_id: int) -> tuple:
         
         return True, f"معتبر ({user_used_count}/{max_usage})"
     else:
-        # کوپن معمولی
         if user_id in coupon.get('used_by', []):
             return False, "قبلاً استفاده شده"
         
@@ -780,8 +749,6 @@ async def show_inbound_manager(
     if not active_inbounds:
         await message.answer("❌ هیچ اینباند فعالی یافت نشد")
         return
-    
-    # ✅ لیست اعتبارسنجی
     valid_ids = {ib.get('id') for ib in active_inbounds}
     
     temp_key = f"{callback_data_prefix}_{admin_id}"
@@ -790,8 +757,6 @@ async def show_inbound_manager(
     else:
         current_list = current_inbound_ids.copy() if current_inbound_ids else []
         TEMP_INBOUND_SELECTION[temp_key] = current_list.copy()
-    
-    # ✅ فیلتر اینباندهای نامعتبر
     invalid_ids = [ib for ib in current_list if ib not in valid_ids]
     if invalid_ids:
         logger.warning(f"⚠️ [show_inbound_manager] اینباندهای نامعتبر حذف شدند: {invalid_ids}")
@@ -876,7 +841,6 @@ async def show_inbound_manager(
     
     if action_buttons:
         buttons.append(action_buttons)
-        # ✅ دکمه انتخاب همه
     buttons.append([InlineKeyboardButton(
         text="✅ انتخاب همه" if lang == "fa" else "✅ Select All",
         callback_data=f"inbound_selectall_{callback_data_prefix}",
@@ -1053,13 +1017,11 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
     days = order.get('days', 0)
     parent_order_id = order.get('parent_order_id')
     is_extend = parent_order_id is not None or order.get('is_extend', False)
-    # ✅ انتخاب نام بر اساس زبان کاربر
     if lang == "en":
         category_name = order.get('category_name_en') or order.get('category_name') or ''
     else:
         category_name = order.get('category_name') or order.get('category_name_en') or ''
     category_id = order.get('category_id')
-        # ✅ اگه هنوز خالی بود، از READY_PACKAGES بگیر
     if not category_name and category_id:
         for cat in READY_PACKAGES.get('categories', []):
             if cat.get('id') == category_id:
@@ -1099,8 +1061,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
     support_display = SUPPORT_USERNAME.strip() if SUPPORT_USERNAME and SUPPORT_USERNAME.strip() else "@my_name_is_navid"
     price_display = f"{price:,} تومان" if lang == "fa" else f"{price:,} Toman"
     amount_display = f"{price:,} تومان" if lang == "fa" else f"{price:,} Toman"
-    
-    # ─── tips block ───
     if lang == "fa":
         tips_block = (
             f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
@@ -1115,8 +1075,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
             f"2. Keep order <code>#{order_id}</code> until payment is confirmed."
         )
         final_line = f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
-    
-    # ─── waiting ───
     if mode == "waiting":
         if lang == "fa":
             return (
@@ -1132,8 +1090,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{money_emoji} Amount: <b>{price_display}</b>\n\n"
                 f"⏳ Waiting for admin approval..."
             )
-    
-    # ─── card ───
     if mode == "card":
         card_num = ' '.join([BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)])
         category_display = category_name if category_name else ("بسته آماده" if lang == "fa" else "Ready Package")
@@ -1154,8 +1110,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{star_emoji} Bank: {BANK_NAME}\n"
                 f"{info_emoji} Support: {support_display}"
             )
-        
-        # ─── تمدید ───
         if is_extend:
             if lang == "fa":
                 return (
@@ -1181,8 +1135,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                     f"{tips_block}\n\n"
                     f"{final_line}"
                 )
-        
-        # ─── شارژ حساب ───
         if is_balance_charge:
             if lang == "fa":
                 return (
@@ -1202,8 +1154,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                     f"{tips_block}\n\n"
                     f"{final_line}"
                 )
-        
-        # ─── خرید عادی ───
         if lang == "fa":
             return (
                 f"{RLM}{config_emoji} <b>اطلاعات پرداخت سفارش</b>\n\n"
@@ -1228,8 +1178,6 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{tips_block}\n\n"
                 f"{final_line}"
             )
-    
-    # ─── reminder ───
     if is_balance_charge:
         if lang == "fa":
             return (
@@ -1529,10 +1477,7 @@ async def go_back_to_admin_panel(callback: CallbackQuery):
         logger.error(f"خطا در ارسال پیام برگشت: {e}")
         callback.data = "admin_panel"
         await admin_panel(callback)
-        
-        
-        
-        
+              
 @dp.callback_query(F.data.startswith("admin_test_toggle_inbound_"))
 async def admin_test_toggle_inbound(callback: CallbackQuery):
     """تغییر وضعیت یک اینباند تست (تیک زدن/برداشتن)"""
@@ -1625,9 +1570,6 @@ async def admin_test_inbounds_save(callback: CallbackQuery):
         show_alert=True
     )
     await admin_test_service_settings(callback)
-
-
-
 
 
 @dp.callback_query(F.data == "admin_test_inbound")
@@ -3615,45 +3557,9 @@ async def admin_test_stats(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
         
-        
-def _try_recover_from_backup(file_path: str) -> dict:
-    """تلاش برای بازیابی فایل از بکاپ"""
-    filename = os.path.basename(file_path)
-    file_dir = os.path.dirname(file_path)
-    backup_dir = os.path.join(file_dir, "backups")
-    
-    logger.info(f"🔍 تلاش برای بازیابی {filename} از بکاپ...")
-    
-    if not os.path.exists(backup_dir):
-        logger.warning(f"⚠️ پوشه بکاپ وجود ندارد: {backup_dir}")
-        return None
-    backups = []
-    for f in os.listdir(backup_dir):
-        if f.startswith(filename) and (f.endswith('.backup') or f.endswith('.json')):
-            full_path = os.path.join(backup_dir, f)
-            backups.append((os.path.getmtime(full_path), full_path))
-    
-    if not backups:
-        logger.warning(f"⚠️ هیچ بکاپی برای {filename} یافت نشد")
-        return None
-    backups.sort(reverse=True)
-    latest_backup = backups[0][1]
-    
-    try:
-        with open(latest_backup, 'r', encoding='utf-8') as f:
-            data = json.loads(f.read())
-        save_json(file_path, data)
-        
-        logger.warning(f"🔄 {filename} از بکاپ بازیابی شد: {os.path.basename(latest_backup)}")
-        return data
-        
-    except Exception as e:
-        logger.error(f"❌ خطا در بازیابی از بکاپ: {e}")
-        return None
 
 
 user_states = {}
-# ✅ کش لینک‌های کانفیگ برای صفحه‌بندی
 CONFIG_LINKS_CACHE = {}          # {order_id: {'links': [...], 'email': str, 'timestamp': datetime}}
 CONFIG_LINKS_CACHE_TTL = 300     # 5 دقیقه
 CONFIG_PAGE_SIZE = 3             # تعداد لینک در هر صفحه
@@ -4217,8 +4123,6 @@ async def admin_shop_message_save(message: Message):
     await message.reply(
         f"✅ پیام فروش با موفقیت بروزرسانی شد!" if lang == "fa" else "✅ Shop message updated successfully!"
     )
-    
-    # ✅ به جای FakeCallback، مستقیم پیام تنظیمات رو بفرست
     is_open = is_shop_open()
     manual_approval = configs_pool.get('manual_approval_settings', {})
     enabled = manual_approval.get('enabled', False)
@@ -4280,8 +4184,6 @@ Click the buttons below to change settings:
             callback_data="admin_panel"
         )]
     ]
-    
-    # ✅ ارسال پیام جدید به جای ویرایش پیام قبلی
     await message.answer(
         text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
@@ -5216,30 +5118,7 @@ async def admin_inbound_select_all_defaults(callback: CallbackQuery):
     await admin_inbound_default_setting(callback)     
         
         
-async def auto_save_worker():
-    """کارگر پس‌زمینه برای ذخیره‌سازی خودکار"""
-    logger.info("🔄 کارگر ذخیره‌سازی خودکار راه‌اندازی شد")
-    
-    while True:
-        try:
-            try:
-                operation = await asyncio.wait_for(_save_queue.get(), timeout=300)
-                logger.debug(f"📥 درخواست ذخیره‌سازی دریافت شد: {operation}")
-            except asyncio.TimeoutError:
-                logger.debug("⏰ ذخیره‌سازی دوره‌ای 5 دقیقه")
-            save_all()
-            while not _save_queue.empty():
-                try:
-                    _save_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                    
-        except asyncio.CancelledError:
-            logger.info("کارگر ذخیره‌سازی متوقف شد")
-            break
-        except Exception as e:
-            logger.error(f"❌ خطا در کارگر ذخیره‌سازی: {e}", exc_info=True)
-            await asyncio.sleep(10)
+
 
 @dp.message(Command("save"))
 async def cmd_save(message: Message):
@@ -5339,24 +5218,6 @@ async def cmd_db_status(message: Message):
     await message.reply("\n".join(status_lines), parse_mode=ParseMode.HTML)
     
     
-def request_save(operation: str = "unknown"):
-    """درخواست ذخیره‌سازی (non-blocking)"""
-    global _save_task
-    current_time = time.time()
-    if operation in _last_save_time:
-        if current_time - _last_save_time[operation] < 10:
-            return
-    
-    _last_save_time[operation] = current_time
-    
-    try:
-        _save_queue.put_nowait(operation)
-        logger.debug(f"📤 درخواست ذخیره‌سازی به صف اضافه شد: {operation}")
-    except Exception as e:
-        logger.error(f"❌ خطا در افزودن به صف ذخیره‌سازی: {e}")
-
-   
-
 
 @dp.message(Command("cleanup_backups"))
 async def cmd_cleanup_backups(message: Message):
@@ -5396,17 +5257,7 @@ async def cmd_cleanup_backups(message: Message):
     
     await message.reply(report_text, parse_mode=ParseMode.HTML)
     
-def _repair_json_file(file: str) -> dict:
-    """تلاش برای تعمیر فایل JSON خراب"""
-    try:
-        backup_file = file + '.backup'
-        if os.path.exists(file):
-            os.rename(file, backup_file)
-        logger.warning(f"🔧 فایل خراب {os.path.basename(file)} بکاپ گرفته شد")
-        save_json(file, {})
-        return {}
-    except:
-        return {}
+
 
 @dp.message(Command("check_packages"))
 async def cmd_check_packages(message: Message):
@@ -5669,21 +5520,6 @@ def increment_user_test(user_id: int, order_id: int = None) -> dict:
     save_test_usage()
     return user_data
 
-def can_user_take_test(user_id: int) -> tuple:
-    """بررسی اینکه آیا کاربر می‌تواند تست بگیرد"""
-    if not TEST_SERVICE_STATUS.get('enabled', False):
-        return False, 0, "❌ تست سرویس در حال حاضر غیرفعال است."
-    
-    user_data = get_user_test_info(user_id)
-    used = user_data.get('count', 0)
-    max_tests = TEST_SERVICE_STATUS.get('max_tests', 1)
-    remaining = max_tests - used
-    
-    if remaining <= 0:
-        return False, 0, f"⚠️ شما قبلاً از سقف تست مجاز ({max_tests} بار) استفاده کرده‌اید."
-    
-    return True, remaining, None
-
 def get_test_stats() -> dict:
     """دریافت آمار تست"""
     total_users = len(USER_TEST_USAGE)
@@ -5704,37 +5540,7 @@ def get_test_stats() -> dict:
         'top_users': top_users[:10]
     }
 
-def try_restore_from_backup_for_file(file_type: str) -> Optional[dict]:
-    """تلاش برای بازیابی یک فایل خاص از بکاپ"""
-    backup_dir = os.path.join(DATA_DIR, 'backups')
-    if not os.path.exists(backup_dir):
-        return None
-    backups = [f for f in os.listdir(backup_dir) if f.startswith('full_backup_') and f.endswith('.json')]
-    if not backups:
-        return None
-    
-    backups.sort(reverse=True)
-    latest_backup = os.path.join(backup_dir, backups[0])
-    
-    try:
-        with open(latest_backup, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        if file_type == 'users':
-            return data.get('users', {})
-        elif file_type == 'orders':
-            return data.get('orders', {})
-        elif file_type == 'referrals':
-            return data.get('referrals', {})
-        elif file_type == 'configs':
-            return data.get('configs', {'configs': [], 'last_id': 0})
-        elif file_type == 'feedback':
-            return data.get('feedback', {})
-        elif file_type == 'chats':
-            return data.get('chats', {})
-    except Exception as e:
-        logger.error(f"خطا در بازیابی {file_type} از بکاپ: {e}")
-        return None
+
 
 def try_full_restore_from_backup():
     """تلاش برای بازیابی کامل از آخرین بکاپ"""
@@ -5845,46 +5651,6 @@ def _init_default_settings_if_needed():
         logger.debug("✅ همه تنظیمات قبلاً وجود داشتند - تغییری اعمال نشد")
         
     
-
-def try_restore_from_backup():
-    """تلاش خودکار برای بازیابی از آخرین بکاپ"""
-    backup_dir = os.path.join(DATA_DIR, 'backups')
-    if not os.path.exists(backup_dir):
-        logger.warning("⚠️ پوشه بکاپ وجود ندارد")
-        return False
-    
-    backups = [f for f in os.listdir(backup_dir) if f.startswith('full_backup_') and f.endswith('.json')]
-    if not backups:
-        logger.warning("⚠️ هیچ بکاپی یافت نشد")
-        return False
-    backups.sort(reverse=True)
-    latest_backup = os.path.join(backup_dir, backups[0])
-    
-    logger.info(f"🔄 تلاش برای بازیابی از بکاپ: {backups[0]}")
-    
-    try:
-        with open(latest_backup, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        global users, orders, referrals, configs_pool, feedbacks, chats, BLACKLIST
-        
-        if data.get('users'):
-            users = data['users']
-            logger.info(f"✅ {len(users)} کاربر از بکاپ بازیابی شد")
-        
-        if data.get('orders'):
-            orders = data['orders']
-            logger.info(f"✅ {len(orders)} سفارش از بکاپ بازیابی شد")
-        
-        if data.get('configs'):
-            configs_pool = data['configs']
-        
-        save_all()
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ خطا در بازیابی از بکاپ: {e}")
-        return False
     
     
 @dp.message(Command("checkdata"))
@@ -6259,8 +6025,6 @@ async def cmd_start(message: Message):
             reply_markup=get_main_keyboard(True, lang, user_id)
         )
         return
-    
-    # ============ بررسی عضویت اجباری - تابع مشترک ============
     async def check_force_join_and_show():
         """بررسی عضویت اجباری و نمایش صفحه مناسب"""
         settings = configs_pool.get('force_join_settings', {})
@@ -6269,8 +6033,6 @@ async def cmd_start(message: Message):
         
         if not force_join_enabled or not channels:
             return True  # عضویت اجباری غیرفعال است
-        
-        # بررسی واقعی عضویت
         membership_report = await check_membership_detailed(user_id)
         
         if not membership_report['is_all_joined']:
@@ -6292,8 +6054,6 @@ async def cmd_start(message: Message):
                 logger.info(f"✅ کاربر {user_id} عضو همه کانال‌هاست، verified به True تغییر کرد")
             
             return True
-    
-    # ============ مسیر 1: تایید دستی غیرفعال ============
     if not approval_enabled:
         if not users[uid].get('approved_by_admin', False):
             users[uid]['approved_by_admin'] = True
@@ -6302,8 +6062,6 @@ async def cmd_start(message: Message):
             users[uid]['updated_at'] = datetime.now().isoformat()
             save_json(DB_FILES['users'], users)
             logger.info(f"✅ کاربر {user_id} خودکار تایید شد (تایید دستی غیرفعال)")
-        
-        # بررسی عضویت اجباری
         can_continue = await check_force_join_and_show()
         if not can_continue:
             return
@@ -6315,10 +6073,7 @@ async def cmd_start(message: Message):
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
-    
-    # ============ مسیر 2: کاربر تایید شده ============
     if users[uid].get('approved_by_admin', False) or users[uid].get('has_purchased', False):
-        # بازیابی کوپن
         coupon_data = load_coupon_from_user_db(user_id)
         coupon_code = coupon_data.get('coupon_code')
         coupon_discount = coupon_data.get('coupon_discount')
@@ -6383,8 +6138,6 @@ async def cmd_start(message: Message):
         users[uid]['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
         logger.info(f"🔄 وضعیت کاربر {user_id} از {status} به pending تغییر کرد (درخواست مجدد)")
-    
-    # نمایش فرم درخواست
     if lang == "fa":
         text = f"""
 {premium_emoji('loading', '🔹')}  <b>به جمع ما خوش آمدید</b>
@@ -6433,7 +6186,6 @@ async def check_membership_detailed(user_id: int) -> dict:
     """
     بررسی دقیق عضویت کاربر در همه کانال‌ها
     """
-    # لاگ شروع بررسی
     logger.info(f"🔍 شروع بررسی عضویت کاربر {user_id}")
     
     if user_id == ADMIN_ID_INT:
@@ -6482,11 +6234,7 @@ async def check_membership_detailed(user_id: int) -> dict:
         try:
             channel_id = ch.get('id')
             channel_name = ch.get('name', channel_id)
-            
-            # لاگ بررسی هر کانال
             logger.info(f"📢 بررسی کانال {channel_name} (ID: {channel_id})")
-            
-            # اطمینان از فرمت صحیح
             if isinstance(channel_id, str) and channel_id.startswith('@'):
                 chat_id = channel_id
             elif isinstance(channel_id, str) and channel_id.lstrip('-').isdigit():
@@ -6844,8 +6592,6 @@ Contact support if needed:
         logger.error(f"❌ خطا در ارسال پیام به کاربر مسدود {user_id}: {e}")
         return False
 
-import html  # ✅ حتماً در بالای فایل import شده باشد
-
 async def get_user_info_from_telegram(user_id: int) -> dict:
     """دریافت اطلاعات کاربر از تلگرام با escape برای استفاده در HTML"""
     try:
@@ -6955,23 +6701,8 @@ def is_blacklisted(user_id: int) -> bool:
     return user_id in BLACKLIST
 
 
-def get_blacklist_users() -> list:
-    """دریافت لیست کاربران مسدود"""
-    return list(BLACKLIST)
 
 
-def clear_blacklist() -> int:
-    """پاکسازی کامل لیست سیاه"""
-    global BLACKLIST
-    count = len(BLACKLIST)
-    BLACKLIST.clear()
-    save_json(DB_FILES['blacklist'], {
-        'users': [],
-        'last_updated': datetime.now().isoformat(),
-        'count': 0
-    })
-    logger.info(f"🗑 لیست سیاه پاکسازی شد - {count} کاربر")
-    return count
 def get_user(user_id: int, username: str = None) -> dict:
     """دریافت اطلاعات کاربر یا ایجاد کاربر جدید با وضعیت‌های مختلف و بررسی خودکار کوپن"""
     uid = str(user_id)
@@ -7142,14 +6873,10 @@ def get_user(user_id: int, username: str = None) -> dict:
                     coupon['status'] = 'used'
                     save_coupons(COUPONS)
                     logger.warning(f"⚠️ کوپن {coupon_code} به حداکثر استفاده رسیده - از کاربر {user_id} پاک می‌شود")
-            
-            # ✅ 5. بررسی استفاده قبلی کاربر
-            # ✅ 5. بررسی استفاده قبلی کاربر - با در نظر گرفتن نوع کوپن
             if coupon_valid:
                 coupon_type = coupon.get('coupon_type', 'normal')
                 
                 if coupon_type == 'admin_special':
-                    # ✅✅✅ کوپن ادمین: بررسی تعداد استفاده کاربر
                     user_usage = coupon.get('user_usage', {})
                     user_used_count = user_usage.get(str(user_id), 0)
                     max_usage = coupon.get('usage_limit', 1)
@@ -7161,17 +6888,13 @@ def get_user(user_id: int, username: str = None) -> dict:
                     else:
                         logger.info(f"✅ کوپن ادمین {coupon_code} همچنان معتبر است ({user_used_count}/{max_usage})")
                 else:
-                    # ✅ کوپن معمولی: بررسی استفاده قبلی
                     if user_id in coupon.get('used_by', []):
                         coupon_valid = False
                         invalid_reason = "قبلاً توسط کاربر استفاده شده"
                         logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده - پاک می‌شود")        
         if coupon_valid:
-            # ✅ کوپن معتبر است - لود به user_states
             if user_id not in user_states:
                 user_states[user_id] = {}
-            
-            # فقط اگر تغییر کرده باشد لود کن
             if user_states[user_id].get('coupon_code') != coupon_code or \
                user_states[user_id].get('coupon_discount') != coupon_discount or \
                not user_states[user_id].get('coupon_applied'):
@@ -7180,13 +6903,10 @@ def get_user(user_id: int, username: str = None) -> dict:
                 user_states[user_id]['coupon_applied'] = True
                 logger.info(f"🏷️ کوپن {coupon_code} (تخفیف: {coupon_discount}%) از دیتابیس به user_states کاربر {user_id} لود شد")
         else:
-            # ✅ کوپن نامعتبر است - پاک از همه جا
             user['coupon_code'] = None
             user['coupon_discount'] = 0
             user['coupon_applied'] = False
             modified = True
-            
-            # پاک از user_states
             if user_id in user_states:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
@@ -7194,7 +6914,6 @@ def get_user(user_id: int, username: str = None) -> dict:
             
             logger.info(f"🗑️ کوپن {coupon_code} از کاربر {user_id} پاک شد - دلیل: {invalid_reason}")
     else:
-        # ✅ کوپنی در دیتابیس نیست - پاک از user_states
         if user_id in user_states:
             has_coupon_in_state = (
                 user_states[user_id].get('coupon_code') or 
@@ -7205,8 +6924,6 @@ def get_user(user_id: int, username: str = None) -> dict:
                 user_states[user_id].pop('coupon_discount', None)
                 user_states[user_id].pop('coupon_applied', None)
                 logger.debug(f"کوپن از user_states کاربر {user_id} پاک شد (در دیتابیس نیست)")
-    
-    # ✅ ذخیره تغییرات
     if modified:
         user['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
@@ -7268,7 +6985,6 @@ def load_coupon_to_user_states(user_id: int) -> bool:
                 logger.warning(f"⚠️ کوپن ادمین {coupon_code} برای کاربر دیگری قفل شده")
                 return False
         else:
-            # ✅ برای کوپن معمولی: بررسی used_by
             if user_id in coupon.get('used_by', []):
                 logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده")
                 return False
@@ -8298,44 +8014,7 @@ def update_order(order_id: int, **kwargs):
     logger.error(f"❌ سفارش #{order_id} یافت نشد")
     return False
 
-def get_user_stats(user_id: int) -> dict:
-    """دریافت آمار کاربر با جدا کردن تست‌ها"""
-    user = get_user(user_id)
-    valid_orders = get_valid_orders()
-    user_orders = [o for o in valid_orders.values() if o.get('user_id') == user_id]
-    test_orders = [o for o in user_orders if o.get('type') == 'test']
-    real_orders = [o for o in user_orders if o.get('type') != 'test']
-    
-    approved = [o for o in real_orders if o.get('status') == 'approved']
-    pending = [o for o in real_orders if o.get('status') in ['pending', 'pending_balance_charge']]
-    rejected = [o for o in real_orders if o.get('status') == 'rejected']
-    awaiting = [o for o in real_orders if o.get('status') == 'awaiting_payment']
-    cancelled = [o for o in real_orders if o.get('status') == 'cancelled']
-    approved_tests = [o for o in test_orders if o.get('status') == 'approved']
-    last_order_date = None
-    dates = [o.get('date', '') for o in real_orders if o.get('date')]
-    if dates:
-        last_order_date = max(dates)
-    
-    return {
-        'total_orders': len(real_orders),  # فقط سفارشات واقعی
-        'approved_orders': len(approved),
-        'pending_orders': len(pending),
-        'rejected_orders': len(rejected),
-        'awaiting_orders': len(awaiting),
-        'cancelled_orders': len(cancelled),
-        'test_orders': len(test_orders),  # تعداد تست‌ها
-        'approved_tests': len(approved_tests),  # تست‌های تایید شده
-        'total_spent': sum(o.get('price', 0) for o in approved),
-        'active_configs': len([o for o in approved if o.get('config_link')]),
-        'last_order_date': last_order_date,
-        'balance': user.get('balance', 0),
-        'total_purchases': user.get('total_purchases', 0),
-        'join_date': user.get('join_date', 'نامشخص'),
-        'is_active': user.get('is_active', True),
-        'verified': user.get('verified', False),
-        'is_blacklisted': user_id in BLACKLIST
-    }
+
 
 
 def get_global_stats() -> dict:
@@ -8380,18 +8059,7 @@ def get_global_stats() -> dict:
             'today_revenue': 0
         }
 
-def get_user_list_sorted(sort_by: str = 'balance', reverse: bool = True, limit: int = 10) -> list:
-    """دریافت لیست مرتب شده کاربران"""
-    user_list = list(users.values())
-    
-    if sort_by == 'balance':
-        user_list.sort(key=lambda u: u.get('balance', 0), reverse=reverse)
-    elif sort_by == 'purchases':
-        user_list.sort(key=lambda u: u.get('total_purchases', 0), reverse=reverse)
-    elif sort_by == 'date':
-        user_list.sort(key=lambda u: u.get('join_date', ''), reverse=reverse)
-    
-    return user_list[:limit]
+
 
 
 def search_user(query: str) -> list:
@@ -8790,28 +8458,7 @@ def backup_database():
         logger.error("❌ خطا در ذخیره بکاپ")
         return False
 
-def load_alert_cache() -> dict:
-    """بارگذاری alert_cache از فایل JSON"""
-    alert_cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
-    
-    if not os.path.exists(alert_cache_file):
-        logger.warning("⚠️ فایل alert_cache.json یافت نشد")
-        return {}
-    
-    try:
-        with open(alert_cache_file, 'r', encoding='utf-8') as f:
-            alert_cache = json.load(f)
-        
-        logger.info(f"✅ alert_cache.json بارگذاری شد:")
-        logger.info(f"  - volume_alerts: {len(alert_cache.get('volume_alerts', {}))}")
-        logger.info(f"  - expiry_alerts: {len(alert_cache.get('expiry_alerts', {}))}")
-        logger.info(f"  - history: {len(alert_cache.get('history', {}))}")
-        logger.info(f"  - service_info: {len(alert_cache.get('service_info', {}))}")
-        
-        return alert_cache
-    except Exception as e:
-        logger.error(f"❌ خطا در خواندن alert_cache.json: {e}")
-        return {}
+
 
 
 def save_alert_cache(alert_cache: dict) -> bool:
@@ -9039,28 +8686,9 @@ def restore_backup(backup_file: str) -> bool:
 
 
 
-
-"""
-Advanced User Search System for Telegram Bot
-Supports: ID (English/Persian/Arabic), Username, Telegram Username, Name (multi-lang), Coupon
-"""
-
-import re
-import html
-import time
-import logging
-import unicodedata
-from datetime import datetime
-from typing import List, Dict, Optional, Tuple, Any
-
 from aiogram import F
 from aiogram.filters import Command
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
+
 
 logger = logging.getLogger(__name__)
 
@@ -9158,14 +8786,6 @@ def strip_decorations(text: str) -> str:
 
     return cleaned.strip()
 
-
-def strip_decorations_keep_us(text: str) -> str:
-    """نسخه‌ای که `_` را نگه می‌دارد (برای username)."""
-    if not text:
-        return ""
-    cleaned = re.sub(r"[^\w\s\u0600-\u06FF]", "", text, flags=re.UNICODE)
-    cleaned = " ".join(cleaned.split())
-    return cleaned.strip()
 
 
 def clean_username(raw: Any) -> str:
@@ -9546,25 +9166,6 @@ def advanced_search_users(
     return results[:limit]
 
 
-def search_users_simple(query: str, limit: int = 50) -> List[Dict[str, Any]]:
-    return advanced_search_users(query, search_in="all", limit=limit)
-
-
-def search_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
-    uid = str(user_id)
-    if uid not in users:
-        return None
-    ud = users[uid]
-    if not isinstance(ud, dict):
-        return None
-    return {
-        "user_id": user_id,
-        "name": safe_str(ud.get("name")),
-        "username": safe_str(ud.get("username")),
-        "telegram_username": safe_str(ud.get("telegram_username")),
-        "balance": ud.get("balance", 0) or 0,
-        "user_data": ud,
-    }
 
 
 # ============================================================
@@ -9599,16 +9200,7 @@ def _cache_update_page(admin_id: int, page: int) -> Optional[Dict[str, Any]]:
     return entry
 
 
-def cleanup_expired_search_cache() -> int:
-    """پاکسازی cacheهای منقضی — می‌توانی در تسک دوره‌ای صدا بزنی."""
-    now = time.time()
-    expired = [
-        aid for aid, e in SEARCH_RESULTS_CACHE.items()
-        if now - e.get("ts", 0) > SEARCH_CACHE_TTL_SECONDS
-    ]
-    for aid in expired:
-        SEARCH_RESULTS_CACHE.pop(aid, None)
-    return len(expired)
+
 
 
 # ============================================================
@@ -10088,23 +9680,35 @@ def register_search_handlers(dp, admin_id_int: int, get_user_func, get_lang_func
     }
     
     
-def format_size(size_bytes: int) -> str:
-    """تبدیل حجم به فرمت خوانا با واحد مناسب
+def format_size(size_bytes: Union[int, float]) -> str:
+    # ─── اعتبارسنجی ورودی ───
+    if size_bytes is None or size_bytes == 0:
+        return "0 B"
     
-    Args:
-        size_bytes: حجم به بایت
-        
-    Returns:
-        رشته فرمت شده با واحد مناسب (B, KB, MB, GB)
-    """
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.2f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+    try:
+        size = float(size_bytes)
+    except (TypeError, ValueError):
+        return "0 B"
+    
+    if size < 0:
+        return "0 B"
+    
+    # ─── واحدها به ترتیب صعودی ───
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    
+    for unit in units:
+        if size < 1024:
+            # برای B عدد صحیح، برای بقیه ۱ یا ۲ رقم اعشار
+            if unit == 'B':
+                return f"{int(size)} {unit}"
+            elif unit == 'KB':
+                return f"{size:.1f} {unit}"
+            else:
+                return f"{size:.2f} {unit}"
+        size /= 1024
+    
+    # fallback برای مقادیر غیرعادی بزرگ
+    return f"{size:.2f} PB"
     
     
 def get_database_size() -> dict:
@@ -10134,22 +9738,6 @@ def get_database_size() -> dict:
     logger.info(f"📊 حجم کل: {format_size(total)}")
     
     return sizes
-
-
-def format_size(size_bytes: int) -> str:
-    """فرمت حجم به صورت خوانا"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024
-    return f"{size_bytes:.1f} TB"
-
-
-
-
-
-
-
 
 
 def get_valid_orders() -> dict:
@@ -10481,13 +10069,6 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
             
-            
-
-import asyncio
-import time
-from typing import Optional
-from yarl import URL
-import aiohttp
 from aiohttp import ClientTimeout, CookieJar
 CONNECTOR = None
 HTTP_SESSION: Optional[aiohttp.ClientSession] = None
@@ -10517,9 +10098,7 @@ def _get_base_url() -> URL:
     return URL(f"{panel_url.scheme}://{panel_url.host}:{panel_url.port}")
 
 
-def _get_panel_host() -> str:
-    """دریافت host پنل"""
-    return URL(SENAI_PANEL_URL).host
+
 
 
 async def _ensure_session():
@@ -10695,21 +10274,7 @@ async def xui_get_csrf_token(session=None) -> Optional[str]:
     return SENAI_CSRF
 
 
-async def test_cookie() -> bool:
-    """تست اعتبار کوکی فعلی (برای compatibility)"""
-    if not SENAI_COOKIE:
-        return False
-    
-    try:
-        await _ensure_session()
-        
-        async with HTTP_SESSION.get(
-            f"{SENAI_PANEL_URL}/panel/api/inbounds/list",
-            timeout=API_TIMEOUT
-        ) as resp:
-            return resp.status == 200
-    except:
-        return False
+
 
 
 async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
@@ -11170,85 +10735,9 @@ async def filter_valid_inbounds(inbound_ids) -> list:
     
     return valid
 
-async def xui_safe_request(method: str, endpoint: str, **kwargs) -> Optional[dict]:
-    """درخواست امن به پنل با رعایت محدودیت‌ها
-    
-    Args:
-        method: متد HTTP ('GET', 'POST', 'PUT', 'DELETE')
-        endpoint: آدرس نسبی endpoint (مثل '/panel/api/inbounds/list')
-        **kwargs: پارامترهای اضافی برای requests
-    
-    Returns:
-        پاسخ JSON در صورت موفقیت، None در صورت خطا
-    """
-    async with panel_semaphore:
-        await panel_rate_limiter.wait_if_needed()
-        
-        cookie = await xui_login()
-        if not cookie:
-            logger.error("❌ عدم موفقیت در لاگین به پنل")
-            return None
-        
-        try:
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                csrf = await xui_get_csrf_token(session)
-                headers = {"X-CSRF-Token": csrf} if csrf else {}
-                
-                url = f"{SENAI_PANEL_URL}{endpoint}"
-                
-                async with session.request(
-                    method=method,
-                    url=url,
-                    cookies={"3x-ui": cookie},
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                    **kwargs
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get("success"):
-                            return data
-                    elif response.status == 429:
-                        logger.warning("⚠️ محدودیت نرخ درخواست، 10 ثانیه صبر...")
-                        await asyncio.sleep(10)
-                    else:
-                        logger.error(f"❌ خطا در درخواست {endpoint}: {response.status}")
-                    return None
-                    
-        except asyncio.TimeoutError:
-            logger.error(f"❌ تایم‌اوت در درخواست {endpoint}")
-            return None
-        except Exception as e:
-            logger.error(f"❌ خطا در درخواست {endpoint}: {e}")
-            return None
 
 
-async def xui_create_client_with_retry(email: str, volume_gb: int, days: int, user_name: str = None, user_id: int = None) -> Optional[str]:
-    """ساخت کلاینت با حداکثر تلاش و مدیریت هوشمند محدودیت‌ها"""
-    
-    max_retries = 5
-    base_delay = 2
-    
-    for attempt in range(max_retries):
-        result = await xui_create_client_with_inbound(email, volume_gb, days, user_name, user_id, retry=1)
-        
-        if result:
-            return result
-        delay = base_delay * (2 ** attempt)  # 2, 4, 8, 16, 32 ثانیه
-        logger.warning(f"⚠️ تلاش {attempt + 1}/{max_retries} ناموفق بود، {delay} ثانیه صبر می‌کنم...")
-        await asyncio.sleep(min(delay, 60))  # حداکثر 60 ثانیه
-    
-    logger.error(f"❌ ساخت کلاینت {email} پس از {max_retries} تلاش ناموفق بود")
-    return None
-async def get_panel_rate_stats() -> dict:
-    """دریافت آمار درخواست‌های پنل"""
-    return {
-        'current_semaphore_value': panel_semaphore._value,
-        'rate_limiter_interval': panel_rate_limiter.interval,
-        'last_request_time': panel_rate_limiter.last_request_time,
-        'is_rate_limited': (time.time() - panel_rate_limiter.last_request_time) < panel_rate_limiter.interval
-    }
+
 async def reset_panel_rate_limits():
     """ریست کردن محدودیت‌های پنل"""
     global panel_semaphore, panel_rate_limiter
@@ -11257,16 +10746,12 @@ async def reset_panel_rate_limits():
     
     logger.info("🔄 محدودیت‌های پنل ریست شدند")
     return True
-from typing import Optional, Dict, List
+
 import aiohttp
-from datetime import datetime, timedelta
 openrouter_client = None
-openrouter_models_status = {}  # ذخیره وضعیت مدل‌ها
-user_ai_requests = {}  # شمارش درخواست‌های روزانه کاربران
+openrouter_models_status = {}
+user_ai_requests = {}
 AI_REQUEST_LIMIT = configs_pool.get('openrouter_settings', {}).get('daily_limit', 10) if 'configs_pool' in dir() else 10
-
-import json
-
 class GeminiClient:
     """کلاینت اتصال به Google Gemini API با مدیریت هوشمند توکن"""
     
@@ -11399,7 +10884,6 @@ class GeminiClient:
         
         return "❌ خطا در پردازش درخواست."
 from collections import defaultdict
-from datetime import datetime, timedelta
 
 class ConversationMemory:
     """مدیریت حافظه مکالمه برای هر کاربر"""
@@ -11616,25 +11100,7 @@ def reset_ai_limits():
     return before_users, before_count
 
 
-def is_ai_question(text: str) -> bool:
-    """تشخیص اینکه آیا سوال مربوط به کانفیگ و VPN است"""
-    ai_keywords = [
-        'چطور', 'چگونه', 'راهنمایی', 'مشکل', 'ارور', 'اتصال', 'قطع', ' وصل',
-        'vpn', 'v2ray', 'vless', 'trojan', 'shadow', 'socks', 'http',
-        'اندروید', 'ios', 'ویندوز', 'مک', 'لینوکس', 'موبایل', 'کامپیوتر',
-        'کانفیگ', 'کانفیک', 'کانف', 'ساب', 'لینک', 'اشتراک',
-        'حجم', 'مدت', 'قیمت', 'خرید', 'شارژ', 'پرداخت', 'فیش', 'کارت',
-        'رفرال', 'دعوت', 'کد تخفیف', 'پشتیبانی', 'مشاوره', 'آموزش'
-    ]
-    
-    text_lower = text.lower()
-    simple_keywords = ['چطوری', 'چجوری', 'چه جوری', 'نمیشه', 'کار نمیکنه']
-    
-    for kw in ai_keywords + simple_keywords:
-        if kw in text_lower:
-            return True
-    
-    return False
+
 @dp.message(Command("ai"))
 async def cmd_ai(message: Message):
     """دستور استفاده از هوش مصنوعی"""
@@ -12449,15 +11915,7 @@ async def find_email_by_sub_id(sub_id: str, use_cache: bool = True) -> Optional[
     return None
 
 
-def clear_subid_cache(sub_id: str = None):
-    """پاک کردن کش subId → email"""
-    global _subid_to_email_cache
-    if sub_id:
-        _subid_to_email_cache.pop(sub_id, None)
-        logger.debug(f"🧹 کش subId پاک شد: {sub_id[:15]}...")
-    else:
-        _subid_to_email_cache.clear()
-        logger.info("🧹 کل کش subId پاک شد")
+
 
 
 # ═══════════════════════════════════════════
@@ -12701,7 +12159,7 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
             f"{download_emoji} Used: {used_str} of {total_str}\n"
             f"{time_emoji} Expiry: {time_left_text}"
         )
-from aiogram.types import BufferedInputFile
+
 
 def generate_qr_code(data: str, order_id: int):
     """ساخت QR Code و برگردوندن به فرمت مناسب aiogram 3.x"""
@@ -13343,156 +12801,7 @@ async def get_test_service(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
         
-        
 
-
-
-
-
-async def xui_update_client(email: str, total_gb: float, expiry_time: int) -> bool:
-    """به‌روزرسانی حجم و تاریخ انقضای کلاینت با UPDATE API"""
-    try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            cookie = await xui_login()
-            if not cookie:
-                return False
-
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-            client_info = await xui_get_client_info(email)
-            if not client_info:
-                return False
-            update_data = {
-                "email": email,
-                "totalGB": int(total_gb * 1024 * 1024 * 1024),
-                "expiryTime": expiry_time,
-                "enable": client_info.get('enable', True),
-                "tgId": client_info.get('tgId', 0),
-                "subId": client_info.get('subId', email),
-                "flow": client_info.get('flow', ''),
-                "limitIp": client_info.get('limitIp', 0),
-                "comment": client_info.get('comment', ''),
-                "resetStrategy": client_info.get('resetStrategy', 'no_reset'),
-                "inboundIds": await get_client_inbounds(email)  # اینباندهای فعلی را حفظ کن
-            }
-
-            async with session.post(
-                f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}",
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                json=update_data,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                response_text = await response.text()
-                logger.info(f"📥 به‌روزرسانی کلاینت: Status {response.status}")
-                
-                if response.status == 200:
-                    data = json.loads(response_text)
-                    return data.get("success", False)
-                return False
-
-    except Exception as e:
-        logger.error(f"❌ خطا در به‌روزرسانی کلاینت {email}: {e}")
-        return False
-    finally:
-        try:
-            await connector.close()
-        except:
-            pass
-        
-        
-        
-        
-
-async def _finalize_extension(
-    order_id: int, 
-    user_id: int, 
-    email: str, 
-    new_volume_gb: float, 
-    new_expiry_date: datetime, 
-    current_volume_gb: float, 
-    extra_volume: int, 
-    extra_days: int, 
-    combined_inbounds: list
-) -> bool:
-    """نهایی‌سازی تمدید سرویس"""
-    
-    order = orders.get(str(order_id))
-    if not order:
-        logger.error(f"❌ سفارش #{order_id} یافت نشد")
-        return False
-    
-    new_volume_total = current_volume_gb + extra_volume
-    new_days_total = order.get('days', 0) + extra_days
-    
-    logger.info(f"📝 به‌روزرسانی سفارش #{order_id} در دیتابیس...")
-    logger.info(f"   📦 حجم جدید: {new_volume_total:.2f} GB")
-    logger.info(f"   ⏱ روز جدید: {new_days_total}")
-    logger.info(f"   📡 اینباندها: {combined_inbounds}")
-    
-    update_order(order_id, 
-                volume=new_volume_total,
-                days=new_days_total,
-                inbound_id=combined_inbounds,
-                updated_at=datetime.now().isoformat())
-    
-    if combined_inbounds:
-        save_user_inbound_selection(user_id, combined_inbounds)
-    
-    logger.info(f"✅ تمدید سرویس {email} با موفقیت انجام شد!")
-    logger.info(f"   📦 حجم جدید: {new_volume_gb:.2f} GB")
-    logger.info(f"   ⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"   📡 اینباندها: {combined_inbounds}")
-    
-    return True
-
-
-
-
-
-async def _finalize_extension(order_id: int, user_id: int, email: str, new_volume_gb: float, new_expiry_date: datetime, current_volume_gb: float, extra_volume: int, extra_days: int, combined_inbounds: list) -> bool:
-    """نهایی‌سازی تمدید سرویس (بعد از موفقیت در پنل)"""
-    
-    order = orders.get(str(order_id))
-    if not order:
-        logger.error(f"❌ [_finalize_extension] سفارش #{order_id} یافت نشد")
-        return False
-    new_volume_total = current_volume_gb + extra_volume
-    new_days_total = order.get('days', 0) + extra_days
-    
-    logger.info(f"📝 [_finalize_extension] به‌روزرسانی سفارش #{order_id} در دیتابیس...")
-    logger.info(f"   📦 حجم جدید در دیتابیس: {new_volume_total:.2f} GB")
-    logger.info(f"   ⏱ روز جدید در دیتابیس: {new_days_total}")
-    logger.info(f"   📡 اینباندهای جدید: {combined_inbounds}")
-    
-    update_order(order_id, 
-                volume=new_volume_total,
-                days=new_days_total,
-                inbound_id=combined_inbounds,
-                updated_at=datetime.now().isoformat())
-    
-    logger.info(f"✅ [_finalize_extension] سفارش #{order_id} با موفقیت به‌روزرسانی شد")
-    if combined_inbounds:
-        save_user_inbound_selection(user_id, combined_inbounds)
-        logger.info(f"📡 [_finalize_extension] اینباندهای ترکیبی برای کاربر {user_id} ذخیره شد: {combined_inbounds}")
-    if log_system:
-        await log_system.log_user_action(
-            user_id,
-            "تمدید سرویس",
-            f"سفارش #{order_id} | +{extra_volume}GB | +{extra_days} روز | حجم جدید: {new_volume_total:.2f}GB | روز جدید: {new_days_total} | اینباندها: {combined_inbounds}"
-        )
-    
-    CustomLogger.log_event('SERVICE_EXTENDED', 
-        f'سرویس #{order_id} تمدید شد - کاربر: {user_id} - +{extra_volume}GB - +{extra_days} روز - اینباندها: {combined_inbounds}', 
-        user_id)
-    
-    logger.info(f"✅ [_finalize_extension] تمدید سرویس {email} با موفقیت انجام شد!")
-    logger.info(f"   📦 حجم جدید: {new_volume_gb:.2f} GB")
-    logger.info(f"   ⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"   📡 اینباندها: {combined_inbounds}")
-    
-    return True
 
 
 async def get_client_inbounds(email: str) -> list:
@@ -13864,48 +13173,7 @@ async def extend_service(
             pass
         
               
-async def update_client_full(email: str, update_data: dict) -> bool:
-    """
-    به‌روزرسانی کامل یک کلاینت با حفظ همه اطلاعات
-    از مسیر POST /panel/api/clients/update/{email} استفاده می‌کند
-    """
-    try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            cookie = await xui_login()
-            if not cookie:
-                logger.error(f"❌ [update_client_full] خطا در ورود به پنل")
-                return False
-            
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-            
-            update_url = f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}"
-            
-            async with session.post(
-                update_url,
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                json=update_data,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                response_text = await response.text()
-                logger.info(f"📥 [update_client_full] Status {response.status}")
-                
-                if response.status == 200:
-                    data = json.loads(response_text)
-                    return data.get("success", False)
-                
-                return False
-                
-    except Exception as e:
-        logger.error(f"❌ [update_client_full] خطا: {e}")
-        return False
-    finally:
-        try:
-            await connector.close()
-        except:
-            pass
+
 
 @dp.callback_query(F.data.startswith("extend_service_"))
 async def extend_service_start(callback: CallbackQuery):
@@ -15117,13 +14385,7 @@ def get_cancel_inline_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=f"❌{'انصراف از پرداخت' if lang=='fa' else 'Cancel Payment'}", callback_data="cancel_payment", style="danger")]
     ])
 
-def get_retry_receipt_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=f"📸 {'ارسال فیش' if lang=='fa' else 'Send Receipt'}", callback_data="retry_receipt"),
-            InlineKeyboardButton(text=f"❌ {'انصراف' if lang=='fa' else 'Cancel'}", callback_data="cancel_payment", style="danger")
-        ]
-    ])
+
 
 def get_feedback_keyboard(order_id: int, lang: str = "fa") -> InlineKeyboardMarkup:
     if lang == "fa":
@@ -15145,11 +14407,7 @@ def get_feedback_keyboard(order_id: int, lang: str = "fa") -> InlineKeyboardMark
             [InlineKeyboardButton(text=f"🏠 Main Menu", callback_data="back_to_main", style="danger")]
         ])
 
-def get_feedback_comment_keyboard(order_id: int, lang: str = "fa") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"❌ {'بدون نظر' if lang=='fa' else 'No Comment'}", callback_data=f"feedback_nocomment_{order_id}")],
-        [InlineKeyboardButton(text=f"🏠 {'منوی اصلی' if lang=='fa' else 'Main Menu'}", callback_data="back_to_main", style="danger")]
-    ])
+
 
 def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
     if lang == "fa":
@@ -18781,11 +18039,7 @@ def get_language_keyboard(user_id: int = None) -> InlineKeyboardMarkup:
         ]
     ])
 
-def get_cancel_reply_keyboard(lang: str = "fa") -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=f"❌ {'انصراف' if lang=='fa' else 'Cancel'}",style="danger")]],
-        resize_keyboard=True
-    )
+
 
 @dp.callback_query(F.data == "admin_ready_packages")
 async def admin_ready_packages_menu(callback: CallbackQuery):
@@ -18850,8 +18104,6 @@ async def admin_category_add_start(callback: CallbackQuery):
         pass
 
 
-
-from typing import Union
 
 def format_volume(value: Union[int, float], is_test: bool = False) -> str:
     """
@@ -20976,10 +20228,7 @@ async def admin_category_inbounds_save(callback: CallbackQuery):
     )
     await go_back_to_category_edit(callback, category_id)
 
-async def refresh_category_edit(callback: CallbackQuery, category_id: int):
-    """رفرش سریع صفحه ویرایش دسته"""
-    callback.data = f"admin_category_edit_{category_id}"
-    await admin_category_edit(callback)
+
     
 def migrate_category_inbound_data():
     """مهاجرت داده‌های اینباند دسته از تک به چندتایی"""
@@ -22155,16 +21404,6 @@ async def back_to_main(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
         
         
-def preserve_coupon_in_state(user_id: int) -> bool:
-    """
-    اطمینان از وجود کوپن در user_states
-    اگر کوپن در جای دیگری ذخیره شده باشد، آن را به user_states اضافه می‌کند
-    """
-    user_state = user_states.get(user_id, {})
-    if user_state.get('coupon_applied') and user_state.get('coupon_code'):
-        logger.info(f"🏷️ کوپن {user_state.get('coupon_code')} قبلاً در user_states وجود دارد")
-        return True
-    return False
 
 def debug_coupon_state(user_id: int, location: str):
     """دیباگ وضعیت کوپن در نقاط مختلف"""
@@ -23684,15 +22923,7 @@ async def xui_get_client_links(email: str) -> Optional[list]:
         return None
 
 
-def extract_vless_link(links: list) -> Optional[str]:
-    """استخراج لینک VLESS از لیست"""
-    if not links:
-        return None
-    
-    for link in links:
-        if isinstance(link, str) and link.startswith('vless://'):
-            return link
-    return None
+
 
 from urllib.parse import quote 
 
@@ -25907,23 +25138,6 @@ async def retry_receipt(callback: CallbackQuery):
         await callback.answer()
     except:
         pass
-
-def save_coupon_to_state(user_id: int, state: dict) -> dict:
-    """
-    کوپن را از state قبلی به state جدید منتقل می‌کند
-    """
-    full_state = user_states.get(user_id, {})
-    coupon_code = full_state.get('coupon_code')
-    coupon_discount = full_state.get('coupon_discount')
-    coupon_applied = full_state.get('coupon_applied', False)
-    
-    if coupon_applied and coupon_code:
-        state['coupon_code'] = coupon_code
-        state['coupon_applied'] = True
-        state['coupon_discount'] = coupon_discount if coupon_discount else 0
-        logger.info(f"🏷️ [save_coupon_to_state] کوپن {coupon_code} به state جدید منتقل شد")
-    
-    return state
 
 
     
@@ -28580,27 +27794,6 @@ async def set_package_inbound(callback: CallbackQuery):
 
 
 async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict:
-    """
-    پاکسازی دیتابیس سفارشات از سفارش‌های بی‌استفاده
-    
-    سفارش‌های حذف شده:
-    - status: deleted → همیشه حذف می‌شه (چه قدیم چه جدید)
-    - status: cancelled → فقط اگه قدیمی‌تر از days باشه
-    - status: rejected → فقط اگه قدیمی‌تر از days باشه
-    - status: awaiting_payment → فقط اگه قدیمی‌تر از days باشه و receipt نداشته باشه
-    
-    سفارش‌های حفظ شده:
-    - approved (همیشه)
-    - inactive (همیشه)
-    - pending/pending_balance_charge (همیشه)
-    
-    Args:
-        days: سفارش‌های cancelled/rejected قدیمی‌تر از این تعداد روز حذف می‌شن
-        dry_run: اگه True باشه، فقط گزارش می‌ده بدون پاک کردن
-    
-    Returns:
-        dict: آمار پاکسازی
-    """
     import time
     from datetime import datetime, timedelta
     
@@ -28611,8 +27804,6 @@ async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict
     
     start_time = time.time()
     cutoff_date = datetime.now() - timedelta(days=days)
-    
-    # آمار
     stats = {
         'total_before': len(orders),
         'deleted_removed': 0,           # status=deleted
@@ -31634,13 +30825,6 @@ def get_active_chats() -> list:
     return [c for c in chats.values() if c.get('status') == 'open']
 
 
-def get_user_chat(user_id: int) -> Optional[dict]:
-    """دریافت چت فعال کاربر"""
-    for c in chats.values():
-        if c.get('user_id') == user_id and c.get('status') == 'open':
-            return c
-    return None
-
 
 @dp.message(lambda m: user_states.get(m.from_user.id, {}).get('awaiting_chat', False))
 async def handle_chat_message(message: Message):
@@ -31883,26 +31067,7 @@ async def handle_feedback_comment(message: Message):
 
 
 
-def preserve_coupon(user_id: int, callback_func):
-    """
-    دکوراتور/تابع کمکی برای حفظ کوپن در هنگام بازگشت یا لغو
-    """
-    user_state = user_states.get(user_id, {})
-    coupon_code = user_state.get('coupon_code')
-    coupon_discount = user_state.get('coupon_discount')
-    coupon_applied = user_state.get('coupon_applied')
-    if user_id in user_states:
-        user_states.pop(user_id, None)
-    if coupon_applied and coupon_code:
-        user_states[user_id] = {
-            'coupon_code': coupon_code,
-            'coupon_discount': coupon_discount,
-            'coupon_applied': True
-        }
-        logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
-        return True
-    
-    return False
+
 
 def reduce_balance(user_id: int, amount: int) -> int:
     """کاهش موجودی کاربر (بررسی میشود که موجودی کافی باشد)"""
@@ -32916,8 +32081,7 @@ async def admin_toggle_panel(callback: CallbackQuery):
     await admin_test_panel(callback)
     
 
-import re
-import html
+
 import unicodedata
 
 def clean_comment_text(comment: str) -> str:
@@ -33425,188 +32589,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
         return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
 _panel_cache = {}  # {email: (timestamp, is_active)}
 _panel_cache_ttl = 10  # اعتبار کش به ثانیه
-async def is_config_active_in_panel(config_link: str) -> bool:
-    """
-    بررسی سریع اینکه کانفیگ در پنل وجود دارد یا خیر
-    با استفاده از کش برای کاهش درخواست‌های تکراری
-    
-    Args:
-        config_link: لینک کانفیگ
-        
-    Returns:
-        bool: True اگر کانفیگ در پنل فعال باشد
-    """
-    global _panel_cache
-    
-    if not config_link or not SENAI_PANEL_ENABLED:
-        return False
-    
-    email = extract_email_from_sub_link(config_link)
-    if not email:
-        return False
-    current_time = datetime.now()
-    if email in _panel_cache:
-        cache_time, is_active = _panel_cache[email]
-        if (current_time - cache_time).total_seconds() < _panel_cache_ttl:
-            logger.debug(f"📦 استفاده از کش پنل برای {email}: {is_active}")
-            return is_active
-    try:
-        client = await xui_get_client_info(email)
-        is_active = client is not None and client != {}
-        _panel_cache[email] = (current_time, is_active)
-        logger.debug(f"💾 کش پنل برای {email} بروزرسانی شد: {is_active}")
-        
-        return is_active
-        
-    except Exception as e:
-        logger.error(f"❌ خطا در بررسی کانفیگ {email}: {e}")
-        if email in _panel_cache:
-            _, cached_result = _panel_cache[email]
-            return cached_result
-        return False
 
-
-def clear_panel_cache(email: str = None):
-    """
-    پاک کردن کش پنل
-    
-    Args:
-        email: اگر مشخص شود، فقط آن ایمیل پاک می‌شود
-    """
-    global _panel_cache
-    if email:
-        _panel_cache.pop(email, None)
-        logger.debug(f"🧹 کش پنل برای {email} پاک شد")
-    else:
-        _panel_cache.clear()
-        logger.info("🧹 کش کامل پنل پاک شد")
-        
-        
-        
-async def sync_single_config(order_id: int) -> bool:
-    """همگام‌سازی یک کانفیگ خاص (برای استفاده در زمان نیاز)
-    
-    Args:
-        order_id: شناسه سفارش
-    
-    Returns:
-        True اگر کانفیگ حذف شده بود، False اگر سالم بود یا خطا رخ داد
-    """
-    order = orders.get(str(order_id))
-    if not order or order.get('status') != 'approved' or not order.get('config_link'):
-        logger.warning(f"⚠️ سفارش #{order_id} برای همگام‌سازی معتبر نیست")
-        return False
-    
-    email = get_order_client_email(order)
-    if not email:
-        logger.warning(f"⚠️ ایمیل سفارش #{order_id} یافت نشد")
-        return False
-    for attempt in range(3):
-        try:
-            cookie = await xui_login()
-            if not cookie:
-                if attempt < 2:
-                    await asyncio.sleep(2)
-                    continue
-                logger.error(f"❌ خطا در اتصال به پنل برای سفارش #{order_id}")
-                return False
-            
-            client = await xui_get_client_info(email)
-            
-            if not client:
-                async with config_lock:
-                    update_order(order_id, status='deleted')
-                logger.info(f"🗑 کانفیگ #{order_id} ({email}) از پنل حذف شده - وضعیت به deleted تغییر کرد")
-                return True
-            
-            logger.debug(f"✅ کانفیگ #{order_id} ({email}) سالم است")
-            return False
-            
-        except asyncio.TimeoutError:
-            logger.warning(f"⏰ تایم‌اوت در همگام‌سازی سفارش #{order_id} (تلاش {attempt+1}/3)")
-            if attempt < 2:
-                await asyncio.sleep(3 * (attempt + 1))
-        except Exception as e:
-            logger.error(f"❌ خطا در همگام‌سازی سفارش #{order_id}: {e}")
-            if attempt < 2:
-                await asyncio.sleep(2)
-    
-    return False
-
-
-def get_sync_stats() -> dict:
-    """دریافت آمار وضعیت کانفیگ‌ها"""
-    valid_orders = get_valid_orders()
-    
-    total = len(valid_orders)
-    approved = len([o for o in valid_orders.values() if o.get('status') == 'approved'])
-    deleted = len([o for o in valid_orders.values() if o.get('status') == 'deleted'])
-    pending = len([o for o in valid_orders.values() if o.get('status') == 'pending'])
-    rejected = len([o for o in valid_orders.values() if o.get('status') == 'rejected'])
-    awaiting = len([o for o in valid_orders.values() if o.get('status') == 'awaiting_payment'])
-    invalid_configs = []
-    for o in valid_orders.values():
-        if o.get('status') == 'approved' and o.get('config_link'):
-            email = extract_email_from_sub_link(o.get('config_link', ''))
-            if not email:
-                invalid_configs.append(o['order_id'])
-    
-    return {
-        'total': total,
-        'approved': approved,
-        'deleted': deleted,
-        'pending': pending,
-        'rejected': rejected,
-        'awaiting': awaiting,
-        'invalid_configs': invalid_configs,
-        'invalid_count': len(invalid_configs)
-    }
-
-
-async def cleanup_orphaned_configs(days: int = 30):
-    """پاکسازی کانفیگ‌های orphaned (سفارش approved ولی کانفیگ در پنل نیست)
-    
-    Args:
-        days: حذف خودکار سفارشات قدیمی‌تر از این تعداد روز (پیش‌فرض 30)
-    """
-    if not SENAI_PANEL_ENABLED:
-        return 0
-    
-    valid_orders = get_valid_orders()
-    cutoff_date = datetime.now() - timedelta(days=days)
-    
-    orphaned = []
-    for o in valid_orders.values():
-        if o.get('status') == 'approved' and o.get('config_link'):
-            created_at = o.get('created_at', o.get('date', ''))
-            if created_at:
-                try:
-                    created = datetime.fromisoformat(created_at)
-                    if created < cutoff_date:
-                        orphaned.append(o)
-                except:
-                    orphaned.append(o)
-    
-    if not orphaned:
-        logger.info(f"📭 هیچ کانفیگ orphaned قدیمی‌تر از {days} روز یافت نشد")
-        return 0
-    
-    logger.info(f"🔍 بررسی {len(orphaned)} کانفیگ orphaned قدیمی...")
-    
-    deleted_count = 0
-    for o in orphaned:
-        email = extract_email_from_sub_link(o.get('config_link', ''))
-        if email:
-            client = await xui_get_client_info(email)
-            if not client:
-                update_order(o['order_id'], status='deleted')
-                deleted_count += 1
-                logger.info(f"🗑 کانفیگ orphaned #{o['order_id']} ({email}) حذف شد")
-    
-    if deleted_count > 0:
-        logger.info(f"✅ {deleted_count} کانفیگ orphaned پاکسازی شد")
-    
-    return deleted_count
      
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_new_config'))
 async def add_new_config(message: Message):
@@ -33833,13 +32816,6 @@ async def add_balance_manual(message: Message):
         await message.reply(f"❌ خطای غیرمنتظره: {html.escape(str(e))}")
         user_states.pop(admin_id, None)
     
-
-
-
-
-import re
-from datetime import datetime
-import logging
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -34454,7 +33430,97 @@ async def _handle_admin_search_message(message: Message, query: str, lang: str) 
     await message.reply(text, reply_markup=kb, parse_mode="HTML")
     return True
 
-
+def is_ai_question(text: str) -> bool:
+    if not text or not isinstance(text, str):
+        return False
+    
+    # ─── نرمال‌سازی متن ───
+    text = unicodedata.normalize("NFKC", text)
+    text = text.lower().strip()
+    
+    # حروف عربی → فارسی
+    text = (
+        text.replace('ي', 'ی')
+            .replace('ى', 'ی')
+            .replace('ك', 'ک')
+            .replace('ة', 'ه')
+            .replace('ۀ', 'ه')
+    )
+    
+    # نیم‌فاصله → فاصله
+    text = text.replace('\u200c', ' ').replace('\u200f', '').replace('\u200e', '')
+    
+    # حذف اعراب
+    text = re.sub(r'[\u064B-\u065F\u0670\u06D6-\u06ED]', '', text)
+    
+    # یکسان‌سازی فاصله‌ها
+    text = ' '.join(text.split())
+    
+    if not text:
+        return False
+    
+    # ─── کلمات کلیدی فارسی (substring) ───
+    persian_keywords = (
+        # سوال‌پرسیدن
+        'چطور', 'چگونه', 'چطوری', 'چجوری', 'چه جوری',
+        'راهنمایی', 'راهنما', 'آموزش', 'نحوه', 'طریقه', 'شیوه',
+        # مشکل و خطا
+        'مشکل', 'ارور', 'خطا', 'خراب', 'نمیشه', 'نمیشود',
+        'کار نمیکنه', 'کار نمیکند', 'وصل نمیشه', 'قطع میشه',
+        # اتصال و شبکه
+        'اتصال', 'وصل', 'قطع', 'کانکت', 'سرعت', 'کندی', 'قطعی',
+        # کانفیگ و پروتکل
+        'کانفیگ', 'کانفیک', 'کانف', 'ساب', 'لینک', 'اشتراک',
+        # خرید و قیمت
+        'حجم', 'مدت', 'قیمت', 'تومان', 'هزینه', 'ارزان', 'گران',
+        'خرید', 'بخرم', 'میخوام', 'میخواهم',
+        # پرداخت و مالی
+        'شارژ', 'پرداخت', 'فیش', 'کارت', 'موجودی', 'کیف پول',
+        # کوپن و رفرال
+        'رفرال', 'دعوت', 'کد تخفیف', 'کوپن', 'تخفیف',
+        # پشتیبانی
+        'پشتیبانی', 'مشاوره', 'ادمین', 'مدیر',
+        # سرویس
+        'تمدید', 'تست', 'رایگان', 'اشتراک',
+        # دستگاه
+        'اندروید', 'ویندوز', 'مک', 'لینوکس', 'موبایل',
+        'کامپیوتر', 'لپتاپ', 'لپ تاپ', 'گوشی', 'تبلت',
+    )
+    
+    for kw in persian_keywords:
+        if kw in text:
+            return True
+    
+    # ─── کلمات کلیدی انگلیسی (word boundary) ───
+    english_keywords = (
+        # سوال
+        'how', 'why', 'what', 'help',
+        # مشکل
+        'error', 'problem', 'issue', 'fix', 'bug',
+        # اتصال و شبکه
+        'vpn', 'v2ray', 'vless', 'vmess', 'trojan',
+        'shadowsocks', 'socks', 'http', 'https',
+        'connection', 'connect', 'disconnect', 'network',
+        # دستگاه و پلتفرم
+        'ios', 'iphone', 'ipad', 'android', 'windows',
+        'linux', 'mac', 'macos', 'pc',
+        # کانفیگ و سرویس
+        'config', 'profile', 'subscription', 'link',
+        'expire', 'renew', 'extend', 'test', 'free', 'trial',
+        # خرید و پرداخت
+        'payment', 'pay', 'card', 'balance',
+        'charge', 'topup', 'top',
+        # کوپن و رفرال
+        'referral', 'invite', 'coupon', 'discount',
+        # پشتیبانی
+        'support', 'contact', 'admin',
+    )
+    
+    for kw in english_keywords:
+        if re.search(r'\b' + re.escape(kw) + r'\b', text):
+            return True
+    
+    return False
 @dp.message(F.text)
 async def handle_text_messages(message: Message):
     """هندلر یکپارچه برای تمام پیام‌های متنی"""
@@ -34531,8 +33597,6 @@ async def handle_text_messages(message: Message):
                 return
     logger.debug(f"پیام بدون وضعیت از کاربر {user_id}: {message.text[:50]}")
     
-    
-import re
 
 # ✅ لیست کلمات نامناسب فارسی و انگلیسی
 BAD_WORDS_FA = [
@@ -34632,10 +33696,6 @@ def contains_bad_words(text: str) -> tuple:
     
     return False, None, None
 
-def is_inappropriate_message(text: str) -> bool:
-    """بررسی سریع برای تشخیص پیام نامناسب"""
-    has_bad_word, _, _ = contains_bad_words(text)
-    return has_bad_word
 
 
 async def get_ai_response(message_text: str, user_id: int = None, username: str = None) -> str:
@@ -34869,113 +33929,7 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
             return f"❌ خطا: {str(e)[:100]}"
     
     return "❌ متأسفانه هیچ سرویس هوش مصنوعی در دسترس نیست. لطفاً بعداً تلاش کنید."
-def detect_question_topic(text: str) -> str:
-    """تشخیص موضوع سوال کاربر"""
-    text_lower = text.lower()
-    topics = {
-        'price': ['قیمت', 'چنده', 'چقدر', 'تومان', 'هزینه', 'ارزان', 'گران'],
-        'install': ['نصب', 'راه‌اندازی', 'نحوه', 'چجوری', 'چطور', 'آموزش', 'نرم‌افزار', 'برنامه'],
-        'support': ['پشتیبانی', 'تماس', 'مشکل', 'خطا', 'ارور', 'قطعی', 'قطع'],
-        'speed': ['سرعت', 'اینترنت', 'مگابیت', 'دانلود', 'آپلود'],
-        'device': ['لپتاپ', 'کامپیوتر', 'ویندوز', 'مک', 'اندروید', 'آیفون', 'موبایل']
-    }
-    
-    for topic, keywords in topics.items():
-        if any(kw in text_lower for kw in keywords):
-            return topic
-    
-    return 'general'
 
-async def get_openrouter_response(message_text: str, user_id: int = None, username: str = None) -> str:
-    """دریافت پاسخ از OpenRouter با درخواست پاسخ کامل"""
-    
-    if not openrouter_client:
-        return "❌ سرویس پشتیبان در دسترس نیست."
-    
-    try:
-        logger.info(f"🎯 OpenRouter: {message_text[:50]}...")
-        messages = [
-            {"role": "system", "content": OPENROUTER_SYSTEM_PROMPT}
-        ]
-        if user_id and conversation_memory.has_history(user_id):
-            history = conversation_memory.get_history(user_id, max_messages=6)
-            for msg in history:
-                role = "user" if msg['role'] == 'user' else "assistant"
-                messages.append({"role": role, "content": msg['content']})
-        if user_id:
-            user_info = get_user(user_id) if 'get_user' in globals() else {}
-            user_name = user_info.get('name', 'کاربر') if user_info else username or f"کاربر_{user_id}"
-            messages.append({"role": "user", "content": f"کاربر {user_name}: {message_text}"})
-        else:
-            messages.append({"role": "user", "content": message_text})
-        model = openrouter_client.default_model
-        if not model:
-            test_result = await openrouter_client.test_connection()
-            if test_result.get('success') and test_result.get('default_model'):
-                model = test_result['default_model']
-                openrouter_client.default_model = model
-            else:
-                return "❌ هیچ مدلی در OpenRouter در دسترس نیست."
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
-                headers=openrouter_client.headers,
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": OPENROUTER_TEMPERATURE,
-                    "max_tokens": OPENROUTER_MAX_TOKENS,
-                    "top_p": OPENROUTER_TOP_P
-                },
-                timeout=aiohttp.ClientTimeout(total=45)
-            ) as response:
-                
-                if response.status == 200:
-                    data = await response.json()
-                    reply = data.get('choices', [{}])[0].get('message', {}).get('content', '')
-                    
-                    if reply:
-                        reply = reply.strip()
-                        reply = '\n'.join([line for line in reply.split('\n') if line.strip()])
-                        if user_id:
-                            conversation_memory.add_message(user_id, 'user', message_text)
-                            conversation_memory.add_message(user_id, 'assistant', reply)
-                        
-                        logger.info(f"✅ OpenRouter پاسخ داد - طول: {len(reply)} کاراکتر")
-                        return reply
-                    else:
-                        return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
-                
-                elif response.status == 429:
-                    logger.warning("⚠️ OpenRouter Rate Limit")
-                    await asyncio.sleep(3)
-                    return "⚠️ محدودیت درخواست در سرویس پشتیبان. لطفاً چند لحظه صبر کنید."
-                
-                elif response.status == 404:
-                    logger.warning(f"⚠️ مدل {model} در OpenRouter موجود نیست")
-                    for backup_model in OPENROUTER_MODELS:
-                        if backup_model != model:
-                            logger.info(f"🔄 تلاش با مدل {backup_model}...")
-                            openrouter_client.default_model = backup_model
-                            return await get_openrouter_response(message_text, user_id, username)
-                    return "❌ هیچ مدل معتبری در OpenRouter یافت نشد."
-                
-                else:
-                    error_text = await response.text()
-                    logger.error(f"❌ OpenRouter Error: {response.status} - {error_text[:200]}")
-                    return f"❌ خطا در سرویس پشتیبان. کد: {response.status}"
-                    
-    except asyncio.TimeoutError:
-        logger.error("⏰ تایم‌اوت در OpenRouter")
-        return "⏰ زمان پاسخگویی به پایان رسید. لطفاً دوباره تلاش کنید."
-        
-    except aiohttp.ClientError as e:
-        logger.error(f"🌐 خطای شبکه در OpenRouter: {e}")
-        return f"❌ خطای شبکه در سرویس پشتیبان: {str(e)[:100]}"
-        
-    except Exception as e:
-        logger.error(f"❌ خطا در OpenRouter: {e}")
-        return f"❌ خطا: {str(e)[:100]}"
     
 @dp.message(Command("test_full"))
 async def cmd_test_full(message: Message):
@@ -35601,22 +34555,6 @@ async def auto_ai_response(message: Message):
         await processing_msg.delete()
 
 
-def is_ai_question(text: str) -> bool:
-    """تشخیص سوال مرتبط با کانفیگ"""
-    text_lower = text.lower()
-    keywords = [
-        'چطور', 'چگونه', 'راهنمایی', 'مشکل', 'ارور', 'خطا', 'اتصال', 'قطع', 'وصل',
-        'vpn', 'کانفیگ', 'کانفیک', 'کانف', 'v2ray', 'vless', 'trojan', 'ساب', 'لینک',
-        'حجم', 'مدت', 'قیمت', 'تومان', 'خرید', 'شارژ', 'پرداخت', 'فیش', 'کارت',
-        'رفرال', 'دعوت', 'پشتیبانی', 'آموزش', 'نحوه', 'طریقه', 'شیوه',
-        'اندروید', 'ios', 'ویندوز', 'مک', 'لینوکس', 'موبایل', 'کامپیوتر',
-        'نمیشه', 'کار نمیکنه', 'وصل نمیشه', 'قطع میشه',
-        'how', 'why', 'what', 'help', 'error', 'problem', 'connection',
-        'config', 'profile', 'subscription', 'link', 'expire', 'renew',
-        'payment', 'card', 'balance', 'charge', 'referral', 'invite'
-    ]
-    
-    return any(kw in text_lower for kw in keywords)
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
     version = "v1.7.41"
@@ -37904,10 +36842,7 @@ async def confirm_cancel_order(callback: CallbackQuery):
     
     logger.info(f"🗑 سفارش #{order_id} توسط ادمین {callback.from_user.id} لغو شد")
     await callback.answer("✅ سفارش لغو شد" if lang == "fa" else "✅ Order cancelled", show_alert=True)
-    
-    
-    
-    
+       
 @dp.callback_query(F.data.startswith("approve_order_"))
 async def approve_order(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
@@ -38002,12 +36937,6 @@ async def reject_order(callback: CallbackQuery):
             logger.error(f"خطا در ارسال پیام رد سفارش: {e}")
         await callback.answer("✅ سفارش رد شد" if lang == 'fa' else "✅ Order rejected", show_alert=True)
     await admin_orders(callback)
-
-
-
-
-
-
 
 
 @dp.callback_query(F.data == "admin_configs")
@@ -38186,9 +37115,7 @@ async def admin_users_page(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
     
-    
-    
-    
+  
 @dp.callback_query(F.data.startswith("admin_view_config_"))
 async def admin_view_config_detail(callback: CallbackQuery):
     """نمایش جزئیات کامل یک کانفیگ برای ادمین با نمایش تعداد کاربر"""
@@ -38262,10 +37189,6 @@ async def admin_view_config_detail(callback: CallbackQuery):
     
     await callback.message.edit_text(text, reply_markup=keyboard)
     
-    
-    
-
-
 @dp.callback_query(F.data.startswith("admin_user_"))
 async def admin_user_detail(callback: CallbackQuery):
     """مشاهده جزئیات کاربر - با نمایش تاریخچه سفارشات"""
@@ -39402,7 +38325,6 @@ async def admin_delete_user_confirm(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
     
-
 @dp.callback_query(F.data.startswith("confirm_delete_user_keep_config_"))
 async def confirm_delete_user_keep_config(callback: CallbackQuery):
     """اجرای حذف کاربر بدون حذف کانفیگ از پنل"""
@@ -39452,8 +38374,7 @@ async def confirm_delete_user_keep_config(callback: CallbackQuery):
     )
     await callback.answer("✅ حذف شد" if lang=="fa" else "✅ Deleted", show_alert=True)
     
-    
-    
+  
 @dp.callback_query(F.data.startswith("confirm_delete_user_"))
 async def confirm_delete_user(callback: CallbackQuery):
     """اجرای حذف کاربر"""
@@ -39517,9 +38438,7 @@ async def confirm_delete_user(callback: CallbackQuery):
         parse_mode=ParseMode.HTML
     )
     await callback.answer("✅ حذف شد" if lang=="fa" else "✅ Deleted", show_alert=True)
-
-
-    
+   
 @dp.callback_query(F.data == "backup_db")
 async def backup_db_cmd(callback: CallbackQuery):
     """بکاپ دستی"""
@@ -39664,9 +38583,7 @@ async def admin_panel_status(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-    
-    
-    
+       
 @dp.callback_query(F.data == "admin_ping_test")
 async def admin_ping_test(callback: CallbackQuery):
     """تست پینگ - HTTP version"""
@@ -39744,14 +38661,6 @@ async def noop(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
 
-
-def get_pool_stats() -> dict:
-    configs = configs_pool.get('configs', [])
-    return {
-        'total': len(configs),
-        'available': len([c for c in configs if not c.get('used')]),
-        'used': len([c for c in configs if c.get('used')])
-    }
     
 @dp.message(Command("aistatus"))
 async def cmd_ai_status(message: Message):
@@ -39772,7 +38681,6 @@ async def cmd_ai_status(message: Message):
 """
     await message.reply(status_text, parse_mode=ParseMode.HTML)
     
-from config import GEMINI_API_KEY  
 async def init_ai():
     """راه‌اندازی کلاینت هوش مصنوعی با لاگ‌گیری کامل و ذخیره خطاها"""
     global gemini_client, openrouter_client
@@ -39969,9 +38877,6 @@ async def init_ai():
         openrouter_error_message = "ℹ️ OpenRouter در config.py غیرفعال شده است (OPENROUTER_ENABLED = False)"
         logger.info(f"   ℹ️ {openrouter_error_message}")
     
-    # ============================================
-    # بخش 3: جمع‌بندی نهایی
-    # ============================================
     logger.info("-" * 70)
     logger.info("📊 جمع‌بندی نهایی:")
     
@@ -40644,71 +39549,6 @@ async def main():
         
         raise
 
-async def get_server_info() -> dict:
-    try:
-        import shutil
-        import psutil
-        
-        total, used, free = shutil.disk_usage(".")
-        free_gb = free / (1024**3)
-        total_gb = total / (1024**3)
-        used_gb = used / (1024**3)
-        disk_percent = (used / total) * 100
-        
-        cpu_percent = psutil.cpu_percent(interval=1)
-        
-        boot_time = datetime.fromtimestamp(psutil.boot_time())
-        uptime_seconds = int((datetime.now() - boot_time).total_seconds())
-        days = uptime_seconds // 86400
-        hours = (uptime_seconds % 86400) // 3600
-        minutes = (uptime_seconds % 3600) // 60
-        uptime_str = f"{days}d {hours}h {minutes}m"
-        
-        return {
-            'free_gb': free_gb,
-            'total_gb': total_gb,
-            'used_gb': used_gb,
-            'disk_percent': disk_percent,
-            'cpu_percent': cpu_percent,
-            'uptime': uptime_str,
-            'uptime_seconds': uptime_seconds
-        }
-    except ImportError:
-        logger.warning("ماژول psutil نصب نیست، اطلاعات سرور محدود است")
-        try:
-            import shutil
-            total, used, free = shutil.disk_usage(".")
-            return {
-                'free_gb': free / (1024**3),
-                'total_gb': total / (1024**3),
-                'used_gb': used / (1024**3),
-                'disk_percent': (used / total) * 100,
-                'cpu_percent': 0,
-                'uptime': 'نامشخص',
-                'uptime_seconds': 0
-            }
-        except:
-            return {
-                'free_gb': 0,
-                'total_gb': 0,
-                'used_gb': 0,
-                'disk_percent': 0,
-                'cpu_percent': 0,
-                'uptime': 'نامشخص',
-                'uptime_seconds': 0
-            }
-    except Exception as e:
-        logger.error(f"خطا در دریافت اطلاعات سرور: {e}")
-        return {
-            'free_gb': 0,
-            'total_gb': 0,
-            'used_gb': 0,
-            'disk_percent': 0,
-            'cpu_percent': 0,
-            'uptime': 'نامشخص',
-            'uptime_seconds': 0
-        }
-
 def cleanup_expired_states():
     """پاک کردن وضعیت‌های منقضی شده کاربران با نگهداری آمار"""
     global user_states
@@ -40993,9 +39833,6 @@ async def cmd_stats(message: Message):
     except Exception as e:
         logger.error(f"خطا در ارسال آمار به ادمین: {e}", exc_info=True)
 
-
-
-
 from alert_system import AlertSystem
 
 alert_system = None
@@ -41017,7 +39854,6 @@ async def init_alert_system():
     try:
         logger.info("🧪 راه‌اندازی سیستم هشدار سرویس...")
         
-        # بارگذاری تنظیمات از دیتابیس
         if 'alert_settings' in configs_pool and isinstance(configs_pool['alert_settings'], dict):
             saved_settings = configs_pool['alert_settings']
             alert_system_settings.update(saved_settings)
@@ -41025,10 +39861,7 @@ async def init_alert_system():
         else:
             logger.info("⚙️ استفاده از تنظیمات پیشفرض هشدار")
         
-        # تعیین مسیر فایل کش
         cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
-        
-        # ✅ ایجاد نمونه سیستم هشدار با پارامترهای جدید
         alert_system = AlertSystem(
             bot=bot,
             orders_getter=get_valid_orders,
@@ -41039,11 +39872,7 @@ async def init_alert_system():
             find_email_by_sub_id_func=find_email_by_sub_id,   # ✅ تابع جدید برای resolve subId → email
             update_order_func=update_order                     # ✅ تابع جدید برای ذخیره email در سفارش
         )
-        
-        # ✅ اعمال تنظیمات بارگذاری شده
         alert_system.update_settings(alert_system_settings)
-        
-        # شروع کارگر پس‌زمینه
         asyncio.create_task(alert_system.run_alert_worker())
         
         logger.info("✅ سیستم هشدار با موفقیت راه‌اندازی شد")
