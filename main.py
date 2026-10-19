@@ -28419,7 +28419,8 @@ async def confirm_approve_package(callback: CallbackQuery):
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
             
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback,
                 f"❌ خطا در تمدید سرویس. موجودی کاربر برگشت داده شد.\n"
                 f"💰 موجودی جدید: {user['balance'] + price:,} تومان\n"
                 f"{payment_emoji} روش پرداخت: {payment_label}" if lang == "fa" else 
@@ -28509,7 +28510,8 @@ async def confirm_approve_package(callback: CallbackQuery):
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
             
-            await callback.message.edit_text(
+            await safe_edit_message(
+                callback,
                 f"❌ خطا در ساخت کلاینت برای بسته #{oid}\n"
                 f"💰 موجودی کاربر برگشت داده شد.\n"
                 f"💰 موجودی جدید: {user['balance'] + price:,} تومان\n"
@@ -28532,7 +28534,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             
             await callback.answer("❌ خطا در ساخت کلاینت", show_alert=True)
             return
-    else:
+    else:  # پنل غیرفعال
         user_states[callback.from_user.id] = {
             'awaiting_config': True,
             'order_id': oid,
@@ -28542,7 +28544,9 @@ async def confirm_approve_package(callback: CallbackQuery):
             'price': price
         }
         
-        await callback.message.edit_text(
+        # ✅ استفاده از safe_edit_message به جای edit_text
+        await safe_edit_message(
+            callback,
             f"⏳ منتظر کانفیگ از ادمین برای بسته #{oid}...\n"
             f"👤 کاربر: {user_name_escaped} ({uid})\n"
             f"📦 {vol}GB / {days} روز\n"
