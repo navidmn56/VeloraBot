@@ -5,18 +5,24 @@
 # ============================================================
 # Source of truth: https://github.com/navidmn56/VeloraBot (main)
 #
-# Design:
-#   * FD 3 on /dev/tty for prompts → curl|bash safe.
-#   * config.py from release is applied, then user's values are
-#     re-applied on top (comments & structure from release kept).
-#   * data/ and *.log are never touched by any operation.
-#   * .version written ONLY after successful health check.
-#   * ZIP download pinned to exact commit SHA.
-#   * Non-root service user + systemd sandboxing.
-#   * Interactive management panel shown in `auto` mode.
-#   * Auto-detects / installs Python 3.11+ for numpy >= 2.3.
-#   * Setup Link: AES-256-CBC encrypted backup of data/ + config.py
-#     uploaded to a temporary host; restorable on another server.
+# FIXED VERSION — patches applied:
+#   #1  --force-update reaches dispatch (no more 'auto' die)
+#   #2  rollback restores config.py
+#   #3  backup BEFORE venv recreate; .venv.old kept for rollback
+#   #4  migrate_config_keys reads keys via env (heredoc/pipe clash)
+#   #5  '#' inside string values no longer mistaken for comment
+#   #6  warns about unmanaged config.py keys reset by update
+#   #7  corrupt config.py fails loudly instead of looking empty
+#   #8  service restart is preserved; INT/TERM can't cancel rollback
+#   #9  Telegram getMe uses --fail + checks "ok":true
+#   #10 systemctl mask removed (it fights unit-file writes)
+#   SL  Setup Link: keep encrypted file for manual transfer; env-pass;
+#       safe perms; archive validation; data replaced by move; config
+#       migrated; split-brain prompt; --backup-link skips heavy steps
+#   WD  Watchdog: grace period + precise conflict pattern
+#   RB  Preflight (systemd/disk/lock), apt retry, venv support for
+#       chosen Python, GitHub API rate-limit fallback, repair stops
+#       service, strict useradd/chown, py_compile without __pycache__
 # ============================================================
 
 set -Eeuo pipefail
@@ -152,7 +158,7 @@ GEMINI_MAX_TOKENS="90"
 GEMINI_DAILY_LIMIT="3"
 
 # ============================================================
-# Logging
+# Logging  (fix: redirect stderr first so open failures are silenced)
 # ============================================================
 
 initialize_logging() {
@@ -160,7 +166,7 @@ initialize_logging() {
     fallback="$(mktemp -t velorabot-installer.XXXXXX.log 2>/dev/null \
         || echo "/tmp/velorabot-installer.$$.log")"
     LOG_FILE="${fallback}"
-    : > "${LOG_FILE}" 2>/dev/null || true
+    : 2>/dev/null > "${LOG_FILE}" || true
     chmod 600 "${LOG_FILE}" 2>/dev/null || true
 
     if [[ "$(id -u)" -eq 0 ]]; then
@@ -239,6 +245,7 @@ rsync_excludes() {
         '--exclude=/config.py' \
         '--exclude=/data/' \
         '--exclude=/.venv/' \
+        '--exclude=/.venv.old/' \
         '--exclude=/.version' \
         '--exclude=/.git/' \
         '--exclude=/.env' \
@@ -249,6 +256,7 @@ rsync_excludes_update() {
     printf '%s\n' \
         '--exclude=/data/' \
         '--exclude=/.venv/' \
+        '--exclude=/.venv.old/' \
         '--exclude=/.version' \
         '--exclude=/.git/' \
         '--exclude=/.env' \
@@ -259,6 +267,7 @@ restore_application_backup() {
     [[ "${BACKUP_READY}" -eq 1 ]] || return 1
     [[ -n "${BACKUP_DIR}" ]] || return 1
     [[ -f "${BACKUP_DIR}/application.tar.gz" ]] || return 1
+    [[ -n "${TEMP_ROOT}" && -d "${TEMP_ROOT}" ]] || return 1   # fix #2
 
     local rollback_root="${TEMP_ROOT}/rollback"
     rm -rf -- "${rollback_root}"
@@ -283,6 +292,13 @@ restore_application_backup() {
 
     rsync -a --delete "${excludes[@]}" \
         "${rollback_root}/" "${INSTALL_DIR}/"
+
+    # ─── FIX #2: restore config.py as well (rsync excludes it) ───
+    if [[ -f "${rollback_root}/config.py" ]]; then
+        cp -a "${rollback_root}/config.py" "${CONFIG_FILE}"
+        chmod 600 "${CONFIG_FILE}"
+        log_info "config.py restored from backup."
+    fi
 
     if [[ -f "${BACKUP_DIR}/data.tar.gz" ]]; then
         log_info "Restoring data/ from backup..."
@@ -311,7 +327,12 @@ rollback_update() {
         return 1
     fi
 
-    if [[ -f "${BACKUP_DIR}/freeze.txt" && -x "${VENV_DIR}/bin/python" ]]; then
+    # ─── FIX #3: prefer .venv.old, then pinned freeze, then reqs ───
+    if [[ -d "${VENV_DIR}.old" ]]; then
+        log_info "Restoring previous virtual environment (.venv.old)..."
+        rm -rf -- "${VENV_DIR}"
+        mv -- "${VENV_DIR}.old" "${VENV_DIR}"
+    elif [[ -f "${BACKUP_DIR}/freeze.txt" && -x "${VENV_DIR}/bin/python" ]]; then
         log_info "Restoring previous Python dependencies (pinned freeze)..."
         if ! "${VENV_DIR}/bin/python" -m pip install \
             --force-reinstall --no-deps \
@@ -333,6 +354,9 @@ rollback_update() {
 
 on_exit() {
     local exit_code=$?
+
+    # ─── FIX #8: don't let Ctrl+C interrupt rollback ───
+    trap '' INT TERM
 
     if [[ -n "${STTY_SAVED_STATE}" ]]; then
         stty "${STTY_SAVED_STATE}" < /dev/tty 2>/dev/null || \
@@ -357,6 +381,13 @@ on_exit() {
             log_error "Automatic rollback was not fully successful."
             log_error "Manual recovery may be required."
         fi
+    fi
+
+    # ─── FIX #8: if installer stopped the service and no rollback ran, restart it ───
+    if (( exit_code != 0 )) && (( UPDATE_IN_PROGRESS == 0 )) && \
+       (( SERVICE_WAS_ACTIVE == 1 )) && ! service_is_active 2>/dev/null; then
+        log_warning "Restarting ${SERVICE_NAME} that the installer had stopped..."
+        systemctl start "${SERVICE_NAME}" >/dev/null 2>&1 || true
     fi
 
     close_tty
@@ -453,23 +484,6 @@ Usage:
   sudo bash $0 --restore "URL#PASS"           # Restore from Setup Link
   sudo bash $0 --help
 
-Options:
-  --install              Force a fresh installation.
-  --update               Force an update of an existing installation.
-  --force-update         Re-sync even when the installed commit is current.
-  --skip-config          Skip config prompts during a fresh install.
-  --repair               Validate and repair the current installation.
-  --backup-link          Generate a portable Setup Link (encrypted).
-  --restore <link>       Restore data + config from a Setup Link.
-  --help, -h             Show this help.
-
-Setup Link format:
-  https://<host>/<file>#<password>
-
-The link is produced by --backup-link on the source server. Both the
-encrypted archive and the decryption password are embedded in the link.
-Links expire automatically within a few days (host-dependent).
-
 Source of truth:
   ${REPO_URL} (branch: ${BRANCH})
 EOF
@@ -511,6 +525,20 @@ check_root() {
     log_success "Running with root privileges."
 }
 
+# ─── FIX (RB): preflight ───
+preflight_checks() {
+    if [[ ! -d /run/systemd/system ]]; then
+        die "systemd is required (OpenVZ/WSL/containers without systemd are unsupported)."
+    fi
+    local free_mb
+    free_mb="$(df -Pm "$(dirname "${INSTALL_DIR}")" | awk 'NR==2 {print $4}')"
+    if [[ -n "${free_mb}" ]] && (( free_mb < 1024 )); then
+        die "At least 1 GB free space is required (found ${free_mb} MB)."
+    fi
+    exec 9>/var/lock/velorabot-installer.lock
+    flock -n 9 || die "Another VeloraBot installer instance is already running."
+}
+
 check_operating_system() {
     [[ -f /etc/os-release ]] || die "Cannot detect the operating system."
     # shellcheck disable=SC1091
@@ -538,19 +566,33 @@ check_operating_system() {
     fi
 }
 
+# ─── FIX (RB): apt retry wrapper ───
+apt_retry() {
+    local attempt
+    for attempt in 1 2 3; do
+        if apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 "$@"; then
+            return 0
+        fi
+        log_warning "apt-get ${1:-?} failed (attempt ${attempt}/3); retrying in 10s..."
+        sleep 10
+    done
+    return 1
+}
+
 install_system_dependencies() {
     draw_step "Installing System Dependencies"
     export DEBIAN_FRONTEND=noninteractive
 
     log_command "apt-get update"
-    apt-get -o DPkg::Lock::Timeout=120 update -qq
+    apt_retry update -qq || log_warning "apt update failed; using cached indexes"
 
     log_command "Installing required packages"
-    apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+    apt_retry install -y -qq \
         ca-certificates curl unzip rsync openssl \
         python3 python3-pip \
         python3-venv python3-dev build-essential libssl-dev libffi-dev \
-        libjpeg-dev zlib1g-dev software-properties-common
+        libjpeg-dev zlib1g-dev software-properties-common \
+        || die "Package installation failed."
 
     for cmd in python3 curl unzip rsync openssl; do
         command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is not available."
@@ -559,12 +601,26 @@ install_system_dependencies() {
     log_success "System dependencies are installed."
 }
 
+# ─── FIX (RB): ensure venv module works for chosen interpreter ───
+ensure_python_venv_support() {
+    if "${PYTHON_BIN}" -c 'import venv, ensurepip' 2>/dev/null; then
+        return 0
+    fi
+    local pkg="${PYTHON_BIN}-venv"
+    [[ "${PYTHON_BIN}" == "python3" ]] && pkg="python3-venv"
+    log_info "Installing ${pkg} so ${PYTHON_BIN} can create venvs..."
+    apt_retry install -y -qq "${pkg}" >/dev/null 2>&1 || true
+    if ! "${PYTHON_BIN}" -c 'import venv, ensurepip' 2>/dev/null; then
+        die "Python venv support is missing for ${PYTHON_BIN}."
+    fi
+}
+
 ensure_modern_python() {
     local py candidate=""
 
-    # ─── مرحله 1: جستجوی پایتون 3.14 نصب‌شده ───
     log_info "Searching for an installed Python 3.14 or newer..."
-    for py in python3.14 python3.13 python3.12 python3.11; do
+    # ─── FIX (RB#3): prefer 3.13/3.12/3.11 first (wheels) then 3.14 ───
+    for py in python3.13 python3.12 python3.11 python3.14; do
         if command -v "${py}" >/dev/null 2>&1; then
             if "${py}" -c \
                 "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)" \
@@ -576,7 +632,6 @@ ensure_modern_python() {
         fi
     done
 
-    # ─── مرحله 2: چک کردن python3 پیش‌فرض ───
     if [[ -z "${candidate}" ]]; then
         if command -v python3 >/dev/null 2>&1 && \
            python3 -c \
@@ -587,22 +642,17 @@ ensure_modern_python() {
         fi
     fi
 
-    # ─── مرحله 3: نصب پایتون 3.14 از deadsnakes PPA ───
     if [[ -z "${candidate}" ]]; then
         log_warning "No Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ found. Installing Python 3.14..."
 
-        # اطمینان از نصب بودن ابزارهای لازم
-        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
-            software-properties-common gnupg ca-certificates 2>/dev/null || true
+        apt_retry install -y -qq software-properties-common gnupg ca-certificates 2>/dev/null || true
 
-        # اضافه کردن deadsnakes PPA (شامل Python 3.14)
-        log_info "Adding deadsnakes PPA (contains Python 3.14)..."
+        log_info "Adding deadsnakes PPA..."
         add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 || true
-        apt-get -o DPkg::Lock::Timeout=120 update -qq 2>/dev/null || true
+        apt_retry update -qq 2>/dev/null || true
 
-        # تلاش برای نصب Python 3.14
-        log_info "Attempting to install python3.14, python3.14-venv, python3.14-dev..."
-        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+        log_info "Attempting to install python3.14..."
+        apt_retry install -y -qq \
             python3.14 python3.14-venv python3.14-dev 2>&1 | \
             tee -a "${LOG_FILE}" || true
 
@@ -613,14 +663,11 @@ ensure_modern_python() {
         fi
     fi
 
-    # ─── مرحله 4: عقب‌نشینی به 3.13 ───
     if [[ -z "${candidate}" ]]; then
         log_warning "Python 3.14 not available. Trying Python 3.13..."
-
-        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+        apt_retry install -y -qq \
             python3.13 python3.13-venv python3.13-dev 2>&1 | \
             tee -a "${LOG_FILE}" || true
-
         if command -v python3.13 >/dev/null 2>&1 && \
            python3.13 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,13) else 1)" 2>/dev/null; then
             candidate="python3.13"
@@ -628,14 +675,11 @@ ensure_modern_python() {
         fi
     fi
 
-    # ─── مرحله 5: عقب‌نشینی به 3.12 ───
     if [[ -z "${candidate}" ]]; then
         log_warning "Python 3.13 not available. Trying Python 3.12..."
-
-        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+        apt_retry install -y -qq \
             python3.12 python3.12-venv python3.12-dev 2>&1 | \
             tee -a "${LOG_FILE}" || true
-
         if command -v python3.12 >/dev/null 2>&1 && \
            python3.12 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
             candidate="python3.12"
@@ -643,14 +687,11 @@ ensure_modern_python() {
         fi
     fi
 
-    # ─── مرحله 6: عقب‌نشینی به 3.11 ───
     if [[ -z "${candidate}" ]]; then
         log_warning "Python 3.12 not available. Trying Python 3.11..."
-
-        apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
+        apt_retry install -y -qq \
             python3.11 python3.11-venv python3.11-dev 2>&1 | \
             tee -a "${LOG_FILE}" || true
-
         if command -v python3.11 >/dev/null 2>&1 && \
            python3.11 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
             candidate="python3.11"
@@ -658,7 +699,6 @@ ensure_modern_python() {
         fi
     fi
 
-    # ─── نتیجه ───
     if [[ -z "${candidate}" ]]; then
         die "Could not install Python 3.11+. Install it manually and re-run the installer."
     fi
@@ -674,7 +714,7 @@ check_python_version() {
 
     if ! "${PYTHON_BIN}" -c \
         "import sys; raise SystemExit(0 if sys.version_info >= (${REQUIRED_PYTHON_MAJOR},${REQUIRED_PYTHON_MINOR}) else 1)"; then
-        die "VeloraBot requires Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR} or newer (numpy >= 2.3 requires it)."
+        die "VeloraBot requires Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR} or newer."
     fi
     log_success "Python version is supported."
 }
@@ -694,28 +734,35 @@ check_github_connectivity() {
 # GitHub main branch
 # ============================================================
 
-fetch_latest_commit() {
+fetch_latest_commit_api() {
     draw_step "Checking Latest GitHub Commit (${BRANCH})"
     local metadata_file="${TEMP_ROOT}/commit.json"
 
-    log_info "Requesting latest commit information from GitHub..."
+    log_info "Requesting latest commit information from GitHub API..."
 
-    curl --fail --silent --show-error --location \
+    if ! curl --fail --silent --show-error --location \
         --retry 4 --retry-delay 2 \
         --connect-timeout 15 --max-time 60 \
         -H "Accept: application/vnd.github+json" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
-        "${COMMITS_API}" -o "${metadata_file}"
+        "${COMMITS_API}" -o "${metadata_file}" 2>>"${LOG_FILE}"; then
+        return 1
+    fi
 
     local parsed
     parsed="$(
         "${PYTHON_BIN}" - "${metadata_file}" <<'PY'
 import json, sys
-with open(sys.argv[1], "r", encoding="utf-8") as f:
-    data = json.load(f)
-if data.get("message"):
-    raise SystemExit(f"GitHub API error: {data['message']}")
-sha = data.get("sha", "")
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        data = json.load(f)
+except Exception as e:
+    print(f"API JSON error: {e}", file=sys.stderr)
+    raise SystemExit(1)
+if isinstance(data, dict) and data.get("message"):
+    print(f"GitHub API error: {data['message']}", file=sys.stderr)
+    raise SystemExit(1)
+sha = data.get("sha", "") if isinstance(data, dict) else ""
 if not sha:
     raise SystemExit("No SHA.")
 commit = data.get("commit", {}) or {}
@@ -723,17 +770,42 @@ author = commit.get("author", {}) or {}
 print(sha)
 print(author.get("date", ""))
 PY
-    )" || die "Failed to parse GitHub commit information."
+    )" || return 1
 
     LATEST_COMMIT_SHA="$(printf '%s\n' "${parsed}" | sed -n '1p')"
     LATEST_COMMIT_DATE="$(printf '%s\n' "${parsed}" | sed -n '2p')"
-    [[ -n "${LATEST_COMMIT_SHA}" ]] || die "Latest commit SHA could not be determined."
+    [[ -n "${LATEST_COMMIT_SHA}" ]] || return 1
 
     LATEST_VERSION="${LATEST_COMMIT_SHA:0:12}"
-
     printf '\nLatest commit : %s\n' "${LATEST_VERSION}"
     printf 'Commit date   : %s\n\n' "${LATEST_COMMIT_DATE}"
-    log_success "Latest commit detected."
+    log_success "Latest commit detected (via GitHub API)."
+    return 0
+}
+
+# ─── FIX (RB#4): fallback when API rate-limits us ───
+fetch_latest_commit_from_zip() {
+    log_warning "GitHub API unavailable; resolving the commit from the branch archive..."
+    local z="${TEMP_ROOT}/branch.zip"
+    curl --fail --silent --show-error --location \
+        --retry 4 --retry-delay 2 \
+        --connect-timeout 15 --max-time 300 \
+        "https://codeload.github.com/${REPO_FULL}/zip/refs/heads/${BRANCH}" \
+        -o "${z}" 2>>"${LOG_FILE}" || return 1
+    LATEST_COMMIT_SHA="$(unzip -z "${z}" 2>/dev/null \
+        | grep -Eo '^[0-9a-f]{40}' | head -n1 || true)"
+    [[ -n "${LATEST_COMMIT_SHA}" ]] || return 1
+    LATEST_VERSION="${LATEST_COMMIT_SHA:0:12}"
+    LATEST_COMMIT_DATE="unknown"
+    printf '\nLatest commit : %s\n\n' "${LATEST_VERSION}"
+    log_success "Latest commit detected (via zip comment)."
+    return 0
+}
+
+fetch_latest_commit() {
+    fetch_latest_commit_api && return 0
+    fetch_latest_commit_from_zip && return 0
+    die "Could not determine the latest commit (API and archive both failed)."
 }
 
 download_latest_commit() {
@@ -834,15 +906,16 @@ create_backup() {
     local ts
     ts="$(date '+%Y%m%d_%H%M%S')"
     BACKUP_DIR="${BACKUP_ROOT}/${ts}_from-${CURRENT_VERSION}_to-${LATEST_VERSION}"
-    mkdir -p "${BACKUP_DIR}"
+    mkdir -p "${BACKUP_ROOT}" "${BACKUP_DIR}"
     chmod 700 "${BACKUP_ROOT}" 2>/dev/null || true
     chmod 700 "${BACKUP_DIR}"
 
     draw_step "Creating Update Backup"
 
-    log_info "Backing up application source (excluding data/, .venv/, *.log)..."
+    log_info "Backing up application source (excluding data/, .venv*, *.log)..."
     tar -czf "${BACKUP_DIR}/application.tar.gz" \
         --exclude='./.venv' \
+        --exclude='./.venv.old' \
         --exclude='./data' \
         --exclude='./.git' \
         --exclude='./*.log' \
@@ -852,7 +925,7 @@ create_backup() {
     }
 
     if [[ -d "${DATA_DIR}" ]]; then
-        log_info "Backing up data/ (users, orders, configs)..."
+        log_info "Backing up data/ ..."
         tar -czf "${BACKUP_DIR}/data.tar.gz" \
             -C "${INSTALL_DIR}" data 2>>"${LOG_FILE}" || {
             log_error "Failed to back up data/."
@@ -893,60 +966,46 @@ create_backup() {
 
 service_is_active() { systemctl is-active --quiet "${SERVICE_NAME}"; }
 
+# ─── FIX #8: don't reset SERVICE_WAS_ACTIVE on every call ───
 stop_service_if_active() {
-    SERVICE_WAS_ACTIVE=0
     if service_is_active; then
         SERVICE_WAS_ACTIVE=1
     fi
-    
+
     log_info "Stopping ${SERVICE_NAME} (if present)..."
-    
-    # ─── مرحله ۱: توقف معمولی ───
+
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    
-    # ─── مرحله ۲: انتظار برای توقف کامل (حداکثر 15 ثانیه) ───
+
     local i=0
     while (( i < 15 )) && service_is_active; do
         sleep 1
         (( i++ )) || true
     done
-    
-    # ─── مرحله ۳: اگه هنوز فعاله، kill سخت ───
+
     if service_is_active; then
         log_warning "Service did not stop cleanly, sending SIGKILL..."
         systemctl kill -s SIGKILL "${SERVICE_NAME}" >/dev/null 2>&1 || true
         sleep 2
     fi
-    
-    # ─── مرحله ۴: اگه بازم فعاله، mask کن (جلوگیری از هر راه‌اندازی) ───
-    if service_is_active; then
-        log_warning "Service is stubborn - using mask to prevent auto-restart..."
-        systemctl mask "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        sleep 1
-    fi
-    
-    # ─── مرحله ۵: پاک کردن حالت failed ───
+
+    # FIX #10: no mask — it fights unit-file writes
     systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    
-    # ─── بررسی نهایی ───
+
     if service_is_active; then
         log_error "❌ Failed to stop ${SERVICE_NAME}!"
         return 1
     fi
-    
+
     log_success "${SERVICE_NAME} stopped."
     return 0
 }
+
+# FIX #10: kept as a no-op for source compatibility
 unmask_service_after_update() {
-    # اگه سرویس mask شده بود، unmask کن
-    if systemctl is-enabled "${SERVICE_NAME}" 2>&1 | grep -q "masked"; then
-        log_info "Unmasking ${SERVICE_NAME}..."
-        systemctl unmask "${SERVICE_NAME}" >/dev/null 2>&1 || true
-        systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    fi
+    return 0
 }
 
+# ─── FIX (RB#6): strict service-user creation ───
 ensure_service_user() {
     if ! getent group "${SERVICE_GROUP}" >/dev/null 2>&1; then
         groupadd --system "${SERVICE_GROUP}" 2>/dev/null || true
@@ -959,12 +1018,15 @@ ensure_service_user() {
             --no-create-home \
             "${SERVICE_USER}" 2>/dev/null || true
     fi
+    id -u "${SERVICE_USER}" >/dev/null 2>&1 \
+        || die "Could not create service user ${SERVICE_USER}."
 }
 
 fix_permissions() {
     ensure_service_user
     mkdir -p "${DATA_DIR}"
-    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}" 2>/dev/null || true
+    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}" \
+        || die "chown failed on ${INSTALL_DIR}"
     chmod 755 "${INSTALL_DIR}" 2>/dev/null || true
     [[ -f "${CONFIG_FILE}" ]] && chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
     chmod 700 "${DATA_DIR}" 2>/dev/null || true
@@ -998,7 +1060,6 @@ RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65535
 
-# --- Sandbox: relaxed but still safe ---
 NoNewPrivileges=yes
 ProtectSystem=full
 ReadWritePaths=${INSTALL_DIR}
@@ -1014,7 +1075,6 @@ LockPersonality=no
 RestrictRealtime=no
 SystemCallArchitectures=native
 
-# Allow raw sockets for ICMP ping (loopback and remote)
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 
@@ -1030,9 +1090,9 @@ EOF
         printf '%s\n' "${desired}" > "${SERVICE_FILE}"
         chmod 644 "${SERVICE_FILE}"
         systemctl daemon-reload
-        log_info "systemd unit file updated."
+        log_info "systemd unit file updated (overwriting previous version)."
     else
-        log_info "systemd unit file unchanged (preserving any local edits)."
+        log_info "systemd unit file unchanged."
     fi
 
     systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
@@ -1048,25 +1108,19 @@ create_systemd_service() {
 
 start_service_and_check() {
     draw_step "Starting VeloraBot"
-    
-    # ─── اطمینان از unmask بودن ───
-    if systemctl is-enabled "${SERVICE_NAME}" 2>&1 | grep -q "masked"; then
-        log_warning "Service is masked, unmasking..."
-        systemctl unmask "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    fi
-    
+
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}" >/dev/null 2>&1 || true
     systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
     systemctl restart "${SERVICE_NAME}"
-    
+
     log_info "Waiting for service to stabilize..."
     sleep 15
-    
+
     local restarts
     restarts="$(systemctl show "${SERVICE_NAME}" -p NRestarts --value 2>/dev/null || echo 0)"
     [[ -n "${restarts}" ]] || restarts=0
-    
+
     if ! service_is_active; then
         log_error "${SERVICE_NAME} failed to start."
         printf '\n%s\n%s\n' "Recent service logs:" "------------------------------------------------------------"
@@ -1074,7 +1128,7 @@ start_service_and_check() {
         printf '%s\n' "------------------------------------------------------------"
         return 1
     fi
-    
+
     if [[ "${restarts}" != "0" ]]; then
         log_error "${SERVICE_NAME} is in a restart loop (NRestarts=${restarts})."
         printf '\n%s\n%s\n' "Recent service logs:" "------------------------------------------------------------"
@@ -1082,17 +1136,24 @@ start_service_and_check() {
         printf '%s\n' "------------------------------------------------------------"
         return 1
     fi
-    
+
+    # ─── FIX #9: getMe with --fail + "ok":true check ───
     if [[ -n "${BOT_TOKEN}" && "${BOT_TOKEN}" != "None" ]]; then
         log_info "Verifying Telegram bot token (getMe)..."
         if printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "${BOT_TOKEN}" \
-             | curl --silent --show-error --max-time 15 --config - >/dev/null 2>&1; then
+             | curl --silent --fail --max-time 15 --config - 2>/dev/null \
+             | grep -q '"ok":true'; then
             log_success "Telegram bot token is valid."
         else
-            log_warning "Could not verify bot token via getMe (network or token issue)."
+            log_warning "Telegram getMe failed: the token is invalid or api.telegram.org is unreachable."
         fi
     fi
-    
+
+    # ─── FIX #3: successful start → drop the old venv ───
+    if [[ -d "${VENV_DIR}.old" ]]; then
+        rm -rf -- "${VENV_DIR}.old" 2>/dev/null || true
+    fi
+
     log_success "${SERVICE_NAME} is running (NRestarts=0)."
     return 0
 }
@@ -1100,19 +1161,18 @@ start_service_and_check() {
 # ============================================================
 # Python venv
 # ============================================================
+
 create_virtual_environment_if_needed() {
     local recreate=0
     local reason=""
     local req_file=""
 
-    # ─── پیدا کردن requirements.txt (ترجیح: نسخه release) ───
     if [[ -n "${RELEASE_ROOT:-}" && -f "${RELEASE_ROOT}/requirements.txt" ]]; then
         req_file="${RELEASE_ROOT}/requirements.txt"
     elif [[ -f "${INSTALL_DIR}/requirements.txt" ]]; then
         req_file="${INSTALL_DIR}/requirements.txt"
     fi
 
-    # ─── بررسی ۱: تغییر نسخه‌ی پایتون ───
     if [[ -x "${VENV_DIR}/bin/python" ]]; then
         local venv_major_minor target_major_minor
         venv_major_minor="$("${VENV_DIR}/bin/python" -c \
@@ -1127,7 +1187,6 @@ create_virtual_environment_if_needed() {
         fi
     fi
 
-    # ─── بررسی ۲: تغییر محتوای requirements.txt ───
     if [[ -x "${VENV_DIR}/bin/python" ]] && (( recreate == 0 )) && [[ -n "${req_file}" ]]; then
         local current_hash stored_hash hash_file
         hash_file="${VENV_DIR}/.requirements.hash"
@@ -1143,19 +1202,20 @@ create_virtual_environment_if_needed() {
                 log_info "requirements.txt unchanged (hash: ${current_hash:0:12})"
             fi
         else
-            # ─── نصب قدیمی بدون هش - برای اطمینان بازسازی می‌کنیم ───
             recreate=1
             reason="No requirements hash found (legacy installation detected)"
         fi
     fi
 
-    # ─── بازسازی در صورت نیاز ───
+    # ─── FIX #3: keep the old venv, don't rm it ───
     if (( recreate == 1 )); then
         log_warning "Recreating virtual environment: ${reason}"
-        rm -rf "${VENV_DIR}"
+        rm -rf -- "${VENV_DIR}.old"
+        if [[ -d "${VENV_DIR}" ]]; then
+            mv -- "${VENV_DIR}" "${VENV_DIR}.old"
+        fi
     fi
 
-    # ─── ساخت venv در صورت نبودن ───
     if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
         draw_step "Creating Python Virtual Environment"
         log_info "Creating ${VENV_DIR} with ${PYTHON_BIN}..."
@@ -1167,19 +1227,15 @@ create_virtual_environment_if_needed() {
         log_info "Existing Python virtual environment will be preserved."
     fi
 
-    # ─── ذخیره‌ی هش فعلی برای بار بعد ───
-    if [[ -n "${req_file}" && -f "${req_file}" ]]; then
-        sha256sum "${req_file}" 2>/dev/null | awk '{print $1}' \
-            > "${VENV_DIR}/.requirements.hash" || true
-        log_info "Saved requirements hash for future comparison."
-    fi
+    # NOTE: the requirements hash is now saved by install_requirements()
+    #       only after a successful pip install. (fix #3)
 
-    # ─── اعتبارسنجی نهایی ───
     [[ -x "${VENV_DIR}/bin/python" ]] || die "Virtual environment is invalid."
     "${VENV_DIR}/bin/python" --version
     "${VENV_DIR}/bin/python" -m pip --version >/dev/null || die "pip is missing."
 }
 
+# ─── FIX #3: hash written only on success ───
 install_requirements() {
     local req="${INSTALL_DIR}/requirements.txt"
     [[ -f "${req}" ]] || die "requirements.txt does not exist."
@@ -1187,10 +1243,15 @@ install_requirements() {
     draw_step "Installing Python Dependencies"
     log_info "Installing dependencies from requirements.txt..."
 
-    "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel
-    "${VENV_DIR}/bin/python" -m pip install -r "${req}"
+    local pip_opts=(--disable-pip-version-check --no-input --retries 5 --timeout 30)
+
+    "${VENV_DIR}/bin/python" -m pip install "${pip_opts[@]}" --upgrade pip setuptools wheel
+    "${VENV_DIR}/bin/python" -m pip install "${pip_opts[@]}" -r "${req}"
     "${VENV_DIR}/bin/python" -m pip check || \
         log_warning "pip check reported inconsistencies (continuing)."
+
+    sha256sum "${req}" 2>/dev/null | awk '{print $1}' \
+        > "${VENV_DIR}/.requirements.hash" || true
 
     log_success "Python dependencies are installed and verified."
 }
@@ -1238,6 +1299,10 @@ sys.exit(1)
 PY
 }
 
+# NOTE (fix #Other-3): "Navid" is treated as a placeholder because it's
+# the release default for BANK_CARD_HOLDER. If your real name is
+# literally "Navid", this will keep re-prompting — edit
+# SENSITIVE_PLACEHOLDER_KEYS / this case-list to remove it.
 is_placeholder() {
     local key="$1"
     local value="$2"
@@ -1267,6 +1332,7 @@ is_placeholder() {
     return 1
 }
 
+# ─── FIX #7: fail loudly on parse error ───
 extract_config_values() {
     [[ -f "${CONFIG_FILE}" ]] || return 1
     local values
@@ -1300,11 +1366,12 @@ try:
             except Exception:
                 pass
     print(json.dumps(result))
-except Exception:
-    print("{}")
+except Exception as e:
+    print(f"config parse error: {e}", file=sys.stderr)
+    sys.exit(1)
 PY
-    )"
-    [[ -n "${values}" ]] || values="{}"
+    )" || { log_error "config.py cannot be parsed."; return 1; }
+    [[ -n "${values}" ]] || return 1
 
     local exported_json="${values}"
 
@@ -1348,14 +1415,16 @@ PY
     GEMINI_TEMPERATURE="$(config_value "GEMINI_TEMPERATURE" "0.7")"
     GEMINI_MAX_TOKENS="$(config_value "GEMINI_MAX_TOKENS" "90")"
     GEMINI_DAILY_LIMIT="$(config_value "GEMINI_DAILY_LIMIT" "3")"
+    return 0
 }
 
+# ─── FIX #5: tokenize-based comment split, atomic write ───
 apply_config_values() {
     local source="$1" target="$2"
     [[ -f "${source}" && -f "${target}" ]] || return 1
 
     "${PYTHON_BIN}" - "${source}" "${target}" <<'PY'
-import ast, re, sys
+import ast, io, os, re, sys, tokenize
 
 source_path, target_path = sys.argv[1], sys.argv[2]
 
@@ -1392,24 +1461,75 @@ def fmt(v):
         return str(v)
     return repr(v)
 
+def split_comment(line):
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(line + "\n").readline):
+            if tok.type == tokenize.COMMENT:
+                return tok.string
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+    return ""
+
+def atomic_write(path, body):
+    st = os.stat(path)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(body)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, st.st_mode & 0o777)
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except PermissionError:
+        pass
+    os.replace(tmp, path)
+
 for key, value in values.items():
     replacement = f"{key} = {fmt(value)}"
     pattern = re.compile(rf"(?m)^([ \t]*){re.escape(key)}([ \t]*=[^\n]*)")
 
     def repl(match):
-        line = match.group(0)
-        eq = line.find("=")
-        comment_idx = line.find("#", eq + 1) if eq >= 0 else -1
-        if comment_idx >= 0:
-            comment = line[comment_idx:]
-            return f"{match.group(1)}{replacement}  {comment}"
-        return f"{match.group(1)}{replacement}"
+        comment = split_comment(match.group(0))
+        suffix = f"  {comment}" if comment else ""
+        return f"{match.group(1)}{replacement}{suffix}"
 
     if pattern.search(text):
         text = pattern.sub(repl, text, count=1)
 
-with open(target_path, "w", encoding="utf-8") as f:
-    f.write(text)
+atomic_write(target_path, text)
+PY
+}
+
+# ─── FIX #6: warn when unmanaged keys differ ───
+warn_unmanaged_config_changes() {
+    local old_cfg="$1"
+    local new_cfg="$2"
+    [[ -f "${old_cfg}" && -f "${new_cfg}" ]] || return 0
+    "${PYTHON_BIN}" - "${old_cfg}" "${new_cfg}" "${CONFIG_EDITABLE_KEYS[@]}" <<'PY' || true
+import ast, sys
+old_p, new_p = sys.argv[1], sys.argv[2]
+managed = set(sys.argv[3:])
+
+def load(p):
+    out = {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except Exception:
+        return out
+    for n in tree.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name) and t.id not in managed:
+                    out[t.id] = ast.dump(n.value)
+    return out
+
+old, new = load(old_p), load(new_p)
+changed = sorted(k for k in old if old[k] != new.get(k))
+if changed:
+    print("WARNING: these customized config.py keys were reset to release defaults:")
+    print("         " + ", ".join(changed))
+    print("         Old file is preserved in the backup: application.tar.gz -> ./config.py")
 PY
 }
 
@@ -1436,6 +1556,8 @@ update_config_file_with_backup() {
     else
         log_warning "Could not re-apply values; manual config review may be needed."
     fi
+
+    warn_unmanaged_config_changes "${saved_config}" "${CONFIG_FILE}"
 }
 
 validate_existing_config() {
@@ -1515,11 +1637,12 @@ validate_existing_config() {
 # Config editors (in place)
 # ============================================================
 
+# ─── FIX #5: same tokenize/atomic logic as apply_config_values ───
 _set_config_raw() {
     local key="$1"
     local raw="$2"
     CFG_KEY="${key}" CFG_RAW="${raw}" "${PYTHON_BIN}" - "${CONFIG_FILE}" <<'PY'
-import os, re, sys
+import io, os, re, sys, tokenize
 path = sys.argv[1]
 key = os.environ["CFG_KEY"]
 raw = os.environ["CFG_RAW"]
@@ -1530,14 +1653,33 @@ with open(path, "r", encoding="utf-8") as f:
 replacement = f"{key} = {raw}"
 pattern = re.compile(rf"(?m)^([ \t]*){re.escape(key)}([ \t]*=[^\n]*)")
 
+def split_comment(line):
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(line + "\n").readline):
+            if tok.type == tokenize.COMMENT:
+                return tok.string
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+    return ""
+
+def atomic_write(p, body):
+    st = os.stat(p)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(body)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, st.st_mode & 0o777)
+    try:
+        os.chown(tmp, st.st_uid, st.st_gid)
+    except PermissionError:
+        pass
+    os.replace(tmp, p)
+
 def repl(match):
-    line = match.group(0)
-    eq = line.find("=")
-    comment_idx = line.find("#", eq + 1) if eq >= 0 else -1
-    if comment_idx >= 0:
-        comment = line[comment_idx:]
-        return f"{match.group(1)}{replacement}  {comment}"
-    return f"{match.group(1)}{replacement}"
+    comment = split_comment(match.group(0))
+    suffix = f"  {comment}" if comment else ""
+    return f"{match.group(1)}{replacement}{suffix}"
 
 if pattern.search(text):
     text = pattern.sub(repl, text, count=1)
@@ -1546,8 +1688,7 @@ else:
         text += "\n"
     text += replacement + "\n"
 
-with open(path, "w", encoding="utf-8") as f:
-    f.write(text)
+atomic_write(path, text)
 PY
 }
 
@@ -1753,6 +1894,7 @@ prompt_float() {
     done
 }
 
+# ─── FIX (Other-1): force base-10 so "08" doesn't trigger octal error ───
 prompt_positive_int() {
     local label="$1"
     local default="$2"
@@ -1761,7 +1903,7 @@ prompt_positive_int() {
 
     while true; do
         prompt_with_default "${label}" "${default}" value
-        if [[ "${value}" =~ ^[0-9]+$ ]] && (( value > 0 )); then
+        if [[ "${value}" =~ ^[0-9]+$ ]] && (( 10#${value} > 0 )); then
             printf -v "${result_var}" '%s' "${value}"
             return
         fi
@@ -1777,7 +1919,7 @@ edit_all_config_keys() {
     while true; do
         clear > /dev/tty 2>/dev/null || true
         [[ -f "${CONFIG_FILE}" ]] || { log_error "config.py not found."; return 1; }
-        extract_config_values || true
+        extract_config_values || { log_error "config.py cannot be parsed."; return 1; }
 
         draw_header "Edit Configuration Keys"
 
@@ -1809,83 +1951,58 @@ edit_all_config_keys() {
         fi
 
         case "${choice}" in
-            1)
-                describe "Get from @BotFather (main bot token)."
-                prompt_for_secret "BOT_TOKEN" BOT_TOKEN
-                set_config_value "BOT_TOKEN" "${BOT_TOKEN}"
-                log_success "BOT_TOKEN updated."
-                ;;
-            2)
-                describe "Your Telegram numeric ID (get from @myidbot)."
-                prompt_admin_id
-                set_config_integer "ADMIN_ID" "${ADMIN_ID}"
-                log_success "ADMIN_ID updated."
-                ;;
-            3)
-                describe "Token of the second bot (must be admin in the log group)."
-                prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
-                set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
-                log_success "LOG_BOT_TOKEN updated."
-                ;;
-            4)
-                prompt_log_channel_id
-                if [[ "${LOG_CHANNEL_ID}" == "None" ]]; then
-                    set_config_literal "LOG_CHANNEL_ID" "None"
-                else
-                    set_config_integer "LOG_CHANNEL_ID" "${LOG_CHANNEL_ID}"
-                fi
-                log_success "LOG_CHANNEL_ID updated."
-                ;;
-            5)
-                describe "Your bank card number — exactly 16 digits (no spaces/dashes/underscores)."
-                prompt_card_number
-                set_config_value "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"
-                log_success "BANK_CARD_NUMBER updated."
-                ;;
-            6)
-                describe "Card holder's full name (as printed on the card)."
-                prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
-                set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
-                log_success "BANK_CARD_HOLDER updated."
-                ;;
-            7)
-                describe "Bank name — e.g. \"Blue Bank\", \"Melli\", \"Mellat\"."
-                prompt_for_value "BANK_NAME" BANK_NAME
-                set_config_value "BANK_NAME" "${BANK_NAME}"
-                log_success "BANK_NAME updated."
-                ;;
-            8)
-                describe "3x-ui panel URL, e.g. https://panel.Domain.com:2053/<web_path>"
-                prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
-                set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
-                log_success "SENAI_PANEL_URL updated."
-                ;;
-            9)
-                describe "Panel admin username."
-                prompt_for_value "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
-                set_config_value "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
-                log_success "SENAI_PANEL_USERNAME updated."
-                ;;
-            10)
-                describe "Panel admin password."
+            1) describe "Get from @BotFather (main bot token)."
+               prompt_for_secret "BOT_TOKEN" BOT_TOKEN
+               set_config_value "BOT_TOKEN" "${BOT_TOKEN}"
+               log_success "BOT_TOKEN updated." ;;
+            2) describe "Your Telegram numeric ID (get from @myidbot)."
+               prompt_admin_id
+               set_config_integer "ADMIN_ID" "${ADMIN_ID}"
+               log_success "ADMIN_ID updated." ;;
+            3) describe "Token of the second bot (must be admin in the log group)."
+               prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
+               set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
+               log_success "LOG_BOT_TOKEN updated." ;;
+            4) prompt_log_channel_id
+               if [[ "${LOG_CHANNEL_ID}" == "None" ]]; then
+                   set_config_literal "LOG_CHANNEL_ID" "None"
+               else
+                   set_config_integer "LOG_CHANNEL_ID" "${LOG_CHANNEL_ID}"
+               fi
+               log_success "LOG_CHANNEL_ID updated." ;;
+            5) describe "Your bank card number — exactly 16 digits."
+               prompt_card_number
+               set_config_value "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"
+               log_success "BANK_CARD_NUMBER updated." ;;
+            6) describe "Card holder's full name (as printed on the card)."
+               prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
+               set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
+               log_success "BANK_CARD_HOLDER updated." ;;
+            7) describe "Bank name."
+               prompt_for_value "BANK_NAME" BANK_NAME
+               set_config_value "BANK_NAME" "${BANK_NAME}"
+               log_success "BANK_NAME updated." ;;
+            8) describe "3x-ui panel URL, e.g. https://panel.Domain.com:2053/<web_path>"
+               prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
+               set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
+               log_success "SENAI_PANEL_URL updated." ;;
+            9) describe "Panel admin username."
+               prompt_for_value "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
+               set_config_value "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
+               log_success "SENAI_PANEL_USERNAME updated." ;;
+            10) describe "Panel admin password."
                 prompt_for_secret "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
                 set_config_value "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"
-                log_success "SENAI_PANEL_PASSWORD updated."
-                ;;
-            11)
-                describe "Subscription URL for clients, e.g. https://sub.Domain.com:2083"
+                log_success "SENAI_PANEL_PASSWORD updated." ;;
+            11) describe "Subscription URL for clients."
                 prompt_http_url "SENAI_SUB_URL" SENAI_SUB_URL
                 set_config_value "SENAI_SUB_URL" "${SENAI_SUB_URL}"
-                log_success "SENAI_SUB_URL updated."
-                ;;
-            12)
-                describe "Support Telegram username — e.g. @your_username_here"
+                log_success "SENAI_SUB_URL updated." ;;
+            12) describe "Support Telegram username."
                 prompt_for_value "SUPPORT_USERNAME" SUPPORT_USERNAME
                 set_config_value "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"
-                log_success "SUPPORT_USERNAME updated."
-                ;;
-            13)
-                local gem=""
+                log_success "SUPPORT_USERNAME updated." ;;
+            13) local gem=""
                 printf 'Enable Gemini? [true/false/none]: ' > /dev/tty
                 if ! IFS= read -r gem <&3; then
                     die "Could not read input."
@@ -1899,49 +2016,46 @@ edit_all_config_keys() {
                 GEMINI_ENABLED="True"
                 [[ "${gem}" == "false" ]] && GEMINI_ENABLED="False"
                 [[ "${gem}" == "none"  ]] && GEMINI_ENABLED="None"
-                log_success "GEMINI_ENABLED updated."
-                ;;
-            14)
-                describe "GEMINI_API_KEY: Get from https://ai.google.dev/"
+                log_success "GEMINI_ENABLED updated." ;;
+            14) describe "GEMINI_API_KEY: Get from https://ai.google.dev/"
                 prompt_for_secret "GEMINI_API_KEY" GEMINI_API_KEY
                 set_config_value "GEMINI_API_KEY" "${GEMINI_API_KEY}"
-                log_success "GEMINI_API_KEY updated."
-                ;;
-            15)
-                describe "GEMINI_MODEL: any Gemini model, e.g. gemini-2.5-flash"
+                log_success "GEMINI_API_KEY updated." ;;
+            15) describe "GEMINI_MODEL: e.g. gemini-2.5-flash"
                 prompt_with_default "GEMINI_MODEL" "${GEMINI_MODEL:-gemini-2.5-flash}" GEMINI_MODEL
                 set_config_value "GEMINI_MODEL" "${GEMINI_MODEL}"
-                log_success "GEMINI_MODEL updated."
-                ;;
-            16)
-                describe "GEMINI_TEMPERATURE: randomness (0.0 to 1.0)"
+                log_success "GEMINI_MODEL updated." ;;
+            16) describe "GEMINI_TEMPERATURE: randomness (0.0 to 1.0)"
                 prompt_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE:-0.7}" GEMINI_TEMPERATURE
                 set_config_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE}"
-                log_success "GEMINI_TEMPERATURE updated."
-                ;;
-            17)
-                describe "GEMINI_MAX_TOKENS: maximum response length"
+                log_success "GEMINI_TEMPERATURE updated." ;;
+            17) describe "GEMINI_MAX_TOKENS: maximum response length"
                 prompt_positive_int "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS:-90}" GEMINI_MAX_TOKENS
                 set_config_integer "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS}"
-                log_success "GEMINI_MAX_TOKENS updated."
-                ;;
-            18)
-                describe "GEMINI_DAILY_LIMIT: max AI responses per user per day"
+                log_success "GEMINI_MAX_TOKENS updated." ;;
+            18) describe "GEMINI_DAILY_LIMIT: max AI responses per user per day"
                 prompt_positive_int "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT:-3}" GEMINI_DAILY_LIMIT
                 set_config_integer "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT}"
-                log_success "GEMINI_DAILY_LIMIT updated."
-                ;;
-            b|B|back|q|quit)
-                return 0
-                ;;
-            *)
-                log_warning "Invalid option."
-                continue
-                ;;
+                log_success "GEMINI_DAILY_LIMIT updated." ;;
+            b|B|back|q|quit) return 0 ;;
+            *) log_warning "Invalid option."; continue ;;
         esac
 
         chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
         log_info "config.py updated in place."
+
+        # ─── FIX (Other-2): offer a restart ───
+        if service_is_active; then
+            if ask_yes_no "Restart ${SERVICE_NAME} to apply changes now? [Y/n]: " "y"; then
+                systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 || true
+                sleep 3
+                if service_is_active; then
+                    log_success "Service restarted."
+                else
+                    log_warning "Service failed to restart; check journalctl -u ${SERVICE_NAME}."
+                fi
+            fi
+        fi
     done
 }
 
@@ -1950,12 +2064,10 @@ edit_all_config_keys() {
 # ============================================================
 
 parse_setup_link() {
-    # $1 = full link, $2 = url_out_var, $3 = password_out_var
     local link="$1"
     local url_var="$2"
     local pass_var="$3"
 
-    # ✅ اسم‌های متمایز برای جلوگیری از تصادم scope
     local parsed_url="${link%%#*}"
     local parsed_password="${link##*#}"
 
@@ -1963,7 +2075,6 @@ parse_setup_link() {
         return 1
     fi
 
-    # ✅ پشتیبانی از http://، https:// و file://
     if [[ ! "$parsed_url" =~ ^(https?|file):// ]]; then
         return 1
     fi
@@ -2012,14 +2123,12 @@ create_setup_link() {
         apt-get -o DPkg::Lock::Timeout=120 install -y -qq openssl >/dev/null 2>&1
     command -v openssl >/dev/null 2>&1 || die "openssl is required."
 
-    # Stop service to get consistent snapshot
     stop_service_if_active
 
     local work_dir="$TEMP_ROOT/setup-link"
     rm -rf "$work_dir"
     mkdir -p "$work_dir"
 
-    # ─── Pack data/ + config.py ───
     log_info "Packing data/ and config.py..."
     if ! tar -czf "$work_dir/setup.tar.gz" \
         -C "$INSTALL_DIR" \
@@ -2034,17 +2143,16 @@ create_setup_link() {
     raw_size="$(du -h "$work_dir/setup.tar.gz" | cut -f1)"
     log_info "Archive size: $raw_size"
 
-    # ─── Random password ───
+    # ─── FIX (SL#2): hex password, no tr/head trimming ───
     local password
-    password="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)"
+    password="$(openssl rand -hex 24)"
 
-    # ─── Encrypt ───
     log_info "Encrypting archive (AES-256-CBC, PBKDF2)..."
-    if ! openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
+    # ─── FIX (SL#2): pass via env so it doesn't show in ps ───
+    if ! SETUP_PASS="$password" openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
         -in "$work_dir/setup.tar.gz" \
         -out "$work_dir/setup.enc" \
-        -pass "pass:$password" 2>>"$LOG_FILE"; then
-
+        -pass env:SETUP_PASS 2>>"$LOG_FILE"; then
         if (( SERVICE_WAS_ACTIVE == 1 )); then
             systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
         fi
@@ -2055,7 +2163,6 @@ create_setup_link() {
     enc_size="$(du -h "$work_dir/setup.enc" | cut -f1)"
     log_info "Encrypted size: $enc_size"
 
-    # ─── Upload ───
     log_info "Uploading to temporary file host..."
 
     local upload_url=""
@@ -2065,7 +2172,6 @@ create_setup_link() {
 
     local user_agent="VeloraBot-Installer/1.0 (https://github.com/navidmn56/VeloraBot)"
 
-    # ─── Try 1: beacon.host ───
     log_info "Trying beacon.host..."
     upload_url="$(
         curl -fsSL --max-time 180 \
@@ -2075,7 +2181,6 @@ create_setup_link() {
             2>>"$LOG_FILE" || true
     )"
     upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-
     if [[ "$upload_url" =~ ^https?:// ]]; then
         host_name="beacon.host"
         log_success "Uploaded to beacon.host"
@@ -2084,7 +2189,6 @@ create_setup_link() {
         upload_url=""
     fi
 
-    # ─── Try 2: 0x0.st ───
     if [[ -z "$upload_url" ]]; then
         log_info "Trying 0x0.st..."
         upload_url="$(
@@ -2095,7 +2199,6 @@ create_setup_link() {
                 2>>"$LOG_FILE" || true
         )"
         upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-
         if [[ "$upload_url" =~ ^https?:// ]]; then
             host_name="0x0.st"
             log_success "Uploaded to 0x0.st"
@@ -2105,7 +2208,6 @@ create_setup_link() {
         fi
     fi
 
-    # ─── Try 3: transfer.sh ───
     if [[ -z "$upload_url" ]]; then
         log_info "Trying transfer.sh..."
         upload_url="$(
@@ -2116,7 +2218,6 @@ create_setup_link() {
                 2>>"$LOG_FILE" || true
         )"
         upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-
         if [[ "$upload_url" =~ ^https?:// ]]; then
             host_name="transfer.sh"
             log_success "Uploaded to transfer.sh"
@@ -2126,7 +2227,6 @@ create_setup_link() {
         fi
     fi
 
-    # ─── Try 4: litterbox.catbox.moe (backup fallback) ───
     if [[ -z "$upload_url" ]]; then
         log_info "Trying litterbox.catbox.moe..."
         upload_url="$(
@@ -2139,7 +2239,6 @@ create_setup_link() {
                 2>>"$LOG_FILE" || true
         )"
         upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-
         if [[ "$upload_url" =~ ^https?:// ]]; then
             host_name="litterbox.catbox.moe"
             log_success "Uploaded to litterbox.catbox.moe"
@@ -2149,12 +2248,29 @@ create_setup_link() {
         fi
     fi
 
-    # ─── Restart service ───
+    # ─── FIX (SL#7): ask whether to keep source online (split-brain) ───
+    local keep_stopped=0
     if (( SERVICE_WAS_ACTIVE == 1 )); then
+        if ask_yes_no "Keep the bot STOPPED here (recommended for migration)? [Y/n]: " "y"; then
+            keep_stopped=1
+            SERVICE_WAS_ACTIVE=0
+            systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+            log_info "Service left stopped and disabled on this server."
+        fi
+    fi
+
+    if (( keep_stopped == 0 )) && (( SERVICE_WAS_ACTIVE == 1 )); then
         systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
     fi
 
-    # ─── All hosts failed ───
+    # ─── FIX (SL#1): preserve the encrypted file before cleanup ───
+    local keep_file="/root/velorabot-setup-$(date +%Y%m%d_%H%M%S).enc"
+    if cp -- "$work_dir/setup.enc" "$keep_file" 2>/dev/null; then
+        chmod 600 "$keep_file"
+    else
+        keep_file=""
+    fi
+
     if [[ -z "$upload_url" ]]; then
         draw_header "Upload Failed — Manual Transfer Required"
 
@@ -2164,35 +2280,28 @@ create_setup_link() {
         printf '%b📦 Manual Transfer Instructions:%b\n\n' "${BOLD}" "${NC}"
 
         printf '%b1. Archive (encrypted):%b\n' "${BOLD}" "${NC}"
-        printf '   %s\n\n' "$work_dir/setup.enc"
+        printf '   %s\n' "${keep_file:-$work_dir/setup.enc}"
+        printf '   (a copy is preserved under /root/ if available)\n\n'
 
         printf '%b2. Decryption password:%b\n' "${BOLD}" "${NC}"
         printf '   %b%s%b\n\n' "${GREEN}" "$password" "${NC}"
 
         printf '%b3. Transfer methods:%b\n' "${BOLD}" "${NC}"
         printf '   a) Download via scp:\n'
-        printf '      scp root@<this-server>:%s /tmp/\n\n' "$work_dir/setup.enc"
+        printf '      scp root@<this-server>:%s /tmp/\n\n' "${keep_file:-$work_dir/setup.enc}"
 
         printf '   b) Base64 paste (small archives only):\n'
-        printf '      base64 -w0 %s\n\n' "$work_dir/setup.enc"
+        printf '      base64 -w0 %s\n\n' "${keep_file:-$work_dir/setup.enc}"
 
         printf '%b4. On the target server, run:%b\n' "${BOLD}" "${NC}"
-        printf '   sudo bash %s --restore "<url>#%s"\n\n' \
-            "$(basename "$0")" "$password"
-
-        printf '%b5. Or place the file manually and run:%b\n' "${BOLD}" "${NC}"
-        printf '   # Copy the .enc file to: /tmp/velorabot-restore.enc\n'
-        printf '   # Then run:\n'
-        printf '   sudo bash %s --restore "file:///tmp/velorabot-restore.enc#%s"\n\n' \
+        printf '   sudo bash %s --restore "file:///tmp/$(basename "$keep_file" 2>/dev/null || echo setup.enc)#%s"\n\n' \
             "$(basename "$0")" "$password"
 
         return 1
     fi
 
-    # ─── Compose link ───
     local setup_link="${upload_url}#${password}"
 
-    # ─── Show ───
     draw_header "Setup Link Ready"
 
     printf '%b🔒 IMPORTANT:%b This link contains your FULL data + config.\n' \
@@ -2208,6 +2317,7 @@ create_setup_link() {
     printf '  Encrypted    : %s\n' "$enc_size"
     printf '  Encryption   : AES-256-CBC + PBKDF2\n'
     printf '  Retention    : a few days (host-dependent)\n'
+    printf '  Local copy   : %s\n' "${keep_file:-<deleted with TEMP_ROOT>}"
     printf '\n'
 
     printf '%bHow to restore on another server:%b\n' "${BOLD}" "${NC}"
@@ -2219,11 +2329,10 @@ create_setup_link() {
 }
 
 # ============================================================
-# Setup Link — Download & Decrypt
+# Setup Link — Download & Decrypt  (FIX: validate archive, env-pass)
 # ============================================================
 
 download_and_decrypt_setup() {
-    # $1 = url, $2 = password, $3 = output_staging_dir
     local url="$1"
     local password="$2"
     local staging="$3"
@@ -2236,13 +2345,10 @@ download_and_decrypt_setup() {
     rm -rf "$work_dir"
     mkdir -p "$work_dir"
 
-    # ─── Download (http/https یا file) ───
     if [[ "$url" == file://* ]]; then
         local local_path="${url#file://}"
         log_info "Using local file: $local_path"
-
         [[ -f "$local_path" ]] || die "Local file not found: $local_path"
-
         if ! cp -a "$local_path" "$work_dir/setup.enc"; then
             die "Failed to copy local archive."
         fi
@@ -2255,35 +2361,52 @@ download_and_decrypt_setup() {
             "$url" 2>>"$LOG_FILE"; then
             die "Failed to download the setup archive from: $url"
         fi
-
         [[ -s "$work_dir/setup.enc" ]] || die "Downloaded archive is empty."
-
         local enc_size
         enc_size="$(du -h "$work_dir/setup.enc" | cut -f1)"
         log_success "Downloaded: $enc_size"
     fi
 
-    # ─── Decrypt ───
     log_info "Decrypting archive..."
-    if ! openssl enc -d -aes-256-cbc -salt -pbkdf2 -iter 100000 \
+    if ! SETUP_PASS="$password" openssl enc -d -aes-256-cbc -salt -pbkdf2 -iter 100000 \
         -in "$work_dir/setup.enc" \
         -out "$work_dir/setup.tar.gz" \
-        -pass "pass:$password" 2>>"$LOG_FILE"; then
+        -pass env:SETUP_PASS 2>>"$LOG_FILE"; then
         die "Failed to decrypt archive. The password or file may be invalid."
     fi
     log_success "Decryption successful."
 
-    # ─── Extract ───
+    # ─── FIX (SL#4): reject links before extraction ───
+    if tar -tvzf "$work_dir/setup.tar.gz" 2>/dev/null | awk '{print $1}' \
+        | grep -qE '^[lh]'; then
+        die "Archive contains symlinks or hardlinks; refusing to extract."
+    fi
+
+    # ─── FIX (SL#4): reject unexpected entries ───
+    local bad_entries
+    bad_entries="$(tar -tzf "$work_dir/setup.tar.gz" 2>/dev/null \
+        | sed 's|^\./||' \
+        | grep -Ev '^(data/|data$|config\.py$)' || true)"
+    if [[ -n "$bad_entries" ]]; then
+        die "Archive contains unexpected entries: $(echo "$bad_entries" | head -n5 | tr '\n' ' ')"
+    fi
+
     rm -rf "$staging"
     mkdir -p "$staging"
 
-    if ! tar -xzf "$work_dir/setup.tar.gz" -C "$staging" 2>>"$LOG_FILE"; then
+    if ! tar --no-same-owner -xzf "$work_dir/setup.tar.gz" -C "$staging" 2>>"$LOG_FILE"; then
         die "Failed to extract the archive."
     fi
 
-    # ─── Validate ───
     [[ -d "$staging/data" ]] || die "Archive is missing data/ folder."
     [[ -f "$staging/config.py" ]] || die "Archive is missing config.py."
+
+    # ─── FIX (SL#4): syntax-check config before touching live files ───
+    if ! "${PYTHON_BIN}" -B -c \
+        'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), "config.py", "exec")' \
+        "$staging/config.py" 2>>"$LOG_FILE"; then
+        die "config.py in the archive has a syntax error; nothing was changed."
+    fi
 
     log_success "Archive contents validated."
     return 0
@@ -2309,93 +2432,89 @@ restore_from_setup_link() {
 
     log_info "URL      : ${url}"
     log_info "Password : (${#password} chars)"
+    log_warning "Make sure the SOURCE server's bot is STOPPED before continuing,"
+    log_warning "otherwise both servers will fight over the same Telegram token."
 
-    # ─── Download & Decrypt ───
     local staging="$TEMP_ROOT/staging-restore"
     download_and_decrypt_setup "$url" "$password" "$staging"
 
-    # ─── Determine existing install ───
     local has_install=0
     if [[ -d "$INSTALL_DIR" && -f "$INSTALL_DIR/main.py" ]]; then
         has_install=1
     fi
 
-    # ─── Install or Update release files ───
+    # ─── FIX (SL#3): secure safety-backup dir ───
+    local safety_backup=""
+    if (( has_install == 1 )); then
+        safety_backup="${BACKUP_ROOT}/pre-restore-$(date +%Y%m%d_%H%M%S)"
+        install -d -m 700 "${BACKUP_ROOT}" "${safety_backup}"
+        if [[ -d "$DATA_DIR" ]]; then
+            tar -czf "$safety_backup/data.tar.gz" -C "$INSTALL_DIR" data 2>>"$LOG_FILE" || true
+            chmod 600 "$safety_backup/data.tar.gz" 2>/dev/null || true
+        fi
+        if [[ -f "$CONFIG_FILE" ]]; then
+            cp -a "$CONFIG_FILE" "$safety_backup/config.py" 2>/dev/null || true
+            chmod 600 "$safety_backup/config.py" 2>/dev/null || true
+        fi
+        log_info "Safety backup: $safety_backup"
+    fi
+
     if (( has_install == 0 )); then
         log_warning "VeloraBot is not installed. Deploying fresh files first..."
-
         prepare_install_directory
         rsync -a "$RELEASE_ROOT/" "$INSTALL_DIR/"
-
-        create_virtual_environment_if_needed
-        install_requirements
     else
         log_info "Existing installation detected. Updating release files..."
         stop_service_if_active
 
-        # Take a safety backup of the existing config/data
-        local safety_backup
-        safety_backup="${BACKUP_ROOT}/pre-restore-$(date +%Y%m%d_%H%M%S)"
-        mkdir -p "$safety_backup"
-
-        if [[ -d "$DATA_DIR" ]]; then
-            tar -czf "$safety_backup/data.tar.gz" -C "$INSTALL_DIR" data 2>>"$LOG_FILE" || true
-        fi
-        if [[ -f "$CONFIG_FILE" ]]; then
-            cp -a "$CONFIG_FILE" "$safety_backup/config.py" 2>/dev/null || true
-        fi
-
-        log_info "Safety backup: $safety_backup"
-
-        # Sync release files (preserving data/, .venv/)
         local excludes=()
         while IFS= read -r line; do excludes+=("$line"); done < <(rsync_excludes_update)
 
         rsync -a --delete "${excludes[@]}" \
             "$RELEASE_ROOT/" "$INSTALL_DIR/"
-
-        create_virtual_environment_if_needed
-        install_requirements
     fi
 
-    # ─── Stop service before replacing data ───
+    create_virtual_environment_if_needed
+    install_requirements
+
     stop_service_if_active
 
-    # ─── Replace data/ ───
+    # ─── FIX (SL#5): move old data instead of rm -rf ───
     log_info "Replacing data/ ..."
-    rm -rf "$DATA_DIR"
+    if [[ -d "$DATA_DIR" ]]; then
+        local old_data="${safety_backup:-$TEMP_ROOT}/data.before-restore"
+        mkdir -p "$(dirname "$old_data")"
+        rm -rf "$old_data"
+        mv -- "$DATA_DIR" "$old_data"
+    fi
     mkdir -p "$DATA_DIR"
     rsync -a "$staging/data/" "$DATA_DIR/"
 
-    # ─── Replace config.py ───
     log_info "Replacing config.py ..."
     cp -a "$staging/config.py" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
-    # ─── Ensure data/configs.json exists ───
     ensure_data_configs_file
 
-    # ─── Fix permissions ───
+    # ─── FIX (SL#6): migrate missing keys from release ───
+    migrate_config_keys || true
+
     fix_permissions
 
-    # ─── Validate config syntax ───
     if ! "${VENV_DIR}/bin/python" -m py_compile "$CONFIG_FILE" >/dev/null 2>&1; then
         log_warning "config.py contains a syntax error!"
         log_warning "Restore aborted to avoid breaking the service."
         return 1
     fi
 
-    # ─── Setup systemd service ───
     create_systemd_service
 
-    # ─── Start service ───
     if ! start_service_and_check; then
         log_error "Restore completed, but the service failed to start."
         log_error "Check the logs with: journalctl -u $SERVICE_NAME -n 100"
         return 1
     fi
 
-    # ─── Write version file ───
     write_version_file
     CURRENT_VERSION="$LATEST_VERSION"
 
@@ -2403,14 +2522,13 @@ restore_from_setup_link() {
     log_success "VeloraBot restored successfully from setup link."
     printf 'URL         : %s\n' "$url"
     printf 'Service     : active\n'
-    printf 'Data folder : replaced\n'
-    printf 'Config      : replaced\n'
-    printf '\n'
+    printf 'Data folder : replaced (old data preserved at %s)\n' "${safety_backup:-${TEMP_ROOT}}"
+    printf 'Config      : replaced\n\n'
     return 0
 }
 
 # ============================================================
-# Migration Watchdog (Auto-stop when another instance is online)
+# Migration Watchdog (FIX: grace period + precise pattern)
 # ============================================================
 
 readonly WATCHDOG_SCRIPT="/usr/local/bin/velorabot-migration-watch.sh"
@@ -2421,46 +2539,43 @@ create_watchdog_script() {
     cat > "${WATCHDOG_SCRIPT}" <<'WATCHDOG_EOF'
 #!/usr/bin/env bash
 # ============================================================
-# VeloraBot Migration Watchdog
-# Auto-stops velorabot when a second instance is detected
-# (via Telegram 409 Conflict errors in journalctl)
+# VeloraBot Migration Watchdog (FIXED)
+# Stops velorabot when a *second* instance is detected online.
+# Requires the bot to log Telegram errors to journald.
 # ============================================================
-
 set -u
 
 SERVICE="velorabot"
 LOG_TAG="velorabot-migration-watch"
 CHECK_WINDOW="3 minutes ago"
+GRACE_SECONDS=180          # ignore conflicts during the first 3 min after start
 THRESHOLD=5
 
-# Exit early if service is not active
-if ! systemctl is-active --quiet "${SERVICE}"; then
-    exit 0
+systemctl is-active --quiet "${SERVICE}" || exit 0
+
+# ─── FIX (WD#1): skip when the service was just started ───
+active_since_us="$(systemctl show "${SERVICE}" -p ActiveEnterTimestampMonotonic --value 2>/dev/null || echo 0)"
+uptime_s="$(cut -d. -f1 /proc/uptime)"
+if [[ "${active_since_us}" =~ ^[0-9]+$ ]] && (( active_since_us > 0 )); then
+    if (( uptime_s - active_since_us / 1000000 < GRACE_SECONDS )); then
+        exit 0
+    fi
 fi
 
-# Count conflict errors in recent logs
-CONFLICTS=$(
-    journalctl -u "${SERVICE}" \
-        --since "${CHECK_WINDOW}" \
-        --no-pager 2>/dev/null \
-        | grep -ci "conflict\|terminated by other" 2>/dev/null \
-        || true
-)
-
-# Sanity check
-[[ -z "${CONFLICTS}" ]] && CONFLICTS=0
+# ─── FIX (WD#1): match only the *real* Telegram conflict message ───
+CONFLICTS="$(
+    journalctl -u "${SERVICE}" --since "${CHECK_WINDOW}" --no-pager 2>/dev/null \
+        | grep -ciE 'terminated by other getUpdates' || true
+)"
+[[ "${CONFLICTS}" =~ ^[0-9]+$ ]] || CONFLICTS=0
 
 if (( CONFLICTS >= THRESHOLD )); then
     logger -t "${LOG_TAG}" \
         "Detected ${CONFLICTS} Telegram conflicts in ${CHECK_WINDOW} — another instance is online. Stopping ${SERVICE}."
 
-    # Graceful stop
     systemctl stop "${SERVICE}" >/dev/null 2>&1 || true
-
-    # Prevent auto-restart
     systemctl disable "${SERVICE}" >/dev/null 2>&1 || true
 
-    # Disable watchdog itself
     systemctl stop velorabot-migration-watch.timer >/dev/null 2>&1 || true
     systemctl disable velorabot-migration-watch.timer >/dev/null 2>&1 || true
 
@@ -2524,15 +2639,13 @@ enable_migration_watchdog() {
 
     log_success "Migration watchdog enabled."
     printf '\n'
-    printf 'The watchdog checks every minute.\n'
-    printf 'If another VeloraBot instance comes online (via same bot token),\n'
-    printf 'the local service will be stopped automatically.\n'
+    printf 'The watchdog checks every minute and runs only after a 3-min grace period.\n'
+    printf 'It relies on the bot logging "Terminated by other getUpdates"\n'
+    printf 'to journald. If your bot logs only to *.log files, this will not\n'
+    printf 'trigger — use "Stop Service (Migration)" instead.\n'
     printf '\n'
     printf 'To monitor:\n'
-    printf '  journalctl -t velorabot-migration-watch -f\n'
-    printf '\n'
-
-    if log_system 2>/dev/null; then :; fi
+    printf '  journalctl -t velorabot-migration-watch -f\n\n'
     return 0
 }
 
@@ -2546,7 +2659,6 @@ disable_migration_watchdog() {
     rm -f "${WATCHDOG_SERVICE}" "${WATCHDOG_TIMER}" "${WATCHDOG_SCRIPT}"
 
     systemctl daemon-reload
-
     log_success "Migration watchdog disabled and removed."
     return 0
 }
@@ -2558,75 +2670,62 @@ watchdog_status() {
     return 1
 }
 
+# ─── FIX #10: no mask; just stop + disable ───
 stop_service_manual() {
     draw_step "Stop VeloraBot Service (Permanent)"
-    
+
     if ! systemctl is-active --quiet "${SERVICE_NAME}" && \
        ! systemctl is-enabled --quiet "${SERVICE_NAME}" 2>/dev/null; then
         log_warning "${SERVICE_NAME} is already stopped and disabled."
         return 0
     fi
-    
+
     printf 'This will STOP and DISABLE the VeloraBot service on this server.\n' > /dev/tty
-    printf 'Use this after a successful migration to another server.\n' > /dev/tty
-    printf 'The service will NOT auto-restart after this operation.\n\n' > /dev/tty
-    
+    printf 'Use this after a successful migration to another server.\n\n' > /dev/tty
+
     if ! ask_yes_no "Stop the service now? [y/N]: " "n"; then
         log_info "Cancelled."
         return 0
     fi
-    
-    # ─── مرحله ۱: توقف سرویس ───
+
     log_info "Stopping ${SERVICE_NAME}..."
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    
-    # ─── مرحله ۲: انتظار برای توقف کامل ───
+
     local i=0
     while (( i < 15 )) && systemctl is-active --quiet "${SERVICE_NAME}"; do
         sleep 1
         (( i++ )) || true
     done
-    
-    # ─── مرحله ۳: kill سخت در صورت نیاز ───
+
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
         log_warning "Forcing stop with SIGKILL..."
         systemctl kill -s SIGKILL "${SERVICE_NAME}" >/dev/null 2>&1 || true
         sleep 2
     fi
-    
-    # ─── مرحله ۴: غیرفعال کردن auto-start ───
+
     log_info "Disabling auto-start on boot..."
     systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    
-    # ─── مرحله ۵: mask کردن سرویس (جلوگیری از هر راه‌اندازی) ───
-    log_info "Masking service to prevent any restart..."
-    systemctl mask "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    
-    # ─── مرحله ۶: پاک کردن حالت failed ───
     systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    
-    # ─── بررسی نهایی ───
+
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
         log_error "❌ Failed to stop the service!"
         return 1
     fi
-    
-    log_success "Service stopped and masked successfully."
-    
+
+    log_success "Service stopped and disabled."
+
     printf '\n' > /dev/tty
     printf '%bStatus:%b\n' "${BOLD}" "${NC}" > /dev/tty
-    printf '  Service : %bSTOPPED%b\n' "${RED}" "${NC}" > /dev/tty
+    printf '  Service    : %bSTOPPED%b\n' "${RED}" "${NC}" > /dev/tty
     printf '  Auto-start : %bDISABLED%b\n' "${RED}" "${NC}" > /dev/tty
-    printf '  Masked  : %bYES (no auto-restart possible)%b\n' "${RED}" "${NC}" > /dev/tty
     printf '\n' > /dev/tty
-    printf '%bTo re-enable later, run:%b\n' "${BOLD}" "${NC}" > /dev/tty
-    printf '  sudo systemctl unmask %s\n' "${SERVICE_NAME}" > /dev/tty
+    printf '%bTo re-enable later:%b\n' "${BOLD}" "${NC}" > /dev/tty
     printf '  sudo systemctl enable %s\n' "${SERVICE_NAME}" > /dev/tty
-    printf '  sudo systemctl start %s\n' "${SERVICE_NAME}" > /dev/tty
-    printf '\n' > /dev/tty
-    
+    printf '  sudo systemctl start  %s\n\n' "${SERVICE_NAME}" > /dev/tty
+
     return 0
 }
+
 # ============================================================
 # Interactive management panel
 # ============================================================
@@ -2655,27 +2754,23 @@ show_management_panel() {
             else
                 printf 'Migration Watchdog : %bdisabled%b\n' "${DIM}" "${NC}"
             fi
-            printf 'Install directory  : %s\n' "${INSTALL_DIR}"
-            printf '\n'
+            printf 'Install directory  : %s\n\n' "${INSTALL_DIR}"
             printf '  %b── General ──%b\n' "${BOLD}" "${NC}"
             printf '   1) Update to latest version\n'
             printf '   2) Force re-sync (re-download current version)\n'
             printf '   3) Edit configuration keys\n'
             printf '   4) Repair installation\n'
             printf '   5) Restart service\n'
-            printf '   6) Show recent service logs\n'
-            printf '\n'
+            printf '   6) Show recent service logs\n\n'
             printf '  %b── Backup / Migration ──%b\n' "${BOLD}" "${NC}"
             printf '   7) %bCreate Setup Link (Backup)%b\n' "${CYAN}" "${NC}"
             printf '   8) Enable Migration Watchdog\n'
             printf '   9) Disable Migration Watchdog\n'
-            printf '  10) %bStop Service (Migration)%b\n' "${YELLOW}" "${NC}"
-            printf '\n'
+            printf '  10) %bStop Service (Migration)%b\n\n' "${YELLOW}" "${NC}"
             printf '  q) Quit\n'
         else
             printf 'Status             : %bNot installed%b\n' "${YELLOW}" "${NC}"
-            printf 'Install directory  : %s\n' "${INSTALL_DIR}"
-            printf '\n'
+            printf 'Install directory  : %s\n\n' "${INSTALL_DIR}"
             printf '   1) Install VeloraBot\n'
             printf '   2) %bRestore from Setup Link%b\n' "${CYAN}" "${NC}"
             printf '   q) Quit\n'
@@ -2689,14 +2784,9 @@ show_management_panel() {
 
         case "${choice}" in
             1)
-                if (( has_install == 1 )); then
-                    SCRIPT_MODE="update"
-                    return 0
-                else
-                    SCRIPT_MODE="install"
-                    return 0
-                fi
-                ;;
+                if (( has_install == 1 )); then SCRIPT_MODE="update"
+                else SCRIPT_MODE="install"; fi
+                return 0 ;;
             2)
                 if (( has_install == 1 )); then
                     FORCE_UPDATE=1
@@ -2705,84 +2795,51 @@ show_management_panel() {
                 else
                     local link=""
                     if read_setup_link_from_tty link; then
-                        RESTORE_LINK="$link"
-                        SCRIPT_MODE="restore"
+                        RESTORE_LINK="$link"; SCRIPT_MODE="restore"
                         return 0
                     else
                         log_warning "No link provided."
                     fi
-                fi
-                ;;
+                fi ;;
             3)
-                if (( has_install == 1 )); then
-                    if [[ -f "${CONFIG_FILE}" ]]; then
-                        edit_all_config_keys
-                    else
-                        log_warning "config.py not found in ${INSTALL_DIR}."
-                    fi
-                fi
-                ;;
+                if (( has_install == 1 )) && [[ -f "${CONFIG_FILE}" ]]; then
+                    edit_all_config_keys
+                fi ;;
             4)
-                if (( has_install == 1 )); then
-                    REPAIR_ONLY=1
-                    return 0
-                fi
-                ;;
+                if (( has_install == 1 )); then REPAIR_ONLY=1; return 0; fi ;;
             5)
                 if (( has_install == 1 )); then
                     log_info "Restarting ${SERVICE_NAME}..."
                     systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 || true
                     sleep 3
-                    if service_is_active; then
-                        log_success "Service restarted."
-                    else
-                        log_error "Service failed to restart."
-                    fi
-                    local _d=""
-                    read_tty "Press Enter to continue..." _d || true
-                fi
-                ;;
+                    if service_is_active; then log_success "Service restarted."
+                    else log_error "Service failed to restart."; fi
+                    local _d=""; read_tty "Press Enter to continue..." _d || true
+                fi ;;
             6)
                 if (( has_install == 1 )); then
                     journalctl -u "${SERVICE_NAME}" -n 50 --no-pager || true
-                    local _d=""
-                    read_tty "Press Enter to continue..." _d || true
-                fi
-                ;;
+                    local _d=""; read_tty "Press Enter to continue..." _d || true
+                fi ;;
             7)
-                if (( has_install == 1 )); then
-                    SCRIPT_MODE="backup-link"
-                    return 0
-                fi
-                ;;
+                if (( has_install == 1 )); then SCRIPT_MODE="backup-link"; return 0; fi ;;
             8)
                 if (( has_install == 1 )); then
                     enable_migration_watchdog || true
-                    local _d=""
-                    read_tty "Press Enter to continue..." _d || true
-                fi
-                ;;
+                    local _d=""; read_tty "Press Enter to continue..." _d || true
+                fi ;;
             9)
                 if (( has_install == 1 )); then
                     disable_migration_watchdog || true
-                    local _d=""
-                    read_tty "Press Enter to continue..." _d || true
-                fi
-                ;;
+                    local _d=""; read_tty "Press Enter to continue..." _d || true
+                fi ;;
             10)
                 if (( has_install == 1 )); then
                     stop_service_manual || true
-                    local _d=""
-                    read_tty "Press Enter to continue..." _d || true
-                fi
-                ;;
-            q|Q|quit|exit)
-                log_info "Exiting."
-                exit 0
-                ;;
-            *)
-                log_warning "Invalid option."
-                ;;
+                    local _d=""; read_tty "Press Enter to continue..." _d || true
+                fi ;;
+            q|Q|quit|exit) log_info "Exiting."; exit 0 ;;
+            *) log_warning "Invalid option." ;;
         esac
     done
 }
@@ -2796,7 +2853,8 @@ configure_config_in_place() {
 
     [[ -f "${CONFIG_FILE}" ]] || die "config.py does not exist."
 
-    extract_config_values || true
+    # ─── FIX #7: fail loudly if config.py is corrupt ───
+    extract_config_values || die "config.py is unreadable or has a syntax error; fix it manually first."
 
     printf '%s\n' "The installer will only fill missing or invalid fields."
     printf '%s\n' "Existing valid values will be preserved."
@@ -2818,7 +2876,7 @@ configure_config_in_place() {
 
     if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ || "${ADMIN_ID}" == "0" ]] || \
        is_placeholder "ADMIN_ID" "${ADMIN_ID}"; then
-        describe "Your Telegram numeric ID (get from @myidbot)."
+        describe "Your Telegram numeric ID."
         prompt_admin_id
         set_config_integer "ADMIN_ID" "${ADMIN_ID}"
         changed=1
@@ -2828,7 +2886,7 @@ configure_config_in_place() {
 
     if ! [[ "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]] || \
        is_placeholder "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"; then
-        describe "Your bank card number — exactly 16 digits (no spaces/dashes/underscores)."
+        describe "Your bank card number — exactly 16 digits."
         prompt_card_number
         set_config_value "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"
         changed=1
@@ -2837,7 +2895,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"; then
-        describe "Card holder's full name (as printed on the card)."
+        describe "Card holder's full name."
         prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
         set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
         changed=1
@@ -2846,7 +2904,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "BANK_NAME" "${BANK_NAME}"; then
-        describe "Bank name — e.g. \"Blue Bank\", \"Melli\", \"Mellat\"."
+        describe "Bank name."
         prompt_for_value "BANK_NAME" BANK_NAME
         set_config_value "BANK_NAME" "${BANK_NAME}"
         changed=1
@@ -2856,8 +2914,7 @@ configure_config_in_place() {
 
     if ! [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]] || \
        is_placeholder "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"; then
-        describe "3x-ui panel URL, e.g. https://panel.Domain.com:2053/<web_path>"
-        describe "or localhost: https://127.0.0.1:2053/<your_web_path>"
+        describe "3x-ui panel URL."
         prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
         set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
         changed=1
@@ -2885,7 +2942,7 @@ configure_config_in_place() {
 
     if ! [[ "${SENAI_SUB_URL}" =~ ^https?:// ]] || \
        is_placeholder "SENAI_SUB_URL" "${SENAI_SUB_URL}"; then
-        describe "Subscription URL for clients, e.g. https://sub.Domain.com:2083"
+        describe "Subscription URL for clients."
         prompt_http_url "SENAI_SUB_URL" SENAI_SUB_URL
         set_config_value "SENAI_SUB_URL" "${SENAI_SUB_URL}"
         changed=1
@@ -2894,7 +2951,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"; then
-        describe "Support Telegram username — e.g. @your_username_here"
+        describe "Support Telegram username."
         prompt_for_value "SUPPORT_USERNAME" SUPPORT_USERNAME
         set_config_value "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"
         changed=1
@@ -2904,12 +2961,6 @@ configure_config_in_place() {
 
     draw_step "Optional: Log Bot Settings"
 
-    describe "LOG_BOT_TOKEN: Token of the second bot (must be admin in the log group)."
-    describe "LOG_CHANNEL_ID: Group/channel ID — NEGATIVE number, e.g. -36737636783."
-    describe "                Get it by adding @myidbot to the group and running /getid@myidbot"
-    describe "                then pressing Enter on the LOG_CHANNEL_ID prompt."
-    printf '\n'
-
     local logs_currently_configured=0
     if [[ -n "${LOG_BOT_TOKEN}" && "${LOG_BOT_TOKEN}" != "None" ]] && \
        ! is_placeholder "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"; then
@@ -2918,7 +2969,7 @@ configure_config_in_place() {
 
     local configure_logs=0
     if (( logs_currently_configured == 1 )); then
-        if ask_yes_no "Log bot is currently configured. Reconfigure it? [y/N]: " "n"; then
+        if ask_yes_no "Log bot is configured. Reconfigure it? [y/N]: " "n"; then
             configure_logs=1
         fi
     else
@@ -2942,8 +2993,7 @@ configure_config_in_place() {
                 set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
                 changed=1
             else
-                printf 'LOG_BOT_TOKEN            : %b(kept existing value)%b\n' \
-                    "${GREEN}" "${NC}"
+                printf 'LOG_BOT_TOKEN            : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
             fi
         else
             prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
@@ -2968,8 +3018,7 @@ configure_config_in_place() {
                 fi
                 changed=1
             else
-                printf 'LOG_CHANNEL_ID           : %b(kept existing value)%b\n' \
-                    "${GREEN}" "${NC}"
+                printf 'LOG_CHANNEL_ID           : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
             fi
         else
             prompt_log_channel_id
@@ -2994,10 +3043,6 @@ configure_config_in_place() {
     fi
 
     draw_step "Optional: Google Gemini AI"
-
-    describe "GEMINI_ENABLED: enable AI responses via Google Gemini."
-    describe "GEMINI_API_KEY: Get from https://ai.google.dev/"
-    printf '\n'
 
     local configure_ai=0
     if [[ "${GEMINI_ENABLED}" == "True" ]] && \
@@ -3025,7 +3070,7 @@ configure_config_in_place() {
             printf 'GEMINI_API_KEY           : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
         fi
 
-        describe "GEMINI_MODEL: any Gemini model, e.g. gemini-2.5-flash"
+        describe "GEMINI_MODEL: e.g. gemini-2.5-flash"
         prompt_with_default "GEMINI_MODEL" "${GEMINI_MODEL:-gemini-2.5-flash}" GEMINI_MODEL
         set_config_value "GEMINI_MODEL" "${GEMINI_MODEL}"
         changed=1
@@ -3062,7 +3107,7 @@ configure_config_in_place() {
 }
 
 # ============================================================
-# Config key migration (AST-based)
+# Config key migration (AST-based)  — FIX #4
 # ============================================================
 
 migrate_config_keys() {
@@ -3129,13 +3174,14 @@ PY
 
     log_warning "Missing config.py keys detected: $(echo "${missing}" | tr '\n' ' ')"
 
-    printf '%s\n' "${missing}" \
-        | "${PYTHON_BIN}" - "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<'PY'
-import ast, sys
+    # ─── FIX #4: pass keys via env, not stdin (heredoc uses stdin) ───
+    MISSING_KEYS="${missing}" "${PYTHON_BIN}" - \
+        "${CONFIG_FILE}" "${RELEASE_ROOT}/config.py" <<'PY'
+import ast, os, sys
 
 config_path = sys.argv[1]
 release_config = sys.argv[2]
-missing = set(line.strip() for line in sys.stdin if line.strip())
+missing = set(os.environ.get("MISSING_KEYS", "").split())
 
 with open(release_config, "r", encoding="utf-8") as f:
     rel_src = f.read()
@@ -3164,9 +3210,12 @@ PY
 # Validation
 # ============================================================
 
+# ─── FIX (RB#7): use -B so no __pycache__ is created ───
 validate_config_syntax() {
     [[ -f "${CONFIG_FILE}" ]] || die "config.py does not exist."
-    if ! "${VENV_DIR}/bin/python" -m py_compile "${CONFIG_FILE}" >/dev/null 2>&1; then
+    if ! "${VENV_DIR}/bin/python" -B -c \
+        'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' \
+        "${CONFIG_FILE}" >/dev/null 2>&1; then
         die "config.py contains a Python syntax error."
     fi
     log_success "config.py syntax is valid."
@@ -3177,7 +3226,9 @@ validate_python_source() {
 
     local failed=0 pyfile
     while IFS= read -r -d '' pyfile; do
-        if ! "${VENV_DIR}/bin/python" -m py_compile "${pyfile}" >/dev/null 2>&1; then
+        if ! "${VENV_DIR}/bin/python" -B -c \
+            'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' \
+            "${pyfile}" >/dev/null 2>&1; then
             printf '%b[FAIL]%b Python syntax error: %s\n' \
                 "${RED}" "${NC}" "${pyfile}" >&2
             write_log "FAIL" "Python syntax error: ${pyfile}"
@@ -3243,10 +3294,11 @@ fresh_install() {
         log_warning "Existing config.py detected — its values will be preserved."
     fi
 
-    log_info "Cleaning previous application files (data/, .venv/, *.log preserved)..."
+    log_info "Cleaning previous application files (data/, .venv*, *.log preserved)..."
     find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 \
         ! -name 'data' \
         ! -name '.venv' \
+        ! -name '.venv.old' \
         ! -name '*.log' \
         -exec rm -rf {} + 2>/dev/null || true
 
@@ -3290,7 +3342,7 @@ fresh_install() {
 }
 
 # ============================================================
-# Update
+# Update  — FIX #3 order + FIX #2 rollback + FIX #6 warning
 # ============================================================
 
 update_existing() {
@@ -3299,10 +3351,9 @@ update_existing() {
     [[ -d "${INSTALL_DIR}" ]] || die "${INSTALL_DIR} does not exist."
 
     validate_release_for_update
-    
 
+    # ─── FIX #3: backup BEFORE recreating the venv ───
     stop_service_if_active
-    create_virtual_environment_if_needed
 
     local saved_config=""
     if [[ -f "${CONFIG_FILE}" ]]; then
@@ -3319,6 +3370,9 @@ update_existing() {
         fi
         die "Backup failed; aborting update."
     fi
+
+    # ─── FIX #3: venv recreate AFTER backup (freeze.txt exists now) ───
+    create_virtual_environment_if_needed
 
     draw_step "Synchronizing Application Files"
     log_info "Synchronizing commit ${LATEST_VERSION} (config.py included)..."
@@ -3372,12 +3426,7 @@ update_existing() {
     fi
 
     draw_step "Synchronizing Python Dependencies"
-    log_info "Installing release requirements into .venv..."
-    "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel
-    "${VENV_DIR}/bin/python" -m pip install -r "${INSTALL_DIR}/requirements.txt"
-    "${VENV_DIR}/bin/python" -m pip check || \
-        log_warning "pip check reported inconsistencies (continuing)."
-    log_success "Python dependencies are synchronized."
+    install_requirements
 
     validate_application_layout
     validate_config_syntax
@@ -3455,19 +3504,12 @@ handle_existing_installation() {
 
     printf '\n'
     printf 'Current commit : %s\n' "${CURRENT_VERSION}"
-    printf 'Latest commit  : %s\n' "${LATEST_VERSION}"
-    printf '\n'
+    printf 'Latest commit  : %s\n\n' "${LATEST_VERSION}"
 
     if (( FORCE_UPDATE == 1 )); then
         log_warning "Force update is enabled."
         update_existing
         return
-    fi
-
-    if versions_equal "${CURRENT_VERSION}" "${LATEST_VERSION}"; then
-        log_info "The installed commit matches the latest commit."
-        log_info "No update is required."
-        return 0
     fi
 
     if ask_yes_no "Update VeloraBot to ${LATEST_VERSION}? [Y/n]: " "y"; then
@@ -3485,6 +3527,10 @@ handle_existing_installation() {
 repair_only() {
     draw_step "Repairing Existing VeloraBot"
     [[ -d "${INSTALL_DIR}" ]] || die "${INSTALL_DIR} does not exist."
+
+    # ─── FIX (RB#5): stop the service before touching .venv ───
+    stop_service_if_active
+
     create_virtual_environment_if_needed
 
     if [[ ! -f "${CONFIG_FILE}" ]]; then
@@ -3543,16 +3589,14 @@ show_final_summary() {
     printf 'Persistent data  : %s\n' "${DATA_DIR}"
     printf 'Service          : %s\n' "${SERVICE_NAME}"
     printf 'Service user     : %s\n' "${SERVICE_USER}"
-    printf 'Installer log    : %s\n' "${LOG_FILE}"
-    printf '\n'
+    printf 'Installer log    : %s\n\n' "${LOG_FILE}"
 
     printf '%s\n' "Update protection:"
     printf '  config.py      : release version installed, user values preserved\n'
     printf '  data/          : never touched (backed up on update)\n'
     printf '  *.log          : never touched (excluded from rsync/tar)\n'
-    printf '  .venv/         : preserved (recreated only on Python version change)\n'
-    printf '  updates        : require explicit user consent\n'
-    printf '\n'
+    printf '  .venv/         : preserved; old copy kept as .venv.old during update\n'
+    printf '  updates        : require explicit user consent\n\n'
 
     if service_is_active; then
         log_success "Service status: active"
@@ -3564,8 +3608,7 @@ show_final_summary() {
     printf '  systemctl status %s\n'  "${SERVICE_NAME}"
     printf '  systemctl restart %s\n' "${SERVICE_NAME}"
     printf '  systemctl stop %s\n'    "${SERVICE_NAME}"
-    printf '  journalctl -u %s -f\n'   "${SERVICE_NAME}"
-    printf '\n'
+    printf '  journalctl -u %s -f\n\n' "${SERVICE_NAME}"
 
     if [[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]]; then
         printf 'Latest backup    : %s\n\n' "${BACKUP_DIR}"
@@ -3594,28 +3637,38 @@ main() {
     check_root
     check_operating_system
 
+    # ─── FIX #1: --force-update becomes an update ───
+    if (( FORCE_UPDATE == 1 )) && [[ "${SCRIPT_MODE}" == "auto" ]]; then
+        SCRIPT_MODE="update"
+    fi
+
     if [[ "${SCRIPT_MODE}" == "auto" ]] && \
        (( FORCE_UPDATE == 0 )) && \
        (( REPAIR_ONLY == 0 )); then
         show_management_panel
     fi
 
+    TEMP_ROOT="$(mktemp -d /tmp/velorabot-installer.XXXXXX)"
+
+    # ─── FIX (SL#8): backup-link skips apt/python/github steps ───
+    if [[ "${SCRIPT_MODE}" == "backup-link" ]]; then
+        command -v openssl >/dev/null 2>&1 || \
+            apt-get -o DPkg::Lock::Timeout=120 install -y -qq openssl >/dev/null 2>&1
+        command -v openssl >/dev/null 2>&1 || die "openssl is required."
+        create_setup_link || die "Failed to create setup link."
+        return 0
+    fi
+
+    preflight_checks
     install_system_dependencies
     ensure_modern_python
+    ensure_python_venv_support
     check_python_version
     check_github_connectivity
-
-    TEMP_ROOT="$(mktemp -d /tmp/velorabot-installer.XXXXXX)"
 
     fetch_latest_commit
     download_latest_commit
     read_current_version
-
-    # ─── Special modes: backup-link and restore ───
-    if [[ "${SCRIPT_MODE}" == "backup-link" ]]; then
-        create_setup_link || die "Failed to create setup link."
-        return 0
-    fi
 
     if [[ "${SCRIPT_MODE}" == "restore" ]]; then
         if [[ -z "${RESTORE_LINK}" ]]; then
@@ -3648,18 +3701,15 @@ main() {
             fi
             fresh_install
             ;;
-
         update)
             if (( has_install == 0 )); then
                 die "Cannot perform --update: no existing installation was found."
             fi
-            update_existing
+            handle_existing_installation
             ;;
-
         auto)
             die "Internal error: 'auto' mode reached the dispatch stage."
             ;;
-
         *)
             die "Internal error: unsupported mode '${SCRIPT_MODE}'."
             ;;
