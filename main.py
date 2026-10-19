@@ -31808,7 +31808,7 @@ async def admin_test_panel(callback: CallbackQuery):
             ping_results[f'🔴 {name}'] = 'Timeout'
     if lang == "fa":
         text = "🔌 <b>وضعیت پنل</b>\n"
-        text += f"🌐 آدرس: <code>{SENAI_PANEL_URL}</code>\n"
+        text += f"🌐 آدرس: <tg-spoiler>{html.escape(SENAI_PANEL_URL)}</tg-spoiler>\n"
         text += f"⚙️ وضعیت: {'🟢 فعال' if SENAI_PANEL_ENABLED else '🔴 غیرفعال'}\n\n"
         
         if SENAI_PANEL_ENABLED:
@@ -31833,7 +31833,7 @@ async def admin_test_panel(callback: CallbackQuery):
                 text += f"  {key}: <code>{ping_results[key]}</code>\n"
     else:
         text = "🔌 <b>Panel Status</b>\n"
-        text += f"🌐 URL: <code>{SENAI_PANEL_URL}</code>\n"
+        text += f"🌐 URL: <tg-spoiler>{html.escape(SENAI_PANEL_URL)}</tg-spoiler>\n"
         text += f"⚙️ Status: {'🟢 On' if SENAI_PANEL_ENABLED else '🔴 Off'}\n\n"
         
         if SENAI_PANEL_ENABLED:
@@ -34367,7 +34367,7 @@ async def auto_ai_response(message: Message):
 
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.7.41"
+    version = "v1.7.45"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
