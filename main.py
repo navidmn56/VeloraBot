@@ -1,7 +1,3 @@
-gemini_client = None
-openrouter_client = None
-gemini_error_message = None 
-openrouter_error_message = None 
 user_ai_requests = {}
 import asyncio
 import json
@@ -18,8 +14,6 @@ import hashlib
 import shutil
 import secrets
 import psutil
-from google import genai
-from google.genai import types
 import re
 import traceback
 from io import BytesIO
@@ -51,11 +45,10 @@ from config import (
     SENAI_PANEL_URL, SENAI_PANEL_USERNAME, SENAI_PANEL_PASSWORD, SENAI_SUB_URL,
     GEMINI_API_KEY, GEMINI_SYSTEM_PROMPT, refresh_gemini_prompt,
     GEMINI_ENABLED, GEMINI_MODEL, GEMINI_TEMPERATURE, GEMINI_MAX_TOKENS, GEMINI_DAILY_LIMIT,
-    OPENROUTER_ENABLED, OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODELS,
-    OPENROUTER_TEMPERATURE, OPENROUTER_MAX_TOKENS, OPENROUTER_TOP_P, OPENROUTER_DAILY_LIMIT,
-    OPENROUTER_SYSTEM_PROMPT, AUTO_AI_RESPONSE,
+    AUTO_AI_RESPONSE,
 )
-
+gemini_client = None
+gemini_error_message = None
 
 async def real_ping_tcp(host: str, port: int = 443, timeout: int = 3) -> Optional[float]:
 
@@ -10748,12 +10741,9 @@ async def reset_panel_rate_limits():
     return True
 
 import aiohttp
-openrouter_client = None
-openrouter_models_status = {}
 user_ai_requests = {}
-AI_REQUEST_LIMIT = configs_pool.get('openrouter_settings', {}).get('daily_limit', 10) if 'configs_pool' in dir() else 10
+
 class GeminiClient:
-    """کلاینت اتصال به Google Gemini API با مدیریت هوشمند توکن"""
     
     def __init__(self, api_key: str, model: str):
         self.api_key = api_key
@@ -10956,97 +10946,7 @@ class ConversationMemory:
                                if (datetime.now() - self.last_activity[uid]).total_seconds() < 600])
         }
 conversation_memory = ConversationMemory(max_history=10, expire_minutes=30)
-class OpenRouterClient:
-    """کلاینت اتصال به OpenRouter API (بدون تغییر)"""
-    
-    def __init__(self, api_key: str, base_url: str):
-        self.api_key = api_key
-        self.base_url = base_url.rstrip('/')
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://t.me/velorazoko_bot",
-            "X-Title": "VPN Config Bot"
-        }
-        self.available_models = []
-        self.default_model = None
-    
-    async def test_connection(self) -> Dict:
-        """تست اتصال به OpenRouter"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.base_url}/api/v1/models",
-                    headers=self.headers,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        models = data.get('data', [])
-                        free_models = [m['id'] for m in models if ':free' in m.get('id', '')]
-                        
-                        for model in OPENROUTER_MODELS:
-                            if model in free_models:
-                                self.default_model = model
-                                break
-                        
-                        if not self.default_model and free_models:
-                            self.default_model = free_models[0]
-                        
-                        return {
-                            'success': True,
-                            'free_models': len(free_models),
-                            'default_model': self.default_model
-                        }
-                    else:
-                        text = await response.text()
-                        return {'success': False, 'error': f"HTTP {response.status}: {text[:100]}"}
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
-    
-    async def chat(self, user_message: str, user_id: int = None, username: str = None, retry: int = 2) -> str:
-        """ارسال پیام به OpenRouter"""
-        if not self.default_model:
-            return "❌ مشکلی در اتصال به هوش مصنوعی وجود دارد."
-        
-        for attempt in range(retry):
-            if attempt > 0:
-                await asyncio.sleep(2 * attempt)
-            
-            try:
-                messages = [
-                    {"role": "system", "content": OPENROUTER_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message}
-                ]
-                
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        f"{self.base_url}/api/v1/chat/completions",
-                        headers=self.headers,
-                        json={
-                            "model": self.default_model,
-                            "messages": messages,
-                            "temperature": OPENROUTER_TEMPERATURE,
-                            "max_tokens": OPENROUTER_MAX_TOKENS
-                        },
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            reply = data.get('choices', [{}])[0].get('message', {}).get('content', '')
-                            return reply.strip() if reply else "متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
-                        elif response.status == 429:
-                            if attempt == retry - 1:
-                                return "⚠️ محدودیت درخواست. لطفاً چند لحظه صبر کنید."
-                            continue
-                        else:
-                            return f"❌ خطا: {response.status}"
-            except Exception as e:
-                logger.error(f"OpenRouter Error: {e}")
-                if attempt == retry - 1:
-                    return f"❌ خطا: {str(e)[:100]}"
-        
-        return "❌ خطا در پردازش درخواست."
+
 def check_ai_limit(user_id: int) -> tuple:
     """بررسی محدودیت روزانه کاربر برای استفاده از AI
     
@@ -11054,7 +10954,7 @@ def check_ai_limit(user_id: int) -> tuple:
         (can_use: bool, remaining: int, message: str)
     """
     today = datetime.now().date().isoformat()
-    daily_limit = GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT
+    daily_limit = GEMINI_DAILY_LIMIT
     
     if user_id not in user_ai_requests:
         user_ai_requests[user_id] = {'date': today, 'count': 0}
@@ -11103,11 +11003,10 @@ def reset_ai_limits():
 
 @dp.message(Command("ai"))
 async def cmd_ai(message: Message):
-    """دستور استفاده از هوش مصنوعی"""
     user_id = message.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    ai_available = (OPENROUTER_ENABLED and openrouter_client) or (GEMINI_ENABLED and gemini_client)
-    
+    ai_available = GEMINI_ENABLED and gemini_client
+
     if not ai_available:
         text = "❌ هوش مصنوعی در حال حاضر در دسترس نیست." if lang == "fa" else "❌ AI is currently unavailable."
         await message.reply(text)
@@ -11127,7 +11026,7 @@ async def cmd_ai(message: Message):
 • حل مشکلات اتصال VPN
 • راهنمای شارژ حساب
 
-<b>⚠️ محدودیت:</b> {OPENROUTER_DAILY_LIMIT} سوال در روز
+<b>⚠️ محدودیت:</b> {GEMINI_DAILY_LIMIT} سوال در روز
 
 برای لغو وضعیت، /cancel را ارسال کنید.
 """
@@ -11145,7 +11044,7 @@ To use AI, send your message with the command:
 • VPN connection issues
 • Balance recharge guide
 
-<b>⚠️ Limit:</b> {OPENROUTER_DAILY_LIMIT} questions per day
+<b>⚠️ Limit:</b> {GEMINI_DAILY_LIMIT} questions per day
 
 Send /cancel to abort.
 """
@@ -11161,7 +11060,7 @@ Send /cancel to abort.
     processing_msg = await message.reply("🤖 در حال پردازش سوال شما..." if lang == "fa" else "🤖 Processing your question...")
     
     try:
-        answer = await openrouter_client.chat(question, user_id, message.from_user.username)
+        answer = await gemini_client.chat(question, user_id, message.from_user.username)
         increment_ai_usage(user_id)
         if lang == "fa":
             response_text = f"""
@@ -11170,7 +11069,7 @@ Send /cancel to abort.
 {answer}
 
 ━━━━━━━━━━━━━━━━━━━━
-📊 سوالات باقیمانده امروز: {remaining - 1}/{OPENROUTER_DAILY_LIMIT}
+📊 سوالات باقیمانده امروز: {remaining - 1}/{GEMINI_DAILY_LIMIT}
 """
         else:
             response_text = f"""
@@ -11179,7 +11078,7 @@ Send /cancel to abort.
 {answer}
 
 ━━━━━━━━━━━━━━━━━━━━
-📊 Remaining questions today: {remaining - 1}/{OPENROUTER_DAILY_LIMIT}
+📊 Remaining questions today: {remaining - 1}/{GEMINI_DAILY_LIMIT}
 """
         
         await processing_msg.edit_text(response_text, parse_mode=ParseMode.HTML)
@@ -11256,6 +11155,7 @@ async def cmd_memory(message: Message):
                     await message.reply(f"❌ کاربر {target_id} هیچ تاریخی ندارد")
             except:
                 await message.reply("❌ آیدی نامعتبر")
+                
 @dp.callback_query(F.data == "admin_ai_settings")
 async def admin_ai_settings(callback: CallbackQuery):
     """تنظیمات هوش مصنوعی برای ادمین با نمایش خطاهای دقیق از configs_pool"""
@@ -11271,7 +11171,6 @@ async def admin_ai_settings(callback: CallbackQuery):
     # ============================================
     ai_errors = configs_pool.get('ai_errors', {})
     gemini_error_message = ai_errors.get('gemini_error', '')
-    openrouter_error_message = ai_errors.get('openrouter_error', '')
     last_check = ai_errors.get('last_check', '')
     
     # ============================================
@@ -11279,8 +11178,6 @@ async def admin_ai_settings(callback: CallbackQuery):
     # ============================================
     gemini_status = "🔴 غیرفعال"
     gemini_display_error = ""
-    openrouter_status = "🔴 غیرفعال"
-    openrouter_display_error = ""
     model_name = "هیچ سرویسی فعال نیست"
     daily_limit = 0
     
@@ -11305,34 +11202,14 @@ async def admin_ai_settings(callback: CallbackQuery):
                 else:
                     gemini_display_error = "⚠️ اتصال به Google API برقرار نشد - لاگ‌ها را بررسی کنید"
     
-    # --- بررسی OpenRouter ---
-    if OPENROUTER_ENABLED:
-        if openrouter_client:
-            openrouter_status = "🟢 فعال"
-            model_name = openrouter_client.default_model if openrouter_client else 'نامشخص'
-            daily_limit = OPENROUTER_DAILY_LIMIT
-            openrouter_display_error = ""
-        else:
-            openrouter_status = "❌ خطا"
-            if openrouter_error_message:
-                openrouter_display_error = openrouter_error_message
-            else:
-                if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "sk-or-v1-xxxxxxx":
-                    openrouter_display_error = "⚠️ کلید OpenRouter در config.py تنظیم نشده است"
-                else:
-                    openrouter_display_error = "⚠️ اتصال به OpenRouter برقرار نشد - لاگ‌ها را بررسی کنید"
-    
     # --- تعیین وضعیت کلی ---
-    if gemini_client or openrouter_client:
+    if gemini_client:
         overall_status = "🟢 فعال"
-        if gemini_client:
-            service_name = "Google Gemini"
-        else:
-            service_name = "OpenRouter"
+        service_name = "Google Gemini"
     else:
         overall_status = "🔴 غیرفعال"
         service_name = "هیچ سرویسی فعال نیست"
-        if gemini_error_message or openrouter_error_message:
+        if gemini_error_message:
             overall_status = "⚠️ نیاز به بررسی"
     
     # --- آمار استفاده روزانه ---
@@ -11346,18 +11223,15 @@ async def admin_ai_settings(callback: CallbackQuery):
     if lang == "fa":
         # خطاها را به صورت خوانا فرمت کن
         gemini_error_display = f"\n  <code>{gemini_display_error}</code>" if gemini_display_error else ""
-        openrouter_error_display = f"\n  <code>{openrouter_display_error}</code>" if openrouter_display_error else ""
         
         # راه‌حل پیشنهادی بر اساس خطاها
         solution_text = ""
         if gemini_error_message and "Location" in gemini_error_message:
-            solution_text = "💡 برای رفع خطای Location، از OpenRouter استفاده کنید یا VPN روی سرور تنظیم کنید."
+            solution_text = "💡 برای رفع خطای Location، VPN روی سرور تنظیم کنید."
         elif gemini_error_message and "کلید" in gemini_error_message:
             solution_text = "💡 کلید API را از https://aistudio.google.com/apikey دریافت کنید."
-        elif openrouter_error_message and "کلید" in openrouter_error_message:
-            solution_text = "💡 کلید OpenRouter را از https://openrouter.ai دریافت کنید."
-        elif gemini_error_message or openrouter_error_message:
-            solution_text = "💡 برای رفع خطا، OpenRouter را فعال کنید یا کلید API را بررسی کنید."
+        elif gemini_error_message:
+            solution_text = "💡 کلید API را از https://aistudio.google.com/apikey بررسی کنید."
         
         text = f"""
 🤖 <b>تنظیمات هوش مصنوعی</b>
@@ -11373,8 +11247,6 @@ async def admin_ai_settings(callback: CallbackQuery):
 <b>خدمات:</b>
 • Google Gemini: {gemini_status}{gemini_error_display}
 
-• OpenRouter: {openrouter_status}{openrouter_error_display}
-
 📊 استفاده روزانه: {daily_usage} سوال
 
 {f'🕐 آخرین بررسی: {last_check[:16]}' if last_check else ''}
@@ -11383,17 +11255,14 @@ async def admin_ai_settings(callback: CallbackQuery):
 """
     else:
         gemini_error_display = f"\n  <code>{gemini_display_error}</code>" if gemini_display_error else ""
-        openrouter_error_display = f"\n  <code>{openrouter_display_error}</code>" if openrouter_display_error else ""
         
         solution_text = ""
         if gemini_error_message and "Location" in gemini_error_message:
-            solution_text = "💡 To fix Location error, use OpenRouter or setup VPN on server."
+            solution_text = "💡 To fix Location error, setup VPN on server."
         elif gemini_error_message and "API key" in gemini_error_message.lower():
             solution_text = "💡 Get API key from https://aistudio.google.com/apikey"
-        elif openrouter_error_message and "API key" in openrouter_error_message.lower():
-            solution_text = "💡 Get OpenRouter key from https://openrouter.ai"
-        elif gemini_error_message or openrouter_error_message:
-            solution_text = "💡 To fix the error, enable OpenRouter or check your API key."
+        elif gemini_error_message:
+            solution_text = "💡 Check your API key at https://aistudio.google.com/apikey"
         
         text = f"""
 🤖 <b>AI Settings</b>
@@ -11408,8 +11277,6 @@ async def admin_ai_settings(callback: CallbackQuery):
 
 <b>Services:</b>
 • Google Gemini: {gemini_status}{gemini_error_display}
-
-• OpenRouter: {openrouter_status}{openrouter_display_error}
 
 📊 Daily usage: {daily_usage} questions
 
@@ -11524,37 +11391,6 @@ async def admin_ai_test(callback: CallbackQuery):
     else:
         gemini_test_detail = "ℹ️ در config.py غیرفعال است"
     
-    # ============================================
-    # تست OpenRouter
-    # ============================================
-    openrouter_test_result = "❌ غیرفعال"
-    openrouter_test_detail = ""
-    
-    if OPENROUTER_ENABLED:
-        if openrouter_client:
-            try:
-                result = await openrouter_client.test_connection()
-                if result.get('success'):
-                    openrouter_test_result = "✅ فعال"
-                    openrouter_test_detail = f"مدل پیش‌فرض: {result.get('default_model', 'نامشخص')}"
-                else:
-                    openrouter_test_result = "❌ خطا"
-                    openrouter_test_detail = result.get('error', 'خطای نامشخص')
-            except Exception as e:
-                openrouter_test_result = "❌ خطا"
-                openrouter_test_detail = f"خطا: {str(e)[:80]}"
-        else:
-            openrouter_test_result = "❌ خطا"
-            ai_errors = configs_pool.get('ai_errors', {})
-            openrouter_error_msg = ai_errors.get('openrouter_error', '')
-            if openrouter_error_msg:
-                openrouter_test_detail = openrouter_error_msg
-            elif not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "sk-or-v1-xxxxxxx":
-                openrouter_test_detail = "⚠️ کلید OpenRouter تنظیم نشده است"
-            else:
-                openrouter_test_detail = "⚠️ اتصال به OpenRouter برقرار نشد"
-    else:
-        openrouter_test_detail = "ℹ️ در config.py غیرفعال است"
     
     # ============================================
     # تست واقعی ارسال پیام (در صورت فعال بودن)
@@ -11563,15 +11399,6 @@ async def admin_ai_test(callback: CallbackQuery):
     if gemini_client:
         try:
             test_msg = await gemini_client.chat("فقط با کلمه 'OK' پاسخ بده.", retry=1)
-            if test_msg and "OK" in test_msg:
-                real_test_result = "\n\n✅ تست ارسال پیام: موفق"
-            else:
-                real_test_result = f"\n\n⚠️ تست ارسال پیام: پاسخ غیرمنتظره - {test_msg[:50] if test_msg else 'پاسخی دریافت نشد'}"
-        except Exception as e:
-            real_test_result = f"\n\n❌ تست ارسال پیام: خطا - {str(e)[:80]}"
-    elif openrouter_client:
-        try:
-            test_msg = await openrouter_client.chat("Just reply with 'OK'.", retry=1)
             if test_msg and "OK" in test_msg:
                 real_test_result = "\n\n✅ تست ارسال پیام: موفق"
             else:
@@ -11596,14 +11423,10 @@ async def admin_ai_test(callback: CallbackQuery):
 وضعیت: {gemini_test_result}
 {f'📝 {gemini_test_detail}' if gemini_test_detail else ''}
 
-<b>📡 OpenRouter:</b>
-وضعیت: {openrouter_test_result}
-{f'📝 {openrouter_test_detail}' if openrouter_test_detail else ''}
-
 ━━━━━━━━━━━━━━━━━━━━━━
 {real_test_result}
 
-{f'💡 <b>راه‌حل پیشنهادی:</b> برای رفع خطا، OpenRouter را فعال کنید یا کلید API را بررسی کنید.' if ('❌' in gemini_test_result or '❌' in openrouter_test_result) else '✅ همه سرویس‌ها به درستی کار می‌کنند.'}
+{f'💡 <b>راه‌حل پیشنهادی:</b> کلید API Gemini را بررسی کنید.' if '❌' in gemini_test_result else '✅ سرویس Gemini به درستی کار می‌کند.'}
 """
     else:
         text = f"""
@@ -11617,14 +11440,10 @@ async def admin_ai_test(callback: CallbackQuery):
 Status: {gemini_test_result}
 {f'📝 {gemini_test_detail}' if gemini_test_detail else ''}
 
-<b>📡 OpenRouter:</b>
-Status: {openrouter_test_result}
-{f'📝 {openrouter_test_detail}' if openrouter_test_detail else ''}
-
 ━━━━━━━━━━━━━━━━━━━━━━
 {real_test_result}
 
-{f'💡 <b>Solution:</b> Enable OpenRouter or check your API key.' if ('❌' in gemini_test_result or '❌' in openrouter_test_result) else '✅ All services are working properly.'}
+{f'💡 <b>Solution:</b> Check your Gemini API key.' if '❌' in gemini_test_result else '✅ All services are working properly.'}
 """
     
     buttons = [
@@ -11648,25 +11467,6 @@ Status: {openrouter_test_result}
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-
-
-@dp.callback_query(F.data == "admin_ai_toggle")
-async def admin_ai_toggle(callback: CallbackQuery):
-    """فعال/غیرفعال کردن AI"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    global OPENROUTER_ENABLED
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    OPENROUTER_ENABLED = not OPENROUTER_ENABLED
-    
-    await callback.answer(
-        f"✅ AI {'فعال شد' if OPENROUTER_ENABLED else 'غیرفعال شد'}" if lang == "fa" else f"✅ AI {'enabled' if OPENROUTER_ENABLED else 'disabled'}",
-        show_alert=True
-    )
-    
-    await admin_ai_settings(callback)
 
 
 @dp.callback_query(F.data == "admin_ai_reset_limits")
@@ -14027,7 +13827,7 @@ async def ai_chat_start(callback: CallbackQuery):
     coupon_applied = user_state.get('coupon_applied', False)
     
     logger.info(f"🔍 [ai_chat_start] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    ai_available = (OPENROUTER_ENABLED and openrouter_client) or (GEMINI_ENABLED and gemini_client)
+    ai_available = GEMINI_ENABLED and gemini_client
     if not ai_available:
         await callback.answer("❌ هوش مصنوعی در حال حاضر در دسترس نیست.", show_alert=True)
         return
@@ -14080,7 +13880,7 @@ async def ai_chat_start(callback: CallbackQuery):
 • پرسیدن سوال در رابطه با سرعت و پایداری
 • گرفتن ایدی پشتیبانی
 
-<b>{premium_emoji('danger','⚠️')} محدودیت:</b> {GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT} سوال در روز
+<b>{premium_emoji('danger','⚠️')} محدودیت:</b> {GEMINI_DAILY_LIMIT} سوال در روز
 
 <tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> سوال خود را بپرسید...
 """
@@ -14100,7 +13900,7 @@ Welcome to AI Support!
 • Questions about speed and stability
 • Support ID retrieval
 
-<b>{premium_emoji('danger','⚠️')} Limit:</b> {GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT} questions per day
+<b>{premium_emoji('danger','⚠️')} Limit:</b> {GEMINI_DAILY_LIMIT} questions per day
 
 <tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> Ask your question...
 """
@@ -33588,7 +33388,7 @@ async def handle_text_messages(message: Message):
     if user_id == ADMIN_ID_INT:
         await handle_admin_special_states(message, user_state)
         return
-    if AUTO_AI_RESPONSE and (gemini_client or openrouter_client):  # بررسی هر دو سرویس
+    if AUTO_AI_RESPONSE and gemini_client:
         if is_ai_question(message.text) and len(message.text.strip()) >= 5:
             can_use, remaining, limit_msg = check_ai_limit(user_id)
             if can_use:
@@ -34178,20 +33978,18 @@ async def cmd_ai_debug(message: Message):
   • فعال: {GEMINI_ENABLED}
   • مدل: {GEMINI_MODEL}
   • Max Tokens: {GEMINI_MAX_TOKENS}
+  • Temperature: {GEMINI_TEMPERATURE}
+  • Daily Limit: {GEMINI_DAILY_LIMIT}
   • System Prompt: {len(GEMINI_SYSTEM_PROMPT)} کاراکتر
 
-📡 <b>OpenRouter:</b>
-  • فعال: {OPENROUTER_ENABLED}
-  • Max Tokens: {OPENROUTER_MAX_TOKENS}
-  • System Prompt: {len(OPENROUTER_SYSTEM_PROMPT)} کاراکتر
-
-📊 <b>تنظیمات:</b>
-  • GEMINI_MAX_TOKENS: {GEMINI_MAX_TOKENS}
-  • برای پاسخ کامل حداقل 500-800 توکن نیاز است
+📊 <b>وضعیت اتصال:</b>
+  • Client: {'🟢 متصل' if gemini_client else '🔴 غیرفعال'}
+  • خطا: {gemini_error_message if gemini_error_message else '✅ ندارد'}
 
 💡 <b>توصیه:</b>
   • اگر پاسخ‌ها ناقص است، GEMINI_MAX_TOKENS را افزایش دهید
-  • مقدار پیشنهادی: 1500
+  • مقدار پیشنهادی: 800 تا 1500
+  • مقدار فعلی: {GEMINI_MAX_TOKENS}
 """
     await message.reply(text, parse_mode=ParseMode.HTML)
        
@@ -34512,7 +34310,7 @@ async def auto_ai_response(message: Message):
         
         return
     
-    daily_limit = GEMINI_DAILY_LIMIT if gemini_client else OPENROUTER_DAILY_LIMIT
+    daily_limit = GEMINI_DAILY_LIMIT
     can_use, remaining, limit_msg = check_ai_limit(user_id)
     
     if not can_use:
@@ -38682,26 +38480,23 @@ async def cmd_ai_status(message: Message):
     await message.reply(status_text, parse_mode=ParseMode.HTML)
     
 async def init_ai():
-    """راه‌اندازی کلاینت هوش مصنوعی با لاگ‌گیری کامل و ذخیره خطاها"""
-    global gemini_client, openrouter_client
-    global gemini_error_message, openrouter_error_message
-    
+    """راه‌اندازی کلاینت هوش مصنوعی - فقط Google Gemini"""
+    global gemini_client, gemini_error_message
+
     gemini_error_message = None
-    openrouter_error_message = None
     gemini_client = None
-    openrouter_client = None
-    
+
     logger.info("=" * 70)
     logger.info("🤖 راه‌اندازی هوش مصنوعی...")
     logger.info("-" * 70)
-    
+
     logger.info("📡 بررسی سرویس Google Gemini:")
     logger.info(f"   ├─ GEMINI_ENABLED: {GEMINI_ENABLED}")
     logger.info(f"   ├─ GEMINI_API_KEY: {GEMINI_API_KEY[:15] if GEMINI_API_KEY and len(GEMINI_API_KEY) > 10 else 'NOT SET'}...")
     logger.info(f"   ├─ GEMINI_MODEL: {GEMINI_MODEL}")
     logger.info(f"   ├─ GEMINI_MAX_TOKENS: {GEMINI_MAX_TOKENS}")
     logger.info(f"   └─ GEMINI_DAILY_LIMIT: {GEMINI_DAILY_LIMIT}")
-    
+
     if GEMINI_ENABLED:
         # بررسی کلید API
         if not GEMINI_API_KEY or GEMINI_API_KEY == "AIzaSyDxxxxxxxxxxxxxxxxxx" or len(GEMINI_API_KEY) < 30:
@@ -38710,25 +38505,25 @@ async def init_ai():
             logger.info("   💡 راه‌حل: از https://aistudio.google.com/apikey یک کلید جدید بگیرید")
         else:
             logger.info("   ✅ کلید API وجود دارد (در حال تست اتصال...)")
-            
+
             try:
                 test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
                 logger.info(f"   🌐 ارسال درخواست تست به: {test_url[:60]}...")
-                
+
                 async with aiohttp.ClientSession() as session:
                     async with session.get(test_url, timeout=aiohttp.ClientTimeout(total=15)) as response:
                         response_text = await response.text()
                         logger.info(f"   📥 پاسخ دریافت شد - Status: {response.status}")
-                        
+
                         if response.status == 200:
                             try:
                                 data = json.loads(response_text)
                                 models = data.get('models', [])
                                 gemini_models = [m['name'].split('/')[-1] for m in models if 'gemini' in m['name']]
-                                
+
                                 logger.info(f"   ✅ اتصال به Gemini برقرار است!")
                                 logger.info(f"   📋 مدل‌های موجود: {gemini_models}")
-                                
+
                                 if GEMINI_MODEL in gemini_models:
                                     logger.info(f"   ✅ مدل '{GEMINI_MODEL}' در دسترس است")
                                     gemini_client = GeminiClient(GEMINI_API_KEY, GEMINI_MODEL)
@@ -38738,78 +38533,78 @@ async def init_ai():
                                     suggested_models = [m for m in gemini_models if 'flash' in m or 'pro' in m]
                                     if not suggested_models:
                                         suggested_models = gemini_models[:3]
-                                    
+
                                     gemini_error_message = f"❌ مدل '{GEMINI_MODEL}' موجود نیست. مدل‌های پیشنهادی: {', '.join(suggested_models)}"
                                     logger.error(f"   ❌ {gemini_error_message}")
                                     gemini_client = None
-                                    
+
                             except json.JSONDecodeError as e:
                                 gemini_error_message = f"❌ پاسخ JSON نامعتبر: {str(e)[:50]}"
                                 logger.error(f"   ❌ {gemini_error_message}")
                                 logger.error(f"   📄 پاسخ: {response_text[:200]}")
                                 gemini_client = None
-                                
+
                         elif response.status == 400:
                             try:
                                 error_data = json.loads(response_text)
                                 error_msg = error_data.get('error', {}).get('message', response_text[:100])
-                                
+
                                 if "User location is not supported" in error_msg:
-                                    gemini_error_message = "🌍 موقعیت جغرافیایی پشتیبانی نمی‌شود - از OpenRouter استفاده کنید"
+                                    gemini_error_message = "🌍 موقعیت جغرافیایی پشتیبانی نمی‌شود - از VPN روی سرور استفاده کنید"
                                 elif "API key not valid" in error_msg or "invalid" in error_msg.lower():
                                     gemini_error_message = "❌ کلید API نامعتبر است - یک کلید جدید بگیرید"
                                 elif "quota" in error_msg.lower():
-                                    gemini_error_message = "⚠️ سهمیه روزانه تمام شده - از OpenRouter استفاده کنید"
+                                    gemini_error_message = "⚠️ سهمیه روزانه تمام شده - فردا امتحان کنید"
                                 else:
                                     gemini_error_message = f"❌ خطای 400: {error_msg[:100]}"
-                                    
+
                                 logger.error(f"   ❌ {gemini_error_message}")
                                 logger.error(f"   📄 پاسخ کامل: {response_text[:300]}")
-                                
+
                             except:
                                 gemini_error_message = f"❌ خطای 400: {response_text[:100]}"
                                 logger.error(f"   ❌ {gemini_error_message}")
                             gemini_client = None
-                            
+
                         elif response.status == 403:
                             gemini_error_message = "❌ دسترسی ممنوع (403) - کلید API نامعتبر یا پروژه فعال نیست"
                             logger.error(f"   ❌ {gemini_error_message}")
                             logger.info("   💡 راه‌حل: در Google Cloud Console API را فعال کنید")
                             gemini_client = None
-                            
+
                         elif response.status == 404:
                             gemini_error_message = f"❌ مدل '{GEMINI_MODEL}' یافت نشد (404)"
                             logger.error(f"   ❌ {gemini_error_message}")
                             logger.info("   💡 راه‌حل: مدل معتبر مانند gemini-1.5-flash را امتحان کنید")
                             gemini_client = None
-                            
+
                         elif response.status == 429:
                             gemini_error_message = "⚠️ محدودیت درخواست (429) - چند لحظه صبر کنید"
                             logger.warning(f"   ⚠️ {gemini_error_message}")
                             gemini_client = None
-                            
+
                         else:
                             gemini_error_message = f"❌ خطای ناشناخته: {response.status} - {response_text[:100]}"
                             logger.error(f"   ❌ {gemini_error_message}")
                             gemini_client = None
-                            
+
             except asyncio.TimeoutError:
                 gemini_error_message = "⏰ زمان اتصال به Google API به پایان رسید (Timeout)"
                 logger.error(f"   ❌ {gemini_error_message}")
                 logger.info("   💡 راه‌حل: اتصال اینترنت سرور را بررسی کنید")
                 gemini_client = None
-                
+
             except aiohttp.ClientConnectorError as e:
                 gemini_error_message = f"🌐 خطای اتصال شبکه: {str(e)[:80]}"
                 logger.error(f"   ❌ {gemini_error_message}")
                 logger.info("   💡 راه‌حل: DNS یا اتصال اینترنت سرور را بررسی کنید")
                 gemini_client = None
-                
+
             except aiohttp.ClientError as e:
                 gemini_error_message = f"🌐 خطای شبکه: {str(e)[:80]}"
                 logger.error(f"   ❌ {gemini_error_message}")
                 gemini_client = None
-                
+
             except Exception as e:
                 gemini_error_message = f"⚠️ خطای غیرمنتظره: {str(e)[:100]}"
                 logger.error(f"   ❌ {gemini_error_message}")
@@ -38819,108 +38614,36 @@ async def init_ai():
     else:
         gemini_error_message = "ℹ️ Gemini در config.py غیرفعال شده است (GEMINI_ENABLED = False)"
         logger.info(f"   ℹ️ {gemini_error_message}")
-    
-    
-    logger.info("-" * 70)
-    logger.info("📡 بررسی سرویس OpenRouter:")
-    logger.info(f"   ├─ OPENROUTER_ENABLED: {OPENROUTER_ENABLED}")
-    logger.info(f"   ├─ OPENROUTER_API_KEY: {OPENROUTER_API_KEY[:15] if OPENROUTER_API_KEY and len(OPENROUTER_API_KEY) > 10 else 'NOT SET'}...")
-    logger.info(f"   └─ OPENROUTER_BASE_URL: {OPENROUTER_BASE_URL}")
-    
-    if OPENROUTER_ENABLED:
-        if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "sk-or-v1-xxxxxxx" or len(OPENROUTER_API_KEY) < 20:
-            openrouter_error_message = "❌ کلید OpenRouter در config.py تنظیم نشده یا نامعتبر است"
-            logger.error(f"   ❌ {openrouter_error_message}")
-            logger.info("   💡 راه‌حل: از https://openrouter.ai یک کلید بگیرید")
-        else:
-            logger.info("   ✅ کلید API وجود دارد (در حال تست اتصال...)")
-            
-            try:
-                openrouter_client = OpenRouterClient(OPENROUTER_API_KEY, OPENROUTER_BASE_URL)
-                result = await openrouter_client.test_connection()
-                
-                if result.get('success'):
-                    logger.info(f"   ✅ اتصال به OpenRouter برقرار است!")
-                    logger.info(f"   📋 مدل پیش‌فرض: {result.get('default_model', 'نامشخص')}")
-                    logger.info(f"   📋 تعداد مدل‌های رایگان: {result.get('free_models', 0)}")
-                    openrouter_error_message = None
-                    logger.info("   🎉 OpenRouter با موفقیت راه‌اندازی شد!")
-                else:
-                    error = result.get('error', 'خطای نامشخص')
-                    if "401" in error or "Unauthorized" in error:
-                        openrouter_error_message = "❌ کلید OpenRouter نامعتبر است (401)"
-                    elif "404" in error:
-                        openrouter_error_message = "❌ آدرس API OpenRouter نامعتبر است (404)"
-                    elif "timeout" in error.lower():
-                        openrouter_error_message = "⏰ زمان اتصال به OpenRouter به پایان رسید"
-                    else:
-                        openrouter_error_message = f"❌ {error[:100]}"
-                    
-                    logger.error(f"   ❌ {openrouter_error_message}")
-                    openrouter_client = None
-                    
-            except asyncio.TimeoutError:
-                openrouter_error_message = "⏰ زمان اتصال به OpenRouter به پایان رسید (Timeout)"
-                logger.error(f"   ❌ {openrouter_error_message}")
-                openrouter_client = None
-                
-            except aiohttp.ClientConnectorError as e:
-                openrouter_error_message = f"🌐 خطای اتصال به OpenRouter: {str(e)[:80]}"
-                logger.error(f"   ❌ {openrouter_error_message}")
-                openrouter_client = None
-                
-            except Exception as e:
-                openrouter_error_message = f"⚠️ خطای غیرمنتظره در OpenRouter: {str(e)[:100]}"
-                logger.error(f"   ❌ {openrouter_error_message}")
-                openrouter_client = None
-    else:
-        openrouter_error_message = "ℹ️ OpenRouter در config.py غیرفعال شده است (OPENROUTER_ENABLED = False)"
-        logger.info(f"   ℹ️ {openrouter_error_message}")
-    
+
     logger.info("-" * 70)
     logger.info("📊 جمع‌بندی نهایی:")
-    
+
     if gemini_client:
         logger.info("   ✅ Google Gemini: فعال")
         logger.info(f"      └─ مدل: {GEMINI_MODEL}")
+        logger.info("   🎉 سرویس هوش مصنوعی با موفقیت راه‌اندازی شد!")
+        logger.info("   📌 سرویس فعال: Google Gemini")
     else:
-        logger.info(f"   ❌ Google Gemini: غیرفعال")
+        logger.info("   ❌ Google Gemini: غیرفعال")
         if gemini_error_message:
             logger.info(f"      └─ دلیل: {gemini_error_message}")
-    
-    if openrouter_client:
-        logger.info("   ✅ OpenRouter: فعال")
-        logger.info(f"      └─ مدل: {openrouter_client.default_model if openrouter_client else 'نامشخص'}")
-    else:
-        logger.info(f"   ❌ OpenRouter: غیرفعال")
-        if openrouter_error_message:
-            logger.info(f"      └─ دلیل: {openrouter_error_message}")
-    
-    if gemini_client or openrouter_client:
-        logger.info("   🎉 حداقل یک سرویس هوش مصنوعی با موفقیت راه‌اندازی شد!")
-        if gemini_client:
-            logger.info("   📌 سرویس فعال: Google Gemini")
-        else:
-            logger.info("   📌 سرویس فعال: OpenRouter")
-    else:
         logger.error("   ❌ هیچ سرویس هوش مصنوعی فعال نشد!")
         logger.info("   💡 راه‌حل‌های پیشنهادی:")
-        logger.info("      1. از OpenRouter استفاده کنید (openrouter.ai)")
-        logger.info("      2. کلید API را از https://aistudio.google.com/apikey دریافت کنید")
-        logger.info("      3. در config.py مدل را به gemini-1.5-flash تغییر دهید")
-        logger.info("      4. اتصال اینترنت سرور را بررسی کنید")
-    
+        logger.info("      1. کلید API را از https://aistudio.google.com/apikey دریافت کنید")
+        logger.info("      2. در config.py مدل را به gemini-1.5-flash یا gemini-2.5-flash تغییر دهید")
+        logger.info("      3. اتصال اینترنت سرور و DNS را بررسی کنید")
+        logger.info("      4. در صورت خطای Location، VPN روی سرور تنظیم کنید")
+
     logger.info("=" * 70)
-    
+
     # ذخیره خطاها در configs_pool برای نمایش در پنل ادمین
     configs_pool['ai_errors'] = {
         'gemini_error': gemini_error_message,
-        'openrouter_error': openrouter_error_message,
         'last_check': datetime.now().isoformat()
     }
     save_all()
-    
-    return gemini_client is not None or openrouter_client is not None
+
+    return gemini_client is not None
 from transaction_system import register_transaction_handlers
 async def main():
     global log_system, panel_semaphore, panel_rate_limiter, shared_connector
