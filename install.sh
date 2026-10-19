@@ -3143,7 +3143,7 @@ for node in rel_tree.body:
 used = set()
 for root, dirs, files in os.walk(install_dir):
     dirs[:] = [d for d in dirs
-               if os.path.join(root, d) not in (venv_dir, data_dir)]
+               if os.path.join(root, d) not in (venv_dir, venv_dir + '.old', data_dir)]
     for fn in files:
         if not fn.endswith(".py"):
             continue
@@ -3237,6 +3237,7 @@ validate_python_source() {
     done < <(
         find "${INSTALL_DIR}" \
             -path "${VENV_DIR}" -prune -o \
+            -path "${VENV_DIR}.old" -prune -o \
             -path "${DATA_DIR}" -prune -o \
             -type f -name '*.py' -print0
     )
