@@ -10809,7 +10809,6 @@ class GeminiClient:
                         "maxOutputTokens": max_tokens,
                         "topP": 0.9,
                         "topK": 40,
-                        "stopSequences": ["\n\n\n"] 
                     }
                 }
                 url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
@@ -11364,20 +11363,29 @@ async def admin_ai_test(callback: CallbackQuery):
     if GEMINI_ENABLED:
         if gemini_client:
             try:
-                # تست واقعی با یک درخواست ساده
-                test_response = await gemini_client.chat("سلام، یک تست ساده است. فقط با 'OK' پاسخ بده.", retry=1)
-                if test_response and "OK" in test_response:
+                # ✅ تست مناسب برای دستیار فروش
+                test_response = await gemini_client.chat(
+                    "سلام! لطفاً در یک جمله کوتاه خودت را معرفی کن.", 
+                    retry=1
+                )
+                
+                # ✅ بررسی: خالی نباشه، خطا نداشته باشه، حداقل ۵ کاراکتر داشته باشه
+                is_error = bool(test_response) and any(
+                    marker in test_response 
+                    for marker in ["❌", "⏰", "خطای", "Error:", "خطا در"]
+                )
+                
+                if test_response and len(test_response.strip()) >= 5 and not is_error:
                     gemini_test_result = "✅ فعال"
-                    gemini_test_detail = "پاسخ تست دریافت شد"
+                    gemini_test_detail = f"پاسخ دریافتی ({len(test_response)} کاراکتر): {test_response[:80]}"
                 else:
                     gemini_test_result = "⚠️ ناقص"
-                    gemini_test_detail = f"پاسخ: {test_response[:50] if test_response else 'پاسخی دریافت نشد'}"
+                    gemini_test_detail = f"پاسخ: {test_response[:80] if test_response else 'پاسخی دریافت نشد'}"
             except Exception as e:
                 gemini_test_result = "❌ خطا"
                 gemini_test_detail = f"خطا: {str(e)[:80]}"
         else:
             gemini_test_result = "❌ خطا"
-            # دریافت خطا از configs_pool
             ai_errors = configs_pool.get('ai_errors', {})
             gemini_error_msg = ai_errors.get('gemini_error', '')
             if gemini_error_msg:
@@ -11395,19 +11403,19 @@ async def admin_ai_test(callback: CallbackQuery):
     # ============================================
     # تست واقعی ارسال پیام (در صورت فعال بودن)
     # ============================================
+    # تست واقعی ارسال پیام (در صورت فعال بودن)
     real_test_result = ""
     if gemini_client:
         try:
-            test_msg = await gemini_client.chat("فقط با کلمه 'OK' پاسخ بده.", retry=1)
-            if test_msg and "OK" in test_msg:
-                real_test_result = "\n\n✅ تست ارسال پیام: موفق"
+            test_msg = await gemini_client.chat("سلام! چطوری؟ یک جواب کوتاه بده.", retry=1)
+            if test_msg and len(test_msg.strip()) >= 5:
+                real_test_result = f"\n\n✅ تست ارسال پیام: موفق (طول پاسخ: {len(test_msg)} کاراکتر)"
             else:
-                real_test_result = f"\n\n⚠️ تست ارسال پیام: پاسخ غیرمنتظره - {test_msg[:50] if test_msg else 'پاسخی دریافت نشد'}"
+                real_test_result = f"\n\n⚠️ تست ارسال پیام: پاسخ خیلی کوتاه یا خالی"
         except Exception as e:
             real_test_result = f"\n\n❌ تست ارسال پیام: خطا - {str(e)[:80]}"
     else:
-        real_test_result = "\n\n❌ تست ارسال پیام: هیچ سرویسی فعال نیست"
-    
+        real_test_result = "\n\n❌ تست ارسال پیام: هیچ سرویسی فعال نیست"   
     # ============================================
     # جمع‌بندی نهایی
     # ============================================
@@ -11426,7 +11434,7 @@ async def admin_ai_test(callback: CallbackQuery):
 ━━━━━━━━━━━━━━━━━━━━━━
 {real_test_result}
 
-{f'💡 <b>راه‌حل پیشنهادی:</b> کلید API Gemini را بررسی کنید.' if '❌' in gemini_test_result else '✅ سرویس Gemini به درستی کار می‌کند.'}
+{f'💡 <b>راه‌حل پیشنهادی:</b> کلید API Gemini را بررسی کنید.' if '❌' in gemini_test_result else ('⚠️ <b>هشدار:</b> پاسخ کامل نیست — GEMINI_MAX_TOKENS را افزایش دهید.' if '⚠️' in gemini_test_result else '✅ سرویس Gemini به درستی کار می‌کند.')}
 """
     else:
         text = f"""
@@ -11443,7 +11451,7 @@ Status: {gemini_test_result}
 ━━━━━━━━━━━━━━━━━━━━━━
 {real_test_result}
 
-{f'💡 <b>Solution:</b> Check your Gemini API key.' if '❌' in gemini_test_result else '✅ All services are working properly.'}
+{f'💡 <b>Solution:</b> Check your Gemini API key.' if '❌' in gemini_test_result else ('⚠️ <b>Warning:</b> Response is incomplete — increase GEMINI_MAX_TOKENS.' if '⚠️' in gemini_test_result else '✅ All services are working properly.')}
 """
     
     buttons = [
