@@ -29293,7 +29293,7 @@ async def my_configs(callback: CallbackQuery):
         await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
         return
 
-    await sync_deleted_configs()
+    await sync_user_configs(user_id)
     valid_orders = get_valid_orders()
 
     configs_list = [
@@ -31988,7 +31988,7 @@ def extract_user_info_from_comment(comment: str):
         if 'test' in cleaned_comment.lower() or 'تست' in cleaned_comment.lower():
             order_type = 'test'
     
-    return user_id, user_name, is_bot_client, order_type   
+    return user_id, user_name, is_bot_client, order_type 
 async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
     """
     همگام‌سازی کامل با پنل
@@ -32399,8 +32399,96 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
     except Exception as e:
         logger.error(f"❌ خطا در همگام‌سازی: {e}", exc_info=True)
         return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
-_panel_cache = {}  # {email: (timestamp, is_active)}
-_panel_cache_ttl = 10  # اعتبار کش به ثانیه
+
+
+async def sync_user_configs(user_id: int) -> dict:
+    """
+    همگام‌سازی فقط کانفیگ‌های یک کاربر با پنل (بدون دست‌زدن به بقیه).
+    """
+    if not SENAI_PANEL_ENABLED:
+        return {'checked': 0, 'approved': 0, 'inactive': 0,
+                'deleted': 0, 'changed': 0, 'skipped': 0}
+
+    valid_orders = get_valid_orders()
+    user_orders = [
+        o for o in valid_orders.values()
+        if o.get('user_id') == user_id
+        and o.get('status') in ('approved', 'inactive')
+    ]
+
+    if not user_orders:
+        return {'checked': 0, 'approved': 0, 'inactive': 0,
+                'deleted': 0, 'changed': 0, 'skipped': 0}
+
+    try:
+        inbounds = await xui_get_inbounds()
+    except Exception as e:
+        logger.error(f"❌ [sync_user_configs] خطا در اینباندها: {e}")
+        return {'checked': 0, 'approved': 0, 'inactive': 0,
+                'deleted': 0, 'changed': 0, 'skipped': 0, 'error': str(e)}
+
+    # email → enable
+    existing_clients = {}
+    for inbound in inbounds:
+        for client in inbound.get('settings', {}).get('clients', []):
+            e = client.get('email', '')
+            if e:
+                existing_clients[e] = client.get('enable', True)
+
+    stats = {'checked': 0, 'approved': 0, 'inactive': 0,
+             'deleted': 0, 'changed': 0, 'skipped': 0}
+    now_iso = datetime.now().isoformat()
+    changed = False
+
+    for order in user_orders:
+        email = get_order_client_email(order)
+
+        # ─── fallback: پیدا کردن email از sub_link ───
+        if not email:
+            sub_link = order.get('sub_link', '') or order.get('config_link', '')
+            if sub_link and '/sub/' in sub_link:
+                try:
+                    sub_id = sub_link.rstrip('/').split('/')[-1]
+                    email = await find_email_by_sub_id(sub_id)
+                    if email:
+                        orders[str(order['order_id'])]['email'] = email
+                        changed = True
+                except Exception as e:
+                    logger.debug(f"[sync_user_configs] subId lookup failed: {e}")
+
+        if not email:
+            stats['skipped'] += 1
+            continue
+
+        stats['checked'] += 1
+
+        if email not in existing_clients:
+            new_status = 'deleted'
+        elif existing_clients[email]:
+            new_status = 'approved'
+        else:
+            new_status = 'inactive'
+
+        stats[new_status] += 1
+
+        if order.get('status') != new_status:
+            oid_str = str(order['order_id'])
+            if oid_str in orders:
+                orders[oid_str]['status'] = new_status
+                orders[oid_str]['is_active_in_panel'] = (new_status == 'approved')
+                orders[oid_str]['updated_at'] = now_iso
+                changed = True
+                stats['changed'] += 1
+                logger.info(
+                    f"🔄 [sync_user_configs] #{order['order_id']} (user {user_id}): "
+                    f"{order.get('status')} → {new_status}"
+                )
+
+    if changed:
+        save_json(DB_FILES['orders'], orders)
+        logger.info(f"💾 [sync_user_configs] user={user_id} stats={stats}")
+
+    return stats
 
      
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_new_config'))
