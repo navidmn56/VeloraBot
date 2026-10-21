@@ -124,12 +124,6 @@ async def smart_ping(host: str, timeout: int = 3) -> Optional[float]:
     icmp_result = await real_ping_icmp(host, timeout=timeout)
     return icmp_result
 
-
-async def real_ping(host: str, timeout: int = 2) -> Optional[float]:
-    
-    return await smart_ping(host, timeout)
-
-
 SENAI_PANEL_ENABLED = True
 TEMP_INBOUND_SELECTION = {}
 INBOUND_BACK_DATA = {}
@@ -390,9 +384,6 @@ def ensure_data_directory():
                 logger.info(f"   🔧 برای تعمیر، از بکاپ استفاده کنید یا دستی تعمیر نمایید")
             
             
-def set_user_state(user_id: int, state: dict):
-    state['timestamp'] = datetime.now().isoformat()
-    user_states[user_id] = state
 async def get_config_from_pool_safe(volume: int, days: int):
     async with config_lock:
         return get_config_from_pool(volume, days)
@@ -577,17 +568,6 @@ def is_coupon_valid_for_user(coupon_code: str, user_id: int) -> tuple:
             return False, "قبلاً استفاده شده"
         
         return True, "معتبر"
-
-
-def get_coupon_discount_for_user(coupon_code: str, user_id: int) -> int:
-    """دریافت درصد تخفیف کوپن برای کاربر (اگر معتبر باشد)"""
-    is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
-    if not is_valid:
-        return 0
-    coupon = COUPONS.get(coupon_code)
-    return coupon.get('discount', 0) if coupon else 0
-
-
 
 
 @dp.callback_query(F.data == "admin_test_service")
@@ -1470,227 +1450,6 @@ async def go_back_to_admin_panel(callback: CallbackQuery):
         logger.error(f"خطا در ارسال پیام برگشت: {e}")
         callback.data = "admin_panel"
         await admin_panel(callback)
-              
-@dp.callback_query(F.data.startswith("admin_test_toggle_inbound_"))
-async def admin_test_toggle_inbound(callback: CallbackQuery):
-    """تغییر وضعیت یک اینباند تست (تیک زدن/برداشتن)"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    try:
-        inbound_id = int(callback.data.split("_")[4])
-    except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    
-    current_inbound_ids = TEST_SERVICE_STATUS.get('inbound_ids', []).copy()
-    
-    if inbound_id in current_inbound_ids:
-        current_inbound_ids.remove(inbound_id)
-        await callback.answer(f"❌ اینباند {inbound_id} لغو شد", show_alert=False)
-    else:
-        current_inbound_ids.append(inbound_id)
-        await callback.answer(f"✅ اینباند {inbound_id} انتخاب شد", show_alert=False)
-    TEST_SERVICE_STATUS['inbound_ids'] = current_inbound_ids
-    TEST_SERVICE_STATUS['last_updated'] = datetime.now().isoformat()
-    await admin_test_inbounds(callback)
-
-
-@dp.callback_query(F.data == "admin_test_inbounds_default")
-async def admin_test_inbounds_default(callback: CallbackQuery):
-    """انتخاب اینباندهای پیش‌فرض برای تست"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    default_ids = configs_pool.get('default_inbound_ids', [])
-    if default_ids:
-        TEST_SERVICE_STATUS['inbound_ids'] = default_ids.copy()
-        TEST_SERVICE_STATUS['last_updated'] = datetime.now().isoformat()
-        await callback.answer(
-            f"✅ {len(default_ids)} اینباند پیش‌فرض انتخاب شد" if lang == "fa" else f"✅ {len(default_ids)} default inbounds selected",
-            show_alert=True
-        )
-    else:
-        await callback.answer(
-            "❌ هیچ اینباند پیش‌فرضی تنظیم نشده است" if lang == "fa" else "❌ No default inbounds set",
-            show_alert=True
-        )
-        return
-    
-    await admin_test_inbounds(callback)
-
-
-@dp.callback_query(F.data == "admin_test_inbounds_clear")
-async def admin_test_inbounds_clear(callback: CallbackQuery):
-    """پاک کردن همه اینباندهای تست"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    TEST_SERVICE_STATUS['inbound_ids'] = []
-    TEST_SERVICE_STATUS['last_updated'] = datetime.now().isoformat()
-    
-    await callback.answer(
-        "🗑 همه اینباندهای تست پاک شدند" if lang == "fa" else "🗑 All test inbounds cleared",
-        show_alert=True
-    )
-    
-    await admin_test_inbounds(callback)
-
-
-@dp.callback_query(F.data == "admin_test_inbounds_save")
-async def admin_test_inbounds_save(callback: CallbackQuery):
-    """ذخیره تنظیمات اینباندهای تست"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    prefix = "test_service"
-    temp_key = f"{prefix}_{callback.from_user.id}"
-    current_list = TEMP_INBOUND_SELECTION.get(temp_key, [])
-    TEST_SERVICE_STATUS['inbound_ids'] = current_list
-    TEST_SERVICE_STATUS['last_updated'] = datetime.now().isoformat()
-    configs_pool['test_service'] = TEST_SERVICE_STATUS
-    save_all()  # این تابع همه چیز را ذخیره می‌کند
-    if temp_key in TEMP_INBOUND_SELECTION:
-        del TEMP_INBOUND_SELECTION[temp_key]
-    
-    await callback.answer(
-        f"✅ {len(current_list)} اینباند تست ذخیره شد!" if lang == "fa" else f"✅ {len(current_list)} test inbounds saved!",
-        show_alert=True
-    )
-    await admin_test_service_settings(callback)
-
-
-@dp.callback_query(F.data == "admin_test_inbound")
-async def admin_test_inbound(callback: CallbackQuery):
-    """تنظیم اینباند برای تست سرویس"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    await callback.message.edit_text("⏳ در حال دریافت لیست اینباندها...")
-    
-    inbounds = await xui_get_inbounds()
-    if not inbounds:
-        await callback.message.edit_text(
-            "❌ هیچ اینباندی یافت نشد یا اتصال به پنل برقرار نشد.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 برگشت", callback_data="admin_test_service")]
-            ])
-        )
-        return
-    
-    current_inbound = TEST_SERVICE_STATUS.get('inbound_id')
-    
-    if lang == "fa":
-        text = f"""
-📡 <b>تنظیم اینباند تست</b>
-
-━━━━━━━━━━━━━━━━━━━
-اینباند فعلی: {current_inbound if current_inbound else '❌ پیش‌فرض (همانند کاربر)'}
-━━━━━━━━━━━━━━━━━━━
-
-لطفاً اینباند مورد نظر برای تست را انتخاب کنید:
-"""
-    else:
-        text = f"""
-📡 <b>Set Test Inbound</b>
-
-━━━━━━━━━━━━━━━━━━━
-Current inbound: {current_inbound if current_inbound else '❌ Default (same as user)'}
-━━━━━━━━━━━━━━━━━━━
-
-Please select an inbound for test:
-"""
-    
-    buttons = []
-    buttons.append([InlineKeyboardButton(
-        text="📌 استفاده از اینباند پیش‌فرض (همانند کاربر)" if lang == "fa" else "📌 Use Default Inbound (same as user)",
-        callback_data="admin_test_inbound_set_default"
-    )])
-    
-    for inbound in inbounds:
-        inbound_id = inbound.get('id')
-        remark = inbound.get('remark', f'Inbound {inbound_id}')
-        protocol = inbound.get('protocol', 'unknown')
-        port = inbound.get('port')
-        enable = inbound.get('enable', True)
-        
-        if not inbound_id or not enable:
-            continue
-        
-        is_selected = (inbound_id == current_inbound)
-        label = f"{'✅' if is_selected else '  '} {remark} - {protocol.upper()}:{port}"
-        
-        buttons.append([InlineKeyboardButton(
-            text=label[:55],
-            callback_data=f"admin_test_inbound_set_{inbound_id}"
-        )])
-    
-    buttons.append([InlineKeyboardButton(
-        text="🔙 برگشت به تنظیمات" if lang == "fa" else "🔙 Back to Settings",
-        callback_data="admin_test_service"
-    )])
-    
-    try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode=ParseMode.HTML
-        )
-    except Exception as e:
-        logger.error(f"❌ خطا در ویرایش پیام: {e}")
-        try:
-            await callback.message.delete()
-        except:
-            pass
-        await callback.message.answer(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode=ParseMode.HTML
-        )
-    
-    try:
-        await callback.answer()
-    except:
-        pass
-
-
-@dp.callback_query(F.data.startswith("admin_test_inbound_set_"))
-async def admin_test_inbound_set(callback: CallbackQuery):
-    """تنظیم اینباند تست"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    parts = callback.data.split("_")
-    if len(parts) >= 5 and parts[4] == 'default':
-        inbound_id = None
-        await callback.answer(
-            f"✅ اینباند پیش‌فرض برای تست تنظیم شد!" if lang == "fa" else "✅ Default inbound set for test!",
-            show_alert=True
-        )
-    else:
-        try:
-            inbound_id = int(parts[4])
-            await callback.answer(
-                f"✅ اینباند {inbound_id} برای تست تنظیم شد!" if lang == "fa" else f"✅ Inbound {inbound_id} set for test!",
-                show_alert=True
-            )
-        except (ValueError, IndexError):
-            await callback.answer("❌ خطا در پردازش", show_alert=True)
-            return
-    
-    TEST_SERVICE_STATUS['inbound_id'] = inbound_id
-    TEST_SERVICE_STATUS['last_updated'] = datetime.now().isoformat()
-    
-    configs_pool['test_service'] = TEST_SERVICE_STATUS
-    save_all()
-    await admin_test_service_settings(callback)
     
     
 @dp.callback_query(F.data == "admin_test_toggle")
@@ -3585,17 +3344,6 @@ def load_user_inbound_selections():
         logger.error(f"خطا در بارگذاری انتخاب‌های اینباند: {e}")
         USER_INBOUND_SELECTION = {}
 
-def get_user_inbounds(user_id: int) -> List[int]:
-    """دریافت لیست اینباندهای انتخاب شده برای کاربر"""
-    user_inbound = USER_INBOUND_SELECTION.get(str(user_id))
-    if user_inbound:
-        if isinstance(user_inbound, list):
-            return user_inbound
-        return [user_inbound]
-    default_ids = configs_pool.get('default_inbound_ids', [])
-    if default_ids:
-        return default_ids
-    return []  # یا همه اینباندها را برگردان
 
 def is_shop_open() -> bool:
     """بررسی وضعیت فروش"""
@@ -5486,55 +5234,6 @@ def save_test_usage():
         logger.error(f"❌ خطا در ذخیره تست: {e}")
         return False
 
-def get_user_test_info(user_id: int) -> dict:
-    """دریافت اطلاعات تست کاربر"""
-    uid = str(user_id)
-    return USER_TEST_USAGE.get(uid, {
-        'count': 0,
-        'last_test': None,
-        'last_order_id': None
-    })
-
-def increment_user_test(user_id: int, order_id: int = None) -> dict:
-    """افزایش تعداد تست کاربر و ذخیره"""
-    uid = str(user_id)
-    user_data = USER_TEST_USAGE.get(uid, {
-        'count': 0,
-        'last_test': None,
-        'last_order_id': None
-    })
-    
-    user_data['count'] = user_data.get('count', 0) + 1
-    user_data['last_test'] = datetime.now().isoformat()
-    if order_id:
-        user_data['last_order_id'] = order_id
-    
-    USER_TEST_USAGE[uid] = user_data
-    save_test_usage()
-    return user_data
-
-def get_test_stats() -> dict:
-    """دریافت آمار تست"""
-    total_users = len(USER_TEST_USAGE)
-    total_tests = sum(data.get('count', 0) for data in USER_TEST_USAGE.values())
-    
-    top_users = []
-    for uid, data in USER_TEST_USAGE.items():
-        top_users.append({
-            'user_id': int(uid),
-            'count': data.get('count', 0),
-            'last_test': data.get('last_test', 'نامشخص')
-        })
-    top_users.sort(key=lambda x: x['count'], reverse=True)
-    
-    return {
-        'total_users': total_users,
-        'total_tests': total_tests,
-        'top_users': top_users[:10]
-    }
-
-
-
 def try_full_restore_from_backup():
     """تلاش برای بازیابی کامل از آخرین بکاپ"""
     global users, orders, referrals, configs_pool, feedbacks, chats, BLACKLIST
@@ -6286,28 +5985,6 @@ async def check_membership_detailed(user_id: int) -> dict:
     
     return result
 
- 
-def get_pending_users() -> list:
-    """دریافت لیست کاربرانی که درخواست تایید داده‌اند"""
-    pending = []
-    for uid, user_data in users.items():
-        if (user_data.get('requested_approval', False) and 
-            not user_data.get('approved_by_admin', False) and
-            user_data.get('registration_status') == 'requested' and
-            int(uid) != ADMIN_ID_INT):  # ✅ ادمین رو حذف کن
-            pending.append({
-                'id': int(uid),
-                'name': user_data.get('name', f'کاربر_{uid}'),
-                'join_date': user_data.get('join_date', 'نامشخص'),
-                'username': user_data.get('username', ''),
-                'telegram_username': user_data.get('telegram_username', ''),
-                'created_at': user_data.get('created_at', ''),
-                'requested_date': user_data.get('requested_date', ''),
-                'updated_at': user_data.get('updated_at', '')
-            })
-    pending.sort(key=lambda x: x.get('requested_date', ''), reverse=True)
-    
-    return pending  
 @dp.callback_query(F.data == "request_approval")
 async def request_approval(callback: CallbackQuery):
     """کاربر درخواست تایید می‌دهد - با جلوگیری از درخواست تکراری"""
@@ -6653,27 +6330,6 @@ def load_blacklist():
         logger.error(f"❌ خطا در بارگذاری لیست سیاه: {e}")
         BLACKLIST = set()
 
-
-def add_to_blacklist(user_id: int, notify: bool = True) -> bool:
-    """افزودن کاربر به لیست سیاه"""
-    global BLACKLIST
-    if user_id not in BLACKLIST:
-        BLACKLIST.add(user_id)
-        save_json(DB_FILES['blacklist'], {
-            'users': list(BLACKLIST),
-            'last_updated': datetime.now().isoformat(),
-            'count': len(BLACKLIST)
-        })
-        logger.info(f"🚫 کاربر {user_id} به لیست سیاه اضافه شد - تعداد: {len(BLACKLIST)}")
-        if notify:
-            asyncio.create_task(notify_blacklisted_user(user_id))
-        
-        return True
-    return False
-
-
-
-
 def remove_from_blacklist(user_id: int) -> bool:
     """حذف کاربر از لیست سیاه"""
     global BLACKLIST
@@ -6687,14 +6343,6 @@ def remove_from_blacklist(user_id: int) -> bool:
         logger.info(f"✅ کاربر {user_id} از لیست سیاه خارج شد - تعداد: {len(BLACKLIST)}")
         return True
     return False
-
-
-def is_blacklisted(user_id: int) -> bool:
-    """بررسی وجود کاربر در لیست سیاه"""
-    return user_id in BLACKLIST
-
-
-
 
 def get_user(user_id: int, username: str = None) -> dict:
     """دریافت اطلاعات کاربر یا ایجاد کاربر جدید با وضعیت‌های مختلف و بررسی خودکار کوپن"""
@@ -6923,77 +6571,6 @@ def get_user(user_id: int, username: str = None) -> dict:
         logger.debug(f"💾 تغییرات کاربر {user_id} ذخیره شد")
     
     return user
-
-
-def load_coupon_to_user_states(user_id: int) -> bool:
-    """لود کوپن از دیتابیس به user_states"""
-    uid = str(user_id)
-    
-    if uid not in users:
-        return False
-    
-    user_data = users[uid]
-    coupon_code = user_data.get('coupon_code')
-    coupon_discount = user_data.get('coupon_discount', 0)
-    coupon_applied = user_data.get('coupon_applied', False)
-    
-    if not coupon_code or not coupon_applied:
-        return False
-    
-    # بررسی اعتبار کوپن
-    if coupon_code in COUPONS:
-        coupon = COUPONS[coupon_code]
-        coupon_type = coupon.get('coupon_type', 'normal')
-        
-        # بررسی وضعیت
-        if coupon.get('status') != 'active':
-            logger.warning(f"⚠️ کوپن {coupon_code} غیرفعال است")
-            return False
-        
-        # بررسی تاریخ انقضا
-        expiry_date = coupon.get('expiry_date')
-        if expiry_date:
-            try:
-                expiry = datetime.fromisoformat(expiry_date)
-                if expiry < datetime.now():
-                    logger.warning(f"⚠️ کوپن {coupon_code} منقضی شده")
-                    return False
-            except:
-                pass
-        
-        # ✅✅✅ بررسی استفاده قبلی بر اساس نوع کوپن
-        if coupon_type == 'admin_special':
-            # ✅ برای کوپن ادمین: بررسی user_usage
-            user_usage = coupon.get('user_usage', {})
-            user_used_count = user_usage.get(str(user_id), 0)
-            max_usage = coupon.get('usage_limit', 1)
-            
-            if user_used_count >= max_usage:
-                logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن ادمین {coupon_code} رسیده ({user_used_count}/{max_usage})")
-                return False
-            
-            # بررسی قفل بودن به کاربر
-            locked_user_id = coupon.get('locked_user_id')
-            if locked_user_id and locked_user_id != user_id:
-                logger.warning(f"⚠️ کوپن ادمین {coupon_code} برای کاربر دیگری قفل شده")
-                return False
-        else:
-            if user_id in coupon.get('used_by', []):
-                logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده")
-                return False
-    
-    # لود به user_states
-    if user_id not in user_states:
-        user_states[user_id] = {}
-    
-    user_states[user_id]['coupon_code'] = coupon_code
-    user_states[user_id]['coupon_discount'] = coupon_discount
-    user_states[user_id]['coupon_applied'] = True
-    
-    logger.info(f"✅ کوپن {coupon_code} (تخفیف: {coupon_discount}%) به user_states کاربر {user_id} لود شد")
-    return True
-
-
 
 def can_user_purchase(user_id: int) -> tuple:
     """
@@ -7886,23 +7463,6 @@ async def blacklist_confirm_clear_all(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
 
 
-    
-    
-    
-    
-
-async def fetch_user_info(user_id: int) -> tuple:
-    """دریافت نام و یوزرنیم کاربر از تلگرام"""
-    try:
-        chat = await bot.get_chat(user_id)
-        name = chat.first_name or chat.username or f"کاربر_{user_id}"
-        username = chat.username or ""
-        return name, username
-    except Exception as e:
-        logger.error(f"خطا در دریافت اطلاعات کاربر {user_id}: {e}")
-        return f"کاربر_{user_id}", ""
-
-
 def update_user(user_id: int, key: str, value):
     """بروزرسانی یک فیلد از کاربر"""
     uid = str(user_id)
@@ -8051,18 +7611,6 @@ def get_global_stats() -> dict:
             'today_orders': 0,
             'today_revenue': 0
         }
-
-
-
-
-def search_user(query: str) -> list:
-    """جستجوی کاربر با نام یا آیدی"""
-    results = []
-    query = query.lower()
-    for u in users.values():
-        if query in str(u.get('id', '')).lower() or query in u.get('name', '').lower():
-            results.append(u)
-    return results
 
 
 def migrate_old_data():
@@ -8232,60 +7780,7 @@ async def delete_old_before_restore(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
-        
-        
-def save_coupon_to_user(user_id: int):
-    """ذخیره کوپن در دیتابیس کاربر"""
-    try:
-        user_state = user_states.get(user_id, {})
-        coupon_code = user_state.get('coupon_code')
-        coupon_applied = user_state.get('coupon_applied', False)
-        coupon_discount = user_state.get('coupon_discount', 0)
-        
-        uid = str(user_id)
-        if uid in users:
-            users[uid]['coupon_code'] = coupon_code if coupon_applied else None
-            users[uid]['coupon_discount'] = coupon_discount if coupon_applied else 0
-            users[uid]['coupon_applied'] = coupon_applied
-            save_json(DB_FILES['users'], users)
-            logger.info(f"📁 [save_coupon_to_user] کوپن برای کاربر {user_id} در دیتابیس ذخیره شد: {coupon_code}")
-    except Exception as e:
-        logger.error(f"❌ [save_coupon_to_user] خطا: {e}")
-
-def load_coupon_from_user(user_id: int) -> dict:
-    """بازیابی کوپن از دیتابیس کاربر"""
-    try:
-        uid = str(user_id)
-        if uid in users:
-            user = users[uid]
-            coupon_code = user.get('coupon_code')
-            coupon_applied = user.get('coupon_applied', False)
-            coupon_discount = user.get('coupon_discount', 0)
-            
-            if coupon_applied and coupon_code:
-                is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
-                if is_valid:
-                    logger.info(f"📁 [load_coupon_from_user_db] کوپن {coupon_code} از دیتابیس کاربر بازیابی شد - {reason}")
-                    return {
-                        'coupon_code': coupon_code,
-                        'coupon_discount': coupon_discount,
-                        'coupon_applied': True
-                    }
-                else:
-                    logger.warning(f"⚠️ [load_coupon_from_user_db] کوپن {coupon_code} نامعتبر: {reason}")
-                    users[uid]['coupon_code'] = None
-                    users[uid]['coupon_discount'] = 0
-                    users[uid]['coupon_applied'] = False
-                    save_json(DB_FILES['users'], users)
-    except Exception as e:
-        logger.error(f"❌ [load_coupon_from_user] خطا: {e}")
-    
-    return {
-        'coupon_code': None,
-        'coupon_discount': 0,
-        'coupon_applied': False
-    }    
+        logger.warning(f"خطا در callback.answer: {e}")    
         
 def backup_database():
     """بکاپ گیری کامل از دیتابیس با تمام تنظیمات، IP Limit، alert_cache و alert_settings"""
@@ -8567,118 +8062,6 @@ def optimize_storage():
     
     return cleaned
 
-
-def restore_backup(backup_file: str) -> bool:
-    """بازگردانی بکاپ کامل"""
-    global users, orders, referrals, configs_pool, feedbacks, chats, BLACKLIST
-    
-    if not os.path.exists(backup_file):
-        logger.error(f"❌ فایل بکاپ {backup_file} یافت نشد")
-        return False
-    
-    try:
-        # ==================== 1. بارگذاری فایل بکاپ ====================
-        data = load_json(backup_file)
-        
-        if not data:
-            logger.error(f"❌ فایل بکاپ {backup_file} خالی یا نامعتبر است")
-            return False
-        
-        # ==================== 2. بررسی نسخه بکاپ ====================
-        backup_version = data.get('backup_info', {}).get('version', 'unknown')
-        logger.info(f"📦 نسخه بکاپ: {backup_version}")
-        
-        # ==================== 3. بازیابی داده‌های اصلی ====================
-        users = data.get('users', {})
-        orders = data.get('orders', {})
-        referrals = data.get('referrals', {})
-        configs_pool = data.get('configs', {})
-        feedbacks = data.get('feedback', {})
-        chats = data.get('chats', {})
-        
-        # ==================== 4. بازیابی BLACKLIST ====================
-        blacklist_data = data.get('blacklist', {})
-        BLACKLIST = set(blacklist_data.get('users', []))
-        
-        # ==================== 5. بازیابی alert_cache ====================
-        alert_cache = data.get('alert_cache', {})
-        if alert_cache:
-            if save_alert_cache(alert_cache):
-                logger.info(f"✅ alert_cache.json با موفقیت بازگردانی شد")
-            else:
-                logger.error(f"❌ خطا در بازگردانی alert_cache.json")
-        else:
-            logger.warning("⚠️ alert_cache در فایل بکاپ یافت نشد")
-        
-        # ==================== 6. بازیابی alert_settings ====================
-        alert_settings = data.get('alert_settings', {})
-        if not alert_settings:
-            # تلاش برای یافتن در configs_pool
-            alert_settings = configs_pool.get('alert_settings', {})
-        
-        if alert_settings:
-            configs_pool['alert_settings'] = alert_settings
-            logger.info(f"✅ alert_settings با موفقیت بازگردانی شد")
-        else:
-            logger.warning("⚠️ alert_settings در فایل بکاپ یافت نشد")
-        
-        # ==================== 7. بازیابی ready_packages و test_service ====================
-        global READY_PACKAGES, TEST_SERVICE_STATUS
-        
-        ready_packages = data.get('ready_packages', {})
-        if ready_packages:
-            READY_PACKAGES = ready_packages
-            logger.info(f"✅ ready_packages بازگردانی شد: {len(ready_packages.get('categories', []))} دسته")
-        
-        test_service = data.get('test_service', {})
-        if test_service:
-            TEST_SERVICE_STATUS = test_service
-            logger.info(f"✅ test_service بازگردانی شد")
-        
-        # ==================== 8. بازیابی سایر داده‌ها ====================
-        global USER_INBOUND_SELECTION, USER_TEST_USAGE, SHOP_STATUS
-        
-        user_inbound_selection = data.get('user_inbound_selection', {})
-        if user_inbound_selection:
-            USER_INBOUND_SELECTION = user_inbound_selection
-            logger.info(f"✅ user_inbound_selection بازگردانی شد: {len(user_inbound_selection)} کاربر")
-        
-        user_test_usage = data.get('user_test_usage', {})
-        if user_test_usage:
-            USER_TEST_USAGE = user_test_usage
-            logger.info(f"✅ user_test_usage بازگردانی شد: {len(user_test_usage)} کاربر")
-        
-        shop_status = data.get('shop_status', {})
-        if shop_status:
-            SHOP_STATUS = shop_status
-            logger.info(f"✅ shop_status بازگردانی شد: {'باز' if shop_status.get('open') else 'بسته'}")
-        
-        # ==================== 9. ذخیره همه داده‌ها ====================
-        save_all()
-        
-        # ==================== 10. لاگ نهایی ====================
-        logger.info(f"✅ بکاپ با موفقیت بازگردانی شد")
-        logger.info(f"  📊 کاربران: {len(users)}")
-        logger.info(f"  📊 سفارشات: {len(orders)}")
-        logger.info(f"  📊 مسدود شده‌ها: {len(BLACKLIST)}")
-        logger.info(f"  🔔 alert_cache: {'بازگردانی شد' if alert_cache else 'یافت نشد'}")
-        logger.info(f"  ⚙️ alert_settings: {'بازگردانی شد' if alert_settings else 'یافت نشد'}")
-        logger.info(f"  📦 ready_packages: {len(READY_PACKAGES.get('categories', []))} دسته")
-        logger.info(f"  🧪 test_service: {'بازگردانی شد' if test_service else 'یافت نشد'}")
-        logger.info(f"  📡 user_inbound_selection: {len(USER_INBOUND_SELECTION)} کاربر")
-        logger.info(f"  🧪 user_test_usage: {len(USER_TEST_USAGE)} کاربر")
-        logger.info(f"  🏪 shop_status: {'بازگردانی شد' if shop_status else 'یافت نشد'}")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ خطا در بازگردانی بکاپ: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return False
-
-
-
 from aiogram import F
 from aiogram.filters import Command
 
@@ -8842,60 +8225,6 @@ SCORE_ID_CONTAINS = 100_000
 SCORE_COUPON_EXACT = 90_000
 SCORE_COUPON_STARTSWITH = 60_000
 SCORE_COUPON_CONTAINS = 30_000
-
-
-def _match_field(
-    value_raw: Any,
-    query_raw: str,
-    *,
-    case_sensitive: bool,
-    exact_score: int,
-    startswith_score: int,
-    contains_score: int,
-    mode: str,  # "raw" or "normalized"
-) -> Tuple[int, List[str]]:
-    """
-    تطبیق یک فیلد با query.
-    مقادیر: (score, reasons)
-    """
-    if value_raw is None:
-        return 0, []
-
-    value = safe_str(value_raw)
-    if not value.strip():
-        return 0, []
-
-    if mode == "normalized":
-        value_norm = normalize_text(value)
-        query_norm = normalize_text(query_raw)
-    else:
-        value_norm = value
-        query_norm = query_raw
-
-    if not query_norm:
-        return 0, []
-
-    if not case_sensitive:
-        value_cmp = value_norm.lower()
-        query_cmp = query_norm.lower()
-    else:
-        value_cmp = value_norm
-        query_cmp = query_norm
-
-    score = 0
-    reasons: List[str] = []
-
-    if value_cmp == query_cmp:
-        score = exact_score
-        reasons.append("exact")
-    elif value_cmp.startswith(query_cmp):
-        score = startswith_score
-        reasons.append("startswith")
-    elif query_cmp in value_cmp:
-        score = contains_score
-        reasons.append("contains")
-
-    return score, reasons
 
 
 def advanced_search_users(
@@ -9840,97 +9169,6 @@ async def send_config_with_qr_option(
             reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
         )
         
-        
-async def send_config_with_qr_option_edit(
-    chat_id: int,
-    order_id: int,
-    volume: Union[int, float],
-    days: int,
-    price: int,
-    config_link: str,
-    lang: str = "fa",
-    edit_message: Message = None
-):
-    """ارسال کانفیگ با امکان حذف پیام قبلی"""
-    
-    if chat_id not in user_states:
-        user_states[chat_id] = {}
-    
-    user_states[chat_id]['current_config'] = {
-        'order_id': order_id,
-        'volume': volume,
-        'days': days,
-        'price': price,
-        'config_link': config_link
-    }
-    
-    order = orders.get(str(order_id))
-    is_test = False
-    email = None
-    
-    if order:
-        is_test = order.get('type') == 'test'
-        email = order.get('email')
-    
-    # ─── دریافت اطلاعات ترافیک ───
-    traffic_info = ""
-    if email and SENAI_PANEL_ENABLED:
-        try:
-            client_info = await xui_get_client_info(email)
-            if client_info:
-                traffic_data = await xui_get_client_traffic(email)
-                traffic_info = format_traffic_info(client_info, traffic_data, lang)
-        except Exception as e:
-            logger.error(f"Error fetching traffic for caption: {e}")
-    
-    # ─── ساخت کپشن ───
-    caption = get_config_caption(
-        order_id, volume, days, price, config_link, lang, traffic_info
-    )
-    
-    # ─── پیام تست ───
-    if is_test:
-        gift_emoji = premium_emoji('gift', '🎁')
-        light_emoji = premium_emoji('light', '💡')
-        home_emoji = premium_emoji('home', '🏠')
-        if lang == "fa":
-            caption += (
-                f"\n\n{gift_emoji} <b>این یک سرویس خوش‌آمدگویی است.</b>\n"
-                f"{light_emoji} امیدواریم تجربه‌ی خوبی داشته باشید.\n"
-                f"{home_emoji} برای خرید سرویس کامل از منوی اصلی اقدام کنید."
-            )
-        else:
-            caption += (
-                f"\n\n{gift_emoji} <b>This is a welcome service.</b>\n"
-                f"{light_emoji} We hope you have a great experience.\n"
-                f"{home_emoji} To purchase full service, use the main menu."
-            )
-    
-    # ─── حذف پیام قبلی ───
-    if edit_message:
-        try:
-            await edit_message.delete()
-        except Exception:
-            pass
-    
-    # ─── ارسال ───
-    try:
-        qr_img = generate_qr_code(config_link, order_id)
-        await bot.send_photo(
-            chat_id,
-            qr_img,
-            caption=caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
-        )
-    except Exception as e:
-        logger.error(f"خطا در ارسال QR Code: {e}")
-        await bot.send_message(
-            chat_id,
-            caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
-        )
 def add_config_to_pool(volume: int, days: int, link: str) -> int:
     """افزودن کانفیگ به مخزن"""
     configs_pool['last_id'] = configs_pool.get('last_id', 0) + 1
@@ -11736,12 +10974,6 @@ async def find_email_by_sub_id(sub_id: str, use_cache: bool = True) -> Optional[
 # ✅ get_order_client_email (sync) - بدون تغییر ساختار
 # ═══════════════════════════════════════════
 def get_order_client_email(order: dict) -> Optional[str]:
-    """
-    دریافت email کلاینت از سفارش (sync)
-    فقط از فیلد email مستقیم استفاده می‌کنه
-    
-    ⚠️ برای fallback به subId، از get_order_client_email_async استفاده کن
-    """
     email = order.get('email', '')
     if email and str(email).strip():
         return str(email).strip()
@@ -11752,63 +10984,6 @@ def get_order_client_email(order: dict) -> Optional[str]:
     )
     return None
 
-
-# ═══════════════════════════════════════════
-# ✅ get_order_client_email_async - با fallback به subId
-# ═══════════════════════════════════════════
-async def get_order_client_email_async(order: dict) -> Optional[str]:
-    """
-    دریافت email کلاینت از سفارش (async)
-    
-    ترتیب:
-    ۱. از فیلد email مستقیم
-    ۲. از sub_link → subId → query به پنل
-    ۳. ذخیره email پیدا شده توی سفارش (به‌روزرسانی خودکار)
-    """
-    order_id = order.get('order_id')
-    
-    # ─── مرحله ۱: email مستقیم ───
-    email = order.get('email', '')
-    if email and str(email).strip():
-        return str(email).strip()
-    
-    # ─── مرحله ۲: از sub_link ───
-    sub_link = order.get('sub_link', '') or order.get('config_link', '')
-    if not sub_link:
-        logger.warning(
-            f"⚠️ [get_order_client_email_async] سفارش #{order_id} "
-            f"نه email داره نه sub_link"
-        )
-        return None
-    
-    try:
-        sub_id = sub_link.rstrip('/').split('/')[-1]
-        if not sub_id:
-            return None
-    except Exception:
-        return None
-    
-    # ─── جستجو توی پنل ───
-    found_email = await find_email_by_sub_id(sub_id)
-    
-    if found_email:
-        # ✅ ذخیره توی سفارش برای بارهای بعد
-        if order_id:
-            try:
-                update_order(order_id, email=found_email)
-                logger.info(
-                    f"💾 [get_order_client_email_async] email سفارش "
-                    f"#{order_id} ذخیره شد: {found_email}"
-                )
-            except Exception as e:
-                logger.warning(f"⚠️ خطا در ذخیره email: {e}")
-        return found_email
-    
-    logger.warning(
-        f"⚠️ [get_order_client_email_async] سفارش #{order_id} "
-        f"email پیدا نشد (subId: {sub_id[:15]}...)"
-    )
-    return None
 
 
 async def xui_get_client_traffic(email: str) -> Optional[dict]:
@@ -13999,31 +13174,6 @@ async def exit_ai_chat(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-        
-        
-
-@dp.callback_query(F.data.startswith("admin_reset_verification_"))
-async def admin_reset_verification(callback: CallbackQuery):
-    """ادمین می‌تواند وضعیت verified کاربر را ریست کند"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    target_id = int(callback.data.split("_")[3])
-    user = get_user(target_id)
-    
-    user['verified'] = False
-    save_all()
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    await callback.answer(f"✅ وضعیت عضویت کاربر {user.get('name')} ریست شد" if lang == "fa" else f"✅ User {user.get('name')} verification reset", show_alert=True)
-    try:
-        await bot.send_message(
-            target_id,
-            "⚠️ وضعیت عضویت شما توسط ادمین ریست شد. لطفاً مجدداً عضویت خود را تأیید کنید." if lang == "fa" else "⚠️ Your membership status has been reset by admin. Please verify your membership again."
-        )
-    except:
-        pass
     
     
 async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = ParseMode.HTML):
@@ -14415,84 +13565,8 @@ Are you sure you want to proceed?
         await callback.answer()
     except:
         pass
-    
-    
-@dp.callback_query(F.data == "admin_emergency_backup")
-async def admin_emergency_backup_callback(callback: CallbackQuery):
-    """دکمه بکاپ اضطراری در پنل ادمین - نسخه CallbackQuery"""
-    logger.critical(f"🔴 admin_emergency_backup CALLED! data={callback.data}")
-    
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    if lang == "fa":
-        text = """
-🚨 <b>بکاپ اضطراری از پنل</b>
-
-⚠️ <b>هشدار!</b>
-این عملیات:
-• تمام اطلاعات فعلی دیتابیس را بازنویسی می‌کند
-• اطلاعات کاربران و سفارشات را از پنل بازیابی می‌کند
-• موجودی کاربران صفر خواهد شد
-• تاریخچه دقیق از دست می‌رود
-
-✅ <b>مزایا:</b>
-• تمام کانفیگ‌های فعال از پنل بازیابی می‌شوند
-• کاربران با کانفیگ‌های فعال دوباره ساخته می‌شوند
-• نیازی به بکاپ قبلی نیست
-
-آیا از انجام این عملیات اطمینان دارید؟
-"""
-    else:
-        text = """
-🚨 <b>Emergency Backup from Panel</b>
-
-⚠️ <b>Warning!</b>
-This operation will:
-• Overwrite all current database data
-• Restore users and orders from panel
-• User balances will be reset to zero
-• Detailed history will be lost
-
-✅ <b>Benefits:</b>
-• All active configs will be restored from panel
-• Users with active configs will be recreated
-• No previous backup needed
-
-Are you sure you want to proceed?
-"""
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="✅ بله، اجرا کن" if lang == "fa" else "✅ Yes, execute",
-                callback_data="confirm_emergency_backup",
-                style="danger"
-            ),
-            InlineKeyboardButton(
-                text="❌ انصراف" if lang == "fa" else "❌ Cancel",
-                callback_data="admin_panel"
-            )
-        ]
-    ])
-    try:
-        await callback.message.delete()
-        logger.info("✅ پیام قبلی حذف شد")
-    except Exception as e:
-        logger.warning(f"⚠️ خطا در حذف پیام: {e}")
-    
-    try:
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
-        logger.info("✅ پیام تاییدیه ارسال شد")
-    except Exception as e:
-        logger.error(f"❌ خطا در ارسال پیام: {e}")
-    
-    try:
-        await callback.answer()
-        logger.info("✅ callback.answer انجام شد")
-    except Exception as e:
-        logger.warning(f"⚠️ خطا در callback.answer: {e}")
+            
+        
 @dp.callback_query(F.data == "test_health_report")
 async def test_health_report(callback: CallbackQuery):
     """تست دستی گزارش سلامت"""
@@ -17304,44 +16378,6 @@ def fully_remove_coupon_from_user(user_id: int) -> bool:
     
     return removed
 
-def release_coupon(user_id: int) -> bool:
-    """آزادسازی کوپن در صورت لغو سفارش (برگشت به حالت قبل)"""
-    user_state = user_states.get(user_id, {})
-    
-    if not user_state.get('coupon_applied'):
-        return False
-    
-    code = user_state.get('coupon_code')
-    if not code or code not in COUPONS:
-        return False
-    
-    coupon = COUPONS[code]
-    coupon_type = coupon.get('coupon_type', 'normal')
-    
-    # ✅✅✅ بررسی بر اساس نوع کوپن
-    if coupon_type == 'admin_special':
-        # برای کوپن ادمین: بررسی user_usage
-        user_usage = coupon.get('user_usage', {})
-        user_used_count = user_usage.get(str(user_id), 0)
-        max_usage = coupon.get('usage_limit', 1)
-        
-        if user_used_count >= max_usage:
-            logger.info(f"🏷️ کوپن ادمین {code} به حداکثر رسیده ({user_used_count}/{max_usage})، قابل آزادسازی نیست")
-            clear_coupon_from_user_db(user_id)
-            return False
-        
-        logger.info(f"🏷️ کوپن ادمین {code} برای کاربر {user_id} آزاد شد (لغو سفارش) - استفاده: {user_used_count}/{max_usage}")
-        return True
-    else:
-        # برای کوپن معمولی: بررسی used_by
-        if user_id in coupon.get('used_by', []):
-            clear_coupon_from_user_db(user_id)
-            logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
-            return False
-        
-        logger.info(f"🏷️ کوپن معمولی {code} برای کاربر {user_id} آزاد شد (لغو سفارش)")
-        return True
-
 def consume_coupon(user_id: int) -> bool:
     """مصرف کوپن - با پشتیبانی از کوپن ادمین"""
     uid = str(user_id)
@@ -17487,60 +16523,8 @@ def release_coupon_on_cancel(user_id: int) -> bool:
     
     logger.info(f"🏷️ کوپن {code} برای کاربر {user_id} آزاد شد (لغو سفارش قبل از مصرف)")
     return True
-
-
-def get_coupon_status(user_id: int) -> dict:
-    """دریافت وضعیت کوپن کاربر"""
-    result = {
-        'has_coupon': False,
-        'code': None,
-        'discount': 0,
-        'is_active': False,
-        'is_used': False,
-        'remaining_uses': 0,
-        'status': None
-    }
-    
-    user_state = user_states.get(user_id, {})
-    if user_state.get('coupon_applied'):
-        code = user_state.get('coupon_code')
-        if code and code in COUPONS:
-            coupon = COUPONS[code]
-            result['has_coupon'] = True
-            result['code'] = code
-            result['discount'] = coupon.get('discount', 0)
-            result['status'] = coupon.get('status', 'unknown')
-            result['is_active'] = coupon.get('status') == 'active'
-            result['is_used'] = user_id in coupon.get('used_by', [])
-            
-            usage_limit = coupon.get('usage_limit', 0)
-            used_count = coupon.get('used_count', 0)
-            if usage_limit > 0:
-                result['remaining_uses'] = max(0, usage_limit - used_count)
-            else:
-                result['remaining_uses'] = -1  # نامحدود
-    
-    return result
-
-
-
-def apply_coupon_discount(user_id: int, price: int) -> tuple:
-    """اعمال تخفیف کوپن بر روی قیمت
-    
-    Returns:
-        (price_after_discount, discount_percent)
-    """
-    user_state = user_states.get(user_id, {})
-    if user_state.get('coupon_applied'):
-        discount = user_state.get('coupon_discount', 0)
-        if discount > 0:
-            discounted_price = price - (price * discount // 100)
-            logger.info(f"🏷️ تخفیف {discount}% روی قیمت {price:,} اعمال شد: {discounted_price:,}")
-            return discounted_price, discount
-    return price, 0
         
-        
-        
+     
 @dp.callback_query(F.data == "show_ready_categories_keep_coupon")
 async def show_ready_categories_keep_coupon(callback: CallbackQuery):
     """نمایش دسته‌بندی بسته‌ها - با حفظ کوپن"""
@@ -18176,198 +17160,6 @@ async def admin_category_edit_select(callback: CallbackQuery):
         "✏️ <b>انتخاب دسته برای ویرایش</b>\n\nلطفاً دسته مورد نظر را انتخاب کنید:" if lang == "fa" else "✏️ <b>Select category to edit</b>\n\nPlease select a category:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
-    try:
-        await callback.answer()
-    except:
-        pass
-
-@dp.callback_query(F.data.startswith("admin_category_inbound_set_"))
-async def admin_category_inbound_set(callback: CallbackQuery):
-    """تنظیم اینباند برای دسته"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    logger.info(f"🔴 admin_category_inbound_set CALLED: {callback.data}")
-    parts = callback.data.split("_")
-    
-    try:
-        category_id = int(parts[4])  # ایندکس 4 = category_id
-        inbound_value = parts[5] if len(parts) > 5 else None  # ایندکس 5 = inbound_id یا 'default'
-        
-        logger.info(f"✅ category_id: {category_id}, inbound_value: {inbound_value}")
-        
-        if inbound_value is None:
-            await callback.answer("❌ اینباند مشخص نشده!", show_alert=True)
-            return
-            
-    except (ValueError, IndexError) as e:
-        logger.error(f"❌ خطا در استخراج داده‌ها: {e}")
-        await callback.answer(f"❌ خطا در پردازش داده‌ها", show_alert=True)
-        return
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    category = None
-    for cat in READY_PACKAGES.get('categories', []):
-        if cat.get('id') == category_id:
-            category = cat
-            break
-    
-    if not category:
-        logger.error(f"❌ دسته با ID {category_id} یافت نشد!")
-        await callback.answer("❌ دسته یافت نشد!" if lang == "fa" else "❌ Category not found!", show_alert=True)
-        return
-    if inbound_value == 'default':
-        category['inbound_id'] = None
-        await callback.answer(
-            f"✅ اینباند پیش‌فرض برای {category.get('name')} تنظیم شد!" if lang == "fa" else f"✅ Default inbound set for {category.get('name')}!",
-            show_alert=True
-        )
-    else:
-        try:
-            inbound_id = int(inbound_value)
-            category['inbound_id'] = inbound_id
-            await callback.answer(
-                f"✅ اینباند {inbound_id} برای {category.get('name')} تنظیم شد!" if lang == "fa" else f"✅ Inbound {inbound_id} set for {category.get('name')}!",
-                show_alert=True
-            )
-        except ValueError:
-            await callback.answer("❌ اینباند نامعتبر!", show_alert=True)
-            return
-    READY_PACKAGES['last_updated'] = datetime.now().isoformat()
-    configs_pool['ready_packages'] = READY_PACKAGES
-    save_all()
-    
-    logger.info(f"✅ تغییرات ذخیره شد - اینباند {inbound_value} برای {category.get('name')}")
-    try:
-        callback.data = f"admin_category_edit_{category_id}"
-        await admin_category_edit(callback)
-    except Exception as e:
-        logger.error(f"❌ خطا در بازگشت به ویرایش: {e}")
-        await callback.message.answer(
-            "✅ تنظیمات ذخیره شد.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="🔙 بازگشت به ویرایش دسته" if lang == "fa" else "🔙 Back to Edit Category",
-                    callback_data=f"admin_category_edit_{category_id}"
-                )]
-            ])
-        )
-
-
-@dp.callback_query(F.data.startswith("admin_category_inbound_"))
-async def admin_category_inbound(callback: CallbackQuery):
-    """تنظیم اینباند اختصاصی برای دسته"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    logger.info(f"🔍 admin_category_inbound CALLED: {callback.data}")
-    
-    parts = callback.data.split("_")
-    if len(parts) > 3 and parts[3] == 'set':
-        logger.warning(f"⚠️ کالبک {callback.data} باید به admin_category_inbound_set برود")
-        await admin_category_inbound_set(callback)
-        return
-    
-    try:
-        category_id = int(parts[3])  # ایندکس 3 = category_id
-        logger.info(f"✅ category_id: {category_id}")
-    except (ValueError, IndexError) as e:
-        logger.error(f"❌ خطا در استخراج category_id: {e}")
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    category = None
-    for cat in READY_PACKAGES.get('categories', []):
-        if cat.get('id') == category_id:
-            category = cat
-            break
-    
-    if not category:
-        await callback.answer("❌ دسته یافت نشد!" if lang == "fa" else "❌ Category not found!", show_alert=True)
-        return
-    await callback.message.edit_text("⏳ در حال دریافت لیست اینباندها...")
-    
-    inbounds = await xui_get_inbounds()
-    if not inbounds:
-        await callback.message.edit_text(
-            "❌ هیچ اینباندی یافت نشد یا اتصال به پنل برقرار نشد.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 برگشت", callback_data=f"admin_category_edit_{category_id}")]
-            ])
-        )
-        return
-    
-    current_inbound = category.get('inbound_id')
-    
-    if lang == "fa":
-        text = f"""
-📡 <b>تنظیم اینباند اختصاصی برای {category.get('name')}</b>
-
-━━━━━━━━━━━━━━━━━━━━━━
-اینباند فعلی: {current_inbound if current_inbound else '❌ تنظیم نشده (استفاده از پیش‌فرض)'}
-━━━━━━━━━━━━━━━━━━━━━━
-
-لطفاً اینباند مورد نظر را انتخاب کنید:
-"""
-    else:
-        text = f"""
-📡 <b>Set Custom Inbound for {category.get('name')}</b>
-
-━━━━━━━━━━━━━━━━━━━━━━
-Current inbound: {current_inbound if current_inbound else '❌ Not set (using default)'}
-━━━━━━━━━━━━━━━━━━━━━━
-
-Please select an inbound:
-"""
-    
-    buttons = []
-    buttons.append([InlineKeyboardButton(
-        text="📌 استفاده از اینباند پیش‌فرض" if lang == "fa" else "📌 Use Default Inbound",
-        callback_data=f"admin_category_inbound_set_{category_id}_default"
-    )])
-    
-    for inbound in inbounds:
-        inbound_id = inbound.get('id')
-        remark = inbound.get('remark', f'Inbound {inbound_id}')
-        protocol = inbound.get('protocol', 'unknown')
-        port = inbound.get('port')
-        enable = inbound.get('enable', True)
-        
-        if not inbound_id or not enable:
-            continue
-        
-        is_selected = (inbound_id == current_inbound)
-        label = f"{'✅' if is_selected else '  '} {remark} - {protocol.upper()}:{port}"
-        
-        buttons.append([InlineKeyboardButton(
-            text=label[:55],
-            callback_data=f"admin_category_inbound_set_{category_id}_{inbound_id}"
-        )])
-    
-    buttons.append([InlineKeyboardButton(
-        text="🔙 برگشت به ویرایش" if lang == "fa" else "🔙 Back to Edit",
-        callback_data=f"admin_category_edit_{category_id}"
-    )])
-    
-    try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode=ParseMode.HTML
-        )
-    except Exception as e:
-        logger.error(f"❌ خطا در ویرایش پیام: {e}")
-        try:
-            await callback.message.delete()
-        except:
-            pass
-        await callback.message.answer(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode=ParseMode.HTML
-        )
-    
     try:
         await callback.answer()
     except:
@@ -19838,52 +18630,6 @@ async def inbound_save_category(callback: CallbackQuery):
     callback.data = f"admin_category_edit_{category_id}"
     await admin_category_edit(callback)
     
-    
-    
-@dp.callback_query(F.data.startswith("admin_category_toggle_inbound_"))
-async def admin_category_toggle_inbound(callback: CallbackQuery):
-    """تغییر وضعیت یک اینباند دسته (تیک زدن/برداشتن)"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    parts = callback.data.split("_")
-    try:
-        category_id = int(parts[4])
-        inbound_id = int(parts[5])
-    except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    category = None
-    for cat in READY_PACKAGES.get('categories', []):
-        if cat.get('id') == category_id:
-            category = cat
-            break
-    
-    if not category:
-        await callback.answer("❌ دسته یافت نشد!", show_alert=True)
-        return
-    prefix = f"category_{category_id}"
-    temp_key = f"{prefix}_{callback.from_user.id}"
-    if temp_key not in TEMP_INBOUND_SELECTION:
-        current_inbound_ids = category.get('inbound_ids', [])
-        if not current_inbound_ids:
-            old_inbound = category.get('inbound_id')
-            if old_inbound:
-                current_inbound_ids = [old_inbound]
-            else:
-                current_inbound_ids = []
-        TEMP_INBOUND_SELECTION[temp_key] = current_inbound_ids.copy()
-    
-    current_list = TEMP_INBOUND_SELECTION[temp_key]
-    if inbound_id in current_list:
-        current_list.remove(inbound_id)
-        await callback.answer(f"❌ لغو شد", show_alert=False)
-    else:
-        current_list.append(inbound_id)
-        await callback.answer(f"✅ انتخاب شد", show_alert=False)
-    
-    TEMP_INBOUND_SELECTION[temp_key] = current_list
-    await admin_category_inbounds(callback)
 
 @dp.message(Command("check_storage"))
 async def cmd_check_storage(message: Message):
@@ -19913,134 +18659,6 @@ async def cmd_check_storage(message: Message):
     text += f"\n🕐 زمان بررسی: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
     await message.reply(text, parse_mode=ParseMode.HTML)
-    
-    
-    
-@dp.callback_query(F.data.startswith("admin_category_inbounds_default_"))
-async def admin_category_inbounds_default(callback: CallbackQuery):
-    """انتخاب اینباندهای پیش‌فرض برای دسته"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    parts = callback.data.split("_")
-    try:
-        category_id = int(parts[4])
-    except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    category = None
-    for cat in READY_PACKAGES.get('categories', []):
-        if cat.get('id') == category_id:
-            category = cat
-            break
-    
-    if not category:
-        await callback.answer("❌ دسته یافت نشد!", show_alert=True)
-        return
-    
-    default_ids = configs_pool.get('default_inbound_ids', [])
-    if default_ids:
-        category['inbound_ids'] = default_ids.copy()
-        category['inbound_id'] = None
-        READY_PACKAGES['last_updated'] = datetime.now().isoformat()
-        configs_pool['ready_packages'] = READY_PACKAGES
-        save_all()
-        
-        await callback.answer(
-            f"✅ {len(default_ids)} اینباند پیش‌فرض انتخاب شد" if lang == "fa" else f"✅ {len(default_ids)} default inbounds selected",
-            show_alert=True
-        )
-    else:
-        await callback.answer(
-            "❌ هیچ اینباند پیش‌فرضی تنظیم نشده است" if lang == "fa" else "❌ No default inbounds set",
-            show_alert=True
-        )
-        return
-    await admin_category_inbounds(callback)
-
-
-@dp.callback_query(F.data.startswith("admin_category_inbounds_clear_"))
-async def admin_category_inbounds_clear(callback: CallbackQuery):
-    """پاک کردن همه اینباندهای دسته"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    parts = callback.data.split("_")
-    try:
-        category_id = int(parts[4])
-    except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    category = None
-    for cat in READY_PACKAGES.get('categories', []):
-        if cat.get('id') == category_id:
-            category = cat
-            break
-    
-    if not category:
-        await callback.answer("❌ دسته یافت نشد!", show_alert=True)
-        return
-    
-    category['inbound_ids'] = []
-    category['inbound_id'] = None
-    READY_PACKAGES['last_updated'] = datetime.now().isoformat()
-    configs_pool['ready_packages'] = READY_PACKAGES
-    save_all()
-    
-    await callback.answer(
-        "🗑 همه اینباندها پاک شدند" if lang == "fa" else "🗑 All inbounds cleared",
-        show_alert=True
-    )
-    await admin_category_inbounds(callback)
-
-
-@dp.callback_query(F.data.startswith("admin_category_inbounds_save_"))
-async def admin_category_inbounds_save(callback: CallbackQuery):
-    """ذخیره تنظیمات اینباندهای دسته و بازگشت"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    parts = callback.data.split("_")
-    try:
-        category_id = int(parts[4])
-    except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
-        return
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    category = None
-    for cat in READY_PACKAGES.get('categories', []):
-        if cat.get('id') == category_id:
-            category = cat
-            break
-    
-    if not category:
-        await callback.answer("❌ دسته یافت نشد!", show_alert=True)
-        return
-    prefix = f"category_{category_id}"
-    temp_key = f"{prefix}_{callback.from_user.id}"
-    current_list = TEMP_INBOUND_SELECTION.get(temp_key, [])
-    category['inbound_ids'] = current_list
-    category['inbound_id'] = None  # حذف کلید قدیمی
-    READY_PACKAGES['last_updated'] = datetime.now().isoformat()
-    configs_pool['ready_packages'] = READY_PACKAGES
-    save_all()  # ذخیره در دیتابیس
-    logger.info(f"✅ اینباندهای دسته {category.get('name')} ذخیره شد: {current_list}")
-    if temp_key in TEMP_INBOUND_SELECTION:
-        del TEMP_INBOUND_SELECTION[temp_key]
-    back_key = f"{prefix}_{callback.from_user.id}_back"
-    if back_key in INBOUND_BACK_DATA:
-        del INBOUND_BACK_DATA[back_key]
-    
-    await callback.answer(
-        f"✅ {len(current_list)} اینباند ذخیره شد" if lang == "fa" else f"✅ {len(current_list)} inbounds saved",
-        show_alert=True
-    )
-    await go_back_to_category_edit(callback, category_id)
 
 
     
@@ -20056,11 +18674,6 @@ def migrate_category_inbound_data():
     READY_PACKAGES['last_updated'] = datetime.now().isoformat()
     configs_pool['ready_packages'] = READY_PACKAGES
     save_all()
-
-
-    
-    
-
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_category_edit'))
@@ -20492,36 +19105,6 @@ async def admin_package_add_process(message: Message):
         user_states.pop(admin_id, None)
 
 
-
-
-
-
-
-def save_ready_packages():
-    """ذخیره تنظیمات بسته‌های آماده در دیتابیس"""
-    try:
-        for cat in READY_PACKAGES.get('categories', []):
-            if 'inbound_ids' not in cat:
-                old_inbound = cat.get('inbound_id')
-                if old_inbound:
-                    cat['inbound_ids'] = [old_inbound]
-                else:
-                    cat['inbound_ids'] = []
-                cat['inbound_id'] = None
-        
-        configs_pool['ready_packages'] = READY_PACKAGES
-        save_all()
-        logger.info("📦 بسته‌های آماده با موفقیت ذخیره شدند")
-        
-        for cat in READY_PACKAGES.get('categories', []):
-            inbound_ids = cat.get('inbound_ids', [])
-            logger.info(f"  📡 {cat.get('name')}: اینباندهای ذخیره شده = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
-        
-        return True
-    except Exception as e:
-        logger.error(f"❌ خطا در ذخیره بسته‌های آماده: {e}")
-        return False
-
 @dp.callback_query(F.data == "admin_force_join")
 async def admin_force_join_settings(callback: CallbackQuery):
     """تنظیمات عضویت اجباری در کانال"""
@@ -20877,35 +19460,6 @@ async def check_membership(user_id: int) -> bool:
     
     return True
 
-async def verify_membership(user_id: int) -> bool:
-    """
-    بررسی و ثبت عضویت کاربر - نسخه ساده
-    """
-    if user_id == ADMIN_ID_INT:
-        return True
-    
-    # استفاده از تابع دقیق
-    membership_report = await check_membership_detailed(user_id)
-    
-    if membership_report['is_all_joined']:
-        # اگر کاربر عضو همه کانال‌هاست، وضعیت verified را ثبت کن
-        user = get_user(user_id)
-        if user:
-            user['verified'] = True
-            user['updated_at'] = datetime.now().isoformat()
-            save_json(DB_FILES['users'], users)
-            logger.info(f"✅ کاربر {user_id} عضویت در کانال‌ها را تایید کرد")
-        return True
-    else:
-        # اگر کاربر عضو نیست، verified را False کن
-        user = get_user(user_id)
-        if user and user.get('verified', False):
-            user['verified'] = False
-            user['updated_at'] = datetime.now().isoformat()
-            save_json(DB_FILES['users'], users)
-            logger.warning(f"⚠️ کاربر {user_id} از کانال لفت داده، verified به False تغییر کرد")
-        return False
-
 @dp.callback_query(F.data == "verify_membership")
 async def process_verify_membership(callback: CallbackQuery):
     """
@@ -21215,20 +19769,7 @@ async def back_to_main(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
-        
-        
-
-def debug_coupon_state(user_id: int, location: str):
-    """دیباگ وضعیت کوپن در نقاط مختلف"""
-    user_state = user_states.get(user_id, {})
-    coupon_code = user_state.get('coupon_code')
-    coupon_applied = user_state.get('coupon_applied', False)
-    
-    logger.info(f"🔍 [{location}] کوپن: code={coupon_code}, applied={coupon_applied}, state={user_state}")
-    if location not in ['back_to_main', 'cancel_order_direct', 'cancel_payment']:
-        if not coupon_applied or not coupon_code:
-            logger.warning(f"⚠️ [{location}] کوپن وجود ندارد!")      
+        logger.warning(f"خطا در callback.answer: {e}")    
         
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery):
@@ -22081,69 +20622,6 @@ async def confirm_broadcast(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
         
         
-        
-async def safe_edit_callback(
-    callback: CallbackQuery, 
-    text: str = None, 
-    reply_markup: InlineKeyboardMarkup = None,
-    parse_mode: ParseMode = ParseMode.HTML,
-    **kwargs
-):
-    """ویرایش امن پیام با مدیریت خطاهای مختلف"""
-    try:
-        if callback.message.content_type != 'text' and text:
-            try:
-                await callback.message.delete()
-            except:
-                pass
-            await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
-            return True
-        if text and reply_markup:
-            await callback.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
-        elif reply_markup:
-            await callback.message.edit_reply_markup(reply_markup=reply_markup)
-        elif text:
-            await callback.message.edit_text(text, parse_mode=parse_mode, **kwargs)
-        return True
-        
-    except Exception as e:
-        error_str = str(e)
-        if "message is not modified" in error_str:
-            logger.debug(f"Message not modified for user {callback.from_user.id}")
-            return True
-        elif "there is no text in the message to edit" in error_str:
-            try:
-                await callback.message.delete()
-            except:
-                pass
-            if text:
-                await callback.message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode, **kwargs)
-            return True
-        elif "can't parse entities" in error_str:
-            logger.warning(f"HTML parse error, sending without HTML: {error_str}")
-            try:
-                if text:
-                    import re
-                    clean_text = re.sub(r'<[^>]+>', '', text)
-                    await callback.message.edit_text(clean_text, reply_markup=reply_markup, parse_mode=None)
-                return True
-            except:
-                pass
-            try:
-                await callback.message.delete()
-            except:
-                pass
-            if text:
-                import re
-                clean_text = re.sub(r'<[^>]+>', '', text)
-                await callback.message.answer(clean_text, reply_markup=reply_markup, parse_mode=None)
-            return True
-        else:
-            logger.error(f"Error in safe_edit_callback: {e}")
-            raise
-        
-        
-
 def sanitize_text_for_broadcast(text: str) -> str:
     """پاکسازی متن برای ارسال به کاربران"""
     if not text:
@@ -26049,37 +24527,6 @@ Activate this service for the user?
         await message.reply("❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid number!")
 
 
-@dp.callback_query(F.data == "admin_custom_balance")
-async def admin_custom_balance(callback: CallbackQuery):
-    """پرداخت دلخواه برای شارژ حساب (بدون ساخت کانفیگ)"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    user_states[callback.from_user.id] = {'awaiting_custom_balance_user': True}
-    
-    if lang == "fa":
-        await callback.message.edit_text(
-            "💰 <b>شارژ دلخواه حساب کاربر</b>\n\n"
-            "لطفاً <b>آیدی عددی کاربر</b> را ارسال کنید.\n\n"
-            "مثال: <code>123456789</code>\n\n"
-            "برای لغو /cancel را بفرستید",
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await callback.message.edit_text(
-            "💰 <b>Custom Balance Charge</b>\n\n"
-            "Please send the <b>User ID</b>.\n\n"
-            "Example: <code>123456789</code>\n\n"
-            "Send /cancel to abort",
-            parse_mode=ParseMode.HTML
-        )
-    try:
-        await callback.answer()
-    except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
-
 @dp.callback_query(F.data.startswith("approve_receipt_"))
 async def approve_receipt(callback: CallbackQuery):
     """تایید رسید با امکان انتخاب اینباند - با تشخیص تمدید"""
@@ -29984,36 +28431,6 @@ async def view_single_config(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
 
-
-@dp.callback_query(F.data.startswith("refresh_config_"))
-async def refresh_config_info(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    order_id = int(callback.data.split("_")[2])
-    lang = get_user(user_id).get('lang', 'fa')
-    
-    order = orders.get(str(order_id))
-    if not order or not order.get('config_link'):
-        await callback.answer("❌ کانفیگ یافت نشد" if lang=='fa' else "❌ Config not found", show_alert=True)
-        return
-    
-    email = get_order_client_email(order)
-    if not email or not SENAI_PANEL_ENABLED:
-        await callback.answer("❌ اطلاعات در دسترس نیست" if lang=='fa' else "❌ Info unavailable", show_alert=True)
-        return
-    
-    await callback.answer("⏳ در حال بروزرسانی...")
-    
-    client_info = await xui_get_client_info(email)
-    if client_info:
-        traffic_data = await xui_get_client_traffic(email)
-        lang = get_user(user_id).get('lang', 'fa')
-        traffic_text = format_traffic_info(client_info, traffic_data, lang)
-        await callback.message.answer(
-            f"🔄 <b>{'اطلاعات زنده' if lang=='fa' else 'Live Info'}</b>\n{traffic_text}",
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await callback.message.answer("❌ خطا در دریافت اطلاعات" if lang=='fa' else "❌ Error fetching info")
 
 @dp.callback_query(F.data == "my_account")
 async def my_account(callback: CallbackQuery):
@@ -35548,78 +33965,6 @@ async def confirm_restore(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")  
-        
-        
-@dp.callback_query(F.data.startswith("confirm_restore_"))
-async def admin_restore_backup_execute(callback: CallbackQuery):
-    """اجرای ریستور بکاپ - فقط دیتابیس، بدون بازسازی پنل"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    restore_panel = False
-    prefix = "confirm_restore_"
-    filename = callback.data.replace(prefix, "")
-    backups = get_backup_list()
-    backup = None
-    for b in backups:
-        if b['filename'] == filename:
-            backup = b
-            break
-    
-    if not backup:
-        await callback.answer("❌ بکاپ یافت نشد", show_alert=True)
-        return
-    await callback.message.edit_text(
-        "⏳ در حال ریستور بکاپ...\n\n"
-        "⚠️ لطفاً صبر کنید...\n"
-        "📌 فقط دیتابیس ربات بازگردانی می‌شود\n"
-        "🔒 کانفیگ‌های پنل تغییری نمی‌کنند",
-        reply_markup=None
-    )
-    result = await restore_from_backup(backup['path'], restore_panel=False)
-    if result['success']:
-        text = f"""
-✅ <b>ریستور بکاپ با موفقیت انجام شد!</b>
-
-📊 <b>نتایج:</b>
-• 👥 کاربران بازگردانی: {result['restored_users']}
-• 📋 سفارشات بازگردانی: {result['restored_orders']}
-• 📦 کانفیگ‌های بازگردانی: {result['restored_configs']}
-
-{result.get('warning', '')}
-
-⚠️ <b>توجه مهم:</b>
-کانفیگ‌های موجود در پنل تغییری نکرده‌اند.
-اگر کانفیگی در پنل حذف شده، از دستور /sync_panel استفاده کنید.
-
-💾 بکاپ از وضعیت قبلی در پوشه backups ذخیره شد.
-"""
-        buttons = [
-            [InlineKeyboardButton(text="🔄 همگام‌سازی با پنل", callback_data="admin_sync_configs")],
-            [InlineKeyboardButton(text="🔙 بازگشت به پنل", callback_data="admin_panel")],
-            [InlineKeyboardButton(text="📋 مشاهده سفارشات", callback_data="admin_orders")]
-        ]
-        
-        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-        
-    else:
-        text = f"❌ <b>خطا در ریستور بکاپ!</b>\n\n"
-        for err in result['errors']:
-            text += f"• {err}\n"
-        text += f"\nلطفاً لاگ‌ها را بررسی کنید."
-        
-        await callback.message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data="admin_restore_backup")]
-            ])
-        )
-    
-    try:
-        await callback.answer()
-    except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
 
 @dp.callback_query(F.data == "admin_manage_backups")
 async def admin_manage_backups(callback: CallbackQuery):
@@ -36018,40 +34363,7 @@ async def admin_delete_old_backups(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
-
-@dp.callback_query(F.data.startswith("delete_backup_"))
-async def admin_delete_backup(callback: CallbackQuery):
-    """حذف یک بکاپ خاص"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    timestamp = callback.data.replace("delete_backup_", "")
-    
-    backups = get_backup_list()
-    backup = None
-    for b in backups:
-        if b['timestamp'] == timestamp:
-            backup = b
-            break
-    
-    if not backup:
-        await callback.answer("❌ بکاپ یافت نشد", show_alert=True)
-        return
-    
-    try:
-        os.remove(backup['path'])
-        await callback.answer("✅ بکاپ حذف شد" if lang=="fa" else "✅ Backup deleted", show_alert=True)
-        await admin_manage_backups(callback)
-    except Exception as e:
-        await callback.answer(f"❌ خطا: {str(e)[:50]}", show_alert=True)
-
-
-
-    
-    
-    
-    
+ 
     
 @dp.callback_query(F.data.startswith("view_order_"))
 async def view_order(callback: CallbackQuery):
@@ -36876,59 +35188,7 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
         await callback.message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     
     await callback.answer("✅ سفارش لغو شد" if lang == "fa" else "✅ Order cancelled", show_alert=True)
-    
-    
-@dp.callback_query(F.data.startswith("confirm_cancel_order_"))
-async def confirm_cancel_order(callback: CallbackQuery):
-    """تایید نهایی لغو سفارش توسط ادمین"""
-    if callback.from_user.id != ADMIN_ID_INT:
-        return await callback.answer("⛔", show_alert=True)
-    
-    logger.info(f"🔴 [confirm_cancel_order] CALLED: {callback.data}")
-    
-    order_id = int(callback.data.split("_")[3])
-    order = orders.get(str(order_id))
-    
-    if not order:
-        await callback.answer("❌ سفارش یافت نشد", show_alert=True)
-        return
-    
-    user_id = order['user_id']
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    update_order(order_id, status='cancelled')
-    try:
-        user_lang = get_user(user_id).get('lang', 'fa')
-        if user_lang == "fa":
-            await bot.send_message(
-                user_id,
-                f"❌ سفارش #{order_id} توسط ادمین لغو شد."
-            )
-        else:
-            await bot.send_message(
-                user_id,
-                f"❌ Order #{order_id} has been cancelled by admin."
-            )
-    except:
-        pass
-    
-    if lang == "fa":
-        text = f"✅ سفارش #{order_id} با موفقیت لغو شد!"
-    else:
-        text = f"✅ Order #{order_id} cancelled successfully!"
-    
-    await callback.message.edit_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="🔙 برگشت به لیست سفارشات" if lang == "fa" else "🔙 Back to Orders",
-                callback_data="admin_orders"
-            )]
-        ])
-    )
-    
-    logger.info(f"🗑 سفارش #{order_id} توسط ادمین {callback.from_user.id} لغو شد")
-    await callback.answer("✅ سفارش لغو شد" if lang == "fa" else "✅ Order cancelled", show_alert=True)
-       
+           
 @dp.callback_query(F.data.startswith("approve_order_"))
 async def approve_order(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
@@ -39723,43 +37983,6 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
     except Exception as e:
         logger.error(f"❌ خطا در فرآیند توقف ربات: {e}", exc_info=True)
         raise
-
-
-async def emergency_shutdown(dispatcher: Dispatcher, bot: Bot, error: Exception):
-    """خاموش کردن اضطراری ربات در صورت خطای بحرانی"""
-    logger.critical(f"🚨 شروع خاموشی اضطراری به دلیل: {error}")
-    
-    try:
-        save_all()
-        logger.info("دیتابیس در حالت اضطراری ذخیره شد")
-        
-        emergency_msg = f"""
-🚨 <b>خاموشی اضطراری ربات!</b>
-
-❌ خطا: {str(error)[:200]}
-🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-دیتابیس ذخیره شد. لطفاً لاگ‌ها را بررسی کنید.
-"""
-        await bot.send_message(ADMIN_ID_INT, emergency_msg, parse_mode=ParseMode.HTML)
-        logger.info("پیام خاموشی اضطراری به ادمین ارسال شد")
-    except Exception as send_err:
-        logger.error(f"نتوانست پیام خاموشی اضطراری ارسال کند: {send_err}")
-    
-    try:
-        await dispatcher.fsm.storage.close()
-        logger.debug("FSM storage در حالت اضطراری بسته شد")
-    except Exception as e:
-        logger.error(f"خطا در بستن FSM storage در حالت اضطراری: {e}")
-    
-    try:
-        await bot.session.close()
-        logger.debug("Bot session در حالت اضطراری بسته شد")
-    except Exception as e:
-        logger.error(f"خطا در بستن bot session در حالت اضطراری: {e}")
-    
-    logger.info("✅ خاموشی اضطراری کامل شد")
-
 
 def get_memory_usage() -> dict:
     """دریافت میزان استفاده از حافظه"""
