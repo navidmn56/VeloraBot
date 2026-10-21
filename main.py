@@ -10336,9 +10336,14 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
         return None
 
 
-async def xui_get_inbounds() -> list:
+async def xui_get_inbounds(force_refresh: bool = False) -> list:
     """دریافت لیست اینباندها با کش و Lock"""
     global INBOUND_CACHE
+    
+    # ✅ اگه force_refresh، کش رو باطل کن
+    if force_refresh:
+        INBOUND_CACHE["loaded"] = False
+        INBOUND_CACHE["time"] = 0
     
     current_time = time.time()
     if INBOUND_CACHE["loaded"] and (current_time - INBOUND_CACHE["time"]) < INBOUND_CACHE_TTL:
@@ -10355,7 +10360,6 @@ async def xui_get_inbounds() -> list:
             INBOUND_CACHE["data"] = inbounds
             INBOUND_CACHE["time"] = current_time
             INBOUND_CACHE["loaded"] = True
-            
             logger.debug(f"{len(inbounds)} اینباند فعال دریافت شد")
             return inbounds
         if INBOUND_CACHE["loaded"]:
@@ -10363,6 +10367,8 @@ async def xui_get_inbounds() -> list:
             return INBOUND_CACHE["data"]
         
         return []
+    
+    
 panel_semaphore = asyncio.Semaphore(3)  # حداکثر 3 درخواست همزمان
 class PanelRateLimiter:
     """محدود کننده نرخ درخواست به پنل"""
@@ -32403,91 +32409,273 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
 
 async def sync_user_configs(user_id: int) -> dict:
     """
-    همگام‌سازی فقط کانفیگ‌های یک کاربر با پنل (بدون دست‌زدن به بقیه).
+    همگام‌سازی کامل یک کاربر با پنل — دقیقاً مثل sync_deleted_configs
+    ولی فقط روی سفارش‌های همین کاربر.
+    - کانفیگ جدید در پنل → سفارش جدید ساخته می‌شه
+    - کانفیگ حذف شده → status=deleted
+    - کانفیگ غیرفعال → status=inactive
+    - inbound_ids/inbound_details/volume/days آپدیت می‌شن
     """
     if not SENAI_PANEL_ENABLED:
-        return {'checked': 0, 'approved': 0, 'inactive': 0,
-                'deleted': 0, 'changed': 0, 'skipped': 0}
+        return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
 
-    valid_orders = get_valid_orders()
-    user_orders = [
-        o for o in valid_orders.values()
-        if o.get('user_id') == user_id
-        and o.get('status') in ('approved', 'inactive')
-    ]
+    import re
+    uid_str = str(user_id)
 
-    if not user_orders:
-        return {'checked': 0, 'approved': 0, 'inactive': 0,
-                'deleted': 0, 'changed': 0, 'skipped': 0}
+    # ─── 1. حفظ موجودی و کوپن کاربر ───
+    user_balance = None
+    user_coupon = None
+    if uid_str in users:
+        user_balance = users[uid_str].get('balance', 0)
+        user_coupon = {
+            'coupon_code': users[uid_str].get('coupon_code'),
+            'coupon_discount': users[uid_str].get('coupon_discount', 0),
+            'coupon_applied': users[uid_str].get('coupon_applied', False),
+        }
 
-    try:
-        inbounds = await xui_get_inbounds()
-    except Exception as e:
-        logger.error(f"❌ [sync_user_configs] خطا در اینباندها: {e}")
-        return {'checked': 0, 'approved': 0, 'inactive': 0,
-                'deleted': 0, 'changed': 0, 'skipped': 0, 'error': str(e)}
+    # ─── 2. دریافت اینباندها (با force_refresh) ───
+    inbounds = await xui_get_inbounds(force_refresh=True)
+    if not inbounds:
+        logger.error(f"❌ [sync_user_configs] user={user_id}: هیچ اینباندی یافت نشد")
+        return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
 
-    # email → enable
-    existing_clients = {}
+    # ─── 3. جمع‌آوری فقط کلاینت‌های همین کاربر ───
+    clients_dict = {}
+    user_has_configs = False
+
     for inbound in inbounds:
-        for client in inbound.get('settings', {}).get('clients', []):
-            e = client.get('email', '')
-            if e:
-                existing_clients[e] = client.get('enable', True)
+        inbound_id = inbound.get('id')
+        remark = inbound.get('remark', f'Inbound_{inbound_id}')
+        protocol = inbound.get('protocol', 'unknown')
+        port = inbound.get('port', '')
+        settings = inbound.get('settings', {})
 
-    stats = {'checked': 0, 'approved': 0, 'inactive': 0,
-             'deleted': 0, 'changed': 0, 'skipped': 0}
-    now_iso = datetime.now().isoformat()
-    changed = False
+        for client in settings.get('clients', []):
+            email = client.get('email', '')
+            if not email:
+                continue
 
-    for order in user_orders:
-        email = get_order_client_email(order)
+            # شناسایی user_id از email
+            extracted_uid = None
+            extracted_type = 'purchase'
+            comment = client.get('comment', '')
 
-        # ─── fallback: پیدا کردن email از sub_link ───
-        if not email:
-            sub_link = order.get('sub_link', '') or order.get('config_link', '')
-            if sub_link and '/sub/' in sub_link:
+            if email.startswith('t') and '_' in email:
+                m = re.search(r't(\d+)_\d+', email)
+                if m:
+                    extracted_uid = int(m.group(1)); extracted_type = 'test'
+            elif email.startswith('u') and '_' in email:
+                m = re.search(r'u(\d+)_\d+', email)
+                if m:
+                    extracted_uid = int(m.group(1)); extracted_type = 'purchase'
+            elif email.startswith('test_'):
+                parts = email.split('_')
+                if len(parts) >= 2 and parts[1].isdigit():
+                    extracted_uid = int(parts[1]); extracted_type = 'test'
+            elif email.startswith('user'):
+                m = re.search(r'user(\d+)', email)
+                if m:
+                    extracted_uid = int(m.group(1)); extracted_type = 'purchase'
+
+            if extracted_uid is None and comment:
                 try:
-                    sub_id = sub_link.rstrip('/').split('/')[-1]
-                    email = await find_email_by_sub_id(sub_id)
-                    if email:
-                        orders[str(order['order_id'])]['email'] = email
-                        changed = True
-                except Exception as e:
-                    logger.debug(f"[sync_user_configs] subId lookup failed: {e}")
+                    cid, _, is_bot, ctype = extract_user_info_from_comment(comment)
+                    if is_bot and cid:
+                        extracted_uid = cid; extracted_type = ctype
+                except Exception:
+                    pass
 
-        if not email:
-            stats['skipped'] += 1
+            # ✅ فقط همین کاربر
+            if extracted_uid != user_id:
+                continue
+
+            user_has_configs = True
+            is_active = client.get('enable', True)
+
+            if email not in clients_dict:
+                clients_dict[email] = {
+                    'email': email,
+                    'totalGB': client.get('totalGB', 0),
+                    'expiryTime': client.get('expiryTime', 0),
+                    'enable': is_active,
+                    'user_id': user_id,
+                    'comment': comment,
+                    'order_type': extracted_type,
+                    'inbound_ids': [],
+                    'inbound_details': [],
+                    'ip_limit': client.get('limitIp', 0),
+                    'subId': client.get('subId', '') or email,
+                }
+
+            clients_dict[email]['inbound_ids'].append(inbound_id)
+            clients_dict[email]['inbound_details'].append({
+                'inbound_id': inbound_id,
+                'remark': remark,
+                'protocol': protocol,
+                'port': port,
+            })
+
+    clients = list(clients_dict.values())
+    logger.info(f"📊 [sync_user_configs] user={user_id}: {len(clients)} کلاینت در پنل")
+
+    # ─── 4. آپدیت has_purchased ───
+    if user_has_configs and uid_str in users:
+        users[uid_str]['has_purchased'] = True
+        users[uid_str]['updated_at'] = datetime.now().isoformat()
+
+    # ─── 5. بازگرداندن موجودی و کوپن ───
+    if user_balance is not None and uid_str in users:
+        users[uid_str]['balance'] = user_balance
+        if user_coupon:
+            users[uid_str]['coupon_code'] = user_coupon['coupon_code']
+            users[uid_str]['coupon_discount'] = user_coupon['coupon_discount']
+            users[uid_str]['coupon_applied'] = user_coupon['coupon_applied']
+
+    # ─── 6. ذخیره اطلاعات سفارشات قبلی این کاربر ───
+    old_order_info = {}
+    for oid, order in orders.items():
+        if not isinstance(order, dict):
             continue
+        if order.get('user_id') != user_id:
+            continue
+        email = order.get('email')
+        if not email:
+            continue
+        old_order_info[email] = {
+            'order_id': order.get('order_id'),
+            'date': order.get('date', datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            'days': order.get('days', 30),
+            'price': order.get('price', 0),
+            'volume': order.get('volume', 0),
+            'status': order.get('status', 'approved'),
+            'type': order.get('type', 'purchase'),
+            'payment_method': order.get('payment_method', 'sync_from_panel'),
+            'payment_label': order.get('payment_label', ''),
+            'receipt_photo_id': order.get('receipt_photo_id'),
+            'config_id': order.get('config_id'),
+            'notes': order.get('notes', ''),
+            'created_at': order.get('created_at', datetime.now().isoformat()),
+            'category_id': order.get('category_id'),
+            'category_name': order.get('category_name'),
+            'category_name_en': order.get('category_name_en'),
+            'package_id': order.get('package_id'),
+            'parent_order_id': order.get('parent_order_id'),
+            'is_extend': order.get('is_extend', False),
+            'ip_limit': order.get('ip_limit', 0),
+        }
 
-        stats['checked'] += 1
+    # ─── 7. آپدیت / ساخت سفارش ───
+    stats = {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': len(clients)}
 
-        if email not in existing_clients:
-            new_status = 'deleted'
-        elif existing_clients[email]:
-            new_status = 'approved'
+    max_order_id = 0
+    for oid_s in orders.keys():
+        try:
+            v = int(oid_s)
+            if v > max_order_id:
+                max_order_id = v
+        except Exception:
+            pass
+
+    for client in clients:
+        email = client.get('email', '')
+        order_type = client.get('order_type', 'purchase')
+        ip_limit = client.get('ip_limit', 0)
+        is_active = client.get('enable', True)
+        total_gb = round(client.get('totalGB', 0) / (1024 ** 3), 6)
+
+        sub_link = build_sub_link_from_client(email, client)
+        sub_id_value = client.get('subId', '') or email
+        inbound_ids = client.get('inbound_ids', [])
+        is_test = order_type == 'test' or email.startswith('test_') or email.startswith('t')
+        old_info = old_order_info.get(email)
+
+        if old_info:
+            order_id = old_info['order_id']
+            days = old_info['days']
+            price = old_info['price']
+            volume_gb = old_info['volume']
+            order_type = old_info['type']
+            original_date = old_info['date']
+            payment_method = old_info['payment_method']
+            receipt_photo_id = old_info['receipt_photo_id']
+            config_id = old_info['config_id']
+            notes = old_info['notes']
+            created_at = old_info['created_at']
+            status = 'approved' if is_active else 'inactive'
+            stats[status] += 1
         else:
-            new_status = 'inactive'
+            # ✅ سفارش جدید از کلاینت یتیم پنل
+            max_order_id += 1
+            order_id = max_order_id
+            days = 30
+            price = 0
+            volume_gb = total_gb
+            original_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            payment_method = 'sync_from_panel'
+            receipt_photo_id = None
+            config_id = None
+            notes = f'ایجاد شده از همگام‌سازی کاربر - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+            created_at = datetime.now().isoformat()
+            status = 'approved' if is_active else 'inactive'
+            stats[status] += 1
+            stats['new'] += 1
+            logger.info(f"🆕 [sync_user_configs] سفارش جدید #{order_id} برای کاربر {user_id} - {email}")
 
-        stats[new_status] += 1
+        orders[str(order_id)] = {
+            'order_id': order_id,
+            'user_id': user_id,
+            'volume': volume_gb,
+            'days': days,
+            'price': price,
+            'type': order_type,
+            'status': status,
+            'date': original_date,
+            'approved_date': (
+                old_info['date'] if old_info and old_info['status'] == 'approved'
+                else (datetime.now().strftime("%Y-%m-%d %H:%M:%S") if is_active else None)
+            ),
+            'config_link': sub_link,
+            'config_id': config_id,
+            'receipt_photo_id': receipt_photo_id,
+            'email': email,
+            'sub_id': sub_id_value,
+            'sub_link': sub_link,
+            'panel_client_id': None,
+            'payment_method': payment_method,
+            'payment_label': old_info.get('payment_label', '') if old_info else '',
+            'rejected_reason': '',
+            'inbound_id': inbound_ids,
+            'inbound_details': client.get('inbound_details', []),
+            'created_at': created_at,
+            'updated_at': datetime.now().isoformat(),
+            'notes': notes,
+            'ip_limit': old_info.get('ip_limit', ip_limit) if old_info else ip_limit,
+            'is_active_in_panel': is_active,
+            'is_test': is_test,
+            'volume_unit': 'GB',
+            'category_id': old_info.get('category_id') if old_info else None,
+            'category_name': old_info.get('category_name') if old_info else None,
+            'category_name_en': old_info.get('category_name_en') if old_info else None,
+            'package_id': old_info.get('package_id') if old_info else None,
+            'parent_order_id': old_info.get('parent_order_id') if old_info else None,
+            'is_extend': old_info.get('is_extend', False) if old_info else False,
+        }
 
-        if order.get('status') != new_status:
-            oid_str = str(order['order_id'])
-            if oid_str in orders:
-                orders[oid_str]['status'] = new_status
-                orders[oid_str]['is_active_in_panel'] = (new_status == 'approved')
-                orders[oid_str]['updated_at'] = now_iso
-                changed = True
-                stats['changed'] += 1
-                logger.info(
-                    f"🔄 [sync_user_configs] #{order['order_id']} (user {user_id}): "
-                    f"{order.get('status')} → {new_status}"
-                )
+    # ─── 8. تشخیص کانفیگ‌های حذف‌شده (فقط این کاربر) ───
+    for oid, order in list(orders.items()):
+        if not isinstance(order, dict):
+            continue
+        if order.get('user_id') != user_id:
+            continue
+        email = order.get('email')
+        if order.get('status') in ['approved', 'inactive'] and email and email not in clients_dict:
+            orders[str(order['order_id'])]['status'] = 'deleted'
+            stats['deleted'] += 1
+            logger.info(f"🗑 [sync_user_configs] سفارش #{order['order_id']} (کاربر {user_id}) → deleted")
 
-    if changed:
-        save_json(DB_FILES['orders'], orders)
-        logger.info(f"💾 [sync_user_configs] user={user_id} stats={stats}")
-
+    # ─── 9. ذخیره ───
+    save_all()
+    logger.info(f"✅ [sync_user_configs] user={user_id} stats={stats}")
     return stats
 
      
