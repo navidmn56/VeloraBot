@@ -2634,25 +2634,62 @@ def save_user_test_settings():
         return False
 
 def get_user_test_settings(user_id: int) -> dict:
-    """دریافت تنظیمات اختصاصی تست کاربر"""
+    """دریافت تنظیمات اختصاصی تست کاربر — نسخه اصلاح‌شده"""
     uid = str(user_id)
-    
+
     default = {
         'volume_mb': TEST_SERVICE_STATUS.get('volume_mb', 1024),
         'days': TEST_SERVICE_STATUS.get('days', 3),
         'max_tests': TEST_SERVICE_STATUS.get('max_tests', 1),
-        'ip_limit': TEST_SERVICE_STATUS.get('ip_limit', 0)
+        'ip_limit': TEST_SERVICE_STATUS.get('ip_limit', 0),
     }
-    
-    if uid in USER_TEST_SETTINGS:
-        settings = USER_TEST_SETTINGS[uid]
-        for key in default:
-            if key not in settings:
-                settings[key] = default[key]
-        return settings
-    
-    return default.copy()
 
+    if uid in USER_TEST_SETTINGS:
+        # ✅ کپی بگیر تا دیکشنری اصلی خراب نشه
+        settings = dict(USER_TEST_SETTINGS[uid])
+
+        # ✅ تبدیل volume (GB) به volume_mb (MB) اگه لازم بود
+        if 'volume_mb' not in settings and 'volume' in settings:
+            settings['volume_mb'] = int(round(settings['volume'] * 1024))
+        # ✅ یا برعکس (برای نمایش)
+        if 'volume' not in settings and 'volume_mb' in settings:
+            settings['volume'] = round(settings['volume_mb'] / 1024, 3)
+
+        # پر کردن بقیه‌ی default‌ها
+        for key, val in default.items():
+            settings.setdefault(key, val)
+
+        return settings
+
+    # کاربر بدون تنظیمات اختصاصی — هم volume و هم volume_mb رو بده
+    result = default.copy()
+    result['volume'] = round(default['volume_mb'] / 1024, 3)
+    return result
+
+def _fmt_test_volume_gb(settings: dict) -> float:
+    """
+    نمایش حجم تست به گیگابایت
+    همیشه از volume_mb می‌خونه (منبع اصلی حقیقت)
+    """
+    if not settings:
+        return 1.0
+    
+    volume_mb = settings.get('volume_mb')
+    if volume_mb is not None:
+        try:
+            return round(float(volume_mb) / 1024, 2)
+        except (TypeError, ValueError):
+            pass
+    
+    # fallback به volume اگه volume_mb نبود
+    volume = settings.get('volume')
+    if volume is not None:
+        try:
+            return round(float(volume), 2)
+        except (TypeError, ValueError):
+            pass
+    
+    return 1.0
 
 @dp.callback_query(F.data.startswith("admin_test_user_volume_"))
 async def admin_test_user_volume(callback: CallbackQuery):
@@ -2675,13 +2712,15 @@ async def admin_test_user_volume(callback: CallbackQuery):
     }
     
     user_settings = get_user_test_settings(target_id)
+    # ✅ نمایش از volume_mb (منبع اصلی حقیقت)
+    current_volume_gb = _fmt_test_volume_gb(user_settings)
     
     if lang == "fa":
         text = f"""
 ✏️ <b>ویرایش حجم اختصاصی تست</b>
 
 👤 کاربر: {target_id}
-📊 حجم فعلی: {user_settings.get('volume', 5)} GB
+📊 حجم فعلی: {current_volume_gb} GB
 
 📝 لطفاً حجم جدید را به <b>گیگابایت</b> وارد کنید:
 (۱ تا ۱۰۰)
@@ -2696,7 +2735,7 @@ async def admin_test_user_volume(callback: CallbackQuery):
 ✏️ <b>Edit Custom Test Volume</b>
 
 👤 User: {target_id}
-📊 Current volume: {user_settings.get('volume', 5)} GB
+📊 Current volume: {current_volume_gb} GB
 
 📝 Please enter new volume in <b>GB</b>:
 (1 to 100)
@@ -2813,6 +2852,7 @@ async def admin_test_user_settings_save(message: Message):
     """ذخیره تنظیم اختصاصی تست کاربر"""
     admin_id = message.from_user.id
     lang = get_user(admin_id).get('lang', 'fa')
+    
     if message.text and message.text.strip() == '/cancel':
         user_states.pop(admin_id, None)
         await message.reply(
@@ -2834,41 +2874,50 @@ async def admin_test_user_settings_save(message: Message):
         
         if new_value <= 0:
             await message.reply(
-                "❌ مقدار باید بزرگتر از صفر باشد!" if lang == "fa" else "❌ Value must be greater than zero!"
+                "❌ مقدار باید بزرگتر از صفر باشد!" if lang == "fa"
+                else "❌ Value must be greater than zero!"
             )
             return
+        
         if setting_type == 'volume' and new_value > 100:
             await message.reply(
-                "⚠️ حجم نمی‌تواند بیشتر از 100 گیگ باشد!" if lang == "fa" else "⚠️ Volume cannot exceed 100 GB!"
+                "⚠️ حجم نمی‌تواند بیشتر از 100 گیگ باشد!" if lang == "fa"
+                else "⚠️ Volume cannot exceed 100 GB!"
             )
             return
         elif setting_type == 'days' and new_value > 30:
             await message.reply(
-                "⚠️ مدت نمی‌تواند بیشتر از 30 روز باشد!" if lang == "fa" else "⚠️ Duration cannot exceed 30 days!"
+                "⚠️ مدت نمی‌تواند بیشتر از 30 روز باشد!" if lang == "fa"
+                else "⚠️ Duration cannot exceed 30 days!"
             )
             return
         elif setting_type == 'max_tests' and new_value > 10:
             await message.reply(
-                "⚠️ تعداد تست نمی‌تواند بیشتر از 10 باشد!" if lang == "fa" else "⚠️ Max tests cannot exceed 10!"
+                "⚠️ تعداد تست نمی‌تواند بیشتر از 10 باشد!" if lang == "fa"
+                else "⚠️ Max tests cannot exceed 10!"
             )
             return
-        uid = str(target_id)
-        if uid not in USER_TEST_SETTINGS:
-            USER_TEST_SETTINGS[uid] = {
-                'volume': TEST_SERVICE_STATUS.get('volume', 5),
-                'days': TEST_SERVICE_STATUS.get('days', 3),
-                'max_tests': TEST_SERVICE_STATUS.get('max_tests', 1)
-            }
         
+        uid = str(target_id)
+        
+        # اطمینان از وجود entry
+        if uid not in USER_TEST_SETTINGS:
+            USER_TEST_SETTINGS[uid] = {}
+        
+        # ✅ مقدار رو ذخیره کن
         USER_TEST_SETTINGS[uid][setting_type] = new_value
+        
+        # ✅✅✅ مهم‌ترین خط: همگام‌سازی volume_mb با volume
+        if setting_type == 'volume':
+            USER_TEST_SETTINGS[uid]['volume_mb'] = int(round(new_value * 1024))
+            logger.info(
+                f"✅ [test_settings_save] حجم تست کاربر {target_id} تنظیم شد: "
+                f"{new_value}GB → {USER_TEST_SETTINGS[uid]['volume_mb']}MB"
+            )
+        
         save_user_test_settings()
         
         user_info = await get_user_info_from_telegram(target_id)
-        setting_names = {
-            'volume': 'حجم' if lang == "fa" else 'Volume',
-            'days': 'مدت' if lang == "fa" else 'Duration',
-            'max_tests': 'تعداد تست' if lang == "fa" else 'Max Tests'
-        }
         
         try:
             await message.delete()
@@ -2876,6 +2925,8 @@ async def admin_test_user_settings_save(message: Message):
             pass
         
         updated_settings = get_user_test_settings(target_id)
+        # ✅ نمایش از volume_mb (مقدار تازه ذخیره شده)
+        updated_volume_gb = _fmt_test_volume_gb(updated_settings)
         
         if lang == "fa":
             text = f"""
@@ -2887,7 +2938,7 @@ async def admin_test_user_settings_save(message: Message):
 ━━━━━━━━━━━━━━━━━━━
 
 <b>تنظیمات اختصاصی (بروزرسانی شد):</b>
-• حجم: {updated_settings.get('volume', 5)} GB
+• حجم: {updated_volume_gb} GB
 • مدت: {updated_settings.get('days', 3)} روز
 • حداکثر تست: {updated_settings.get('max_tests', 1)}
 
@@ -2930,7 +2981,7 @@ async def admin_test_user_settings_save(message: Message):
 ━━━━━━━━━━━━━━━━━━━
 
 <b>Custom Settings (Updated):</b>
-• Volume: {updated_settings.get('volume', 5)} GB
+• Volume: {updated_volume_gb} GB
 • Duration: {updated_settings.get('days', 3)} days
 • Max tests: {updated_settings.get('max_tests', 1)}
 
@@ -2963,6 +3014,7 @@ async def admin_test_user_settings_save(message: Message):
                     callback_data="admin_test_users"
                 )]
             ]
+        
         await message.answer(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
@@ -2972,7 +3024,8 @@ async def admin_test_user_settings_save(message: Message):
         
     except ValueError:
         await message.reply(
-            "❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid number!"
+            "❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa"
+            else "❌ Please enter a valid number!"
         )
     except Exception as e:
         logger.error(f"خطا در ذخیره تنظیم تست کاربر: {e}")
@@ -3000,6 +3053,9 @@ async def admin_test_user_settings(callback: CallbackQuery):
     current_count = user_test_data.get('count', 0)
     user_settings = get_user_test_settings(target_id)
     
+    # ✅ نمایش از volume_mb
+    current_volume_gb = _fmt_test_volume_gb(user_settings)
+    
     if lang == "fa":
         text = f"""
 🧪 <b>تنظیمات تست کاربر</b>
@@ -3010,7 +3066,7 @@ async def admin_test_user_settings(callback: CallbackQuery):
 ━━━━━━━━━━━━━━━━━━━
 
 <b>تنظیمات اختصاصی فعلی:</b>
-• حجم: {user_settings.get('volume', 5)} GB
+• حجم: {current_volume_gb} GB
 • مدت: {user_settings.get('days', 3)} روز
 • حداکثر تست: {user_settings.get('max_tests', 1)}
 ━━━━━━━━━━━━━━━━━━━
@@ -3054,7 +3110,7 @@ async def admin_test_user_settings(callback: CallbackQuery):
 ━━━━━━━━━━━━━━━━━━━
 
 <b>Current Custom Settings:</b>
-• Volume: {user_settings.get('volume', 5)} GB
+• Volume: {current_volume_gb} GB
 • Duration: {user_settings.get('days', 3)} days
 • Max tests: {user_settings.get('max_tests', 1)}
 ━━━━━━━━━━━━━━━━━━━
@@ -3088,6 +3144,7 @@ async def admin_test_user_settings(callback: CallbackQuery):
                 callback_data="admin_test_users"
             )]
         ]
+    
     try:
         await callback.message.delete()
     except:
@@ -33060,7 +33117,7 @@ async def auto_ai_response(message: Message):
 
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
-    version = "v1.7.45"
+    version = "v1.7.46"
     if callback.from_user.id != ADMIN_ID_INT:
         logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
