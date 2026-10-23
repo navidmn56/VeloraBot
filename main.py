@@ -9360,6 +9360,7 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
 from aiohttp import ClientTimeout, CookieJar
 CONNECTOR = None
 HTTP_SESSION: Optional[aiohttp.ClientSession] = None
+shared_connector: Optional[aiohttp.TCPConnector] = None
 SENAI_COOKIE = None
 COOKIE_TIME = 0
 COOKIE_TTL = 3600  # یک ساعت
@@ -37819,22 +37820,6 @@ async def main():
         migrate_old_data()
         logger.info("مهاجرت داده‌های قدیمی کامل شد")
         
-        try:
-            import signal
-            
-            async def shutdown_signal(sig):
-                logger.info(f"🛑 دریافت سیگنال {sig.name}")
-                await shutdown(dp, bot)
-                raise KeyboardInterrupt
-            
-            for sig in [signal.SIGTERM, signal.SIGINT]:
-                asyncio.get_event_loop().add_signal_handler(
-                    sig, lambda: asyncio.create_task(shutdown_signal(sig))
-                )
-            logger.info("Handlerهای سیگنال سیستمی (SIGTERM, SIGINT) اضافه شدند")
-        except Exception as e:
-            logger.warning(f"⚠️ نمی‌توان handler سیگنال را اضافه کرد: {e}")
-        
         shared_connector = aiohttp.TCPConnector(
             ssl=False,
             limit=20,
@@ -37845,10 +37830,11 @@ async def main():
         
         logger.info("🚀 شروع polling...")
         logger.info("=" * 60)
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, close_bot_session=False)
         
     except asyncio.CancelledError:
         logger.info("اجرای اصلی ربات لغو شد")
+        raise
     except Exception as e:
         error_msg = f"خطای بحرانی در راه‌اندازی: {e}"
         logger.critical(error_msg, exc_info=True)
@@ -37870,10 +37856,6 @@ async def main():
                 logger.info("خطای بحرانی در سیستم لاگ خارجی ثبت شد")
             except Exception as log_err:
                 logger.error(f"خطا در ثبت خطا در سیستم لاگ خارجی: {log_err}")
-        
-        if 'shared_connector' in globals() and shared_connector:
-            await shared_connector.close()
-            logger.info("Shared connector بسته شد")
         
         raise
 
@@ -37953,56 +37935,11 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         if cleaned > 0:
             logger.info(f"🧹 {cleaned} وضعیت منقضی پاک شد")
         
-        logger.info("🔌 بستن جلسات HTTP...")
-        
-        try:
-            await close_http_session()
-            logger.info("✅ HTTP session بسته شد")
-        except Exception as e:
-            logger.warning(f"⚠️ خطا در بستن HTTP session: {e}")
-        
-        try:
-            if 'shared_connector' in globals() and shared_connector:
-                await shared_connector.close()
-                logger.info("✅ Shared connector بسته شد")
-        except Exception as e:
-            logger.warning(f"⚠️ خطا در بستن shared connector: {e}")
-        
-        try:
-            if 'CONNECTOR' in globals() and CONNECTOR:
-                await CONNECTOR.close()
-                logger.info("✅ CONNECTOR بسته شد")
-        except Exception as e:
-            logger.warning(f"⚠️ خطا در بستن CONNECTOR: {e}")
-        
-        try:
-            if 'HTTP_SESSION' in globals() and HTTP_SESSION:
-                await HTTP_SESSION.close()
-                logger.info("✅ HTTP_SESSION بسته شد")
-        except Exception as e:
-            logger.warning(f"⚠️ خطا در بستن HTTP_SESSION: {e}")
-        
-        logger.info("🔌 بستن جلسات aiogram...")
-        
-        try:
-            await dispatcher.fsm.storage.close()
-            logger.info("✅ FSM storage بسته شد")
-        except Exception as e:
-            logger.warning(f"⚠️ خطا در بستن FSM storage: {e}")
-        
-        try:
-            await bot.session.close()
-            logger.info("✅ Bot session بسته شد")
-        except Exception as e:
-            logger.warning(f"⚠️ خطا در بستن bot session: {e}")
-        
         if log_system:
             try:
                 await log_system.log_bot_stop(ADMIN_ID_INT)
                 logger.info("✅ لاگ توقف در سیستم خارجی ثبت شد")
                 await asyncio.sleep(0.5)
-                await log_system.close()
-                logger.info("✅ سیستم لاگ خارجی بسته شد")
             except Exception as e:
                 logger.warning(f"⚠️ خطا در بستن سیستم لاگ: {e}")
         
@@ -38015,7 +37952,7 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
 ⏱ زمان اجرای فرآیند توقف: {uptime.total_seconds():.1f} ثانیه
 📊 وضعیت نهایی: {len(users)} کاربر، {len(get_valid_orders())} سفارش
 💾 بکاپ نهایی ذخیره شد
-🔌 همه اتصالات بسته شد
+🔌 اتصالات در حال بسته‌شدن هستند
 """
             await bot.send_message(ADMIN_ID_INT, shutdown_msg, parse_mode=ParseMode.HTML)
             logger.info("✅ پیام توقف به ادمین ارسال شد")
@@ -38027,19 +37964,48 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+                current_task = asyncio.current_task(loop)
+                pending = [
+                    task for task in asyncio.all_tasks(loop)
+                    if not task.done() and task is not current_task
+                ]
                 if pending:
                     logger.info(f"⏳ منتظر {len(pending)} تسک باقیمانده...")
                     await asyncio.wait(pending, timeout=2.0)
         except Exception as e:
             logger.warning(f"⚠️ خطا در بستن event loop: {e}")
         
-        logger.info("✅ ربات با موفقیت متوقف شد")
-        logger.info(f"⏱ کل زمان فرآیند توقف: {(datetime.now() - shutdown_start).total_seconds():.1f} ثانیه")
-        
     except Exception as e:
         logger.error(f"❌ خطا در فرآیند توقف ربات: {e}", exc_info=True)
         raise
+    finally:
+        logger.info("🔌 بستن اتصالات باقیمانده...")
+        cleanup_errors = []
+
+        async def close_resource(name, close):
+            try:
+                await close()
+                logger.info(f"✅ {name} بسته شد")
+            except Exception as e:
+                cleanup_errors.append(name)
+                logger.warning(f"⚠️ خطا در بستن {name}: {e}")
+
+        await close_resource("HTTP session", close_http_session)
+
+        if shared_connector:
+            await close_resource("shared connector", shared_connector.close)
+        if CONNECTOR:
+            await close_resource("CONNECTOR", CONNECTOR.close)
+        if not bot.session.closed:
+            await close_resource("Bot session", bot.session.close)
+        await close_resource("FSM storage", dispatcher.fsm.storage.close)
+        if log_system:
+            await close_resource("سیستم لاگ خارجی", log_system.close)
+        if cleanup_errors:
+            logger.error(f"توقف ربات با خطا در بستن این منابع پایان یافت: {', '.join(cleanup_errors)}")
+        else:
+            logger.info("✅ ربات با موفقیت متوقف شد")
+        logger.info(f"⏱ کل زمان فرآیند توقف: {(datetime.now() - shutdown_start).total_seconds():.1f} ثانیه")
 
 def get_memory_usage() -> dict:
     """دریافت میزان استفاده از حافظه"""
@@ -38228,17 +38194,13 @@ if __name__ == "__main__":
             await main()
         except KeyboardInterrupt:
             logger.info("🛑 دریافت سیگنال توقف از کاربر (KeyboardInterrupt)")
-            await shutdown(dp, bot)
         except asyncio.CancelledError:
             logger.info("اجرای ربات لغو شد (CancelledError)")
-            await shutdown(dp, bot)
         except Exception as e:
             logger.critical(f"❌ خطای بحرانی در اجرای اصلی: {e}", exc_info=True)
-            try:
-                await shutdown(dp, bot)
-            except Exception as shutdown_err:
-                logger.error(f"خطا در توقف پس از خطای بحرانی: {shutdown_err}")
             raise
+        finally:
+            await shutdown(dp, bot)
     
     try:
         asyncio.run(run())
