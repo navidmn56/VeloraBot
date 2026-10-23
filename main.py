@@ -9849,9 +9849,20 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
         return None
 
 
-async def xui_get_inbounds(force_refresh: bool = False) -> list:
+async def xui_get_inbounds(
+    force_refresh: bool = False,
+    include_disabled: bool = False,
+) -> list:
     """دریافت لیست اینباندها با کش و Lock"""
     global INBOUND_CACHE
+
+    if include_disabled:
+        async with INBOUND_LOCK:
+            result = await _api_request("GET", "/panel/api/inbounds/list")
+        if result and result.get("success") and isinstance(result.get("obj"), list):
+            return result["obj"]
+        logger.error("دریافت همه اینباندها از پنل ناموفق بود")
+        return []
     
     # ✅ اگه force_refresh، کش رو باطل کن
     if force_refresh:
@@ -37058,24 +37069,149 @@ async def admin_stats(callback: CallbackQuery):
     available_configs = get_available_configs_count()
     total_used_gb = 0
     total_capacity_gb = 0
-    active_configs_count = 0
-    
+    unlimited_configs_count = 0
+    panel_stats_available = False
+
+    def is_sold_config(order: dict) -> bool:
+        order_type = str(order.get('type', '')).lower()
+        return not (
+            order.get('is_test')
+            or order.get('is_extend')
+            or order_type in {'test', 'extend', 'balance_charge'}
+        )
+
+    sold_approved_orders = [
+        order for order in approved
+        if is_sold_config(order)
+    ]
+    approved_emails = set()
+    for order in sold_approved_orders:
+        email = order.get('email')
+        if not email:
+            email = extract_email_from_sub_link(
+                order.get('sub_link') or order.get('config_link') or ''
+            )
+        if email:
+            approved_emails.add(str(email))
+
+    category_names = {}
+    category_counts = {}
+    for category in READY_PACKAGES.get('categories', []):
+        category_id = category.get('id')
+        if category_id is None:
+            continue
+        category_names[str(category_id)] = (
+            category.get('name') if lang == 'fa'
+            else category.get('name_en') or category.get('name')
+        ) or (f"دسته {category_id}" if lang == 'fa' else f"Category {category_id}")
+        category_counts[str(category_id)] = 0
+
+    custom_order_count = 0
+    for order in sold_approved_orders:
+        category_id = order.get('category_id')
+        category_key = str(category_id) if category_id is not None else None
+        category_name = (
+            order.get('category_name') if lang == 'fa'
+            else order.get('category_name_en') or order.get('category_name')
+        )
+        if category_key:
+            if category_key not in category_names:
+                category_names[category_key] = category_name or (
+                    f"دسته {category_id}" if lang == 'fa' else f"Category {category_id}"
+                )
+                category_counts[category_key] = 0
+            category_counts[category_key] += 1
+        elif category_name:
+            category_key = f"name:{category_name}"
+            category_names[category_key] = category_name
+            category_counts[category_key] = category_counts.get(category_key, 0) + 1
+        else:
+            custom_order_count += 1
+
+    panel_clients = {}
+    traffic_by_email = {}
     if SENAI_PANEL_ENABLED:
-        for o in approved:
-            if o.get('config_link'):
-                email = extract_email_from_sub_link(o.get('config_link', ''))
-                if email:
-                    client = await xui_get_client_info(email)
-                    if client:
-                        traffic = await xui_get_client_traffic(email)
-                        total_capacity_gb += client.get('totalGB', 0) / (1024**3)
-                        up = (traffic.get('up', 0) if traffic else 0) / (1024**3)
-                        down = (traffic.get('down', 0) if traffic else 0) / (1024**3)
-                        total_used_gb += up + down
-                        active_configs_count += 1
+        try:
+            inbounds = await xui_get_inbounds(include_disabled=True)
+            for inbound in inbounds:
+                settings = inbound.get('settings', {})
+                if isinstance(settings, str):
+                    settings = json.loads(settings)
+                if not isinstance(settings, dict):
+                    continue
+                for client in settings.get('clients', []):
+                    email = client.get('email')
+                    if not email or str(email) not in approved_emails:
+                        continue
+                    panel_clients.setdefault(str(email), client)
+
+                client_stats = inbound.get('clientStats', [])
+                if isinstance(client_stats, str):
+                    client_stats = json.loads(client_stats)
+                if isinstance(client_stats, list):
+                    for client_stat in client_stats:
+                        email = client_stat.get('email')
+                        if email and str(email) in approved_emails:
+                            try:
+                                up = int(client_stat.get('up', 0) or 0)
+                                down = int(client_stat.get('down', 0) or 0)
+                            except (TypeError, ValueError):
+                                logger.warning("آمار ترافیک نامعتبر کلاینت در پنل نادیده گرفته شد")
+                                continue
+                            traffic_by_email[str(email)] = (
+                                traffic_by_email.get(str(email), 0) + up + down
+                            )
+
+            actual_clients = {
+                email: client
+                for email, client in panel_clients.items()
+            }
+            panel_stats_available = bool(inbounds)
+            active_configs_count = len(actual_clients)
+            for client in actual_clients.values():
+                if client.get('totalGB') is None:
+                    logger.warning("محدودیت حجم کلاینت در پنل موجود نیست")
+                    continue
+                try:
+                    total_bytes = int(client.get('totalGB') or 0)
+                except (TypeError, ValueError):
+                    logger.warning("حجم نامعتبر کلاینت در آمار پنل نادیده گرفته شد")
+                    continue
+                if total_bytes == 0:
+                    unlimited_configs_count += 1
+                else:
+                    total_capacity_gb += total_bytes / (1024 ** 3)
+
+            total_used_gb = sum(
+                traffic_by_email.get(email, 0)
+                for email, client in actual_clients.items()
+                if client.get('totalGB')
+            ) / (1024 ** 3)
+        except Exception as e:
+            logger.error(f"خطا در دریافت آمار پنل: {e}", exc_info=True)
+            panel_stats_available = False
+
+    category_lines_fa = [
+        f"• {category_names[key]}: {count}"
+        for key, count in category_counts.items()
+    ]
+    category_lines_en = [
+        f"• {category_names[key]}: {count}"
+        for key, count in category_counts.items()
+    ]
+    category_text_fa = "\n".join(category_lines_fa) or "• دسته‌ای تعریف نشده است"
+    category_text_en = "\n".join(category_lines_en) or "• No categories defined"
     now = datetime.now().strftime("%H:%M:%S")
     
     if lang == "fa":
+        panel_text = (
+            f"""🔹 کانفیگ‌های تأییدشده در پنل: {active_configs_count}
+🔹 کانفیگ نامحدود: {unlimited_configs_count}
+🔹 حجم کل اختصاص‌داده‌شده: {total_capacity_gb:.2f} GB
+🔹 مصرف ثبت‌شده: {total_used_gb:.2f} GB
+🔹 باقی‌ماندهٔ حجم محدود: {max(total_capacity_gb - total_used_gb, 0):.2f} GB"""
+            if panel_stats_available else "⚠️ دریافت اطلاعات از پنل ناموفق بود."
+        )
         text = f"""
 📊 <b>آمار کلی سیستم</b>
 <code>🕐 {now}</code>
@@ -37085,15 +37221,24 @@ async def admin_stats(callback: CallbackQuery):
 💰 فروش کل: {total_revenue:,} تومان
 💵 موجودی کاربران: {total_balance:,} تومان
 
+🗂 <b>کانفیگ‌های فروخته‌شده و تأییدشده:</b>
+{category_text_fa}
+• سفارش‌های سفارشی (بدون دسته): {custom_order_count}
+
 📡 <b>پنل:</b>
-🔹 کانفیگ‌های فعال: {active_configs_count}
-🔹 ظرفیت کل: {total_capacity_gb:.0f} GB
-🔹 مصرف کل: {total_used_gb:.1f} GB
-🔹 باقی‌مانده: {total_capacity_gb - total_used_gb:.1f} GB
+{panel_text}
 
 📦 کانفیگ موجود در مخزن: {available_configs}
 """
     else:
+        panel_text = (
+            f"""🔹 Approved configs in panel: {active_configs_count}
+🔹 Unlimited configs: {unlimited_configs_count}
+🔹 Total allocated volume: {total_capacity_gb:.2f} GB
+🔹 Recorded usage: {total_used_gb:.2f} GB
+🔹 Remaining limited volume: {max(total_capacity_gb - total_used_gb, 0):.2f} GB"""
+            if panel_stats_available else "⚠️ Failed to retrieve panel information."
+        )
         text = f"""
 📊 <b>System Statistics</b>
 <code>🕐 {now}</code>
@@ -37103,11 +37248,12 @@ async def admin_stats(callback: CallbackQuery):
 💰 Revenue: {total_revenue:,} Toman
 💵 Balances: {total_balance:,} Toman
 
+🗂 <b>Sold and approved configs by category:</b>
+{category_text_en}
+• Custom orders (no category): {custom_order_count}
+
 📡 <b>Panel:</b>
-🔹 Active: {active_configs_count}
-🔹 Capacity: {total_capacity_gb:.0f} GB
-🔹 Used: {total_used_gb:.1f} GB
-🔹 Free: {total_capacity_gb - total_used_gb:.1f} GB
+{panel_text}
 
 📦 Pool: {available_configs}
 """
