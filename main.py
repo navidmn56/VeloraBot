@@ -10,18 +10,15 @@ from balance_system import (
 )
 import time
 import html
-import hashlib
-import shutil
 import secrets
 import base64
 import psutil
 import re
 import traceback
 from io import BytesIO
-from urllib import response
 import aiohttp
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 import unicodedata
 import qrcode
 from yarl import URL
@@ -33,10 +30,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     Message,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
     CopyTextButton,
     BufferedInputFile,
 )
@@ -44,8 +38,7 @@ from config import (
     BOT_TOKEN, ADMIN_ID, LOG_BOT_TOKEN, LOG_CHANNEL_ID, SUPPORT_USERNAME,
     BANK_CARD_NUMBER, BANK_CARD_HOLDER, BANK_NAME,
     SENAI_PANEL_URL, SENAI_PANEL_USERNAME, SENAI_PANEL_PASSWORD, SENAI_SUB_URL,
-    GEMINI_API_KEY, GEMINI_SYSTEM_PROMPT, refresh_gemini_prompt,
-    GEMINI_ENABLED, GEMINI_MODEL, GEMINI_TEMPERATURE, GEMINI_MAX_TOKENS, GEMINI_DAILY_LIMIT,
+    GEMINI_API_KEY, GEMINI_SYSTEM_PROMPT, GEMINI_ENABLED, GEMINI_MODEL, GEMINI_TEMPERATURE, GEMINI_MAX_TOKENS, GEMINI_DAILY_LIMIT,
     AUTO_AI_RESPONSE,
 )
 gemini_client = None
@@ -10134,8 +10127,7 @@ async def xui_create_client_with_inbound(
                         "inboundIds": valid_inbound_ids
                     }
                 ]
-                logger.info(f"📤 ارسال به پنل: {json.dumps(bulk_data, indent=2)[:500]}...")
-                logger.info(f"📡 اینباندهای ارسالی: {valid_inbound_ids}")
+                logger.info("📤 درخواست ساخت کلاینت به پنل ارسال شد (%s اینباند)", len(valid_inbound_ids))
                 logger.info(f"👤 محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
                 logger.info(f"📦 حجم: {'نامحدود' if volume_gb == 0 else f'{volume_gb} GB'}")
                 connector = aiohttp.TCPConnector(ssl=False)
@@ -11100,9 +11092,7 @@ async def xui_get_client_info(email: str) -> Optional[dict]:
                         obj = data.get("obj", {})
                         client = obj.get("client", obj)
                         
-                        # دیباگ نوع داده
-                        logger.debug(f"🔍 نوع client برای {email}: {type(client)}")
-                        logger.debug(f"🔍 محتوای client: {client}")
+                        logger.debug("کلاینت از پنل دریافت شد (%s)", type(client).__name__)
                         
                         # اگر client دیکشنری نیست، برگردان None
                         if not isinstance(client, dict):
@@ -12128,8 +12118,7 @@ async def xui_detach_inbounds(email: str, inbound_ids: list) -> bool:
             detach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/detach"
             detach_data = {"inboundIds": inbound_ids}
 
-            logger.info(f"📤 ارسال درخواست detach به: {detach_url}")
-            logger.info(f"📝 داده: {json.dumps(detach_data)}")
+            logger.info("📤 درخواست detach برای %s اینباند ارسال شد", len(inbound_ids))
 
             async with session.post(
                 detach_url,
@@ -12192,8 +12181,7 @@ async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
             attach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/attach"
             attach_data = {"inboundIds": inbound_ids}
 
-            logger.info(f"📤 ارسال درخواست attach به: {attach_url}")
-            logger.info(f"📝 داده: {json.dumps(attach_data)}")
+            logger.info("📤 درخواست attach برای %s اینباند ارسال شد", len(inbound_ids))
 
             async with session.post(
                 attach_url,
@@ -20069,8 +20057,8 @@ async def admin_broadcast_start(callback: CallbackQuery):
             "🖼️ <b>عکس:</b> ارسال عکس با کپشن\n"
             "📄 <b>فایل:</b> ارسال فایل (PDF، ویدیو، و غیره)\n"
             "🎵 <b>صوت:</b> ارسال فایل صوتی\n\n"
-            "💡 نکات:\n"
-            "• از HTML میتوانید استفاده کنید\n"
+            "💡 قالب‌بندی را مستقیم در تلگرام انجام دهید؛ بولد، ایتالیک، خط‌خورده، زیرخط، لینک، نقل‌قول، spoiler و ایموجی Premium حفظ می‌شوند.\n"
+            "• تگ‌های HTML تلگرام مثل <code>&lt;b&gt;</code> و <code>&lt;tg-spoiler&gt;</code> هم پشتیبانی می‌شوند.\n"
             "• برای لغو /cancel را بفرستید\n"
             "• پیام به همه کاربران ارسال میشود"
         )
@@ -20082,8 +20070,8 @@ async def admin_broadcast_start(callback: CallbackQuery):
             "🖼️ <b>Photo:</b> Send photo with caption\n"
             "📄 <b>File:</b> Send file (PDF, video, etc.)\n"
             "🎵 <b>Audio:</b> Send audio file\n\n"
-            "💡 Tips:\n"
-            "• You can use HTML\n"
+            "💡 Format directly in Telegram: bold, italic, underline, strikethrough, links, quotes, spoilers and Premium Emoji are preserved.\n"
+            "• Telegram HTML tags such as <code>&lt;b&gt;</code> and <code>&lt;tg-spoiler&gt;</code> are also supported.\n"
             "• Send /cancel to abort\n"
             "• Message will be sent to all users"
         )
@@ -20140,7 +20128,7 @@ async def broadcast_type_selected(callback: CallbackQuery):
         await callback.message.answer(
             f"📝 <b>ارسال پیام همگانی - {type_name}</b>\n\n"
             f"لطفاً {'متن' if broadcast_type == 'text' else 'فایل'} خود را ارسال کنید.\n"
-            f"{'از HTML می‌توانید استفاده کنید.' if broadcast_type == 'text' else ''}\n\n"
+            f"{'قالب‌بندی تلگرام و تگ‌های HTML پشتیبانی می‌شوند.' if broadcast_type == 'text' else ''}\n\n"
             f"برای لغو /cancel را بفرستید",
             parse_mode=ParseMode.HTML
         )
@@ -20148,7 +20136,7 @@ async def broadcast_type_selected(callback: CallbackQuery):
         await callback.message.answer(
             f"📝 <b>Broadcast - {type_name}</b>\n\n"
             f"Please send your {'text' if broadcast_type == 'text' else 'file'}.\n"
-            f"{'You can use HTML.' if broadcast_type == 'text' else ''}\n\n"
+            f"{'Telegram formatting and HTML tags are supported.' if broadcast_type == 'text' else ''}\n\n"
             f"Send /cancel to abort",
             parse_mode=ParseMode.HTML
         )
@@ -20157,6 +20145,365 @@ async def broadcast_type_selected(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
+
+
+_BROADCAST_ACTIONS = {
+    "buy": ("🛒 خرید سرویس", "🛒 Buy service", "buy_service"),
+    "renew": ("🔄 تمدید (انتخاب کانفیگ)", "🔄 Renew (choose config)", "my_configs"),
+    "configs": ("🌐 کانفیگ‌های من", "🌐 My Configs", "my_configs"),
+    "coupon": ("🏷️ اعمال کوپن", "🏷️ Apply coupon", "apply_coupon"),
+    "coupon_status": ("🏷️ وضعیت کوپن", "🏷️ Coupon status", "coupon_status"),
+    "account": ("👤 حساب کاربری", "👤 My account", "my_account"),
+    "balance": ("💰 افزایش موجودی", "💰 Add balance", "increase_balance"),
+    "invite": ("👥 دعوت از دوستان", "👥 Invite friends", "invite_friends"),
+    "test": ("🎁 کانفیگ تست", "🎁 Test config", "get_test_service"),
+    "ai": ("🤖 چت با هوش مصنوعی", "🤖 AI chat", "ai_chat"),
+    "language": ("🌎 تغییر زبان", "🌎 Change language", "change_language"),
+    "home": ("🏠 منوی اصلی", "🏠 Main menu", "broadcast_back_to_main"),
+}
+
+
+def _is_safe_broadcast_url(raw_url: str) -> bool:
+    if not isinstance(raw_url, str) or len(raw_url) > 2048:
+        return False
+    if any(ord(char) < 32 for char in raw_url):
+        return False
+    try:
+        parsed_url = URL(raw_url)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        (
+            parsed_url.scheme == "https"
+            and parsed_url.host
+            and not parsed_url.user
+            and not parsed_url.password
+        )
+        or (parsed_url.scheme == "tg" and parsed_url.host)
+    )
+
+
+def _broadcast_recipient_ids() -> list:
+    recipient_ids = []
+    for stored_id, user_data in users.items():
+        try:
+            user_id = int(stored_id)
+        except (TypeError, ValueError):
+            continue
+        if user_id <= 0 or user_id in BLACKLIST or str(user_id) in BLACKLIST:
+            continue
+        if isinstance(user_data, dict):
+            if user_data.get("is_active") is False:
+                continue
+            if user_data.get("registration_status") in {"cancelled", "rejected"}:
+                continue
+        recipient_ids.append(user_id)
+    return list(dict.fromkeys(recipient_ids))
+
+
+def _broadcast_keyboard(buttons: list, lang: str) -> Optional[InlineKeyboardMarkup]:
+    """Build only registered navigation buttons and validated external links."""
+    rows = []
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+        action = button.get("action")
+        style = button.get("style")
+        if style not in {None, "primary", "success", "danger"}:
+            style = None
+        if action in _BROADCAST_ACTIONS:
+            fa_text, en_text, callback_data = _BROADCAST_ACTIONS[action]
+            rows.append([InlineKeyboardButton(
+                text=fa_text if lang == "fa" else en_text,
+                callback_data=callback_data,
+                style=style,
+            )])
+        elif action == "url":
+            label = button.get("label")
+            url = button.get("url")
+            if (
+                isinstance(label, str)
+                and 1 <= len(label) <= 64
+                and _is_safe_broadcast_url(url)
+            ):
+                rows.append([InlineKeyboardButton(
+                    text=label,
+                    url=url,
+                    style=style,
+                )])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+async def _send_broadcast_message(
+    chat_id: int,
+    broadcast_data: dict,
+    lang: str,
+):
+    keyboard = _broadcast_keyboard(broadcast_data.get("buttons", []), lang)
+    if broadcast_data.get("parse_mode") == ParseMode.HTML:
+        caption = broadcast_data.get("caption", "")
+        media = broadcast_data.get("media")
+        broadcast_type = broadcast_data.get("type")
+        if broadcast_type == "text":
+            return await bot.send_message(
+                chat_id, caption, parse_mode=ParseMode.HTML, reply_markup=keyboard
+            )
+        if not media:
+            raise ValueError("شناسهٔ رسانهٔ برودکست موجود نیست")
+        if broadcast_type == "photo":
+            return await bot.send_photo(
+                chat_id, media, caption=caption or None,
+                parse_mode=ParseMode.HTML, reply_markup=keyboard,
+            )
+        if broadcast_type == "file":
+            send_file = bot.send_video if broadcast_data.get("media_kind") == "video" else bot.send_document
+            return await send_file(
+                chat_id, media, caption=caption or None,
+                parse_mode=ParseMode.HTML, reply_markup=keyboard,
+            )
+        if broadcast_type == "audio":
+            send_audio = bot.send_voice if broadcast_data.get("subtype") == "voice" else bot.send_audio
+            return await send_audio(
+                chat_id, media, caption=caption or None,
+                parse_mode=ParseMode.HTML, reply_markup=keyboard,
+            )
+        raise ValueError(f"نوع برودکست پشتیبانی نمی‌شود: {broadcast_type}")
+
+    return await bot.copy_message(
+        chat_id,
+        broadcast_data["source_chat_id"],
+        broadcast_data["source_message_id"],
+        reply_markup=keyboard,
+    )
+
+
+def _broadcast_button_setup_markup(
+    buttons: list, lang: str, button_styles: Optional[dict] = None
+) -> InlineKeyboardMarkup:
+    button_styles = button_styles or {}
+    selected = {
+        button.get("action"): button
+        for button in buttons
+        if isinstance(button, dict) and isinstance(button.get("action"), str)
+    }
+    custom_url = selected.get("url")
+    style_labels = {
+        None: "بدون رنگ" if lang == "fa" else "No color",
+        "primary": "آبی" if lang == "fa" else "Blue",
+        "success": "سبز" if lang == "fa" else "Green",
+        "danger": "قرمز" if lang == "fa" else "Red",
+    }
+    rows = []
+    for key, (fa_text, en_text, _) in _BROADCAST_ACTIONS.items():
+        item = selected.get(key)
+        style = item.get("style") if item else button_styles.get(key)
+        if style not in {None, "primary", "success", "danger"}:
+            style = None
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{'✅ ' if item else ''}{fa_text if lang == 'fa' else en_text}",
+                callback_data=f"broadcast_button_toggle:{key}",
+                style=style,
+            ),
+            InlineKeyboardButton(
+                text=style_labels.get(style, style_labels[None]),
+                callback_data=f"broadcast_button_style:{key}",
+            ),
+        ])
+    if custom_url:
+        custom_style = custom_url.get("style")
+        if custom_style not in style_labels:
+            custom_style = button_styles.get("url")
+        if custom_style not in style_labels:
+            custom_style = None
+        rows.append([
+            InlineKeyboardButton(
+                text=f"✅ {custom_url.get('label', '🔗 لینک')}",
+                callback_data="broadcast_button_toggle:url",
+                style=custom_style,
+            ),
+            InlineKeyboardButton(
+                text=style_labels[custom_style],
+                callback_data="broadcast_button_style:url",
+            ),
+        ])
+    rows.extend([
+        [InlineKeyboardButton(
+            text="🔗 افزودن دکمهٔ لینک" if lang == "fa" else "🔗 Add URL button",
+            callback_data="broadcast_button_add_url",
+        )],
+        [InlineKeyboardButton(
+            text="✅ ادامه و پیش‌نمایش" if lang == "fa" else "✅ Continue to preview",
+            callback_data="broadcast_buttons_done",
+            style="success",
+        )],
+        [InlineKeyboardButton(
+            text="❌ لغو برودکست" if lang == "fa" else "❌ Cancel broadcast",
+            callback_data="cancel_broadcast",
+            style="danger",
+        )],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_broadcast_button_setup(message: Message, admin_id: int):
+    state = user_states[admin_id]
+    lang = get_user(admin_id).get("lang", "fa")
+    buttons = state["broadcast_data"].setdefault("buttons", [])
+    await message.answer(
+        (
+            "⚙️ <b>تنظیم دکمه‌های زیر پیام</b>\n"
+            "برای افزودن یا حذف هر دکمه روی آن بزنید؛ انتخاب‌ها برای همین برودکست هستند."
+            if lang == "fa"
+            else "⚙️ <b>Configure buttons under the message</b>\n"
+            "Toggle the buttons below. These choices apply to this broadcast only."
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_broadcast_button_setup_markup(
+            buttons, lang, state["broadcast_data"].get("button_styles", {})
+        ),
+    )
+
+
+@dp.callback_query(
+    F.data.startswith("broadcast_button_")
+    | F.data.in_({"broadcast_buttons_done", "cancel_broadcast"})
+)
+async def configure_broadcast_buttons(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get("lang", "fa")
+    state = user_states.get(admin_id, {})
+    broadcast_data = state.get("broadcast_data")
+    action = callback.data
+    if action == "cancel_broadcast":
+        user_states.pop(admin_id, None)
+        await callback.message.edit_text("❌ برودکست لغو شد" if lang == "fa" else "❌ Broadcast cancelled")
+        await callback.answer()
+        return
+
+    if action == "broadcast_button_add_url":
+        buttons = broadcast_data.get("buttons", []) if isinstance(broadcast_data, dict) else []
+        has_url_button = any(
+            isinstance(button, dict) and button.get("action") == "url"
+            for button in buttons
+        )
+        if len(buttons) >= 10 and not has_url_button:
+            return await callback.answer(
+                "حداکثر ۱۰ دکمه مجاز است" if lang == "fa" else "Maximum 10 buttons allowed",
+                show_alert=True,
+            )
+        if not state.get("awaiting_broadcast_button_setup") or not isinstance(broadcast_data, dict):
+            return await callback.answer("درخواست منقضی شده است" if lang == "fa" else "This request has expired", show_alert=True)
+        state["awaiting_broadcast_button_setup"] = False
+        state["awaiting_broadcast_url"] = True
+        await callback.message.answer(
+            "عنوان و آدرس را در یک خط بفرست:\n<code>متن دکمه | https://example.com</code>\n"
+            "فقط آدرس HTTPS یا پیوند رسمی tg:// پذیرفته می‌شود. برای لغو /cancel را بفرست."
+            if lang == "fa"
+            else "Send the label and URL on one line:\n<code>Button text | https://example.com</code>\n"
+            "Only HTTPS or official tg:// links are accepted. Send /cancel to cancel.",
+            parse_mode=ParseMode.HTML,
+        )
+        await callback.answer()
+        return
+
+    if not state.get("awaiting_broadcast_button_setup") or not isinstance(broadcast_data, dict):
+        return await callback.answer(
+            "درخواست منقضی شده است" if lang == "fa" else "This request has expired",
+            show_alert=True,
+        )
+
+    selected = broadcast_data.setdefault("buttons", [])
+    if action.startswith("broadcast_button_toggle:"):
+        button_name = action.split(":", 1)[1]
+        if button_name not in set(_BROADCAST_ACTIONS) | {"url"}:
+            return await callback.answer("دکمه نامعتبر است" if lang == "fa" else "Invalid button", show_alert=True)
+        item = next(
+            (button for button in selected
+             if isinstance(button, dict) and button.get("action") == button_name),
+            None,
+        )
+        if item:
+            selected.remove(item)
+        elif button_name == "url":
+            return await callback.answer("ابتدا آدرس دکمه را ثبت کنید" if lang == "fa" else "Add the URL first", show_alert=True)
+        elif len(selected) >= 10:
+            return await callback.answer("حداکثر ۱۰ دکمه مجاز است" if lang == "fa" else "Maximum 10 buttons allowed", show_alert=True)
+        else:
+            selected.append({
+                "action": button_name,
+                "style": broadcast_data.setdefault("button_styles", {}).get(button_name),
+            })
+        await callback.message.edit_reply_markup(
+            reply_markup=_broadcast_button_setup_markup(
+                selected, lang, broadcast_data.get("button_styles", {})
+            )
+        )
+        await callback.answer()
+        return
+
+    if action.startswith("broadcast_button_style:"):
+        button_name = action.split(":", 1)[1]
+        if button_name not in set(_BROADCAST_ACTIONS) | {"url"}:
+            return await callback.answer("دکمه نامعتبر است" if lang == "fa" else "Invalid button", show_alert=True)
+        styles = [None, "primary", "success", "danger"]
+        style_map = broadcast_data.setdefault("button_styles", {})
+        item = next(
+            (button for button in selected
+             if isinstance(button, dict) and button.get("action") == button_name),
+            None,
+        )
+        current = item.get("style") if item else style_map.get(button_name)
+        next_style = styles[(styles.index(current) + 1) % len(styles)] if current in styles else None
+        style_map[button_name] = next_style
+        if item:
+            item["style"] = next_style
+        await callback.message.edit_reply_markup(
+            reply_markup=_broadcast_button_setup_markup(
+                selected, lang, style_map
+            )
+        )
+        await callback.answer()
+        return
+
+    if action != "broadcast_buttons_done":
+        return await callback.answer(
+            "درخواست دکمه نامعتبر است" if lang == "fa" else "Invalid button request",
+            show_alert=True,
+        )
+
+    state["awaiting_broadcast_button_setup"] = False
+    state["awaiting_broadcast_confirm"] = True
+    state["broadcast_preview_verified"] = False
+    confirmation = state.get("confirm_text", "")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="👁️ پیش‌نمایش" if lang == "fa" else "👁️ Preview",
+            callback_data="preview_broadcast",
+            style="primary",
+        )],
+        [
+            InlineKeyboardButton(
+                text="✅ بله، ارسال کن" if lang == "fa" else "✅ Yes, send",
+                callback_data="confirm_broadcast",
+                style="success",
+            ),
+            InlineKeyboardButton(
+                text="❌ انصراف" if lang == "fa" else "❌ Cancel",
+                callback_data="cancel_broadcast",
+                style="danger",
+            ),
+        ],
+    ])
+    await callback.message.edit_text(
+        confirmation,
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
     
 async def test_panel_connection() -> dict:
     """تست کامل اتصال به پنل با پینگ هوشمند"""
@@ -20233,6 +20580,7 @@ async def admin_broadcast_send(message: Message):
     state = user_states.get(admin_id, {})
     broadcast_type = state.get('broadcast_type', 'text')
     media_content = None
+    media_kind = None
     caption = None
     parse_mode = None
     file_name = None
@@ -20242,17 +20590,18 @@ async def admin_broadcast_send(message: Message):
             await message.reply("❌ لطفاً متن را ارسال کنید" if lang=="fa" else "❌ Please send text")
             return
         caption = message.text
-        parse_mode = detect_safe_parse_mode(caption)
+        parse_mode = None if message.entities else detect_safe_parse_mode(caption)
     
     elif broadcast_type == 'photo':
         if not message.photo:
             await message.reply("❌ لطفاً یک عکس ارسال کنید" if lang=="fa" else "❌ Please send a photo")
             return
         media_content = message.photo[-1].file_id
+        media_kind = "photo"
         caption = message.caption or ""
-        parse_mode = detect_safe_parse_mode(caption)
+        parse_mode = None if message.caption_entities else detect_safe_parse_mode(caption)
         file_name = f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        logger.info(f"📸 عکس دریافت شد - file_id: {media_content[:20]}...")
+        logger.info("📸 رسانهٔ تصویری برودکست دریافت شد")
     
     elif broadcast_type == 'file':
         if not message.document and not message.video:
@@ -20261,14 +20610,16 @@ async def admin_broadcast_send(message: Message):
         
         if message.document:
             media_content = message.document.file_id
+            media_kind = "document"
             file_name = message.document.file_name or f"file_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         elif message.video:
             media_content = message.video.file_id
+            media_kind = "video"
             file_name = message.video.file_name or f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         caption = message.caption or ""
-        parse_mode = detect_safe_parse_mode(caption)
-        logger.info(f"📄 فایل دریافت شد - file_id: {media_content[:20]}...")
+        parse_mode = None if message.caption_entities else detect_safe_parse_mode(caption)
+        logger.info("📄 فایل برودکست دریافت شد")
     
     elif broadcast_type == 'audio':
         if not message.audio and not message.voice:
@@ -20279,32 +20630,22 @@ async def admin_broadcast_send(message: Message):
         audio_subtype = None
         if message.audio:
             media_content = message.audio.file_id
+            media_kind = "audio"
             file_name = message.audio.file_name or f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             audio_subtype = 'audio'
         elif message.voice:
             media_content = message.voice.file_id
+            media_kind = "voice"
             file_name = f"voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg"
             audio_subtype = 'voice'
         
         caption = message.caption or ""
-        parse_mode = detect_safe_parse_mode(caption)
-        logger.info(f"🎵 صوت دریافت شد - subtype: {audio_subtype} - file_id: {media_content[:20]}...")
+        parse_mode = None if message.caption_entities else detect_safe_parse_mode(caption)
+        logger.info(f"🎵 صوت برودکست دریافت شد - subtype: {audio_subtype}")
     
     else:
         await message.reply("❌ نوع پیام نامشخص است" if lang=="fa" else "❌ Unknown message type")
         return
-    MAX_CAPTION_LENGTH = 1000
-    if len(caption) > MAX_CAPTION_LENGTH and broadcast_type != 'text':
-        warning_msg = f"""
-⚠️ <b>هشدار: کپشن شما بسیار طولانی است!</b>
-
-📊 طول کپشن: {len(caption)} کاراکتر
-🔢 محدودیت تلگرام: {MAX_CAPTION_LENGTH} کاراکتر
-
-💡 کپشن شما به طور خودکار کوتاه خواهد شد.
-📄 کپشن کامل به عنوان فایل جداگانه ارسال خواهد شد.
-"""
-        await message.reply(warning_msg, parse_mode=ParseMode.HTML)
     preview_text = ""
     if broadcast_type == 'text':
         preview_text = caption[:200] + ("..." if len(caption) > 200 else "")
@@ -20312,18 +20653,17 @@ async def admin_broadcast_send(message: Message):
         preview_text = f"📎 {broadcast_type} + {caption[:100] + '...' if caption else 'بدون کپشن'}"
     
     clean_preview = html.escape(preview_text)
+    recipient_count = len(_broadcast_recipient_ids())
     
     if lang == "fa":
         confirm_text = f"""
 📢 <b>تأیید ارسال پیام همگانی</b>
 
-📊 تعداد کاربران: {len(users)}
+📊 تعداد کاربران: {recipient_count}
 📝 نوع: {broadcast_type}
 {f"📎 نام فایل: {file_name}" if file_name else ""}
 📝 محتوای پیام:
 {clean_preview}
-
-{f"⚠️ طول کپشن: {len(caption)} کاراکتر (حداکثر {MAX_CAPTION_LENGTH})" if broadcast_type != 'text' else ""}
 
 ⚠️ آیا از ارسال این پیام به همه کاربران اطمینان دارید؟
 """
@@ -20331,13 +20671,11 @@ async def admin_broadcast_send(message: Message):
         confirm_text = f"""
 📢 <b>Confirm Broadcast</b>
 
-📊 Users count: {len(users)}
+📊 Users count: {recipient_count}
 📝 Type: {broadcast_type}
 {f"📎 File name: {file_name}" if file_name else ""}
 📝 Content:
 {clean_preview}
-
-{f"⚠️ Caption length: {len(caption)} characters (max {MAX_CAPTION_LENGTH})" if broadcast_type != 'text' else ""}
 
 ⚠️ Are you sure you want to send this to all users?
 """
@@ -20350,55 +20688,77 @@ async def admin_broadcast_send(message: Message):
         'caption': caption,
         'parse_mode': parse_mode,
         'file_name': file_name,
-        'subtype': audio_subtype_value  # ✅ برای voice/audio
+        'media_kind': media_kind,
+        'subtype': audio_subtype_value,
+        'source_chat_id': message.chat.id,
+        'source_message_id': message.message_id,
+        'buttons': [],
     }
     
     user_states[admin_id] = {
-        'awaiting_broadcast_confirm': True,
+        'awaiting_broadcast_button_setup': True,
         'broadcast_data': broadcast_data,
-        'users_count': len(users)
+        'users_count': recipient_count,
+        'confirm_text': confirm_text,
     }
-    
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text="👁️ پیش‌نمایش" if lang == "fa" else "👁️ Preview",
-                callback_data="preview_broadcast",
-                style="primary"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="✅ بله، ارسال کن" if lang == "fa" else "✅ Yes, send",
-                callback_data="confirm_broadcast",
-                style="success"
-            ),
-            InlineKeyboardButton(
-                text="❌ انصراف" if lang == "fa" else "❌ Cancel",
-                callback_data="admin_panel",
-                style="danger"
-            )
-        ]
-    ]
-    try:
-        if broadcast_type == 'text':
-            await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
-        else:
-            if broadcast_type == 'photo' and media_content:
-                await message.reply_photo(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-            elif broadcast_type == 'file' and media_content:
-                await message.reply_document(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-            elif broadcast_type == 'audio' and media_content:
-                # ✅ تفکیک voice از audio
-                if audio_subtype_value == 'voice':
-                    await message.reply_voice(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-                else:
-                    await message.reply_audio(media_content, caption=confirm_text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
-            else:
-                await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logger.error(f"خطا در نمایش تأییدیه: {e}")
-        await message.reply(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+    await _show_broadcast_button_setup(message, admin_id)
+
+
+@dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get("awaiting_broadcast_url"))
+async def admin_broadcast_add_url_button(message: Message):
+    admin_id = message.from_user.id
+    lang = get_user(admin_id).get("lang", "fa")
+    state = user_states.get(admin_id, {})
+    if message.text and message.text.strip().lower() == "/cancel":
+        state["awaiting_broadcast_url"] = False
+        state["awaiting_broadcast_button_setup"] = True
+        await message.reply("افزودن لینک لغو شد." if lang == "fa" else "Adding a URL was cancelled.")
+        await _show_broadcast_button_setup(message, admin_id)
+        return
+
+    if not message.text or "|" not in message.text:
+        await message.reply(
+            "فرمت نادرست است. نمونه:\n<code>مشاهده سایت | https://example.com</code>"
+            if lang == "fa"
+            else "Invalid format. Example:\n<code>Visit site | https://example.com</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    label, raw_url = (part.strip() for part in message.text.split("|", 1))
+    if not 1 <= len(label) <= 64 or not _is_safe_broadcast_url(raw_url):
+        await message.reply(
+            "عنوان باید ۱ تا ۶۴ نویسه باشد و لینک فقط HTTPS یا tg:// معتبر باشد."
+            if lang == "fa"
+            else "Button text must be 1-64 characters and URL must be valid HTTPS or tg://."
+        )
+        return
+
+    broadcast_data = state.get("broadcast_data")
+    if not isinstance(broadcast_data, dict):
+        user_states.pop(admin_id, None)
+        await message.reply("وضعیت برودکست منقضی شده است." if lang == "fa" else "Broadcast state expired.")
+        return
+    buttons = broadcast_data.setdefault("buttons", [])
+    url_button = next(
+        (button for button in buttons
+         if isinstance(button, dict) and button.get("action") == "url"),
+        None,
+    )
+    if not url_button and len(buttons) >= 10:
+        await message.reply("حداکثر ۱۰ دکمه مجاز است." if lang == "fa" else "Maximum 10 buttons allowed.")
+        return
+
+    style = broadcast_data.setdefault("button_styles", {}).get("url")
+    url_data = {"action": "url", "label": label, "url": str(URL(raw_url)), "style": style}
+    if url_button:
+        buttons[buttons.index(url_button)] = url_data
+    else:
+        buttons.append(url_data)
+    state["awaiting_broadcast_url"] = False
+    state["awaiting_broadcast_button_setup"] = True
+    await _show_broadcast_button_setup(message, admin_id)
+
 
 @dp.callback_query(F.data == "preview_broadcast")
 async def preview_broadcast(callback: CallbackQuery):
@@ -20419,21 +20779,10 @@ async def preview_broadcast(callback: CallbackQuery):
             show_alert=True
         )
         return
+    state["broadcast_preview_verified"] = False
     
     broadcast_type = broadcast_data.get('type', 'text')
-    media = broadcast_data.get('media')
-    caption = broadcast_data.get('caption', '')
-    parse_mode = broadcast_data.get('parse_mode')
     subtype = broadcast_data.get('subtype')
-    
-    # ✅ کیبوردی که کاربران خواهند دید (دقیقاً همون)
-    broadcast_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
-            callback_data="broadcast_back_to_main",
-            style="primary"
-        )]
-    ])
     
     # ✅ هدر پیش‌نمایش
     type_display = {
@@ -20464,64 +20813,11 @@ async def preview_broadcast(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"خطا در ارسال هدر پیش‌نمایش: {e}")
     
-    # ✅ ارسال محتوای واقعی (دقیقاً مثل کاربر)
     preview_sent = False
     try:
-        if broadcast_type == 'text':
-            if len(caption) > 4096:
-                parts = [caption[i:i+4096] for i in range(0, len(caption), 4096)]
-                for idx, part in enumerate(parts):
-                    is_last = (idx == len(parts) - 1)
-                    await bot.send_message(
-                        admin_id, part,
-                        parse_mode=parse_mode,
-                        reply_markup=broadcast_keyboard if is_last else None
-                    )
-            else:
-                await bot.send_message(
-                    admin_id, caption,
-                    parse_mode=parse_mode,
-                    reply_markup=broadcast_keyboard
-                )
-            preview_sent = True
-        
-        elif broadcast_type == 'photo':
-            if media:
-                await bot.send_photo(
-                    admin_id, media,
-                    caption=caption or None,
-                    parse_mode=parse_mode,
-                    reply_markup=broadcast_keyboard
-                )
-                preview_sent = True
-        
-        elif broadcast_type == 'file':
-            if media:
-                await bot.send_document(
-                    admin_id, media,
-                    caption=caption or None,
-                    parse_mode=parse_mode,
-                    reply_markup=broadcast_keyboard
-                )
-                preview_sent = True
-        
-        elif broadcast_type == 'audio':
-            if media:
-                if subtype == 'voice':
-                    await bot.send_voice(
-                        admin_id, media,
-                        caption=caption or None,
-                        parse_mode=parse_mode,
-                        reply_markup=broadcast_keyboard
-                    )
-                else:
-                    await bot.send_audio(
-                        admin_id, media,
-                        caption=caption or None,
-                        parse_mode=parse_mode,
-                        reply_markup=broadcast_keyboard
-                    )
-                preview_sent = True
+        await _send_broadcast_message(admin_id, broadcast_data, lang)
+        preview_sent = True
+        state["broadcast_preview_verified"] = True
     
     except Exception as e:
         logger.error(f"❌ خطا در ارسال پیش‌نمایش: {e}", exc_info=True)
@@ -20548,7 +20844,7 @@ async def preview_broadcast(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text="❌ انصراف کامل" if lang == "fa" else "❌ Cancel",
-                callback_data="admin_panel",
+                callback_data="cancel_broadcast",
                 style="danger"
             )]
         ])
@@ -20658,11 +20954,23 @@ async def confirm_broadcast(callback: CallbackQuery):
     if not broadcast_data:
         await callback.answer("❌ داده‌ای برای ارسال وجود ندارد" if lang=="fa" else "❌ No data to send", show_alert=True)
         return
+    if not state.get("broadcast_preview_verified"):
+        await callback.answer(
+            "برای جلوگیری از ارسال اشتباه، ابتدا پیش‌نمایش را با موفقیت بررسی کنید."
+            if lang == "fa"
+            else "Please review a successful preview before sending.",
+            show_alert=True,
+        )
+        return
+    if state.get("broadcast_sending"):
+        await callback.answer("ارسال همین حالا در حال انجام است" if lang == "fa" else "Broadcast is already running", show_alert=True)
+        return
+    if "source_chat_id" not in broadcast_data or "source_message_id" not in broadcast_data:
+        await callback.answer("پیام اصلی برودکست در دسترس نیست؛ لطفاً دوباره بسازید." if lang == "fa" else "The source message is unavailable; please create the broadcast again.", show_alert=True)
+        return
+    state["broadcast_sending"] = True
     logger.info(f"📢 شروع ارسال پیام همگانی:")
     logger.info(f"  - نوع: {broadcast_data.get('type')}")
-    logger.info(f"  - media: {broadcast_data.get('media')}")
-    logger.info(f"  - caption: {broadcast_data.get('caption', '')[:50]}...")
-    logger.info(f"  - parse_mode: {broadcast_data.get('parse_mode')}")
     logger.info(f"  - تعداد کاربران: {len(users)}")
     status_msg = await callback.message.answer(
         "⏳ در حال ارسال پیام همگانی..." if lang=="fa" else "⏳ Sending broadcast..."
@@ -20671,124 +20979,16 @@ async def confirm_broadcast(callback: CallbackQuery):
     sent_count = 0
     failed_count = 0
     failed_users = []
-    users_list = list(users.keys())
+    users_list = _broadcast_recipient_ids()
     total_users = len(users_list)
     
     broadcast_type = broadcast_data.get('type', 'text')
-    media = broadcast_data.get('media')
-    caption = broadcast_data.get('caption', '')
-    parse_mode = broadcast_data.get('parse_mode', None)
-    MAX_CAPTION_LENGTH = 1000
-    original_caption = caption
-    
-    if len(caption) > MAX_CAPTION_LENGTH:
-        logger.warning(f"⚠️ کپشن طولانی است ({len(caption)} کاراکتر)، در حال کوتاه کردن...")
-        
-        if broadcast_type in ['photo', 'file', 'audio']:
-            truncated = caption[:MAX_CAPTION_LENGTH - 50] + "...\n\n[کپشن کامل در فایل پیوست]"
-            caption = truncated
-            logger.info(f"✅ کپشن به {len(caption)} کاراکتر کوتاه شد")
-            
-            try:
-                from io import BytesIO
-                file_buffer = BytesIO()
-                file_buffer.write(original_caption.encode('utf-8'))
-                file_buffer.seek(0)
-                
-                from aiogram.types import BufferedInputFile
-                input_file = BufferedInputFile(file_buffer.read(), filename="full_caption.txt")
-                
-                await callback.message.answer_document(
-                    document=input_file,
-                    caption="📄 کپشن کامل پیام (به دلیل محدودیت تلگرام، کپشن کامل در این فایل ارسال شد)"
-                )
-            except Exception as e:
-                logger.error(f"خطا در ارسال فایل کپشن کامل: {e}")
-    
-    clean_caption = sanitize_text_for_broadcast(caption)
-    
-    if parse_mode == ParseMode.HTML and clean_caption != caption:
-        parse_mode = None
-        logger.warning(f"⚠️ متن حاوی کاراکترهای غیرمجاز بود، HTML غیرفعال شد")
-    # ✅ fallbackهای امن
-    subtype = broadcast_data.get('subtype')
-    default_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🏠 منوی اصلی",
-            callback_data="broadcast_back_to_main",
-            style="primary"
-        )]
-    ])
     
     for i, uid in enumerate(users_list):
-        broadcast_keyboard = default_keyboard  # ✅ مقدار پیشفرض
         try:
-            user_id = int(uid)
-            
+            user_id = uid
             user_lang = get_user(user_id).get('lang', 'fa')
-            broadcast_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="🏠 منوی اصلی" if user_lang == "fa" else "🏠 Main Menu",
-                    callback_data="broadcast_back_to_main",
-                    style="primary"
-                )]
-            ])
-            
-            if broadcast_type == 'text':
-                if len(clean_caption) > 4096:
-                    parts = [clean_caption[j:j+4096] for j in range(0, len(clean_caption), 4096)]
-                    for idx, part in enumerate(parts):
-                        is_last = (idx == len(parts) - 1)
-                        await bot.send_message(
-                            user_id, part,
-                            parse_mode=parse_mode,
-                            reply_markup=broadcast_keyboard if is_last else None
-                        )
-                else:
-                    await bot.send_message(
-                        user_id, clean_caption,
-                        parse_mode=parse_mode,
-                        reply_markup=broadcast_keyboard
-                    )
-                    
-            elif broadcast_type == 'photo':
-                if not media:
-                    raise ValueError("media_id is None")
-                await bot.send_photo(
-                    user_id, media,
-                    caption=clean_caption or None,
-                    parse_mode=parse_mode,
-                    reply_markup=broadcast_keyboard
-                )
-                
-            elif broadcast_type == 'file':
-                if not media:
-                    raise ValueError("media_id is None")
-                await bot.send_document(
-                    user_id, media,
-                    caption=clean_caption or None,
-                    parse_mode=parse_mode,
-                    reply_markup=broadcast_keyboard
-                )
-                
-            elif broadcast_type == 'audio':
-                if not media:
-                    raise ValueError("media_id is None")
-                # ✅ تفکیک voice از audio
-                if subtype == 'voice':
-                    await bot.send_voice(
-                        user_id, media,
-                        caption=clean_caption or None,
-                        parse_mode=parse_mode,
-                        reply_markup=broadcast_keyboard
-                    )
-                else:
-                    await bot.send_audio(
-                        user_id, media,
-                        caption=clean_caption or None,
-                        parse_mode=parse_mode,
-                        reply_markup=broadcast_keyboard
-                    )
+            await _send_broadcast_message(user_id, broadcast_data, user_lang)
             
             sent_count += 1
             if (i + 1) % 10 == 0:
@@ -20803,31 +21003,11 @@ async def confirm_broadcast(callback: CallbackQuery):
                         pass
                     status_msg = await callback.message.answer(progress_text)
             
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.1)
             
         except Exception as e:
             error_str = str(e)
             logger.error(f"❌ خطا در ارسال به کاربر {uid}: {error_str}")
-            
-            # fallback بدون parse_mode
-            if "can't parse entities" in error_str and parse_mode == ParseMode.HTML:
-                try:
-                    if broadcast_type == 'text':
-                        await bot.send_message(int(uid), clean_caption, parse_mode=None, reply_markup=broadcast_keyboard)
-                    elif broadcast_type == 'photo' and media:
-                        await bot.send_photo(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
-                    elif broadcast_type == 'file' and media:
-                        await bot.send_document(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
-                    elif broadcast_type == 'audio' and media:
-                        if subtype == 'voice':
-                            await bot.send_voice(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
-                        else:
-                            await bot.send_audio(int(uid), media, caption=clean_caption or None, parse_mode=None, reply_markup=broadcast_keyboard)
-                    sent_count += 1
-                    continue
-                except Exception as e2:
-                    logger.warning(f"⚠️ تلاش مجدد نیز خطا داد: {e2}")
-            
             failed_count += 1
             failed_users.append(uid)
     user_states.pop(callback.from_user.id, None)
@@ -20854,8 +21034,6 @@ async def confirm_broadcast(callback: CallbackQuery):
 📊 تعداد کل: {total_users}
 📝 نوع: {broadcast_type}
 🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-{f"⚠️ کپشن به {MAX_CAPTION_LENGTH} کاراکتر کوتاه شد" if len(original_caption) > MAX_CAPTION_LENGTH else ""}
 
 {f"❌ کاربران ناموفق: {', '.join(failed_users[:10])}" if failed_users else ""}
 {f"⚠️ {len(failed_users) - 10} کاربر دیگر..." if len(failed_users) > 10 else ""}
@@ -20904,27 +21082,6 @@ async def confirm_broadcast(callback: CallbackQuery):
         logger.warning(f"خطا در callback.answer: {e}")
         
         
-def sanitize_text_for_broadcast(text: str) -> str:
-    """پاکسازی متن برای ارسال به کاربران"""
-    if not text:
-        return ""
-    dangerous_patterns = [
-        r'؟<؟',  # الگوی خاص
-        r'<[^a-zA-Z/]',  # تگ‌های ناقص
-        r'[^\w\s<>/="\']<[^\w\s<>/="\']',  # کاراکتر قبل از <
-    ]
-    
-    import re
-    for pattern in dangerous_patterns:
-        text = re.sub(pattern, '', text)
-    tags = re.findall(r'<([a-zA-Z][a-zA-Z0-9]*)[^>]*>', text)
-    for tag in tags:
-        if tag not in ['b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-emoji']:
-            text = text.replace(f'<{tag}', f'&lt;{tag}')
-            text = text.replace(f'</{tag}', f'&lt;/{tag}')
-    text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\r\t')
-    
-    return text  
 @dp.callback_query(F.data == "admin_broadcast_test")
 async def admin_broadcast_test(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
@@ -20968,34 +21125,20 @@ def detect_safe_parse_mode(text: str) -> Optional[ParseMode]:
     """تشخیص اینکه متن حاوی HTML معتبر است یا خیر"""
     if not text:
         return None
-    valid_tags = [
-        '<b>', '</b>',
-        '<i>', '</i>',
-        '<u>', '</u>',
-        '<s>', '</s>',
-        '<code>', '</code>',
-        '<pre>', '</pre>',
-        '<a href=', '</a>',
-        '<tg-emoji', '</tg-emoji>'
-    ]
-    has_html = False
-    for tag in valid_tags:
-        if tag in text:
-            has_html = True
-            break
-    
-    if not has_html:
+    supported_tags = (
+        "b|strong|i|em|u|ins|s|strike|del|span|tg-spoiler|tg-emoji|"
+        "a|code|pre|blockquote"
+    )
+    tag_pattern = rf"</?(?:{supported_tags})(?:\s|>|/)"
+    if not re.search(tag_pattern, text, re.IGNORECASE):
         return None
-    dangerous_chars = ['<', '>']
-    text_copy = text
     if text.count('<') != text.count('>'):
         return None
-    import re
     invalid_pattern = r'[^\w\s<>/="\']<[^\w\s<>/="\']'
     if re.search(invalid_pattern, text):
         return None
-    open_tags = re.findall(r'<([a-zA-Z][a-zA-Z0-9]*)', text)
-    close_tags = re.findall(r'</([a-zA-Z][a-zA-Z0-9]*)>', text)
+    open_tags = re.findall(r'<([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>', text)
+    close_tags = re.findall(r'</([a-zA-Z][a-zA-Z0-9-]*)\s*>', text)
     if len(open_tags) != len(close_tags):
         return None
     return ParseMode.HTML  
@@ -21361,7 +21504,12 @@ async def show_qr_code(callback: CallbackQuery):
         await callback.answer("❌ کانفیگ یافت نشد" if lang == 'fa' else "❌ Config not found", show_alert=True)
         return
     
-    logger.info(f"اطلاعات سفارش: volume={order.get('volume')}, days={order.get('days')}, link={order.get('config_link')[:30]}...")
+    logger.info(
+        "اطلاعات سفارش #%s: volume=%s, days=%s",
+        order_id,
+        order.get("volume"),
+        order.get("days"),
+    )
     
     try:
         email = get_order_client_email(order)
@@ -21488,9 +21636,10 @@ async def xui_get_client_links(email: str) -> Optional[list]:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    logger.info(f"🔍 Client links: {json.dumps(data, indent=2)}")
                     if data.get("success"):
-                        return data.get("obj", [])
+                        links = data.get("obj", [])
+                        logger.debug("لینک‌های پنل دریافت شد (%s مورد)", len(links) if isinstance(links, list) else 0)
+                        return links
                 return None
     except Exception as e:
         logger.error(f"❌ خطا در دریافت لینک‌ها: {e}")
@@ -24089,7 +24238,7 @@ async def pay_balance(callback: CallbackQuery):
             if config:
                 sub_link = config['link']
                 config_id = config.get('id')
-                logger.info(f"📦 [pay_balance] کانفیگ از مخزن دریافت شد: {sub_link}")
+                logger.info("📦 [pay_balance] کانفیگ از مخزن دریافت شد")
         except Exception as e:
             logger.error(f"❌ [pay_balance] خطا در دریافت از مخزن: {e}")
             sub_link = None
@@ -32466,9 +32615,9 @@ async def rebuild_sub_links_in_database():
                 if is_valid_link(config_link):
                     new_config_link = rebuild_link(config_link)
                     if new_config_link:
-                        logger.info(f"📝 config_link #{order_id}: {config_link} -> {new_config_link}")
+                        logger.info(f"📝 config_link سفارش #{order_id} بازسازی شد")
                     else:
-                        logger.warning(f"⚠️ config_link #{order_id}: بازسازی نشد - {config_link}")
+                        logger.warning(f"⚠️ config_link سفارش #{order_id} بازسازی نشد")
                         failed_orders.append({
                             'order_id': order_id,
                             'old_link': config_link,
@@ -32480,14 +32629,14 @@ async def rebuild_sub_links_in_database():
                         'link': config_link,
                         'reason': 'Invalid link (skipped)'
                     })
-                    logger.info(f"⏭️ config_link #{order_id} نامعتبر است، دست نخورد: '{config_link}'")
+                    logger.info(f"⏭️ config_link سفارش #{order_id} نامعتبر است و دست‌نخورده ماند")
             if sub_link:
                 if is_valid_link(sub_link):
                     new_sub_link = rebuild_link(sub_link)
                     if new_sub_link:
-                        logger.info(f"📝 sub_link #{order_id}: {sub_link} -> {new_sub_link}")
+                        logger.info(f"📝 sub_link سفارش #{order_id} بازسازی شد")
                     else:
-                        logger.warning(f"⚠️ sub_link #{order_id}: بازسازی نشد - {sub_link}")
+                        logger.warning(f"⚠️ sub_link سفارش #{order_id} بازسازی نشد")
                         failed_orders.append({
                             'order_id': order_id,
                             'old_link': sub_link,
@@ -32499,7 +32648,7 @@ async def rebuild_sub_links_in_database():
                         'link': sub_link,
                         'reason': 'Invalid link (skipped)'
                     })
-                    logger.info(f"⏭️ sub_link #{order_id} نامعتبر است، دست نخورد: '{sub_link}'")
+                    logger.info(f"⏭️ sub_link سفارش #{order_id} نامعتبر است و دست‌نخورده ماند")
             update_data = {}
             if new_config_link and new_config_link != config_link:
                 update_data['config_link'] = new_config_link
