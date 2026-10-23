@@ -9326,22 +9326,22 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
             style="primary"
         )])
     
-    # ─── ردیف 3: پلتفرم‌ها (اندروید | آیفون | ویندوز) ───
+    # ─── ردیف 3: راهنمای اتصال هر پلتفرم ───
     buttons.append([
         InlineKeyboardButton(
             text="📱 اندروید" if lang == "fa" else "📱 Android",
-            url="https://github.com/2dust/v2rayng"
+            callback_data=f"platform_android_{order_id}_{int(show_qr)}"
         ),
         InlineKeyboardButton(
             text="🍏 آیفون" if lang == "fa" else "🍏 iOS",
-            url="https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690"
+            callback_data=f"platform_ios_{order_id}_{int(show_qr)}"
         ),
         InlineKeyboardButton(
             text="💻 ویندوز" if lang == "fa" else "💻 Windows",
-            url="https://github.com/2dust/v2rayn"
+            callback_data=f"platform_windows_{order_id}_{int(show_qr)}"
         )
     ])
-    
+
     # ─── ردیف 4: کانفیگ‌های من | منوی اصلی ───
     buttons.append([
         InlineKeyboardButton(
@@ -9351,11 +9351,226 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
         InlineKeyboardButton(
             text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
             callback_data="back_to_main",
-            style="primary"
+            style="primary",
         )
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+PLATFORM_GUIDES = {
+    "android": {
+        "url": "https://github.com/2dust/v2rayng",
+        "fa_name": "اندروید (v2rayNG)",
+        "en_name": "Android (v2rayNG)",
+        "fa_steps": (
+            "۱) برنامهٔ <b>v2rayNG</b> را از لینک زیر دانلود و نصب کن.\n"
+            "۲) لینک اشتراک را از صفحهٔ کانفیگ کپی کن.\n"
+            "۳) در v2rayNG روی منوی ☰ بزن و وارد بخش <b>Subscriptions</b> شو.\n"
+            "۴) روی <b>＋</b> بزن، لینک را در قسمت آدرس وارد کن و ذخیره کن.\n"
+            "۵) از منوی ⋮ گزینهٔ <b>Update subscription</b> را بزن.\n"
+            "۶) یکی از سرورها را انتخاب کن و دکمهٔ اتصال را بزن ✅"
+        ),
+        "en_steps": (
+            "1) Download and install <b>v2rayNG</b> from the link below.\n"
+            "2) Copy the subscription link from the config page.\n"
+            "3) In v2rayNG, open ☰ and go to <b>Subscriptions</b>.\n"
+            "4) Tap <b>＋</b>, enter the link, and save it.\n"
+            "5) From ⋮, choose <b>Update subscription</b>.\n"
+            "6) Select a server and tap connect ✅"
+        ),
+    },
+    "ios": {
+        "url": "https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690",
+        "fa_name": "آیفون (V2Box)",
+        "en_name": "iPhone (V2Box)",
+        "fa_steps": (
+            "۱) برنامهٔ <b>V2Box</b> را از App Store نصب کن.\n"
+            "۲) لینک اشتراک را از صفحهٔ کانفیگ کپی کن.\n"
+            "۳) در V2Box روی <b>＋</b> بزن و افزودن کانفیگ از طریق URL را انتخاب کن.\n"
+            "۴) لینک را وارد و ذخیره کن؛ اگر اجازهٔ دسترسی به کلیپ‌بورد خواسته شد، تأیید کن.\n"
+            "۵) فهرست سرورها را به‌روزرسانی کن، یک سرور را انتخاب و اتصال را فعال کن ✅"
+        ),
+        "en_steps": (
+            "1) Install <b>V2Box</b> from the App Store.\n"
+            "2) Copy the subscription link from the config page.\n"
+            "3) In V2Box, tap <b>＋</b> and choose the URL import option.\n"
+            "4) Enter the link and save it; allow clipboard access if prompted.\n"
+            "5) Refresh the server list, select a server, and connect ✅"
+        ),
+    },
+    "windows": {
+        "url": "https://github.com/2dust/v2rayN",
+        "fa_name": "ویندوز (v2rayN)",
+        "en_name": "Windows (v2rayN)",
+        "fa_steps": (
+            "۱) برنامهٔ <b>v2rayN</b> را از لینک زیر دانلود و نصب کن.\n"
+            "۲) لینک اشتراکت را از صفحهٔ کانفیگ کپی کن.\n"
+            "۳) منوی <b>Subscription group settings</b> را باز کن.\n"
+            "۴) یک ردیف جدید بساز، لینک را در خانهٔ <b>URL</b> قرار بده و <b>OK</b> کن.\n"
+            "۵) از منوی <b>Subscription</b> گزینهٔ <b>Update subscription</b> را بزن.\n"
+            "۶) سرور را انتخاب کن و اتصال را فعال کن ✅"
+        ),
+        "en_steps": (
+            "1) Download and install <b>v2rayN</b> from the link below.\n"
+            "2) Copy your subscription link from the config page.\n"
+            "3) Open <b>Subscription group settings</b>.\n"
+            "4) Add a row, paste the link into <b>URL</b>, and click <b>OK</b>.\n"
+            "5) From <b>Subscription</b>, choose <b>Update subscription</b>.\n"
+            "6) Select a server and enable the connection ✅"
+        ),
+    },
+}
+
+
+async def show_platform_guide(callback: CallbackQuery, platform: str):
+    """نمایش راهنمای اتصال و نگهداری اطلاعات صفحهٔ کانفیگ مبدأ."""
+    lang = get_user(callback.from_user.id).get("lang", "fa")
+    guide = PLATFORM_GUIDES[platform]
+    order_id, show_qr = _parse_platform_callback(callback)
+    if order_id is None:
+        await callback.answer(
+            "❌ خطا در بازگشت به کانفیگ" if lang == "fa" else "❌ Could not return to the config",
+            show_alert=True,
+        )
+        return
+
+    order = orders.get(str(order_id))
+    if not order or order.get("user_id") != callback.from_user.id or not order.get("config_link"):
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
+            show_alert=True,
+        )
+        return
+
+    title = guide["fa_name"] if lang == "fa" else guide["en_name"]
+    steps = guide["fa_steps"] if lang == "fa" else guide["en_steps"]
+    text = (
+        f"📖 <b>راهنمای اتصال {title}</b>\n\n{steps}"
+        if lang == "fa"
+        else f"📖 <b>How to connect with {title}</b>\n\n{steps}"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📥 دانلود برنامه" if lang == "fa" else "📥 Download app",
+            url=guide["url"],
+            style="success",
+        )],
+        [
+            InlineKeyboardButton(
+                text="🔙 بازگشت به کانفیگ" if lang == "fa" else "🔙 Back to config",
+                callback_data=f"platform_back_{order_id}_{int(show_qr)}",
+            ),
+            InlineKeyboardButton(
+                text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                callback_data="back_to_main",
+                style="primary",
+            ),
+        ],
+    ])
+
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.warning(f"خطا در حذف صفحهٔ کانفیگ پیش از نمایش راهنما: {e}")
+    await bot.send_message(
+        callback.message.chat.id,
+        text,
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+def _parse_platform_callback(callback: CallbackQuery):
+    try:
+        parts = callback.data.split("_")
+        if (
+            len(parts) != 4
+            or parts[0] != "platform"
+            or parts[1] not in (*PLATFORM_GUIDES, "back")
+        ):
+            return None, False
+        order_id = int(parts[2])
+        show_qr_value = int(parts[3])
+        if show_qr_value not in (0, 1):
+            return None, False
+        return order_id, bool(show_qr_value)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None, False
+
+
+@dp.callback_query(F.data.startswith("platform_android_"))
+async def platform_android(callback: CallbackQuery):
+    await show_platform_guide(callback, "android")
+
+
+@dp.callback_query(F.data.startswith("platform_ios_"))
+async def platform_ios(callback: CallbackQuery):
+    await show_platform_guide(callback, "ios")
+
+
+@dp.callback_query(F.data.startswith("platform_windows_"))
+async def platform_windows(callback: CallbackQuery):
+    await show_platform_guide(callback, "windows")
+
+
+@dp.callback_query(F.data.startswith("platform_back_"))
+async def platform_back_to_config(callback: CallbackQuery):
+    """بازسازی صفحهٔ کانفیگ قبلی از روی شناسه و حالت QR/متن."""
+    lang = get_user(callback.from_user.id).get("lang", "fa")
+    order_id, show_qr = _parse_platform_callback(callback)
+    order = orders.get(str(order_id)) if order_id is not None else None
+    if not order or order.get("user_id") != callback.from_user.id or not order.get("config_link"):
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
+            show_alert=True,
+        )
+        return
+
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.warning(f"خطا در حذف راهنما هنگام بازگشت به کانفیگ: {e}")
+
+    if show_qr:
+        await send_config_with_qr_option(
+            callback.message.chat.id,
+            order_id,
+            order.get("volume", 0),
+            order.get("days", 0),
+            order.get("price", 0),
+            order["config_link"],
+            lang,
+        )
+    else:
+        traffic_info = ""
+        email = order.get("email")
+        if email and SENAI_PANEL_ENABLED:
+            try:
+                client_info = await xui_get_client_info(email)
+                if client_info:
+                    traffic_data = await xui_get_client_traffic(email)
+                    traffic_info = format_traffic_info(client_info, traffic_data, lang)
+            except Exception as e:
+                logger.error(f"خطا در دریافت اطلاعات ترافیک هنگام بازگشت به کانفیگ: {e}")
+
+        caption = get_config_caption(
+            order_id,
+            order.get("volume", 0),
+            order.get("days", 0),
+            order.get("price", 0),
+            order["config_link"],
+            lang,
+            traffic_info,
+        )
+        await bot.send_message(
+            callback.message.chat.id,
+            caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang),
+        )
+    await callback.answer()
             
 from aiohttp import ClientTimeout, CookieJar
 CONNECTOR = None
