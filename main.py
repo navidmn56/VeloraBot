@@ -13,6 +13,7 @@ import html
 import hashlib
 import shutil
 import secrets
+import base64
 import psutil
 import re
 import traceback
@@ -3370,6 +3371,8 @@ async def admin_test_stats(callback: CallbackQuery):
 
 user_states = {}
 CONFIG_LINKS_CACHE = {}          # {order_id: {'links': [...], 'email': str, 'timestamp': datetime}}
+LINK_ROTATION_CONFIRMATIONS = {}
+LINK_ROTATION_LOCKS = {}
 CONFIG_LINKS_CACHE_TTL = 300     # 5 دقیقه
 CONFIG_PAGE_SIZE = 3             # تعداد لینک در هر صفحه
 logger.info("دیکشنری user_states ایجاد شد") 
@@ -9325,6 +9328,12 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
             callback_data=f"show_qr_{order_id}",
             style="primary"
         )])
+
+    buttons.append([InlineKeyboardButton(
+        text="🔗 تغییر لینک اشتراک" if lang == "fa" else "🔗 Change subscription link",
+        callback_data=f"change_link_{order_id}_{int(show_qr)}",
+        style="primary",
+    )])
     
     # ─── ردیف 3: راهنمای اتصال هر پلتفرم ───
     buttons.append([
@@ -21492,6 +21501,728 @@ async def xui_get_client_links(email: str) -> Optional[list]:
 
 from urllib.parse import quote 
 
+
+def _panel_success(response: Optional[dict]) -> bool:
+    return bool(response and response.get("success") is True)
+
+
+async def _panel_generate_uuid() -> str:
+    response = await _api_request("GET", "/panel/api/server/getNewUUID")
+    value = (response or {}).get("obj", {}).get("uuid")
+    if not _panel_success(response) or not isinstance(value, str) or not re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}",
+        value,
+    ):
+        raise RuntimeError("پنل UUID معتبر تولید نکرد")
+    return value
+
+
+async def _panel_generate_wireguard_keypair() -> tuple:
+    response = await _api_request("GET", "/panel/api/server/getNewX25519Cert")
+    values = (response or {}).get("obj")
+    if not _panel_success(response) or not isinstance(values, dict):
+        raise RuntimeError("پنل نتوانست کلید X25519 برای WireGuard تولید کند")
+
+    normalized = []
+    for name in ("privateKey", "publicKey"):
+        value = values.get(name)
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(f"پنل {name} معتبر برای WireGuard برنگرداند")
+        try:
+            raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        except (ValueError, base64.binascii.Error) as e:
+            raise RuntimeError(f"کلید {name} برگشتی از پنل Base64 معتبر نیست") from e
+        if len(raw) != 32:
+            raise RuntimeError(f"کلید {name} برگشتی از پنل ۳۲ بایت نیست")
+        normalized.append(base64.b64encode(raw).decode("ascii"))
+    return tuple(normalized)
+
+
+def _subscription_id_from_link(link: Optional[str]) -> Optional[str]:
+    if not link:
+        return None
+    try:
+        parsed = URL(link)
+        configured = URL(SENAI_SUB_URL)
+        if parsed.origin() != configured.origin():
+            return None
+        parts = parsed.path.rstrip("/").split("/")
+        if len(parts) >= 2 and parts[-2] == "sub" and parts[-1]:
+            return parts[-1]
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _as_allowed_ips(value) -> list:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str) and item.strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+def _build_panel_client_update_payload(client: dict, email: str) -> dict:
+    """Map the panel's read model to the complete client update request."""
+    required_fields = (
+        "email", "security", "password", "flow", "auth", "privateKey",
+        "publicKey", "preSharedKey", "keepAlive", "secret", "adTag",
+        "limitIp", "limitHwid", "totalGB", "expiryTime", "enable", "tgId",
+        "subId", "group", "comment", "reset", "resetDay", "resetWeekday",
+        "resetMax", "trafficReset", "trafficResetDay",
+    )
+    missing_fields = [field for field in required_fields if field not in client]
+    if missing_fields:
+        raise RuntimeError(
+            "اطلاعات کامل کلاینت برای حفظ تنظیمات پنل دریافت نشد: "
+            + ", ".join(missing_fields)
+        )
+
+    uuid_value = client.get("uuid")
+    if not isinstance(uuid_value, str) or not uuid_value:
+        candidate = client.get("id")
+        uuid_value = candidate if isinstance(candidate, str) else ""
+
+    payload = {
+        "id": uuid_value,
+        "security": client.get("security", ""),
+        "password": client.get("password", ""),
+        "flow": client.get("flow", ""),
+        "auth": client.get("auth", ""),
+        "privateKey": client.get("privateKey", ""),
+        "publicKey": client.get("publicKey", ""),
+        "allowedIPs": _as_allowed_ips(client.get("allowedIPs")),
+        "preSharedKey": client.get("preSharedKey", ""),
+        "keepAlive": client.get("keepAlive", 0),
+        "forwardedPorts": client.get("forwardedPorts", ""),
+        "secret": client.get("secret", ""),
+        "adTag": client.get("adTag", ""),
+        "email": email,
+        "limitIp": client.get("limitIp", 0),
+        "limitHwid": client.get("limitHwid", 0),
+        "totalGB": client.get("totalGB", 0),
+        "expiryTime": client.get("expiryTime", 0),
+        "enable": client.get("enable", True),
+        "tgId": client.get("tgId", 0),
+        "subId": client.get("subId", ""),
+        "group": client.get("group", ""),
+        "comment": client.get("comment", ""),
+        "reset": client.get("reset", 0),
+        "resetDay": client.get("resetDay", 0),
+        "resetWeekday": client.get("resetWeekday", 0),
+        "resetMax": client.get("resetMax", 0),
+        "trafficReset": client.get("trafficReset", "never"),
+        "trafficResetDay": client.get("trafficResetDay", 1),
+        "created_at": client.get("created_at", client.get("createdAt", 0)),
+    }
+
+    reverse = client.get("reverse")
+    if reverse:
+        if isinstance(reverse, str):
+            try:
+                reverse = json.loads(reverse)
+            except json.JSONDecodeError as e:
+                raise RuntimeError("تنظیم reverse کلاینت قابل حفظ نیست") from e
+        if not isinstance(reverse, dict):
+            raise RuntimeError("تنظیم reverse کلاینت قابل حفظ نیست")
+        payload["reverse"] = reverse
+    return payload
+
+
+async def _fetch_panel_client(email: str) -> dict:
+    response = await _api_request(
+        "GET",
+        f"/panel/api/clients/get/{quote(email, safe='')}",
+    )
+    obj = (response or {}).get("obj")
+    client = obj.get("client") if isinstance(obj, dict) else None
+    if not _panel_success(response) or not isinstance(client, dict):
+        raise RuntimeError("کلاینت دقیقاً با این email در پنل پیدا نشد")
+    return obj
+
+
+def _decode_inbound_settings(inbound: dict) -> dict:
+    settings = inbound.get("settings", {})
+    if isinstance(settings, str):
+        try:
+            settings = json.loads(settings)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"تنظیمات اینباند {inbound.get('id')} قابل خواندن نیست"
+            ) from e
+    if not isinstance(settings, dict):
+        raise RuntimeError(f"تنظیمات اینباند {inbound.get('id')} معتبر نیست")
+    return settings
+
+
+async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int) -> tuple:
+    if not SENAI_PANEL_ENABLED:
+        raise RuntimeError("اتصال به پنل فعال نیست")
+
+    order = orders.get(str(order_id))
+    if (
+        not order
+        or order.get("user_id") != user_id
+        or order.get("status") not in ("approved", "inactive")
+        or order.get("email") != email
+    ):
+        raise RuntimeError("سفارش یا مالکیت کانفیگ با درخواست تطبیق ندارد")
+
+    matching_orders = [
+        item for item in orders.values()
+        if isinstance(item, dict) and item.get("email") == email
+    ]
+    if any(item.get("user_id") != user_id for item in matching_orders):
+        raise RuntimeError("email کلاینت در سفارش کاربر دیگری هم ثبت شده؛ عملیات متوقف شد")
+
+    panel_obj = await _fetch_panel_client(email)
+    panel_client = panel_obj["client"]
+    old_sub_id = panel_client.get("subId")
+    related_orders = [
+        item for item in matching_orders
+        if item.get("status") in ("approved", "inactive")
+    ]
+    if not related_orders or order not in related_orders:
+        raise RuntimeError("سفارش فعالی برای ثبت subId جدید در دیتابیس پیدا نشد")
+    stored_sub_ids = {
+        sub_id
+        for item in related_orders
+        for sub_id in (
+            _subscription_id_from_link(item.get("config_link")),
+            _subscription_id_from_link(item.get("sub_link")),
+        )
+        if sub_id
+    }
+    if not old_sub_id or stored_sub_ids != {old_sub_id}:
+        raise RuntimeError("subId پنل با لینک ذخیره‌شده در سفارش‌ها یکسان نیست")
+
+    comment = str(panel_client.get("comment", ""))
+    comment_ids = re.findall(r"\(ID:\s*(\d+)\)", comment)
+    panel_tg_id = panel_client.get("tgId", 0)
+    try:
+        panel_tg_id = int(panel_tg_id or 0)
+    except (TypeError, ValueError):
+        raise RuntimeError("شناسهٔ تلگرام ذخیره‌شده در پنل معتبر نیست")
+    if panel_tg_id and panel_tg_id != user_id:
+        raise RuntimeError("شناسهٔ تلگرام کلاینت پنل متعلق به این کاربر نیست")
+    if comment_ids and any(int(value) != user_id for value in comment_ids):
+        raise RuntimeError("شناسهٔ کاربر در توضیحات پنل با سفارش مطابقت ندارد")
+    if panel_tg_id != user_id and str(user_id) not in comment_ids:
+        raise RuntimeError("مالکیت کلاینت با tgId یا شناسهٔ داخل comment تأیید نشد")
+
+    inbounds_response = await _api_request("GET", "/panel/api/inbounds/list")
+    if not _panel_success(inbounds_response) or not isinstance(
+        inbounds_response.get("obj"), list
+    ):
+        raise RuntimeError("فهرست اینباندها از پنل دریافت نشد")
+
+    targets = []
+    protocols = set()
+    shadowsocks_key_sizes = set()
+    wireguard_ips = {}
+    panel_tunnel_ips = panel_obj.get("tunnelAllowedIPs", {})
+    if not isinstance(panel_tunnel_ips, dict):
+        panel_tunnel_ips = {}
+    for inbound in inbounds_response["obj"]:
+        if not isinstance(inbound, dict):
+            continue
+        settings = _decode_inbound_settings(inbound)
+        clients = settings.get("clients", [])
+        if not isinstance(clients, list):
+            raise RuntimeError(f"فهرست کلاینت‌های اینباند {inbound.get('id')} معتبر نیست")
+        matches = [
+            item for item in clients
+            if isinstance(item, dict) and item.get("email") == email
+        ]
+        if not matches:
+            continue
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"کلاینت با email یکسان چندبار در اینباند {inbound.get('id')} وجود دارد"
+            )
+        inbound_id = inbound.get("id")
+        if not isinstance(inbound_id, int):
+            raise RuntimeError("شناسهٔ اینباند معتبر نیست")
+
+        protocol = str(inbound.get("protocol", "")).lower()
+        if protocol not in {
+            "vless", "vmess", "trojan", "shadowsocks",
+            "wireguard", "amneziawg", "hysteria", "tuic",
+        }:
+            raise RuntimeError(f"پروتکل {protocol or 'نامشخص'} پشتیبانی نمی‌شود")
+
+        entry = {
+            "id": inbound_id,
+            "protocol": protocol,
+            "client": matches[0],
+            "settings": settings,
+        }
+        targets.append(entry)
+        protocols.add(protocol)
+        if protocol == "shadowsocks":
+            method = str(settings.get("method", settings.get("cipher", ""))).lower()
+            if method.startswith("2022-blake3-"):
+                if "aes-128-gcm" in method:
+                    shadowsocks_key_sizes.add(16)
+                elif "aes-256-gcm" in method or "chacha20-poly1305" in method:
+                    shadowsocks_key_sizes.add(32)
+                else:
+                    raise RuntimeError(f"روش رمزنگاری Shadowsocks پشتیبانی نمی‌شود: {method}")
+        if protocol in ("wireguard", "amneziawg"):
+            allowed_ips = _as_allowed_ips(matches[0].get("allowedIPs"))
+            if allowed_ips:
+                wireguard_ips[str(inbound_id)] = allowed_ips
+
+    if not targets:
+        raise RuntimeError("هیچ اینباندی با تطبیق دقیق email کلاینت پیدا نشد")
+    wireguard_targets = [
+        item for item in targets
+        if item["protocol"] in ("wireguard", "amneziawg")
+    ]
+    for target in wireguard_targets:
+        inbound_key = str(target["id"])
+        if inbound_key not in wireguard_ips:
+            allowed_ips = _as_allowed_ips(
+                panel_tunnel_ips.get(inbound_key, panel_tunnel_ips.get(target["id"]))
+            )
+            if not allowed_ips and len(wireguard_targets) == 1:
+                allowed_ips = _as_allowed_ips(panel_client.get("allowedIPs"))
+            if not allowed_ips:
+                raise RuntimeError(
+                    f"Allowed IP کلاینت WireGuard در اینباند {target['id']} مشخص نیست"
+                )
+            wireguard_ips[inbound_key] = allowed_ips
+    target_ids = {item["id"] for item in targets}
+    attached_ids = panel_obj.get("inboundIds")
+    if isinstance(attached_ids, list) and {
+        int(value) for value in attached_ids if str(value).isdigit()
+    } != target_ids:
+        raise RuntimeError("فهرست اینباندهای کلاینت با تنظیمات پنل همخوانی ندارد")
+
+    old_uuid = panel_client.get("uuid")
+    if not isinstance(old_uuid, str) or not old_uuid:
+        candidate = panel_client.get("id")
+        old_uuid = candidate if isinstance(candidate, str) else ""
+    if any(protocol in protocols for protocol in ("vless", "vmess", "tuic")) and not old_uuid:
+        raise RuntimeError("UUID فعلی کلاینت قابل شناسایی نیست")
+    if any(protocol in protocols for protocol in ("trojan", "shadowsocks", "tuic")):
+        if not panel_client.get("password"):
+            raise RuntimeError("رمز فعلی کلاینت قابل شناسایی نیست")
+    if protocols.intersection({"wireguard", "amneziawg"}):
+        if not panel_client.get("privateKey") or not panel_client.get("publicKey"):
+            raise RuntimeError("کلیدهای فعلی WireGuard قابل شناسایی نیستند")
+
+    old_links = await xui_get_client_links(email)
+    url_protocols = protocols.intersection({"vless", "vmess", "trojan", "shadowsocks"})
+    if url_protocols and not old_links:
+        raise RuntimeError("لینک‌های فعلی از پنل قابل دریافت نیستند؛ عملیات متوقف شد")
+
+    old_payload = _build_panel_client_update_payload(panel_client, email)
+    if wireguard_ips:
+        old_payload["allowedIPsByInbound"] = wireguard_ips
+    new_payload = dict(old_payload)
+    new_sub_id = await _panel_generate_uuid()
+    while new_sub_id == old_sub_id:
+        new_sub_id = await _panel_generate_uuid()
+    new_payload["subId"] = new_sub_id
+
+    if old_uuid or any(protocol in protocols for protocol in ("vless", "vmess", "tuic")):
+        new_payload["id"] = await _panel_generate_uuid()
+    if any(protocol in protocols for protocol in ("trojan", "shadowsocks", "tuic")):
+        if len(shadowsocks_key_sizes) > 1:
+            raise RuntimeError("این کلاینت به Shadowsocks با طول کلیدهای متناقض متصل است")
+        if shadowsocks_key_sizes:
+            key_size = next(iter(shadowsocks_key_sizes))
+            new_payload["password"] = base64.b64encode(
+                secrets.token_bytes(key_size)
+            ).decode("ascii")
+        else:
+            new_payload["password"] = (await _panel_generate_uuid()).replace("-", "")
+    if "hysteria" in protocols:
+        new_payload["auth"] = (await _panel_generate_uuid()).replace("-", "")
+    if protocols.intersection({"wireguard", "amneziawg"}):
+        new_payload["privateKey"], new_payload["publicKey"] = (
+            await _panel_generate_wireguard_keypair()
+        )
+        new_payload["allowedIPsByInbound"] = wireguard_ips
+
+    attempted_ids = []
+    old_order_values = {
+        id(item): {
+            "config_link": item.get("config_link"),
+            "sub_link": item.get("sub_link"),
+            "updated_at": item.get("updated_at"),
+        }
+        for item in related_orders
+    }
+    orders_modified = False
+    try:
+        for inbound_id in sorted(target_ids):
+            attempted_ids.append(inbound_id)
+            response = await _api_request(
+                "POST",
+                f"/panel/api/clients/update/{quote(email, safe='')}?inboundIds={inbound_id}",
+                json=new_payload,
+            )
+            if not _panel_success(response):
+                raise RuntimeError(
+                    f"پنل در به‌روزرسانی اینباند {inbound_id} خطا داد: "
+                    f"{(response or {}).get('msg', 'پاسخ نامعتبر')}"
+                )
+
+        verified_obj = await _fetch_panel_client(email)
+        verified_client = verified_obj["client"]
+        if verified_client.get("subId") != new_sub_id:
+            raise RuntimeError("subId جدید در پنل تأیید نشد")
+        if "id" in new_payload:
+            actual_uuid = verified_client.get("uuid") or verified_client.get("id")
+            if actual_uuid != new_payload["id"]:
+                raise RuntimeError("UUID جدید در پنل تأیید نشد")
+        if "password" in new_payload and verified_client.get("password") != new_payload["password"]:
+            raise RuntimeError("رمز جدید در پنل تأیید نشد")
+        if "privateKey" in new_payload and (
+            verified_client.get("privateKey") != new_payload["privateKey"]
+            or verified_client.get("publicKey") != new_payload["publicKey"]
+        ):
+            raise RuntimeError("کلیدهای WireGuard جدید در پنل تأیید نشدند")
+
+        fresh_inbounds = await _api_request("GET", "/panel/api/inbounds/list")
+        if not _panel_success(fresh_inbounds) or not isinstance(fresh_inbounds.get("obj"), list):
+            raise RuntimeError("تأیید نهایی تنظیمات اینباند از پنل ممکن نشد")
+        for inbound in fresh_inbounds["obj"]:
+            if inbound.get("id") not in target_ids:
+                continue
+            settings = _decode_inbound_settings(inbound)
+            matched = [
+                item for item in settings.get("clients", [])
+                if isinstance(item, dict) and item.get("email") == email
+            ]
+            if len(matched) != 1:
+                raise RuntimeError(f"کلاینت در اینباند {inbound.get('id')} تأیید نشد")
+            protocol = str(inbound.get("protocol", "")).lower()
+            client = matched[0]
+            if protocol in ("vless", "vmess", "tuic") and client.get("id") != new_payload["id"]:
+                raise RuntimeError(f"UUID جدید در اینباند {inbound.get('id')} تأیید نشد")
+            if protocol in ("trojan", "shadowsocks", "tuic") and client.get("password") != new_payload["password"]:
+                raise RuntimeError(f"رمز جدید در اینباند {inbound.get('id')} تأیید نشد")
+            if protocol in ("wireguard", "amneziawg") and (
+                client.get("privateKey") != new_payload["privateKey"]
+                or client.get("publicKey") != new_payload["publicKey"]
+            ):
+                raise RuntimeError(f"کلید جدید در اینباند {inbound.get('id')} تأیید نشد")
+
+        new_links = await xui_get_client_links(email)
+        if url_protocols and not new_links:
+            raise RuntimeError("لینک‌های جدید از پنل دریافت نشدند")
+        if old_links and new_links and set(old_links).intersection(new_links):
+            raise RuntimeError("بعضی لینک‌های قبلی هنوز فعال هستند")
+
+        new_subscription_link = build_sub_link_from_client(email, verified_client)
+        if (
+            not new_subscription_link
+            or _subscription_id_from_link(new_subscription_link) != new_sub_id
+        ):
+            raise RuntimeError("لینک اشتراک جدید از subId تأییدشده ساخته نشد")
+
+        for related_order in related_orders:
+            related_order["config_link"] = new_subscription_link
+            related_order["sub_link"] = new_subscription_link
+            related_order["updated_at"] = datetime.now().isoformat()
+        orders_modified = True
+        if not save_json(DB_FILES["orders"], orders):
+            raise RuntimeError("لینک جدید پنل ذخیره نشد؛ تغییرات در حال بازگردانی است")
+
+    except Exception as operation_error:
+        if orders_modified:
+            for related_order in related_orders:
+                previous = old_order_values[id(related_order)]
+                for field, value in previous.items():
+                    if value is None:
+                        related_order.pop(field, None)
+                    else:
+                        related_order[field] = value
+            if not save_json(DB_FILES["orders"], orders):
+                logger.critical("ذخیرهٔ مقدار قبلی لینک سفارش پس از شکست عملیات انجام نشد")
+
+        rollback_errors = []
+        for inbound_id in reversed(attempted_ids):
+            rollback = await _api_request(
+                "POST",
+                f"/panel/api/clients/update/{quote(email, safe='')}?inboundIds={inbound_id}",
+                json=old_payload,
+            )
+            if not _panel_success(rollback):
+                rollback_errors.append(inbound_id)
+        if attempted_ids and not rollback_errors:
+            try:
+                restored_obj = await _fetch_panel_client(email)
+                restored_client = restored_obj["client"]
+                restored_uuid = restored_client.get("uuid") or restored_client.get("id")
+                if (
+                    restored_client.get("subId") != old_payload["subId"]
+                    or restored_uuid != old_payload["id"]
+                    or restored_client.get("password") != old_payload["password"]
+                    or restored_client.get("privateKey") != old_payload["privateKey"]
+                    or restored_client.get("publicKey") != old_payload["publicKey"]
+                ):
+                    rollback_errors.append("client-record")
+
+                restored_inbounds = await _api_request("GET", "/panel/api/inbounds/list")
+                if not _panel_success(restored_inbounds) or not isinstance(
+                    restored_inbounds.get("obj"), list
+                ):
+                    rollback_errors.append("inbound-verification")
+                else:
+                    restored_by_id = {
+                        inbound.get("id"): inbound
+                        for inbound in restored_inbounds["obj"]
+                        if isinstance(inbound, dict)
+                    }
+                    for inbound_id in attempted_ids:
+                        inbound = restored_by_id.get(inbound_id)
+                        if not inbound:
+                            rollback_errors.append(inbound_id)
+                            continue
+                        settings = _decode_inbound_settings(inbound)
+                        restored_matches = [
+                            item for item in settings.get("clients", [])
+                            if isinstance(item, dict) and item.get("email") == email
+                        ]
+                        expected = next(
+                            item["client"] for item in targets if item["id"] == inbound_id
+                        )
+                        protocol = next(
+                            item["protocol"] for item in targets if item["id"] == inbound_id
+                        )
+                        if len(restored_matches) != 1:
+                            rollback_errors.append(inbound_id)
+                            continue
+                        restored = restored_matches[0]
+                        credential_fields = []
+                        if protocol in ("vless", "vmess", "tuic"):
+                            credential_fields.append("id")
+                        if protocol in ("trojan", "shadowsocks", "tuic"):
+                            credential_fields.append("password")
+                        if protocol == "hysteria":
+                            credential_fields.append("auth")
+                        if protocol in ("wireguard", "amneziawg"):
+                            credential_fields.extend(("privateKey", "publicKey"))
+                        if any(restored.get(field) != expected.get(field) for field in credential_fields):
+                            rollback_errors.append(inbound_id)
+
+                restored_links = await xui_get_client_links(email)
+                if old_links and (
+                    not restored_links or set(restored_links) != set(old_links)
+                ):
+                    rollback_errors.append("subscription-links")
+            except Exception as rollback_verification_error:
+                logger.error(
+                    "تأیید بازگردانی پنل برای کلاینت %s خطا داد: %s",
+                    email,
+                    rollback_verification_error,
+                    exc_info=True,
+                )
+                rollback_errors.append("verification-error")
+        if rollback_errors:
+            logger.critical(
+                "بازگردانی چرخش لینک کلاینت %s ناموفق بود؛ اینباندهای نیازمند بررسی: %s",
+                email,
+                rollback_errors,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"{operation_error}; بازگردانی پنل برای اینباندهای {rollback_errors} ناموفق بود"
+            ) from operation_error
+        raise RuntimeError(f"{operation_error}; تغییرات پنل بازگردانی شد") from operation_error
+
+    for cached_order_id in list(CONFIG_LINKS_CACHE):
+        cached_order = orders.get(str(cached_order_id), orders.get(cached_order_id))
+        if any(cached_order is item for item in related_orders):
+            CONFIG_LINKS_CACHE.pop(cached_order_id, None)
+    return new_subscription_link, new_links or []
+
+
+async def _show_rotated_subscription(
+    chat_id: int, order_id: int, subscription_link: str, lang: str
+):
+    caption = (
+        "✅ <b>لینک اشتراک با موفقیت تغییر کرد</b>\n"
+        "حجم و زمان باقی‌مانده حفظ شده است.\n\n"
+        f"🔗 <b>لینک جدید:</b>\n<code>{html.escape(subscription_link)}</code>"
+        if lang == "fa"
+        else "✅ <b>Subscription link changed successfully</b>\n"
+        "Your remaining quota and time were preserved.\n\n"
+        f"🔗 <b>New link:</b>\n<code>{html.escape(subscription_link)}</code>"
+    )
+    await bot.send_photo(
+        chat_id,
+        generate_qr_code(subscription_link, order_id),
+        caption=caption,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang),
+    )
+
+
+@dp.callback_query(F.data.regexp(r"^change_link_\d+_[012]$"))
+async def change_subscription_link_start(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get("lang", "fa")
+    try:
+        _, _, order_id_raw, mode_raw = callback.data.split("_")
+        order_id = int(order_id_raw)
+        mode = int(mode_raw)
+    except (ValueError, AttributeError):
+        await callback.answer("❌ درخواست نامعتبر است" if lang == "fa" else "❌ Invalid request", show_alert=True)
+        return
+
+    order = orders.get(str(order_id))
+    if (
+        mode not in (0, 1, 2)
+        or not order
+        or order.get("user_id") != user_id
+        or order.get("status") not in ("approved", "inactive")
+        or not order.get("email")
+        or not order.get("config_link")
+    ):
+        await callback.answer("❌ کانفیگ قابل تغییر نیست" if lang == "fa" else "❌ This config cannot be changed", show_alert=True)
+        return
+
+    prompt = (
+        "🔗 <b>تغییر لینک اشتراک</b>\n\n"
+        "یک لینک تازه ساخته می‌شود و <b>لینک فعلی کاملاً از کار می‌افتد</b>. "
+        "هر دستگاهی که با لینک قدیمی وصل است همان لحظه قطع می‌شود و باید لینک جدید را روی آن وارد کنی.\n"
+        "حجم و روزهای باقی‌مانده دقیقاً حفظ می‌شوند.\n\n"
+        "ادامه بدهم؟"
+        if lang == "fa"
+        else "🔗 <b>Change subscription link</b>\n\n"
+        "A new link will be created and the <b>current link will stop working</b>. "
+        "Devices using the old link will disconnect and must be updated with the new one.\n"
+        "Your remaining data and time will be preserved.\n\n"
+        "Continue?"
+    )
+    confirmation = await callback.message.answer(
+        prompt,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="❌ نه" if lang == "fa" else "❌ No",
+                callback_data="change_link_no",
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                text="✅ بله، تغییر بده" if lang == "fa" else "✅ Yes, change it",
+                callback_data="change_link_yes",
+                style="danger",
+            ),
+        ]]),
+    )
+    LINK_ROTATION_CONFIRMATIONS[(user_id, confirmation.message_id)] = {
+        "order_id": order_id,
+        "email": order["email"],
+        "origin_message_id": callback.message.message_id,
+        "processing": False,
+    }
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "change_link_no")
+async def change_subscription_link_cancel(callback: CallbackQuery):
+    key = (callback.from_user.id, callback.message.message_id)
+    LINK_ROTATION_CONFIRMATIONS.pop(key, None)
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.warning(f"خطا در پاک‌کردن پیام لغو تغییر لینک: {e}")
+    await callback.answer("عملیات لغو شد" if get_user(callback.from_user.id).get("lang", "fa") == "fa" else "Cancelled")
+
+
+@dp.callback_query(F.data == "change_link_yes")
+async def change_subscription_link_confirm(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get("lang", "fa")
+    key = (user_id, callback.message.message_id)
+    confirmation = LINK_ROTATION_CONFIRMATIONS.get(key)
+    if not confirmation or confirmation["processing"]:
+        await callback.answer(
+            "این درخواست منقضی یا در حال اجراست" if lang == "fa" else "This request expired or is already running",
+            show_alert=True,
+        )
+        return
+
+    confirmation["processing"] = True
+    order_id = confirmation["order_id"]
+    email = confirmation["email"]
+    lock = LINK_ROTATION_LOCKS.setdefault(email, asyncio.Lock())
+    await callback.answer("⏳ در حال بررسی پنل..." if lang == "fa" else "⏳ Checking the panel...")
+    try:
+        await callback.message.edit_text(
+            "⏳ در حال تغییر امن لینک و بررسی پنل..." if lang == "fa"
+            else "⏳ Rotating the link and verifying the panel...",
+        )
+        async with lock:
+            subscription_link, _ = await _rotate_panel_client_identity(email, user_id, order_id)
+    except Exception as e:
+        confirmation["processing"] = False
+        logger.error(
+            "خطا در تغییر لینک اشتراک سفارش #%s برای کاربر %s: %s",
+            order_id,
+            user_id,
+            e,
+            exc_info=True,
+        )
+        LINK_ROTATION_CONFIRMATIONS.pop(key, None)
+        rollback_failed = "بازگردانی پنل برای اینباندهای" in str(e)
+        error_intro = (
+            "❌ تغییر لینک ناموفق بود؛ لینک قبلی حفظ شده است."
+            if lang == "fa" and not rollback_failed
+            else "⚠️ تغییر لینک ناموفق بود و بازگردانی کامل تأیید نشد؛ با پشتیبانی تماس بگیر."
+            if lang == "fa"
+            else "❌ Link rotation failed; the previous link remains active."
+            if not rollback_failed
+            else "⚠️ Link rotation failed and full rollback could not be verified; contact support."
+        )
+        try:
+            await callback.message.edit_text(
+                f"{error_intro}\n\n<code>{html.escape(str(e)[:400])}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as delete_error:
+            logger.warning(f"خطا در نمایش خطای تغییر لینک: {delete_error}")
+        return
+
+    LINK_ROTATION_CONFIRMATIONS.pop(key, None)
+    try:
+        await bot.delete_message(callback.message.chat.id, confirmation["origin_message_id"])
+    except Exception as e:
+        logger.warning(f"خطا در حذف صفحهٔ حاوی لینک قدیمی: {e}")
+    try:
+        await callback.message.delete()
+    except Exception as e:
+        logger.warning(f"خطا در حذف پیام تأیید تغییر لینک: {e}")
+    try:
+        await _show_rotated_subscription(
+            callback.message.chat.id,
+            order_id,
+            subscription_link,
+            lang,
+        )
+    except Exception as e:
+        logger.error(f"خطا در نمایش QR لینک جدید سفارش #{order_id}: {e}", exc_info=True)
+        await bot.send_message(
+            callback.message.chat.id,
+            (
+                "✅ لینک تغییر کرد؛ QR ساخته/ارسال نشد.\n"
+                f"🔗 <code>{html.escape(subscription_link)}</code>"
+                if lang == "fa"
+                else "✅ Link changed; the QR could not be sent.\n"
+                f"🔗 <code>{html.escape(subscription_link)}</code>"
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang),
+        )
+    logger.info("کاربر %s لینک اشتراک سفارش #%s را تغییر داد", user_id, order_id)
+
+
 async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
     """دریافت لینک‌های کانفیگ با کش (برای صفحه‌بندی)"""
     now = datetime.now()
@@ -21679,7 +22410,13 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             style="success"
         )])
 
-    # --- دکمه‌های عملیات (بدون بروزرسانی) ---
+    buttons.append([InlineKeyboardButton(
+        text="🔗 تغییر لینک اشتراک" if lang == "fa" else "🔗 Change subscription link",
+        callback_data=f"change_link_{order_id}_2",
+        style="primary",
+    )])
+
+    # --- دکمه‌های عملیات ---
     buttons.append([InlineKeyboardButton(
         text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
         callback_data="back_to_main",
