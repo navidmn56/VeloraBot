@@ -30213,12 +30213,12 @@ def add_message(chat_id: int, sender: str, text: str):
         save_all()
 
 
-def close_chat(chat_id: int, closed_by: str = "user"):
-    """بستن چت با اطلاع‌رسانی به ادمین"""
+async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool = True):
+    """بستن چت و اطلاع‌رسانی به طرف مقابل."""
     cid = str(chat_id)
     
     chat = chats.get(cid)
-    if chat:
+    if chat and chat.get('status') != 'closed':
         user_id = chat.get('user_id')
         if log_system and user_id:
             asyncio.create_task(log_system.log_chat_closed(chat_id, user_id, closed_by))
@@ -30227,21 +30227,71 @@ def close_chat(chat_id: int, closed_by: str = "user"):
         chat['closed_at'] = datetime.now().isoformat()
         chat['updated_at'] = datetime.now().isoformat()
         save_all()
-        if closed_by == "user":
-            asyncio.create_task(
-                bot.send_message(
-                    ADMIN_ID_INT,
-                    f"🔒 چت #{chat_id} توسط کاربر بسته شد.\n"
-                    f"👤 کاربر: {get_user(user_id).get('name', 'نامشخص')} (ID: {user_id})\n"
-                    f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
+        if notify_other and user_id:
+            recipient_id = ADMIN_ID_INT if closed_by == "user" else user_id
+            recipient_lang = (
+                get_user(user_id).get('lang', 'fa')
+                if recipient_id == user_id
+                else get_user(ADMIN_ID_INT).get('lang', 'fa')
             )
+            is_ticket = chat.get('kind') == 'ticket'
+            if recipient_id == user_id:
+                notification = (
+                    f"🔒 تیکت #{chat_id} توسط پشتیبانی بسته شد."
+                    if is_ticket
+                    else f"🔒 گفتگو #{chat_id} توسط پشتیبانی بسته شد."
+                ) if recipient_lang == "fa" else (
+                    f"🔒 Ticket #{chat_id} was closed by support."
+                    if is_ticket
+                    else f"🔒 Conversation #{chat_id} was closed by support."
+                )
+            else:
+                notification = (
+                    f"🔒 تیکت #{chat_id} توسط کاربر بسته شد."
+                    if is_ticket
+                    else f"🔒 گفتگو #{chat_id} توسط کاربر بسته شد."
+                ) if recipient_lang == "fa" else (
+                    f"🔒 Ticket #{chat_id} was closed by the user."
+                    if is_ticket
+                    else f"🔒 Conversation #{chat_id} was closed by the user."
+                )
+            menu_text = "🏠 منوی اصلی" if recipient_lang == "fa" else "🏠 Main menu"
+            try:
+                await bot.send_message(
+                    recipient_id,
+                    notification,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text=menu_text, callback_data="back_to_main")
+                    ]]),
+                )
+            except Exception as e:
+                logger.error(
+                    "چت #%s بسته شد اما اعلان آن به کاربر %s ارسال نشد: %s",
+                    chat_id,
+                    recipient_id,
+                    e,
+                    exc_info=True,
+                )
         
         logger.info(f"چت #{chat_id} بسته شد - توسط: {closed_by}")
         return True
     
     logger.warning(f"چت #{chat_id} برای بسته شدن یافت نشد")
     return False
+
+
+def get_user_ticket_keyboard(chat_id: int, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⏹ پایان ارسال و منوی اصلی" if lang == "fa" else "⏹ Stop sending · Main menu",
+            callback_data=f"ticket_pause_user_{chat_id}",
+        )],
+        [InlineKeyboardButton(
+            text="🔒 بستن تیکت" if lang == "fa" else "🔒 Close ticket",
+            callback_data=f"ticket_close_user_{chat_id}",
+            style="danger",
+        )],
+    ])
 
 
 def get_active_chats() -> list:
@@ -30441,7 +30491,7 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
         )
     except Exception as e:
         logger.error(f"خطا در اعلان تیکت #{chat_id} به ادمین: {e}", exc_info=True)
-        close_chat(chat_id, closed_by="admin")
+        await close_chat(chat_id, closed_by="admin", notify_other=False)
         user_states.pop(user_id, None)
         await callback.message.answer(
             "❌ ثبت تیکت با خطا مواجه شد. لطفاً کمی بعد دوباره تلاش کنید."
@@ -30459,12 +30509,7 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
             else f"🎫 Ticket #{chat_id} is open. Send your message here; support will reply in this chat.\n"
             "Send /end to close it."
         ),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="⏹ پایان ارسال و منوی اصلی" if lang == "fa" else "⏹ Stop sending · Main menu",
-                callback_data=f"ticket_pause_user_{chat_id}",
-            )]
-        ]),
+        reply_markup=get_user_ticket_keyboard(chat_id, lang),
     )
     await callback.answer("✅ تیکت ایجاد شد" if lang == "fa" else "✅ Ticket created")
 
@@ -30567,14 +30612,14 @@ async def user_close_ticket(callback: CallbackQuery):
         await callback.answer("❌ تیکت نامعتبر است.", show_alert=True)
         return
     chat = chats.get(str(chat_id))
-    if not chat or chat.get('user_id') != user_id:
+    if not chat or chat.get('user_id') != user_id or chat.get('status') != 'open':
         await callback.answer("❌ تیکت پیدا نشد.", show_alert=True)
         return
-    close_chat(chat_id, closed_by="user")
+    await close_chat(chat_id, closed_by="user")
     user_states.pop(user_id, None)
     lang = get_user(user_id).get('lang', 'fa')
     await callback.message.edit_text(
-        "✅ تیکت بسته شد." if lang == "fa" else "✅ Ticket closed.",
+        "✅ تیکت بسته شد. به منوی اصلی برگشتید." if lang == "fa" else "✅ Ticket closed. You are back at the main menu.",
         reply_markup=get_back_only_keyboard(lang),
     )
     await callback.answer()
@@ -30644,12 +30689,7 @@ async def user_continue_ticket(callback: CallbackQuery):
         f"💬 ادامه تیکت #{chat_id}. پیام خود را بنویسید."
         if lang == "fa"
         else f"💬 Continue ticket #{chat_id}. Send your message here.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="⏹ پایان ارسال و منوی اصلی" if lang == "fa" else "⏹ Stop sending · Main menu",
-                callback_data=f"ticket_pause_user_{chat_id}",
-            )]
-        ]),
+        reply_markup=get_user_ticket_keyboard(chat_id, lang),
     )
     await callback.answer()
 
@@ -30691,12 +30731,7 @@ async def relay_support_message(
         )
     keyboard = None
     if close_ticket_for_user:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
-                text="⏹ پایان ارسال و منوی اصلی" if lang == "fa" else "⏹ Stop sending · Main menu",
-                callback_data=f"ticket_pause_user_{chat_id}",
-            )
-        ]])
+        keyboard = get_user_ticket_keyboard(chat_id, lang)
 
     if message.text:
         await bot.send_message(
@@ -30767,7 +30802,7 @@ async def handle_chat_message(message: Message):
         )
         return
     if message.text and message.text.strip() == '/end':
-        close_chat(chat_id, closed_by="user")
+        await close_chat(chat_id, closed_by="user")
         user_states.pop(user_id, None)
         if lang == "fa":
             await message.reply("✅ گفتگو پایان یافت. متشکریم!", reply_markup=get_back_only_keyboard(lang))
@@ -31234,11 +31269,11 @@ async def admin_close_chat(callback: CallbackQuery):
     chat_id = int(callback.data.split("_")[2])
     
     chat = chats.get(str(chat_id))
+    if not chat or chat.get('status') != 'open':
+        await callback.answer("❌ تیکت فعال پیدا نشد." if lang == "fa" else "❌ Active ticket not found.", show_alert=True)
+        return
     
-    if log_system and chat:
-        await log_system.log_chat_closed(chat_id, chat.get('user_id'), "admin")
-    
-    close_chat(chat_id, closed_by="admin")
+    await close_chat(chat_id, closed_by="admin")
     if chat and chat.get('user_id') in user_states:
         user_states.pop(chat['user_id'], None)
     if callback.from_user.id in user_states:
@@ -33979,7 +34014,25 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
         callback_data="exit_ai_chat",
         style="danger",
     )])
-    return strip_ai_button_directives(answer), InlineKeyboardMarkup(inline_keyboard=buttons)
+    display_answer = strip_ai_button_directives(answer)
+    if not display_answer:
+        if any(
+            button.callback_data in ("invite_friends", "ai_action_invite_friends")
+            for row in buttons
+            for button in row
+        ):
+            display_answer = (
+                "برای دعوت از دوستان، دکمهٔ زیر را بزنید تا لینک دعوتتان را دریافت کنید."
+                if lang == "fa"
+                else "Tap the button below to get your personal invitation link."
+            )
+        else:
+            display_answer = (
+                "برای ادامه، یکی از دکمه‌های پیشنهادی زیر را انتخاب کنید."
+                if lang == "fa"
+                else "Choose one of the suggested buttons below to continue."
+            )
+    return display_answer, InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 @dp.callback_query(F.data.startswith("ai_action_"))
@@ -34240,8 +34293,13 @@ async def get_ai_response(
                                     return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
                                 
                                 if user_id:
+                                    memory_reply = strip_ai_button_directives(reply)
+                                    if not memory_reply:
+                                        memory_reply = (
+                                            "برای ادامه، از دکمه‌های پیشنهادی زیر استفاده کنید."
+                                        )
                                     conversation_memory.add_message(user_id, 'user', message_text)
-                                    conversation_memory.add_message(user_id, 'assistant', strip_ai_button_directives(reply))
+                                    conversation_memory.add_message(user_id, 'assistant', memory_reply)
                                 
                                 logger.info(f"✅ پاسخ Gemini دریافت شد - طول: {len(reply)} کاراکتر")
                                 return reply
