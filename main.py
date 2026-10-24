@@ -27988,6 +27988,7 @@ async def confirm_approve_package(callback: CallbackQuery):
         approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         inbound_id=selected_inbounds
     )
+    await update_user_receipt_review_status(order, 'approved')
     
     await check_referral_bonus(uid)
     coupon_consumed = consume_coupon(uid)
@@ -28826,6 +28827,7 @@ async def approve_direct(callback: CallbackQuery):
     
     await callback.answer("⏳ در حال پردازش...")
     update_order(order_id, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    await update_user_receipt_review_status(order, 'approved')
     if log_system:
         await log_system.log_order_approved(order_id, user_id)
     await check_referral_bonus(user_id)
