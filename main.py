@@ -1195,6 +1195,93 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
             f"1. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
             f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
         )
+
+
+def build_receipt_review_status_text(order: dict, status: str, lang: str) -> str:
+    order_id = order.get('order_id', '?')
+    parent_order_id = order.get('parent_order_id')
+    is_balance_charge = order.get('type') == 'balance_charge'
+
+    if lang == "fa":
+        title = (
+            "✅ <b>پرداخت تأیید شد</b>"
+            if status == "approved"
+            else "❌ <b>فیش رد شد</b>"
+        )
+        if is_balance_charge:
+            title = (
+                "✅ <b>شارژ حساب تأیید شد</b>"
+                if status == "approved"
+                else "❌ <b>فیش شارژ حساب رد شد</b>"
+            )
+        details = f"🆔 شماره سفارش: #{order_id}"
+        if parent_order_id is not None:
+            details += f"\n🔄 تمدید سرویس #{parent_order_id}"
+    else:
+        title = (
+            "✅ <b>Payment approved</b>"
+            if status == "approved"
+            else "❌ <b>Receipt rejected</b>"
+        )
+        if is_balance_charge:
+            title = (
+                "✅ <b>Balance charge approved</b>"
+                if status == "approved"
+                else "❌ <b>Balance charge receipt rejected</b>"
+            )
+        details = f"🆔 Order number: #{order_id}"
+        if parent_order_id is not None:
+            details += f"\n🔄 Service renewal for order #{parent_order_id}"
+
+    return f"{title}\n\n{details}"
+
+
+async def update_user_receipt_review_status(order: dict, status: str) -> bool:
+    message_id = order.get('receipt_status_message_id')
+    receipt_chat_id = order.get('receipt_status_chat_id')
+    chat_id = receipt_chat_id or order.get('user_id')
+    if not message_id or not receipt_chat_id:
+        logger.warning(
+            "شناسه پیام پاسخ فیش برای سفارش #%s موجود نیست؛ اعلان وضعیت جدید ارسال می‌شود",
+            order.get('order_id', '?'),
+        )
+
+    user_id = order.get('user_id')
+    lang = order.get('receipt_status_lang') or get_user(user_id).get('lang', 'fa')
+    status_text = build_receipt_review_status_text(order, status, lang)
+    if message_id and receipt_chat_id:
+        try:
+            await bot.edit_message_text(
+                status_text,
+                chat_id=receipt_chat_id,
+                message_id=message_id,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+        except Exception as e:
+            logger.warning(
+                "ویرایش پیام وضعیت فیش سفارش #%s ناموفق بود؛ اعلان پاسخ‌دار ارسال می‌شود: %s",
+                order.get('order_id', '?'),
+                e,
+                exc_info=True,
+            )
+
+    try:
+        await bot.send_message(
+            chat_id,
+            status_text,
+            parse_mode=ParseMode.HTML,
+            reply_to_message_id=message_id if receipt_chat_id and message_id else None,
+        )
+        return True
+    except Exception as e:
+        logger.error(
+            "ارسال اعلان وضعیت فیش سفارش #%s ناموفق بود: %s",
+            order.get('order_id', '?'),
+            e,
+            exc_info=True,
+        )
+        return False
         
         
 @dp.callback_query(F.data.startswith("inbound_clear_"))
@@ -25037,7 +25124,13 @@ async def handle_receipt(message: Message):
             success += f"{premium_emoji('id','🆔')} Order number: #{order_id}\n"
             success += f"{premium_emoji('time','⏳')} Pending approval..."
     
-    await message.reply(success, parse_mode=ParseMode.HTML)
+    receipt_status_message = await message.reply(success, parse_mode=ParseMode.HTML)
+    update_order(
+        order_id,
+        receipt_status_chat_id=receipt_status_message.chat.id,
+        receipt_status_message_id=receipt_status_message.message_id,
+        receipt_status_lang=lang,
+    )
     
     if user_id in user_states:
         user_states[user_id]['awaiting_receipt'] = False
@@ -25255,6 +25348,7 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
                 payment_method='custom_payment_receipt',
                 amount=amount,
                 approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    await update_user_receipt_review_status(order, 'approved')
     add_balance(user_id, amount)
     if log_system:
         await log_system.log_balance_change(
@@ -25759,6 +25853,8 @@ async def approve_receipt(callback: CallbackQuery):
         # ✅ صدا زدن مستقیم تابع approve_balance با پارامترهای لازم
         # به جای تغییر callback.data، مستقیم تابع را صدا بزنید
         await approve_balance(callback, order_id=oid)
+        if order.get('status') == 'approved':
+            await update_user_receipt_review_status(order, 'approved')
         return
     
     # ==================== بخش خرید معمولی ====================
@@ -28311,6 +28407,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
         approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         inbound_id=inbound_id,   # ✅ اینباندهای فیلترشده رو ذخیره کن
     )
+    await update_user_receipt_review_status(order, 'approved')
     
     coupon_consumed = consume_coupon(uid)
     if coupon_consumed:
@@ -28648,22 +28745,12 @@ async def reject_receipt(callback: CallbackQuery):
     
     # ✅ حالا می‌توانیم رد کنیم
     update_order(order_id, status='rejected')
+    await update_user_receipt_review_status(order, 'rejected')
     
     if log_system:
         await log_system.log_order_rejected(order_id, order['user_id'], "فیش نامعتبر")
     
     CustomLogger.log_event('ORDER_REJECTED', f'سفارش #{order_id} توسط ادمین رد شد', order['user_id'])
-    
-    try:
-        user_lang = get_user(order['user_id']).get('lang', 'fa')
-        if user_lang == 'fa':
-            await send_sticker(order['user_id'], 'order_rejected', '❌')
-            await bot.send_message(order['user_id'], f"{premium_emoji('fail','❌')} سفارش #{order_id} شما رد شد")
-        else:
-            await send_sticker(order['user_id'], 'order_rejected', '❌')
-            await bot.send_message(order['user_id'], f"{premium_emoji('fail','❌')} Your order #{order_id} has been rejected")
-    except:
-        pass
     
     # ✅ حذف پیام از چت ادمین
     try:
