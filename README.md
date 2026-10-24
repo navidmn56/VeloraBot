@@ -36,7 +36,7 @@ It provides an automated environment for selling and managing VPN configurations
 
 The bot is designed to work specifically with **MHSanaei 3X-UI** and its API.
 
-Smart support lets users choose AI chat or open a support ticket. A ticket can optionally reference one of the user's configurations; administrators can review the user's profile and available configuration details while replying. AI responses can also show context-aware buttons for supported bot actions such as starting a purchase, requesting an available test, or renewing one of the user's eligible services.
+Smart support lets users choose AI chat or open a support ticket. A ticket can optionally reference one of the user's configurations; administrators can review the user's profile and available configuration details while replying. Users and administrators can exchange text and supported media in tickets, and users can pause ticket input without closing the ticket. AI receives a read-only snapshot limited to the current user's profile and orders, and can show context-aware buttons for account, configuration, coupon, balance, referral, language, purchase, test, support, and eligible renewal actions.
 
 ---
 
@@ -50,8 +50,8 @@ Smart support lets users choose AI chat or open a support ticket. A ticket can o
 | **Service Renewal**        | Allow users to renew existing VPN services               |
 | **Payments**               | Balance management, orders and receipt handling          |
 | **Referrals**              | Referral links and reward system                         |
-| **Smart Support**          | Choose between Google Gemini AI and a human-support ticket |
-| **Support Tickets**        | Two-way user/admin messaging with optional config selection |
+| **Smart Support**          | Choose between Google Gemini AI and a human-support ticket; AI context is read-only and user-scoped |
+| **Support Tickets**        | Two-way text/media messaging, optional config selection, and pausing user input without closing the ticket |
 | **Logging**                | Application and Telegram logging                         |
 | **Configuration Delivery** | Automated configuration and subscription delivery        |
 | **User Management**        | Manage users and their services                          |
