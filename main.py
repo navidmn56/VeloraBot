@@ -1236,7 +1236,21 @@ def build_receipt_review_status_text(order: dict, status: str, lang: str) -> str
     return f"{title}\n\n{details}"
 
 
+def get_receipt_status_metadata(order: dict) -> dict:
+    fields = (
+        'receipt_status_chat_id',
+        'receipt_status_message_id',
+        'receipt_status_lang',
+    )
+    return {field: order.get(field) for field in fields}
+
+
 async def update_user_receipt_review_status(order: dict, status: str) -> bool:
+    order_id = order.get('order_id')
+    latest_order = orders.get(str(order_id))
+    if isinstance(latest_order, dict):
+        order = latest_order
+
     message_id = order.get('receipt_status_message_id')
     receipt_chat_id = order.get('receipt_status_chat_id')
     chat_id = receipt_chat_id or order.get('user_id')
@@ -32377,6 +32391,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                         'payment_method': order.get('payment_method', 'sync_from_panel'),
                         'payment_label': order.get('payment_label', ''),
                         'receipt_photo_id': order.get('receipt_photo_id'),
+                        **get_receipt_status_metadata(order),
                         'config_id': order.get('config_id'),
                         'notes': order.get('notes', ''),
                         'created_at': order.get('created_at', datetime.now().isoformat()),
@@ -32500,6 +32515,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 'config_link': sub_link,
                 'config_id': config_id,
                 'receipt_photo_id': receipt_photo_id,
+                **get_receipt_status_metadata(old_info or {}),
                 'email': email,
                 'sub_id': sub_id_value,
                 'sub_link': sub_link,
@@ -32704,6 +32720,7 @@ async def sync_user_configs(user_id: int) -> dict:
             'payment_method': order.get('payment_method', 'sync_from_panel'),
             'payment_label': order.get('payment_label', ''),
             'receipt_photo_id': order.get('receipt_photo_id'),
+            **get_receipt_status_metadata(order),
             'config_id': order.get('config_id'),
             'notes': order.get('notes', ''),
             'created_at': order.get('created_at', datetime.now().isoformat()),
@@ -32789,6 +32806,7 @@ async def sync_user_configs(user_id: int) -> dict:
             'config_link': sub_link,
             'config_id': config_id,
             'receipt_photo_id': receipt_photo_id,
+            **get_receipt_status_metadata(old_info or {}),
             'email': email,
             'sub_id': sub_id_value,
             'sub_link': sub_link,
