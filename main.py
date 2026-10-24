@@ -22683,11 +22683,18 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     )])
 
     # --- دکمه‌های عملیات ---
-    buttons.append([InlineKeyboardButton(
-        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
-        callback_data="back_to_main",
-        style="danger"
-    )])
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 بازگشت به کانفیگ" if lang == "fa" else "🔙 Back to Config",
+            callback_data=f"view_config_{order_id}",
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main",
+            style="danger",
+        ),
+    ])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 

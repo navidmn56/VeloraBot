@@ -659,6 +659,27 @@ class AlertSystem:
     # ═══════════════════════════════════════════
     # Notifications
     # ═══════════════════════════════════════════
+
+    def _build_alert_keyboard(self, order_id: int, lang: str, is_test: bool) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=(
+                    "🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service"
+                ) if is_test else (
+                    "🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service"
+                ),
+                callback_data="buy_service" if is_test else f"extend_service_{order_id}",
+                style="success" if is_test else "primary",
+            )],
+            [InlineKeyboardButton(
+                text="📁 مشاهده کانفیگ" if lang == 'fa' else "📁 View Config",
+                callback_data=f"view_config_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                text="🏠 منوی اصلی" if lang == 'fa' else "🏠 Main Menu",
+                callback_data="back_to_main",
+            )],
+        ])
     
     async def _notify_volume(
         self, 
@@ -680,110 +701,89 @@ class AlertSystem:
         used_display = self._format_volume(used_gb)
         total_display = self._format_volume(total_gb)
         remaining_display = self._format_volume(remaining_gb)
-        
-        if threshold_label == "exhausted":
-            if is_test:
-                if lang == 'fa':
+        exhausted = threshold_label == "exhausted"
+        service_name = "سرویس آزمایشی" if is_test else "سرویس"
+        service_name_en = "test service" if is_test else "service"
+
+        if lang == 'fa':
+            if exhausted:
+                if is_test:
                     text = (
-                        f"❌ <b>حجم تست تمام شد</b>\n\n"
-                        f"🧪 حجم سرویس تست شما به پایان رسید!\n\n"
-                        f"📊 مصرف: {used_display} از {total_display}\n\n"
-                        f"💡 برای ادامه استفاده، سرویس کامل تهیه کنید."
+                        f"❌ <b>حجم سرویس آزمایشی به پایان رسیده است</b>\n\n"
+                        f"🧪 حجم تست شما به‌طور کامل مصرف شده است.\n\n"
+                        f"🆔 شماره سفارش: #{order_id}\n"
+                        f"📊 میزان مصرف: {used_display} از {total_display}\n\n"
+                        f"سرویس آزمایشی قابل تمدید نیست. برای ادامه استفاده، سرویس اصلی را از بخش خرید تهیه کنید."
                     )
                 else:
                     text = (
-                        f"❌ <b>Test Volume Exhausted</b>\n\n"
-                        f"🧪 Your test service volume is exhausted!\n\n"
-                        f"📊 Used: {used_display} of {total_display}\n\n"
-                        f"💡 Purchase a full service to continue."
+                        f"❌ <b>حجم سرویس به پایان رسیده است</b>\n\n"
+                        f"📡 حجم {service_name} شما به‌طور کامل مصرف شده است.\n\n"
+                        f"🆔 شماره سفارش: #{order_id}\n"
+                        f"📊 میزان مصرف: {used_display} از {total_display}\n"
+                        f"📉 حجم باقی‌مانده: {remaining_display}\n\n"
+                        f"برای ادامه استفاده، کانفیگ را مشاهده کنید یا سرویس خود را تمدید کنید."
                     )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
-                        callback_data="buy_service",
-                        style="success"
-                    )]
-                ])
             else:
-                if lang == 'fa':
+                if is_test:
                     text = (
-                        f"❌ <b>حجم سرویس تمام شد</b>\n\n"
-                        f"📡 حجم سرویس شما به پایان رسید!\n\n"
-                        f"🆔 سفارش: #{order_id}\n"
-                        f"📊 مصرف: {used_display} از {total_display}\n\n"
-                        f"💡 می‌توانید از بخش «کانفیگ‌های من» سرویس خود را تمدید کنید."
+                        f"⚠️ <b>حجم سرویس آزمایشی رو به اتمام است</b>\n\n"
+                        f"🧪 بخش عمده‌ای از حجم تست شما مصرف شده است.\n\n"
+                        f"🆔 شماره سفارش: #{order_id}\n"
+                        f"📊 میزان مصرف: {used_display} از {total_display}\n"
+                        f"📉 حجم باقی‌مانده: {remaining_display} ({remaining_percent:.1f}٪)\n\n"
+                        f"سرویس تست قابل تمدید نیست؛ برای ادامه پس از پایان تست، سرویس اصلی را خریداری کنید."
                     )
                 else:
                     text = (
-                        f"❌ <b>Service Volume Exhausted</b>\n\n"
-                        f"📡 Your service volume is exhausted!\n\n"
-                        f"🆔 Order: #{order_id}\n"
-                        f"📊 Used: {used_display} of {total_display}\n\n"
-                        f"💡 You can renew your service from 'My Configs'."
+                        f"⚠️ <b>حجم سرویس رو به اتمام است</b>\n\n"
+                        f"📡 بخش عمده‌ای از حجم {service_name} شما مصرف شده است.\n\n"
+                        f"🆔 شماره سفارش: #{order_id}\n"
+                        f"📊 میزان مصرف: {used_display} از {total_display}\n"
+                        f"📉 حجم باقی‌مانده: {remaining_display} ({remaining_percent:.1f}٪)\n\n"
+                        f"برای جلوگیری از وقفه، وضعیت کانفیگ را بررسی و در صورت نیاز آن را تمدید کنید."
                     )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data=f"extend_service_{order_id}",
-                        style="primary"
-                    )]
-                ])
         else:
-            if is_test:
-                if lang == 'fa':
+            if exhausted:
+                if is_test:
                     text = (
-                        f"⚠️ <b>هشدار مصرف تست</b>\n\n"
-                        f"🧪 سرویس تست شما در حال اتمام است!\n\n"
-                        f"📊 مصرف: {used_display} از {total_display}\n"
-                        f"📊 باقی‌مانده: {remaining_display} ({remaining_percent:.1f}%)\n\n"
-                        f"💡 برای ادامه استفاده، سرویس کامل تهیه کنید."
+                        f"❌ <b>Test service data allowance exhausted</b>\n\n"
+                        f"🧪 Your test data allowance has been fully used.\n\n"
+                        f"🆔 Order: #{order_id}\n"
+                        f"📊 Used: {used_display} of {total_display}\n\n"
+                        f"Test services cannot be renewed. Purchase a full service to continue."
                     )
                 else:
                     text = (
-                        f"⚠️ <b>Test Service Warning</b>\n\n"
-                        f"🧪 Your test service is running out!\n\n"
-                        f"📊 Used: {used_display} of {total_display}\n"
-                        f"📊 Remaining: {remaining_display} ({remaining_percent:.1f}%)\n\n"
-                        f"💡 Purchase a full service to continue."
-                    )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
-                        callback_data="buy_service",
-                        style="success"
-                    )]
-                ])
-            else:
-                if lang == 'fa':
-                    text = (
-                        f"⚠️ <b>هشدار مصرف سرویس</b>\n\n"
-                        f"📡 سرویس شما در حال اتمام است!\n\n"
-                        f"🆔 سفارش: #{order_id}\n"
-                        f"📊 مصرف: {used_display} از {total_display}\n"
-                        f"📊 باقی‌مانده: {remaining_display} ({remaining_percent:.1f}%)\n\n"
-                        f"💡 می‌توانید از بخش «کانفیگ‌های من» سرویس خود را تمدید کنید."
-                    )
-                else:
-                    text = (
-                        f"⚠️ <b>Service Usage Warning</b>\n\n"
-                        f"📡 Your service is running out!\n\n"
+                        f"❌ <b>Service data allowance exhausted</b>\n\n"
+                        f"📡 Your {service_name_en} has used its full data allowance.\n\n"
                         f"🆔 Order: #{order_id}\n"
                         f"📊 Used: {used_display} of {total_display}\n"
-                        f"📊 Remaining: {remaining_display} ({remaining_percent:.1f}%)\n\n"
-                        f"💡 You can renew your service from 'My Configs'."
+                        f"📉 Remaining: {remaining_display}\n\n"
+                        f"View your config or renew the service to continue."
                     )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data=f"extend_service_{order_id}",
-                        style="primary"
-                    )]
-                ])
+            else:
+                if is_test:
+                    text = (
+                        f"⚠️ <b>Test service data is running low</b>\n\n"
+                        f"🧪 Most of your test data allowance has been used.\n\n"
+                        f"🆔 Order: #{order_id}\n"
+                        f"📊 Used: {used_display} of {total_display}\n"
+                        f"📉 Remaining: {remaining_display} ({remaining_percent:.1f}%)\n\n"
+                        f"Test services cannot be renewed. Purchase a full service when you are ready to continue."
+                    )
+                else:
+                    text = (
+                        f"⚠️ <b>Service data is running low</b>\n\n"
+                        f"📡 Most of the data allowance for your {service_name_en} has been used.\n\n"
+                        f"🆔 Order: #{order_id}\n"
+                        f"📊 Used: {used_display} of {total_display}\n"
+                        f"📉 Remaining: {remaining_display} ({remaining_percent:.1f}%)\n\n"
+                        f"Review your config and renew the service if needed to avoid interruption."
+                    )
         
+        keyboard = self._build_alert_keyboard(order_id, lang, is_test)
+
         try:
             await self.bot.send_message(
                 user_id, text, parse_mode="HTML", reply_markup=keyboard
@@ -808,7 +808,7 @@ class AlertSystem:
         
         user = self.get_user(user_id)
         lang = user.get('lang', 'fa') if user else 'fa'
-        
+
         if notify_label == "expired":
             time_left = "منقضی شده" if lang == 'fa' else "Expired"
         elif days_left > 0:
@@ -818,105 +818,77 @@ class AlertSystem:
         else:
             minutes_left = max(0, int(hours_left * 60))
             time_left = f"{minutes_left} دقیقه" if lang == 'fa' else f"{minutes_left} minutes"
-        
-        if notify_label == "expired":
-            if is_test:
-                if lang == 'fa':
+
+        service_name = "سرویس آزمایشی" if is_test else "سرویس"
+        service_name_en = "test service" if is_test else "service"
+        expired = notify_label == "expired"
+
+        if lang == 'fa':
+            if expired:
+                if is_test:
                     text = (
-                        f"❌ <b>سرویس تست منقضی شد</b>\n\n"
-                        f"🧪 سرویس تست شما به پایان رسید!\n\n"
-                        f"🆔 سفارش: #{order_id}\n\n"
-                        f"💡 برای ادامه استفاده، سرویس کامل تهیه کنید."
+                        f"❌ <b>مهلت سرویس آزمایشی به پایان رسیده است</b>\n\n"
+                        f"🧪 زمان استفاده از تست شما تمام شده است.\n\n"
+                        f"🆔 شماره سفارش: #{order_id}\n\n"
+                        f"سرویس تست قابل تمدید نیست. برای ادامه، یک سرویس اصلی خریداری کنید."
                     )
                 else:
                     text = (
-                        f"❌ <b>Test Service Expired</b>\n\n"
-                        f"🧪 Your test service has expired!\n\n"
-                        f"🆔 Order: #{order_id}\n\n"
-                        f"💡 Purchase a full service to continue."
+                        f"❌ <b>مهلت استفاده از سرویس به پایان رسیده است</b>\n\n"
+                        f"📡 اعتبار زمانی {service_name} شما منقضی شده است.\n\n"
+                        f"🆔 شماره سفارش: #{order_id}\n\n"
+                        f"برای استفادهٔ دوباره، کانفیگ را بررسی کنید و در صورت نیاز سرویس را تمدید کنید."
                     )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
-                        callback_data="buy_service",
-                        style="success"
-                    )]
-                ])
             else:
-                if lang == 'fa':
+                if is_test:
                     text = (
-                        f"❌ <b>سرویس منقضی شد</b>\n\n"
-                        f"📡 سرویس شما به پایان رسید!\n\n"
-                        f"🆔 سفارش: #{order_id}\n\n"
-                        f"💡 می‌توانید از بخش «کانفیگ‌های من» سرویس خود را تمدید کنید."
+                        f"⚠️ <b>سرویس آزمایشی شما به‌زودی منقضی می‌شود</b>\n\n"
+                        f"🧪 زمان باقی‌مانده: {time_left}\n"
+                        f"🆔 شماره سفارش: #{order_id}\n\n"
+                        f"تست قابل تمدید نیست؛ برای استفاده بدون وقفه، سرویس اصلی را خریداری کنید."
                     )
                 else:
                     text = (
-                        f"❌ <b>Service Expired</b>\n\n"
-                        f"📡 Your service has expired!\n\n"
-                        f"🆔 Order: #{order_id}\n\n"
-                        f"💡 You can renew your service from 'My Configs'."
+                        f"⚠️ <b>هشدار نزدیک‌شدن به انقضای سرویس</b>\n\n"
+                        f"📡 اعتبار زمانی {service_name} شما به‌زودی به پایان می‌رسد.\n\n"
+                        f"⏱ زمان باقی‌مانده: {time_left}\n"
+                        f"🆔 شماره سفارش: #{order_id}\n\n"
+                        f"برای جلوگیری از قطع دسترسی، وضعیت سرویس را بررسی و در صورت نیاز آن را تمدید کنید."
                     )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data=f"extend_service_{order_id}",
-                        style="primary"
-                    )]
-                ])
         else:
-            if is_test:
-                if lang == 'fa':
+            if expired:
+                if is_test:
                     text = (
-                        f"⚠️ <b>هشدار انقضای تست</b>\n\n"
-                        f"🧪 سرویس تست شما به زودی منقضی می‌شود!\n\n"
-                        f"⏱ زمان باقی‌مانده: {time_left}\n"
-                        f"🆔 سفارش: #{order_id}\n\n"
-                        f"💡 برای ادامه استفاده، سرویس کامل تهیه کنید."
+                        f"❌ <b>Test service has expired</b>\n\n"
+                        f"🧪 Your test period has ended.\n\n"
+                        f"🆔 Order: #{order_id}\n\n"
+                        f"Test services cannot be renewed. Purchase a full service to continue."
                     )
                 else:
                     text = (
-                        f"⚠️ <b>Test Expiry Warning</b>\n\n"
-                        f"🧪 Your test service is about to expire!\n\n"
-                        f"⏱ Time left: {time_left}\n"
+                        f"❌ <b>Service validity has expired</b>\n\n"
+                        f"📡 The validity period for your {service_name_en} has ended.\n\n"
                         f"🆔 Order: #{order_id}\n\n"
-                        f"💡 Purchase a full service to continue."
+                        f"Review your config and renew the service if you would like to continue."
                     )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service",
-                        callback_data="buy_service",
-                        style="success"
-                    )]
-                ])
             else:
-                if lang == 'fa':
+                if is_test:
                     text = (
-                        f"⚠️ <b>هشدار انقضای سرویس</b>\n\n"
-                        f"📡 سرویس شما به زودی منقضی می‌شود!\n\n"
-                        f"⏱ زمان باقی‌مانده: {time_left}\n"
-                        f"🆔 سفارش: #{order_id}\n\n"
-                        f"💡 می‌توانید از بخش «کانفیگ‌های من» سرویس خود را تمدید کنید."
+                        f"⚠️ <b>Your test service will expire soon</b>\n\n"
+                        f"🧪 Time remaining: {time_left}\n"
+                        f"🆔 Order: #{order_id}\n\n"
+                        f"Test services cannot be renewed. Purchase a full service for uninterrupted access."
                     )
                 else:
                     text = (
-                        f"⚠️ <b>Service Expiry Warning</b>\n\n"
-                        f"📡 Your service is about to expire!\n\n"
-                        f"⏱ Time left: {time_left}\n"
+                        f"⚠️ <b>Service expiry reminder</b>\n\n"
+                        f"📡 The validity period for your {service_name_en} will end soon.\n\n"
+                        f"⏱ Time remaining: {time_left}\n"
                         f"🆔 Order: #{order_id}\n\n"
-                        f"💡 You can renew your service from 'My Configs'."
+                        f"Review your service and renew it if needed to avoid an interruption."
                     )
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text="🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service",
-                        callback_data=f"extend_service_{order_id}",
-                        style="primary"
-                    )]
-                ])
+
+        keyboard = self._build_alert_keyboard(order_id, lang, is_test)
         
         try:
             await self.bot.send_message(
