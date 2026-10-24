@@ -1081,7 +1081,13 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
                 f"{'موجودی جدید' if user_lang == 'fa' else 'New balance'}: "
                 f"{new_balance:,} {'تومان' if user_lang == 'fa' else 'Toman'}"
                 f"{coupon_msg}",
-                parse_mode=ParseMode.HTML
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🏠 منوی اصلی" if user_lang == 'fa' else "🏠 Main Menu",
+                        callback_data="back_to_main",
+                    )
+                ]]),
             )
         except Exception as e:
             logger = getattr(_main, 'logger', None)
