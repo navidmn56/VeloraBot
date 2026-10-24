@@ -11722,10 +11722,11 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             InlineKeyboardButton(text="💰 افزایش موجودی", callback_data="increase_balance" if is_approved else "noop", style="primary")
         ])
         
-        # ─── ردیف ۴: دعوت از دوستان | چت با AI ───
-        row_4 = [InlineKeyboardButton(text="👥 دعوت از دوستان", callback_data="invite_friends", style="primary")]
-        if AI_FEATURE_ENABLED:
-            row_4.append(InlineKeyboardButton(text="🤖 چت با AI", callback_data="ai_chat", style="primary"))
+        # ─── ردیف ۴: دعوت از دوستان | پشتیبانی هوشمند ───
+        row_4 = [
+            InlineKeyboardButton(text="👥 دعوت از دوستان", callback_data="invite_friends", style="primary"),
+            InlineKeyboardButton(text="🤖 پشتیبانی هوشمند", callback_data="ai_chat", style="primary"),
+        ]
         buttons.append(row_4)
         
         # ─── ردیف ۵: کانفیگ خوش‌آمد (فقط اگه تست باقی مونده) ───
@@ -11774,10 +11775,11 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             InlineKeyboardButton(text="💰 Increase Balance", callback_data="increase_balance" if is_approved else "noop", style="primary")
         ])
         
-        # ─── ردیف ۴: دعوت از دوستان | چت با AI ───
-        row_4 = [InlineKeyboardButton(text="👥 Invite Friends", callback_data="invite_friends", style="primary")]
-        if AI_FEATURE_ENABLED:
-            row_4.append(InlineKeyboardButton(text="🤖 Chat with AI", callback_data="ai_chat", style="primary"))
+        # ─── ردیف ۴: دعوت از دوستان | پشتیبانی هوشمند ───
+        row_4 = [
+            InlineKeyboardButton(text="👥 Invite Friends", callback_data="invite_friends", style="primary"),
+            InlineKeyboardButton(text="🤖 Smart Support", callback_data="ai_chat", style="primary"),
+        ]
         buttons.append(row_4)
         
         # ─── ردیف ۵: کانفیگ خوش‌آمد (فقط اگه تست باقی مونده) ───
@@ -13288,31 +13290,80 @@ def migrate_test_inbound_data():
         
 @dp.callback_query(F.data == "ai_chat")
 async def ai_chat_start(callback: CallbackQuery):
-    """شروع چت با هوش مصنوعی - با حفظ کوپن"""
+    """انتخاب مسیر پشتیبانی هوشمند یا ارتباط با پشتیبان واقعی."""
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
+    ai_available = AI_FEATURE_ENABLED and GEMINI_ENABLED and gemini_client
+    text = (
+        "🤖 <b>پشتیبانی هوشمند</b>\n\n"
+        "روش پاسخ‌گویی را انتخاب کنید:"
+        if lang == "fa"
+        else "🤖 <b>Smart support</b>\n\nChoose how you want help:"
+    )
+    buttons = []
+    if ai_available:
+        buttons.append([InlineKeyboardButton(
+            text="🤖 گفتگو با هوش مصنوعی" if lang == "fa" else "🤖 Chat with AI",
+            callback_data="support_start_ai",
+            style="primary",
+        )])
+    open_tickets = [
+        chat for chat in get_active_chats()
+        if chat.get('user_id') == user_id and chat.get('kind') == 'ticket'
+    ]
+    for chat in open_tickets[:5]:
+        buttons.append([InlineKeyboardButton(
+            text=(
+                f"💬 ادامه تیکت #{chat['id']}"
+                if lang == "fa"
+                else f"💬 Continue ticket #{chat['id']}"
+            ),
+            callback_data=f"ticket_continue_{chat['id']}",
+        )])
+    buttons.extend([
+        [InlineKeyboardButton(
+            text="🎫 تیکت برای پشتیبان واقعی" if lang == "fa" else "🎫 Ticket for human support",
+            callback_data="support_create_ticket",
+            style="success",
+        )],
+        [InlineKeyboardButton(
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main menu",
+            callback_data="back_to_main",
+        )],
+    ])
+    await callback.message.edit_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "support_start_ai")
+async def start_ai_support_chat(callback: CallbackQuery):
+    """ورود به گفت‌وگوی AI از منوی پشتیبانی."""
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    if not (AI_FEATURE_ENABLED and GEMINI_ENABLED and gemini_client):
+        await callback.answer(
+            "❌ هوش مصنوعی در حال حاضر در دسترس نیست." if lang == "fa" else "❌ AI is currently unavailable.",
+            show_alert=True,
+        )
+        return
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
-    
-    logger.info(f"🔍 [ai_chat_start] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
-    ai_available = GEMINI_ENABLED and gemini_client
-    if not ai_available:
-        await callback.answer("❌ هوش مصنوعی در حال حاضر در دسترس نیست.", show_alert=True)
-        return
     if user_id in user_states:
         user_states.pop(user_id, None)
-    
-    user_states[user_id] = {
-        'ai_chat_mode': True,
-        'timestamp': datetime.now().isoformat()
-    }
+    user_states[user_id] = {'ai_chat_mode': True, 'timestamp': datetime.now().isoformat()}
     if coupon_applied and coupon_code:
-        user_states[user_id]['coupon_code'] = coupon_code
-        user_states[user_id]['coupon_applied'] = True
-        user_states[user_id]['coupon_discount'] = coupon_discount
-        logger.info(f"🏷️ [ai_chat_start] کوپن {coupon_code} حفظ شد")
+        user_states[user_id].update({
+            'coupon_code': coupon_code,
+            'coupon_applied': True,
+            'coupon_discount': coupon_discount,
+        })
+
     if conversation_memory.has_history(user_id):
         history = conversation_memory.get_history(user_id)
         last_message = history[-1] if history else None
@@ -13393,7 +13444,6 @@ Welcome to AI Support!
 async def clear_ai_memory(callback: CallbackQuery):
     """پاک کردن حافظه مکالمه کاربر - با حفظ کوپن"""
     user_id = callback.from_user.id
-    lang = get_user(user_id).get('lang', 'fa')
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
@@ -13402,17 +13452,13 @@ async def clear_ai_memory(callback: CallbackQuery):
     logger.info(f"🔍 [clear_ai_memory] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
     
     conversation_memory.clear(user_id)
-    await callback.answer(
-        "🧹 حافظه مکالمه پاک شد!" if lang == "fa" else "🧹 Memory cleared!",
-        show_alert=True
-    )
     if coupon_applied and coupon_code:
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount
         logger.info(f"🏷️ [clear_ai_memory] کوپن {coupon_code} حفظ شد")
     await callback.message.delete()
-    await ai_chat_start(callback)
+    await start_ai_support_chat(callback)
         
 @dp.callback_query(F.data == "exit_ai_chat")
 async def exit_ai_chat(callback: CallbackQuery):
@@ -30165,13 +30211,19 @@ async def set_lang_en(callback: CallbackQuery):
         pass
     
     await back_to_main(callback)
-def create_chat(user_id: int, feedback_id: int) -> int:
+def create_chat(
+    user_id: int,
+    feedback_id: Optional[int] = None,
+    config_order_id: Optional[int] = None,
+) -> int:
     """ایجاد چت جدید"""
-    chat_id = len(chats) + 1
+    chat_id = max((int(chat.get('id', 0)) for chat in chats.values()), default=0) + 1
     chats[str(chat_id)] = {
         'id': chat_id,
         'user_id': user_id,
         'feedback_id': feedback_id,
+        'config_order_id': config_order_id,
+        'kind': 'ticket' if feedback_id is None else 'feedback',
         'status': 'open',  # open, closed
         'messages': [],
         'created_at': datetime.now().isoformat(),
@@ -30230,6 +30282,229 @@ def get_active_chats() -> list:
     return [c for c in chats.values() if c.get('status') == 'open']
 
 
+def get_user_support_configs(user_id: int) -> list:
+    """دریافت سرویس‌های فعال، غیرفعال یا حذف‌شده کاربر برای پشتیبانی."""
+    return [
+        order
+        for order in get_valid_orders().values()
+        if order.get('user_id') == user_id
+        and order.get('status') in ('approved', 'inactive', 'deleted')
+        and (order.get('config_link') or order.get('email'))
+    ]
+
+
+def format_ticket_user_details(user_id: int, selected_order_id: Optional[int] = None) -> str:
+    user = get_user(user_id)
+    username = user.get('telegram_username') or user.get('username') or ''
+    details = [
+        f"👤 <b>{html.escape(str(user.get('name') or 'کاربر'))}</b> (ID: <code>{user_id}</code>)",
+        f"🔗 نام کاربری: @{html.escape(str(username).lstrip('@')) if username else 'ندارد'}",
+        f"💰 موجودی: {user.get('balance', 0)}",
+        f"🛒 تعداد خرید: {user.get('total_purchases', 0)}",
+    ]
+    user_configs = get_user_support_configs(user_id)
+    details.append(f"\n📦 <b>کانفیگ‌های کاربر ({len(user_configs)}):</b>")
+    for order in user_configs[:5]:
+        order_id = order.get('order_id')
+        selected_mark = "✅ " if selected_order_id is not None and str(order_id) == str(selected_order_id) else ""
+        config_name = html.escape(str(order.get('email') or f"سفارش {order_id}"))
+        status = html.escape(str(order.get('status', 'نامشخص')))
+        details.append(
+            f"{selected_mark}#{order_id} — {config_name} | "
+            f"{order.get('volume', '?')}GB / {order.get('days', '?')} روز | {status}"
+        )
+        link = str(order.get('config_link') or '')
+        if link:
+            details.append(f"<code>{html.escape(link[:220])}</code>")
+    if len(user_configs) > 5:
+        details.append(f"و {len(user_configs) - 5} کانفیگ دیگر")
+    if selected_order_id is not None:
+        selected_order = next(
+            (order for order in user_configs if str(order.get('order_id')) == str(selected_order_id)),
+            None,
+        )
+        if selected_order:
+            details.append(f"\n🎯 کانفیگ مرتبط با تیکت: <b>#{selected_order_id}</b>")
+    else:
+        details.append("\n🎯 کانفیگ مرتبط: انتخاب نشده / مشکل مربوط به کانفیگ نیست")
+    return "\n".join(details)
+
+
+async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional[int] = None):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    if await block_unauthorized(callback.message, user_id):
+        await callback.answer("⛔", show_alert=True)
+        return
+    if config_order_id is not None and not any(
+        str(order.get('order_id')) == str(config_order_id)
+        for order in get_user_support_configs(user_id)
+    ):
+        await callback.answer(
+            "❌ این کانفیگ متعلق به حساب شما نیست." if lang == "fa" else "❌ This config does not belong to you.",
+            show_alert=True,
+        )
+        return
+
+    chat_id = create_chat(user_id, config_order_id=config_order_id)
+    existing_state = user_states.get(user_id, {})
+    user_states[user_id] = {
+        'awaiting_chat': True,
+        'chat_id': chat_id,
+        'timestamp': datetime.now().isoformat(),
+    }
+    for key in ('coupon_code', 'coupon_discount', 'coupon_applied'):
+        if key in existing_state:
+            user_states[user_id][key] = existing_state[key]
+    try:
+        await bot.send_message(
+            ADMIN_ID_INT,
+            f"🎫 <b>تیکت جدید #{chat_id}</b>\n\n"
+            f"{format_ticket_user_details(user_id, config_order_id)}\n\n"
+            f"برای پاسخ، تیکت را باز کنید.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💬 مشاهده و پاسخ", callback_data=f"admin_chat_{chat_id}")]
+            ]),
+        )
+    except Exception as e:
+        logger.error(f"خطا در اعلان تیکت #{chat_id} به ادمین: {e}", exc_info=True)
+        close_chat(chat_id, closed_by="admin")
+        user_states.pop(user_id, None)
+        await callback.message.answer(
+            "❌ ثبت تیکت با خطا مواجه شد. لطفاً کمی بعد دوباره تلاش کنید."
+            if lang == "fa"
+            else "❌ Could not open a ticket. Please try again later."
+        )
+        await callback.answer()
+        return
+    await callback.message.answer(
+        (
+            f"🎫 تیکت شما با شماره #{chat_id} ثبت شد.\n"
+            "پیام خود را بنویسید؛ پاسخ پشتیبانی در همین گفتگو نمایش داده می‌شود.\n"
+            "برای پایان تیکت /end را بفرستید."
+            if lang == "fa"
+            else f"🎫 Ticket #{chat_id} is open. Send your message here; support will reply in this chat.\n"
+            "Send /end to close it."
+        ),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔒 پایان تیکت" if lang == "fa" else "🔒 Close ticket",
+                callback_data=f"ticket_close_user_{chat_id}",
+            )]
+        ]),
+    )
+    await callback.answer("✅ تیکت ایجاد شد" if lang == "fa" else "✅ Ticket created")
+
+
+@dp.callback_query(F.data == "support_create_ticket")
+async def support_create_ticket(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    configs = get_user_support_configs(user_id)
+    buttons = [
+        [InlineKeyboardButton(
+            text=(
+                f"📦 #{order.get('order_id')} · {str(order.get('email') or 'کانفیگ')[:28]}"
+                if lang == "fa"
+                else f"📦 #{order.get('order_id')} · {str(order.get('email') or 'Config')[:28]}"
+            ),
+            callback_data=f"ticket_config_{order.get('order_id')}",
+        )]
+        for order in configs[:20]
+    ]
+    buttons.append([InlineKeyboardButton(
+        text="❔ مشکل مربوط به کانفیگ نیست" if lang == "fa" else "❔ My issue is not config-related",
+        callback_data="ticket_no_config",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
+        callback_data="ai_chat",
+    )])
+    await callback.message.edit_text(
+        (
+            "🎫 <b>ثبت تیکت پشتیبانی</b>\n\n"
+            "اگر مشکل مربوط به یکی از کانفیگ‌هاست، آن را انتخاب کنید. "
+            "در غیر این صورت گزینه «مشکل مربوط به کانفیگ نیست» را بزنید."
+            if lang == "fa"
+            else "🎫 <b>Open a support ticket</b>\n\n"
+            "Select the affected config, or choose that the issue is not config-related."
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "ticket_no_config")
+async def ticket_no_config(callback: CallbackQuery):
+    await open_support_ticket(callback)
+
+
+@dp.callback_query(F.data.startswith("ticket_config_"))
+async def ticket_config_selected(callback: CallbackQuery):
+    try:
+        order_id = int(callback.data.rsplit("_", 1)[1])
+    except (TypeError, ValueError):
+        await callback.answer("❌ سفارش نامعتبر است.", show_alert=True)
+        return
+    await open_support_ticket(callback, order_id)
+
+
+@dp.callback_query(F.data.startswith("ticket_close_user_"))
+async def user_close_ticket(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    try:
+        chat_id = int(callback.data.rsplit("_", 1)[1])
+    except (TypeError, ValueError):
+        await callback.answer("❌ تیکت نامعتبر است.", show_alert=True)
+        return
+    chat = chats.get(str(chat_id))
+    if not chat or chat.get('user_id') != user_id:
+        await callback.answer("❌ تیکت پیدا نشد.", show_alert=True)
+        return
+    close_chat(chat_id, closed_by="user")
+    user_states.pop(user_id, None)
+    lang = get_user(user_id).get('lang', 'fa')
+    await callback.message.edit_text(
+        "✅ تیکت بسته شد." if lang == "fa" else "✅ Ticket closed.",
+        reply_markup=get_back_only_keyboard(lang),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("ticket_continue_"))
+async def user_continue_ticket(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    try:
+        chat_id = int(callback.data.rsplit("_", 1)[1])
+    except (TypeError, ValueError):
+        await callback.answer("❌ تیکت نامعتبر است.", show_alert=True)
+        return
+    chat = chats.get(str(chat_id))
+    if not chat or chat.get('user_id') != user_id or chat.get('status') != 'open':
+        await callback.answer("❌ تیکت فعال پیدا نشد.", show_alert=True)
+        return
+    user_states[user_id] = {
+        'awaiting_chat': True,
+        'chat_id': chat_id,
+        'timestamp': datetime.now().isoformat(),
+    }
+    lang = get_user(user_id).get('lang', 'fa')
+    await callback.message.answer(
+        f"💬 ادامه تیکت #{chat_id}. پیام خود را بنویسید."
+        if lang == "fa"
+        else f"💬 Continue ticket #{chat_id}. Send your message here.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔒 پایان تیکت" if lang == "fa" else "🔒 Close ticket",
+                callback_data=f"ticket_close_user_{chat_id}",
+            )]
+        ]),
+    )
+    await callback.answer()
+
+
 
 @dp.message(lambda m: user_states.get(m.from_user.id, {}).get('awaiting_chat', False))
 async def handle_chat_message(message: Message):
@@ -30248,9 +30523,9 @@ async def handle_chat_message(message: Message):
     chat = chats.get(str(chat_id))
     if not chat or chat.get('status') == 'closed':
         if lang == "fa":
-            await message.reply("❌ این گفتگو بسته شده است.\nبرای شروع مجدد از بخش بازخورد اقدام کنید.")
+            await message.reply("❌ این گفتگو بسته شده است.\nبرای شروع تیکت جدید از بخش پشتیبانی اقدام کنید.")
         else:
-            await message.reply("❌ This conversation is closed.\nTo start again, use the feedback section.")
+            await message.reply("❌ This conversation is closed.\nOpen a new ticket from support to continue.")
         user_states.pop(user_id, None)
         return
     if message.text and message.text.strip() == '/end':
@@ -30305,7 +30580,10 @@ async def handle_chat_message(message: Message):
         await message.reply("❌ نوع فایل پشتیبانی نمی‌شود.")
         return
     add_message(chat_id, 'user', text_content)
-    admin_text = f"💬 <b>پیام جدید از کاربر {user_id}</b>\n🆔 چت: #{chat_id}\n\n{text_content}"
+    admin_text = (
+        f"💬 <b>پیام جدید از کاربر {user_id}</b>\n"
+        f"🆔 تیکت: #{chat_id}\n\n{html.escape(text_content)}"
+    )
     
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💬 پاسخ", callback_data=f"admin_chat_{chat_id}")]
@@ -30757,16 +31035,24 @@ async def admin_chat_view(callback: CallbackQuery):
             )
         await callback.answer()
         return
-    user = get_user(chat['user_id'])
-    user_name_escaped = html.escape(user.get('name', 'User'))  # ✅
-    text = f"💬 <b>چت با {user_name_escaped}</b> (ID: {chat['user_id']})\n\n"
+    selected_order_id = chat.get('config_order_id')
+    title = "تیکت" if chat.get('kind') == 'ticket' else "چت بازخورد"
+    text = (
+        f"🎫 <b>{title} #{chat_id}</b>\n"
+        f"{format_ticket_user_details(chat['user_id'], selected_order_id)}\n\n"
+        "━━━━━━━━━━━━━━━━━━\n<b>گفتگو:</b>\n"
+    )
     
-    for msg in chat['messages'][-10:]:
+    for msg in chat['messages'][-8:]:
         sender = "👤 کاربر" if msg['sender'] == 'user' else "👑 ادمین"
-        text += f"{sender}: {msg['text'][:50]}\n"
+        text += f"{sender}: {html.escape(str(msg.get('text', ''))[:180])}\n"
     user_states[callback.from_user.id] = {'awaiting_chat_reply': True, 'chat_id': chat_id}
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="👤 پروفایل و سفارش‌های کاربر" if lang == "fa" else "👤 User profile and orders",
+            callback_data=f"admin_user_{chat['user_id']}",
+        )],
         [InlineKeyboardButton(text="❌ پایان چت" if lang=="fa" else "❌ Close Chat", callback_data=f"close_chat_{chat_id}")],
         [InlineKeyboardButton(text="🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data="admin_chats")]
     ])
@@ -31249,18 +31535,26 @@ async def admin_chat_reply(message: Message):
         )
         user_states.pop(admin_id, None)
         return
-    add_message(chat_id, 'admin', message.text or '[پیام]')
-    if log_system:
-        await log_system.log_chat_message(chat['user_id'], chat_id, message.text or "[فایل]", "admin")
-    
+    reply_text = message.text or '[پیام]'
     try:
         await bot.send_message(
             chat['user_id'],
-            f"💬 <b>پیام از پشتیبانی:</b>\n\n{message.text or '📎 فایل'}"
+            f"💬 <b>پیام از پشتیبانی:</b>\n\n{html.escape(reply_text)}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🔒 پایان تیکت" if get_user(chat['user_id']).get('lang', 'fa') == "fa" else "🔒 Close ticket",
+                    callback_data=f"ticket_close_user_{chat_id}",
+                )]
+            ]),
         )
-    except:
-        pass
-    
+    except Exception as e:
+        logger.error(f"خطا در ارسال پاسخ تیکت #{chat_id} به کاربر {chat['user_id']}: {e}")
+        await message.reply("❌ ارسال پاسخ ناموفق بود؛ پیام در تیکت ذخیره نشد.")
+        return
+    add_message(chat_id, 'admin', reply_text)
+    if log_system:
+        await log_system.log_chat_message(chat['user_id'], chat_id, reply_text, "admin")
     await message.reply("✅ پیام ارسال شد. برای ادامه پیام بنویسید یا /cancel")  
 
 
@@ -33373,7 +33667,113 @@ def contains_bad_words(text: str) -> tuple:
 
 
 
-async def get_ai_response(message_text: str, user_id: int = None, username: str = None) -> str:
+def get_ai_button_context(user_id: int, lang: str) -> str:
+    """Build a per-user allowlist for AI-suggested inline actions."""
+    actions = [
+        ("CLEAR_MEMORY", "پاک کردن حافظه" if lang == "fa" else "Clear conversation memory"),
+        ("HUMAN_SUPPORT", "ارتباط با پشتیبان واقعی" if lang == "fa" else "Contact human support"),
+    ]
+    user = get_user(user_id)
+    if user.get('registration_status') in ('approved', None) or user_id == ADMIN_ID_INT:
+        actions.append(("BUY_SERVICE", "خرید سرویس" if lang == "fa" else "Buy a service"))
+
+    test_settings = get_user_test_settings(user_id)
+    test_usage = USER_TEST_USAGE.get(str(user_id), {})
+    if (
+        TEST_SERVICE_STATUS.get('enabled', False)
+        and test_usage.get('count', 0) < test_settings.get('max_tests', TEST_SERVICE_STATUS.get('max_tests', 1))
+    ):
+        actions.append(("GET_TEST_SERVICE", "دریافت تست" if lang == "fa" else "Get a test config"))
+
+    renewals = []
+    for order in get_user_support_configs(user_id):
+        order_id = order.get('order_id')
+        if order.get('status') not in ('approved', 'inactive'):
+            continue
+        is_test = (
+            order.get('type') == 'test'
+            or order.get('is_test', False)
+            or str(order.get('email', '')).startswith(('test_', 't'))
+        )
+        if order_id is not None and not is_test:
+            renewals.append((f"RENEW_ORDER:{order_id}", f"تمدید سفارش {order_id}" if lang == "fa" else f"Renew order {order_id}"))
+    actions.extend(renewals[:10])
+
+    available = "\n".join(f"- {action}: {label}" for action, label in actions)
+    return (
+        "\n\nبرای پاسخ، در صورت مرتبط بودن حداکثر دو دکمه کاربردی پیشنهاد بده. "
+        "فقط از شناسه‌های مجاز زیر استفاده کن و هر دکمه را در خط مستقل و دقیقاً با قالب "
+        "[[BUTTON:شناسه|متن دکمه]] در انتهای پاسخ بنویس. شناسه جدید یا شماره سفارشی که در فهرست نیست نساز. "
+        "اگر دکمه‌ای لازم نیست، هیچ نشانگر دکمه‌ای ننویس.\n"
+        f"شناسه‌ها و عنوان‌های مجاز:\n{available}"
+    )
+
+
+def strip_ai_button_directives(text: str) -> str:
+    return re.sub(r"\[\[BUTTON:[A-Z_]+(?::\d+)?\|[^\]\r\n]{1,64}\]\]", "", text).strip()
+
+
+def build_ai_reply_keyboard(answer: str, user_id: int, lang: str):
+    buttons = []
+    seen_callbacks = set()
+    allowed_actions = set(re.findall(
+        r"- ([A-Z_]+(?::\d+)?):",
+        get_ai_button_context(user_id, lang),
+    ))
+    allowed_orders = {
+        str(order.get('order_id'))
+        for order in get_user_support_configs(user_id)
+        if order.get('order_id') is not None
+        and order.get('status') in ('approved', 'inactive')
+        and order.get('type') != 'test'
+        and not order.get('is_test', False)
+        and not str(order.get('email', '')).startswith(('test_', 't'))
+    }
+    callback_map = {
+        "CLEAR_MEMORY": "clear_ai_memory",
+        "HUMAN_SUPPORT": "ai_chat",
+        "BUY_SERVICE": "buy_service",
+        "GET_TEST_SERVICE": "get_test_service",
+    }
+    for action, label in re.findall(
+        r"\[\[BUTTON:([A-Z_]+(?::\d+)?)\|([^\]\r\n]{1,64})\]\]",
+        answer,
+    )[:2]:
+        if action not in allowed_actions:
+            continue
+        if action.startswith("RENEW_ORDER:"):
+            order_id = action.partition(":")[2]
+            if order_id not in allowed_orders:
+                continue
+            callback_data = f"extend_service_{order_id}"
+        else:
+            callback_data = callback_map.get(action, "")
+            if action == "GET_TEST_SERVICE" and not TEST_SERVICE_STATUS.get('enabled', False):
+                continue
+        clean_label = re.sub(r"[<>\[\]\r\n]", "", label).strip()[:40]
+        if callback_data and clean_label and callback_data not in seen_callbacks:
+            buttons.append([InlineKeyboardButton(text=clean_label, callback_data=callback_data)])
+            seen_callbacks.add(callback_data)
+
+    if "clear_ai_memory" not in seen_callbacks:
+        buttons.append([InlineKeyboardButton(
+            text="🧹 پاک کردن حافظه" if lang == "fa" else "🧹 Clear Memory",
+            callback_data="clear_ai_memory",
+        )])
+    buttons.append([InlineKeyboardButton(
+        text="❌ خروج از چت" if lang == "fa" else "❌ Exit Chat",
+        callback_data="exit_ai_chat",
+        style="danger",
+    )])
+    return strip_ai_button_directives(answer), InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def get_ai_response(
+    message_text: str,
+    user_id: Optional[int] = None,
+    username: Optional[str] = None,
+    button_context: str = "",
+) -> str:
     """دریافت پاسخ کامل از AI - با تلاش مجدد در صورت ناقص بودن"""
     if gemini_client:
         try:
@@ -33390,9 +33790,12 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
             else:
                 full_message += f"کاربر: {message_text}"
             
+            system_instruction = GEMINI_SYSTEM_PROMPT
+            if button_context:
+                system_instruction += button_context
             payload = {
                 "system_instruction": {
-                    "parts": [{"text": GEMINI_SYSTEM_PROMPT}]
+                    "parts": [{"text": system_instruction}]
                 },
                 "contents": [{
                     "parts": [{"text": full_message}]
@@ -33467,7 +33870,7 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                     full_message_fa = f"لطفاً فقط به فارسی جواب بده:\n{full_message}"
                                     payload_fa = {
                                         "system_instruction": {
-                                            "parts": [{"text": GEMINI_SYSTEM_PROMPT + "\n\n⚠️ فقط به زبان فارسی پاسخ بده. اگه کلمه انگلیسی استفاده میکنی، معنی فارسیش رو هم بنویس."}]
+                                            "parts": [{"text": system_instruction + "\n\n⚠️ فقط به زبان فارسی پاسخ بده. اگه کلمه انگلیسی استفاده میکنی، معنی فارسیش رو هم بنویس."}]
                                         },
                                         "contents": [{
                                             "parts": [{"text": full_message_fa}]
@@ -33507,7 +33910,7 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                     logger.warning(f"⚠️ پاسخ ناقص است (MAX_TOKENS)، تلاش مجدد با توکن بیشتر...")
                                     payload2 = {
                                         "system_instruction": {
-                                            "parts": [{"text": GEMINI_SYSTEM_PROMPT + "\n\n⚠️ فقط به زبان فارسی پاسخ بده."}]
+                                            "parts": [{"text": system_instruction + "\n\n⚠️ فقط به زبان فارسی پاسخ بده."}]
                                         },
                                         "contents": [{
                                             "parts": [{"text": full_message}]
@@ -33564,7 +33967,7 @@ async def get_ai_response(message_text: str, user_id: int = None, username: str 
                                 
                                 if user_id:
                                     conversation_memory.add_message(user_id, 'user', message_text)
-                                    conversation_memory.add_message(user_id, 'assistant', reply)
+                                    conversation_memory.add_message(user_id, 'assistant', strip_ai_button_directives(reply))
                                 
                                 logger.info(f"✅ پاسخ Gemini دریافت شد - طول: {len(reply)} کاراکتر")
                                 return reply
@@ -33745,8 +34148,14 @@ async def process_ai_chat_message(message: Message):
     processing_msg = await message.reply("⏳ در حال پردازش سوال شما..." if lang == "fa" else "⏳ Processing your question...")
     
     try:
+        button_context = get_ai_button_context(user_id, lang)
         answer = await asyncio.wait_for(
-            get_ai_response(message.text, user_id, message.from_user.username),
+            get_ai_response(
+                message.text or "",
+                user_id,
+                message.from_user.username,
+                button_context=button_context,
+            ),
             timeout=90
         )
         
@@ -33795,6 +34204,7 @@ async def process_ai_chat_message(message: Message):
         
         # ✅ پاسخ درست بود - محدودیت کم کن
         increment_ai_usage(user_id)
+        answer, reply_keyboard = build_ai_reply_keyboard(answer, user_id, lang)
         
         # ✅ پاکسازی پاسخ
         lines = [line.strip() for line in answer.split('\n') if line.strip()]
@@ -33817,10 +34227,7 @@ async def process_ai_chat_message(message: Message):
         await processing_msg.edit_text(
             response_text,
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🧹 پاک کردن حافظه" if lang == "fa" else "🧹 Clear Memory", callback_data="clear_ai_memory")],
-                [InlineKeyboardButton(text="❌ خروج از چت" if lang == "fa" else "❌ Exit Chat", callback_data="exit_ai_chat", style="danger")]
-            ])
+            reply_markup=reply_keyboard,
         )
         
         logger.info(f"✅ پاسخ کامل AI برای کاربر {user_id} ارسال شد - طول: {len(answer)} کاراکتر")
@@ -34195,7 +34602,7 @@ async def auto_ai_response(message: Message):
     processing_msg = await message.reply("🤖 در حال بررسی سوال شما..." if lang == "fa" else "🤖 Checking your question...")
     
     try:
-        answer = await get_ai_response(message.text, user_id, message.from_user.username)
+        answer = await get_ai_response(message.text or "", user_id, message.from_user.username)
         error_keywords = ["❌", "⚠️", "خطا", "متأسفانه", "Error", "متاسفانه"]
         is_error = any(kw in answer for kw in error_keywords)
         

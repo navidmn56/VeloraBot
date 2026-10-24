@@ -36,6 +36,8 @@ It provides an automated environment for selling and managing VPN configurations
 
 The bot is designed to work specifically with **MHSanaei 3X-UI** and its API.
 
+Smart support lets users choose AI chat or open a support ticket. A ticket can optionally reference one of the user's configurations; administrators can review the user's profile and available configuration details while replying. AI responses can also show context-aware buttons for supported bot actions such as starting a purchase, requesting an available test, or renewing one of the user's eligible services.
+
 ---
 
 ## Features
@@ -48,7 +50,8 @@ The bot is designed to work specifically with **MHSanaei 3X-UI** and its API.
 | **Service Renewal**        | Allow users to renew existing VPN services               |
 | **Payments**               | Balance management, orders and receipt handling          |
 | **Referrals**              | Referral links and reward system                         |
-| **AI Support**             | Optional Google Gemini integration                       |
+| **Smart Support**          | Choose between Google Gemini AI and a human-support ticket |
+| **Support Tickets**        | Two-way user/admin messaging with optional config selection |
 | **Logging**                | Application and Telegram logging                         |
 | **Configuration Delivery** | Automated configuration and subscription delivery        |
 | **User Management**        | Manage users and their services                          |
