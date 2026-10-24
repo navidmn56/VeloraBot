@@ -1245,6 +1245,19 @@ def get_receipt_status_metadata(order: dict) -> dict:
     return {field: order.get(field) for field in fields}
 
 
+def get_extension_success_keyboard(order_id: int, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📁 مشاهده کانفیگ تمدیدشده" if lang == "fa" else "📁 View Extended Config",
+            callback_data=f"view_config_{order_id}",
+        )],
+        [InlineKeyboardButton(
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main",
+        )],
+    ])
+
+
 async def update_user_receipt_review_status(order: dict, status: str) -> bool:
     order_id = order.get('order_id')
     latest_order = orders.get(str(order_id))
@@ -28127,7 +28140,12 @@ async def confirm_approve_package(callback: CallbackQuery):
             else:
                 success_text = "✅ <b>Service extended successfully!</b>"
             
-            await bot.send_message(uid, success_text, parse_mode=ParseMode.HTML)
+            await bot.send_message(
+                uid,
+                success_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_extension_success_keyboard(parent_order_id, lang),
+            )
             
             await callback.message.answer(
                 f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد!\n{payment_emoji} {payment_label}\n📡 اینباندها: {final_inbounds}",
@@ -28481,9 +28499,17 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             
             try:
                 if lang == "fa":
-                    await bot.send_message(uid, "✅ سرویس شما با موفقیت تمدید شد.")
+                    await bot.send_message(
+                        uid,
+                        "✅ سرویس شما با موفقیت تمدید شد.",
+                        reply_markup=get_extension_success_keyboard(parent_order_id, lang),
+                    )
                 else:
-                    await bot.send_message(uid, "✅ Your service has been extended successfully.")
+                    await bot.send_message(
+                        uid,
+                        "✅ Your service has been extended successfully.",
+                        reply_markup=get_extension_success_keyboard(parent_order_id, lang),
+                    )
                 logger.info(f"📨 پیام تایید تمدید به کاربر {uid} ارسال شد")
             except Exception as e:
                 logger.error(f"❌ خطا در ارسال پیام به کاربر {uid}: {e}")
@@ -28761,6 +28787,36 @@ async def reject_receipt(callback: CallbackQuery):
     # ✅ حالا می‌توانیم رد کنیم
     update_order(order_id, status='rejected')
     await update_user_receipt_review_status(order, 'rejected')
+    user_id = order['user_id']
+    user_lang = order.get('receipt_status_lang') or get_user(user_id).get('lang', 'fa')
+    await send_sticker(user_id, 'order_rejected', '😭')
+    rejection_text = (
+        f"❌ <b>فیش سفارش #{order_id} رد شد.</b>\n\n"
+        "در صورت نیاز، لطفاً فیش معتبر را دوباره ارسال کنید."
+        if user_lang == 'fa'
+        else f"❌ <b>Receipt for order #{order_id} was rejected.</b>\n\n"
+        "Please resend a valid receipt if needed."
+    )
+    try:
+        await bot.send_message(
+            user_id,
+            rejection_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🏠 منوی اصلی" if user_lang == 'fa' else "🏠 Main Menu",
+                    callback_data="back_to_main",
+                )
+            ]]),
+        )
+    except Exception as e:
+        logger.error(
+            "ارسال پیام رد فیش سفارش #%s به کاربر %s ناموفق بود: %s",
+            order_id,
+            user_id,
+            e,
+            exc_info=True,
+        )
     
     if log_system:
         await log_system.log_order_rejected(order_id, order['user_id'], "فیش نامعتبر")
