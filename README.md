@@ -22,7 +22,7 @@ Python-based Telegram bot for automated VPN configuration sales, user management
 
 <div align="center">
 
-<img src="docs/screenshot/Screenshot.png" alt="VeloraBot" width="360">
+<img src="docs/screenshot/Screenshot.standard.png" alt="VeloraBot" width="360" height="519">
 
 </div>
 
@@ -79,7 +79,7 @@ Compatibility with future 3X-UI releases is not guaranteed until tested.
 
 <div align="center">
 
-<img src="docs/screenshot/AiSupport.jpg" alt="VeloraBot User Interface" width="360">
+<img src="docs/screenshot/AiSupport.standard.png" alt="VeloraBot User Interface" width="360" height="519">
 
 </div>
 
@@ -87,7 +87,7 @@ Compatibility with future 3X-UI releases is not guaranteed until tested.
 
 <div align="center">
 
-<img src="docs/screenshot/Screenshot3.jpg" alt="VeloraBot Admin Panel" width="360">
+<img src="docs/screenshot/Screenshot3.standard.png" alt="VeloraBot Admin Panel" width="360" height="519">
 
 </div>
 
@@ -107,6 +107,18 @@ Before installing VeloraBot, make sure your server has the following:
 ---
 
 ## Installation
+
+### Quick Install
+
+On an interactive Linux server, run the installer with root privileges:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/navidmn56/VeloraBot/main/install.sh | sudo bash
+```
+
+This downloads and runs the latest installer from the `main` branch. Review `install.sh` before running it if you want to inspect the commands that will execute with root privileges.
+
+### Manual Installation
 
 ### 1. Clone the Repository
 
