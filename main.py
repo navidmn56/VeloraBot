@@ -30363,32 +30363,71 @@ def get_user_support_configs(user_id: int) -> list:
     ]
 
 
-def build_ai_user_database_context(user_id: int) -> str:
+def should_include_ai_user_context(message_text: str) -> bool:
+    text = message_text.lower()
+    personal_request = re.search(
+        r"\bmy\b|\bmine\b|مال من|حسابم|موجودیم|کیف.?پولم|"
+        r"(?:سفارش|کانفیگ|سرویس|خرید)(?:ات|ها|های)?\s*من|"
+        r"(?:سفارشم|کانفیگم|سرویسم|خریدم)",
+        text,
+    )
+    personal_data = re.search(
+        r"\b(?:account|balance|wallet|order|orders|subscription|config|configs|service|services)\b"
+        r"|حساب|موجودی|کیف.?پول|سفارش|کانفیگ|سرویس|خرید",
+        text,
+    )
+    specific_order = re.search(r"(?:order|سفارش)\s*#?\s*\d+", text)
+    implicit_balance = re.search(r"\b(?:balance|wallet)\b|موجودی|کیف.?پول", text)
+    return bool(specific_order or implicit_balance or (personal_request and personal_data))
+
+
+def build_ai_user_database_context(user_id: int, message_text: str = "") -> str:
     """Create a read-only, user-scoped snapshot without exposing config credentials."""
     user = users.get(str(user_id), {})
+    wants_profile = bool(re.search(
+        r"\b(?:account|profile|balance|wallet)\b|حساب|پروفایل|موجودی|کیف.?پول",
+        message_text,
+        re.IGNORECASE,
+    ))
+    wants_orders = bool(re.search(
+        r"\b(?:order|orders|subscription|config|configs|service|services|renew)\b"
+        r"|سفارش|کانفیگ|سرویس|تمدید|خرید",
+        message_text,
+        re.IGNORECASE,
+    ))
     user_fields = (
-        'id', 'name', 'username', 'telegram_username', 'balance', 'total_spent',
-        'total_purchases', 'lang', 'join_date', 'registration_status',
-        'has_purchased', 'coupon_applied', 'coupon_discount',
-    )
+        'id', 'name', 'balance', 'total_spent', 'total_purchases',
+        'lang', 'registration_status',
+    ) if wants_profile else ()
     user_snapshot = {field: user[field] for field in user_fields if field in user}
     order_fields = (
         'order_id', 'status', 'type', 'volume', 'days', 'price', 'date',
-        'created_at', 'category_name', 'category_name_en', 'is_extend',
+        'category_name', 'category_name_en',
     )
     user_orders = []
-    for order in get_valid_orders().values():
-        if str(order.get('user_id')) != str(user_id):
-            continue
-        user_orders.append({field: order[field] for field in order_fields if field in order})
+    requested_order = re.search(r"(?:order|سفارش|#)\s*#?\s*(\d+)", message_text, re.IGNORECASE)
+    requested_order_id = requested_order.group(1) if requested_order else None
+    if wants_orders:
+        for order in get_valid_orders().values():
+            if str(order.get('user_id')) != str(user_id):
+                continue
+            user_orders.append({field: order[field] for field in order_fields if field in order})
     user_orders.sort(
         key=lambda order: str(order.get('created_at') or order.get('date') or ''),
         reverse=True,
     )
+    if requested_order_id:
+        user_orders = [
+            order for order in user_orders
+            if str(order.get('order_id')) == requested_order_id
+        ]
+    else:
+        user_orders = user_orders[:5]
     return json.dumps(
-        {'user': user_snapshot, 'orders': user_orders[:30]},
+        {'user': user_snapshot, 'orders': user_orders},
         ensure_ascii=False,
         default=str,
+        separators=(",", ":"),
     )
 
 
@@ -30437,7 +30476,10 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
         return
     if config_order_id is not None and not any(
         str(order.get('order_id')) == str(config_order_id)
-        for order in get_user_support_configs(user_id)
+        and order.get('status') in ("approved", "inactive")
+        and order.get('config_link')
+        for order in get_valid_orders().values()
+        if order.get('user_id') == user_id
     ):
         await callback.answer(
             "❌ این کانفیگ متعلق به حساب شما نیست." if lang == "fa" else "❌ This config does not belong to you.",
@@ -30503,18 +30545,53 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
 async def support_create_ticket(callback: CallbackQuery):
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
-    configs = get_user_support_configs(user_id)
-    buttons = [
-        [InlineKeyboardButton(
-            text=(
-                f"📦 #{order.get('order_id')} · {str(order.get('email') or 'کانفیگ')[:28]}"
-                if lang == "fa"
-                else f"📦 #{order.get('order_id')} · {str(order.get('email') or 'Config')[:28]}"
-            ),
-            callback_data=f"ticket_config_{order.get('order_id')}",
-        )]
-        for order in configs[:20]
+    configs = [
+        order for order in get_valid_orders().values()
+        if order.get('user_id') == user_id
+        and order.get('status') in ("approved", "inactive")
+        and order.get('config_link')
+        and order.get('order_id') is not None
     ]
+    configs.sort(key=lambda order: str(order.get('date') or ''), reverse=True)
+    buttons = []
+    for order in configs[:20]:
+        category = get_order_category_name(order, lang).strip()
+        if lang == "fa":
+            category = category.removeprefix("کانفیگ").lstrip(" ·-—:")
+            category = category if category.startswith("اشتراک") else f"اشتراک {category}".strip()
+            volume_gb = order.get('volume', 0) or 0
+            if volume_gb == 0:
+                volume = "∞"
+            elif volume_gb < 1:
+                volume = f"{round(volume_gb * 1024)} مگ"
+            else:
+                volume = f"{volume_gb:.0f} گیگ"
+            duration = f"{order.get('days')} روز" if order.get('days') else ""
+            status_icon = "💳" if order.get('status') == "approved" else "🔴"
+        else:
+            category = category.removeprefix("Config").lstrip(" ·-—:")
+            category = category if category.lower().endswith(("sub", "subscription")) else f"{category} Sub".strip()
+            volume_gb = order.get('volume', 0) or 0
+            if volume_gb == 0:
+                volume = "∞"
+            elif volume_gb < 1:
+                volume = f"{round(volume_gb * 1024)} MB"
+            else:
+                volume = f"{volume_gb:.0f} GB"
+            duration = f"{order.get('days')} days" if order.get('days') else ""
+            status_icon = "💳" if order.get('status') == "approved" else "🔴"
+        category = category[:20]
+        label_parts = [part for part in (category, volume, duration, f"#{order.get('order_id')}") if part]
+        label = f"\u200f{status_icon} " + " · ".join(label_parts)
+        if len(label) > 64:
+            suffix = f" · #{order.get('order_id')}"
+            label = f"\u200f{status_icon} {category[:12]} · {volume} · {duration}" + suffix
+            label = label[:64]
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"ticket_config_{order.get('order_id')}",
+            style="success" if order.get('status') == "approved" else "danger",
+        )])
     buttons.append([InlineKeyboardButton(
         text="❔ مشکل مربوط به کانفیگ نیست" if lang == "fa" else "❔ My issue is not config-related",
         callback_data="ticket_no_config",
@@ -33763,7 +33840,7 @@ def contains_bad_words(text: str) -> tuple:
 
 
 
-def get_ai_button_context(user_id: int, lang: str) -> str:
+def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> str:
     """Build a per-user allowlist for AI-suggested inline actions."""
     actions = [
         ("CLEAR_MEMORY", "پاک کردن حافظه" if lang == "fa" else "Clear conversation memory"),
@@ -33787,19 +33864,31 @@ def get_ai_button_context(user_id: int, lang: str) -> str:
     ):
         actions.append(("GET_TEST_SERVICE", "دریافت تست" if lang == "fa" else "Get a test config"))
 
-    renewals = []
-    for order in get_user_support_configs(user_id):
-        order_id = order.get('order_id')
-        if order.get('status') not in ('approved', 'inactive'):
-            continue
-        is_test = (
-            order.get('type') == 'test'
-            or order.get('is_test', False)
-            or str(order.get('email', '')).startswith('test_')
+    if re.search(r"تمدید|renew|extend", message_text, re.IGNORECASE):
+        requested_order = re.search(
+            r"(?:سفارش|order|#)\s*#?\s*(\d+)",
+            message_text,
+            re.IGNORECASE,
         )
-        if order_id is not None and not is_test:
-            renewals.append((f"RENEW_ORDER:{order_id}", f"تمدید سفارش {order_id}" if lang == "fa" else f"Renew order {order_id}"))
-    actions.extend(renewals[:10])
+        requested_order_id = requested_order.group(1) if requested_order else None
+        renewals = []
+        for order in get_user_support_configs(user_id):
+            order_id = order.get('order_id')
+            if requested_order_id and str(order_id) != requested_order_id:
+                continue
+            if order.get('status') not in ('approved', 'inactive'):
+                continue
+            is_test = (
+                order.get('type') == 'test'
+                or order.get('is_test', False)
+                or str(order.get('email', '')).startswith('test_')
+            )
+            if order_id is not None and not is_test:
+                renewals.append((
+                    f"RENEW_ORDER:{order_id}",
+                    f"تمدید سفارش {order_id}" if lang == "fa" else f"Renew order {order_id}",
+                ))
+        actions.extend(renewals[:3])
 
     available = "\n".join(f"- {action}: {label}" for action, label in actions)
     return (
@@ -33823,7 +33912,7 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
     seen_callbacks = set()
     allowed_actions = set(re.findall(
         r"- ([A-Z_]+(?::\d+)?):",
-        get_ai_button_context(user_id, lang),
+        get_ai_button_context(user_id, lang, user_message),
     ))
     allowed_orders = {
         str(order.get('order_id'))
@@ -33993,14 +34082,14 @@ async def handle_ai_menu_action(callback: CallbackQuery):
         ):
             await callback.answer("❌ سفارش برای تمدید در دسترس نیست.", show_alert=True)
             return
-        callback.data = f"extend_service_{order_id}"
+        callback_data = f"extend_service_{order_id}"
         handler = extend_service_start
     else:
         action_handler = action_handlers.get(action)
         if not action_handler:
             await callback.answer("❌ این عملیات در دسترس نیست.", show_alert=True)
             return
-        callback.data, handler = action_handler
+        callback_data, handler = action_handler
 
     state = user_states.get(user_id, {})
     state.pop('ai_chat_mode', None)
@@ -34009,7 +34098,7 @@ async def handle_ai_menu_action(callback: CallbackQuery):
         user_states[user_id] = state
     else:
         user_states.pop(user_id, None)
-    await handler(callback)
+    await handler(callback.model_copy(update={"data": callback_data}))
 
 
 async def get_ai_response(
@@ -34019,14 +34108,15 @@ async def get_ai_response(
     button_context: str = "",
     user_context: str = "",
 ) -> str:
-    """دریافت پاسخ کامل از AI - با تلاش مجدد در صورت ناقص بودن"""
+    """دریافت یک پاسخ از AI با سقف خروجی و context کنترل‌شده."""
     if gemini_client:
         try:
             logger.info(f"🎯 استفاده از Gemini: {message_text[:50]}...")
-            max_tokens = 1500
+            max_tokens = max(64, min(GEMINI_MAX_TOKENS, 384))
             full_message = ""
             if user_id and conversation_memory.has_history(user_id):
-                history = conversation_memory.get_context(user_id, max_messages=3)
+                history = conversation_memory.get_context(user_id, max_messages=2)
+                history = history[-1200:]
                 full_message += f"{history}\n\n"
             if user_id:
                 user_info = get_user(user_id) if 'get_user' in globals() else {}
@@ -34121,107 +34211,15 @@ async def get_ai_response(
                                 reply = '\n'.join(lines)
                                 
                                 # ✅ اطمینان از فارسی بودن
-                                # اگه پاسخ انگلیسیه، ترجمه کن
                                 if not any('\u0600' <= c <= '\u06FF' for c in reply):
-                                    logger.warning("⚠️ پاسخ انگلیسی است، تلاش برای فارسی کردن...")
-                                    # درخواست مجدد با تأکید بر فارسی
-                                    full_message_fa = f"لطفاً فقط به فارسی جواب بده:\n{full_message}"
-                                    payload_fa = {
-                                        "system_instruction": {
-                                            "parts": [{"text": system_instruction + "\n\n⚠️ فقط به زبان فارسی پاسخ بده. اگه کلمه انگلیسی استفاده میکنی، معنی فارسیش رو هم بنویس."}]
-                                        },
-                                        "contents": [{
-                                            "parts": [{"text": full_message_fa}]
-                                        }],
-                                        "generationConfig": {
-                                            "temperature": GEMINI_TEMPERATURE,
-                                            "maxOutputTokens": max_tokens,
-                                            "topP": 0.95,
-                                            "topK": 40
-                                        }
-                                    }
-                                    
-                                    try:
-                                        async with session.post(
-                                            url,
-                                            json=payload_fa,
-                                            timeout=aiohttp.ClientTimeout(total=45)
-                                        ) as response_fa:
-                                            if response_fa.status == 200:
-                                                data_fa = await response_fa.json()
-                                                candidates_fa = data_fa.get('candidates', [])
-                                                if candidates_fa:
-                                                    reply_fa = candidates_fa[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-                                                    if reply_fa:
-                                                        reply_fa = reply_fa.strip()
-                                                        reply_fa = reply_fa.replace('**', '').replace('*', '').replace('`', '')
-                                                        reply_fa = re.sub(r'<[^>]+>', '', reply_fa)
-                                                        lines_fa = [line.strip() for line in reply_fa.split('\n') if line.strip()]
-                                                        reply = '\n'.join(lines_fa)
-                                    except:
-                                        pass
+                                    logger.warning("⚠️ پاسخ Gemini فارسی نبود؛ برای جلوگیری از درخواست تکراری همان پاسخ استفاده می‌شود")
                                 
                                 if not reply:
                                     return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
                                 
                                 if finish_reason == 'MAX_TOKENS':
-                                    logger.warning(f"⚠️ پاسخ ناقص است (MAX_TOKENS)، تلاش مجدد با توکن بیشتر...")
-                                    payload2 = {
-                                        "system_instruction": {
-                                            "parts": [{"text": system_instruction + "\n\n⚠️ فقط به زبان فارسی پاسخ بده."}]
-                                        },
-                                        "contents": [{
-                                            "parts": [{"text": full_message}]
-                                        }],
-                                        "generationConfig": {
-                                            "temperature": GEMINI_TEMPERATURE,
-                                            "maxOutputTokens": 2500,
-                                            "topP": 0.95,
-                                            "topK": 40
-                                        }
-                                    }
-                                    
-                                    try:
-                                        async with session.post(
-                                            url,
-                                            json=payload2,
-                                            timeout=aiohttp.ClientTimeout(total=45)
-                                        ) as response2:
-                                            
-                                            if response2.status == 200:
-                                                data2 = await response2.json()
-                                                candidates2 = data2.get('candidates', [])
-                                                
-                                                if candidates2:
-                                                    finish_reason2 = candidates2[0].get('finishReason', '')
-                                                    reply2 = candidates2[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-                                                    
-                                                    if reply2:
-                                                        reply2 = reply2.strip()
-                                                        reply2 = reply2.replace('**', '').replace('*', '').replace('`', '')
-                                                        reply2 = re.sub(r'<[^>]+>', '', reply2)
-                                                        
-                                                        for pattern in patterns_to_remove:
-                                                            reply2 = re.sub(pattern, '', reply2, flags=re.IGNORECASE | re.MULTILINE)
-                                                        
-                                                        lines2 = [line.strip() for line in reply2.split('\n') if line.strip()]
-                                                        reply2 = '\n'.join(lines2)
-                                                        
-                                                        if reply2 and len(reply2) > len(reply):
-                                                            reply = reply2
-                                                            finish_reason = finish_reason2
-                                                            logger.info(f"✅ پاسخ کامل‌تر دریافت شد - طول: {len(reply)}")
-                                                    else:
-                                                        logger.warning("⚠️ پاسخ دوم خالی بود")
-                                                else:
-                                                    logger.warning("⚠️ پاسخ دوم نامعتبر بود")
-                                            else:
-                                                logger.warning(f"⚠️ درخواست دوم ناموفق: {response2.status}")
-                                    except Exception as e2:
-                                        logger.error(f"❌ خطا در درخواست دوم: {e2}")
-                                    
-                                    if finish_reason == 'MAX_TOKENS':
-                                        reply += "\n\n⚠️ پاسخ کامل نشد. لطفاً سوال خود را کوتاه‌تر بپرسید."
+                                    logger.warning("⚠️ پاسخ Gemini با محدودیت خروجی قطع شد")
+                                    reply += "\n\n⚠️ پاسخ کوتاه شد؛ لطفاً سوال را دقیق‌تر بپرسید."
                                 
                                 if user_id:
                                     conversation_memory.add_message(user_id, 'user', message_text)
@@ -34406,14 +34404,19 @@ async def process_ai_chat_message(message: Message):
     processing_msg = await message.reply("⏳ در حال پردازش سوال شما..." if lang == "fa" else "⏳ Processing your question...")
     
     try:
-        button_context = get_ai_button_context(user_id, lang)
+        message_text = message.text or ""
+        button_context = get_ai_button_context(user_id, lang, message_text)
         answer = await asyncio.wait_for(
             get_ai_response(
-                message.text or "",
+                message_text,
                 user_id,
                 message.from_user.username,
                 button_context=button_context,
-                user_context=build_ai_user_database_context(user_id),
+                user_context=(
+                    build_ai_user_database_context(user_id, message_text)
+                    if should_include_ai_user_context(message_text)
+                    else ""
+                ),
             ),
             timeout=90
         )
@@ -34870,7 +34873,11 @@ async def auto_ai_response(message: Message):
             message.text or "",
             user_id,
             message.from_user.username,
-            user_context=build_ai_user_database_context(user_id),
+            user_context=(
+                build_ai_user_database_context(user_id, message.text or "")
+                if should_include_ai_user_context(message.text or "")
+                else ""
+            ),
         )
         error_keywords = ["❌", "⚠️", "خطا", "متأسفانه", "Error", "متاسفانه"]
         is_error = any(kw in answer for kw in error_keywords)
