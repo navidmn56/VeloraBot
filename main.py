@@ -20059,6 +20059,12 @@ async def back_to_main(callback: CallbackQuery):
     coupon_code = before_state.get('coupon_code')
     coupon_discount = before_state.get('coupon_discount')
     coupon_applied = before_state.get('coupon_applied')
+    if before_state.get('awaiting_chat'):
+        logger.info(
+            "کاربر %s با انتخاب منوی اصلی از حالت دریافت پیام تیکت #%s خارج شد",
+            user_id,
+            before_state.get('chat_id'),
+        )
     
     logger.info(f"🔍 کوپن در back_to_main - code: {coupon_code}, applied: {coupon_applied}, discount: {coupon_discount}")
     if user_id in user_states:
@@ -24687,6 +24693,12 @@ async def handle_receipt(message: Message):
     user_id = message.from_user.id
     
     user_state = user_states.get(user_id, {})
+    if user_state.get('awaiting_chat'):
+        await handle_chat_message(message)
+        return
+    if user_id == ADMIN_ID_INT and user_state.get('awaiting_chat_reply'):
+        await admin_chat_reply(message)
+        return
     
     if not user_state.get('awaiting_receipt'):
         logger.debug(f"کاربر {user_id} عکس فرستاد ولی در حالت awaiting_receipt نیست")
@@ -28841,6 +28853,12 @@ async def reject_direct(callback: CallbackQuery):
 async def handle_wrong_file_type(message: Message):
     user_id = message.from_user.id
     user_state = user_states.get(user_id, {})
+    if user_state.get('awaiting_chat'):
+        await handle_chat_message(message)
+        return
+    if user_id == ADMIN_ID_INT and user_state.get('awaiting_chat_reply'):
+        await admin_chat_reply(message)
+        return
     if user_state.get('awaiting_receipt', False):
         lang = get_user(user_id).get('lang', 'fa')
         
@@ -30505,10 +30523,79 @@ async def user_continue_ticket(callback: CallbackQuery):
     await callback.answer()
 
 
+def support_message_description(message: Message) -> str:
+    content = message.text or message.caption
+    if content:
+        return content
+    content_type = getattr(message, 'content_type', 'message')
+    file_name = None
+    for attribute in ('document', 'video', 'audio', 'animation'):
+        media = getattr(message, attribute, None)
+        if media and getattr(media, 'file_name', None):
+            file_name = media.file_name
+            break
+    suffix = f": {file_name}" if file_name else ""
+    return f"[{content_type}{suffix}]"
+
+
+async def relay_support_message(
+    message: Message,
+    destination_id: int,
+    chat_id: int,
+    sender_label: str,
+    close_ticket_for_user: bool = False,
+):
+    description = support_message_description(message)
+    lang = get_user(destination_id).get('lang', 'fa')
+    title = (
+        f"💬 پیام از پشتیبانی · تیکت #{chat_id}"
+        if sender_label == "admin"
+        else f"💬 پیام کاربر {message.from_user.id} · تیکت #{chat_id}"
+    )
+    if lang == "en":
+        title = (
+            f"💬 Support message · ticket #{chat_id}"
+            if sender_label == "admin"
+            else f"💬 Message from user {message.from_user.id} · ticket #{chat_id}"
+        )
+    keyboard = None
+    if close_ticket_for_user:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🔒 پایان تیکت" if lang == "fa" else "🔒 Close ticket",
+                callback_data=f"ticket_close_user_{chat_id}",
+            )
+        ]])
+
+    if message.text:
+        await bot.send_message(
+            destination_id,
+            f"{title}\n\n{html.escape(message.text)}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+    else:
+        await message.copy_to(destination_id)
+        try:
+            await bot.send_message(
+                destination_id,
+                f"{title}\n{html.escape(description)}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            logger.error(
+                "پیام رسانه‌ای تیکت #%s ارسال شد اما ارسال توضیحات/دکمه ناموفق بود: %s",
+                chat_id,
+                e,
+            )
+    return description
+
+
 
 @dp.message(lambda m: user_states.get(m.from_user.id, {}).get('awaiting_chat', False))
 async def handle_chat_message(message: Message):
-    """دریافت پیام چت از کاربر - با پشتیبانی از فایل"""
+    """دریافت و انتقال متن و رسانه کاربر در تیکت پشتیبانی."""
     user_id = message.from_user.id
     if await block_unauthorized(message, message.from_user.id):
         return
@@ -30536,112 +30623,28 @@ async def handle_chat_message(message: Message):
         else:
             await message.reply("✅ Conversation ended. Thank you!", reply_markup=get_back_only_keyboard(lang))
         return
-    text_content = ""
-    file_info = None
-    file_type = None
-    
-    if message.text:
-        text_content = message.text
-    elif message.caption:
-        text_content = message.caption
-    elif message.document:
-        file_type = "document"
-        file_info = f"📄 {message.document.file_name}"
-        text_content = f"[فایل: {message.document.file_name}]"
-    elif message.photo:
-        file_type = "photo"
-        file_info = f"📸 عکس"
-        text_content = "[عکس]"
-    elif message.video:
-        file_type = "video"
-        file_info = f"🎬 {message.video.file_name if message.video.file_name else 'ویدیو'}"
-        text_content = f"[ویدیو: {message.video.file_name if message.video.file_name else 'ویدیو'}]"
-    elif message.audio:
-        file_type = "audio"
-        file_info = f"🎵 {message.audio.file_name if message.audio.file_name else 'صدا'}"
-        text_content = f"[صدا: {message.audio.file_name if message.audio.file_name else 'صدا'}]"
-    elif message.voice:
-        file_type = "voice"
-        file_info = f"🎤 ویس"
-        text_content = "[ویس]"
-    elif message.video_note:
-        file_type = "video_note"
-        file_info = f"📹 ویدیو نوت"
-        text_content = "[ویدیو نوت]"
-    elif message.sticker:
-        file_type = "sticker"
-        file_info = f"🏷️ استیکر"
-        text_content = "[استیکر]"
-    elif message.animation:
-        file_type = "animation"
-        file_info = f"🎞️ گیف"
-        text_content = "[گیف]"
-    else:
-        await message.reply("❌ نوع فایل پشتیبانی نمی‌شود.")
+    try:
+        text_content = await relay_support_message(
+            message,
+            ADMIN_ID_INT,
+            chat_id,
+            sender_label="user",
+        )
+    except Exception as e:
+        logger.error(f"خطا در انتقال پیام کاربر به تیکت #{chat_id}: {e}", exc_info=True)
+        await message.reply("❌ ارسال پیام به پشتیبانی ناموفق بود. لطفاً دوباره تلاش کنید.")
         return
     add_message(chat_id, 'user', text_content)
-    admin_text = (
-        f"💬 <b>پیام جدید از کاربر {user_id}</b>\n"
-        f"🆔 تیکت: #{chat_id}\n\n{html.escape(text_content)}"
-    )
-    
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 پاسخ", callback_data=f"admin_chat_{chat_id}")]
-    ])
-    
     try:
-        if file_type and message.document:
-            await bot.send_document(
-                ADMIN_ID_INT,
-                message.document.file_id,
-                caption=admin_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=admin_kb
-            )
-        elif file_type and message.photo:
-            await bot.send_photo(
-                ADMIN_ID_INT,
-                message.photo[-1].file_id,
-                caption=admin_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=admin_kb
-            )
-        elif file_type and message.video:
-            await bot.send_video(
-                ADMIN_ID_INT,
-                message.video.file_id,
-                caption=admin_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=admin_kb
-            )
-        elif file_type and message.audio:
-            await bot.send_audio(
-                ADMIN_ID_INT,
-                message.audio.file_id,
-                caption=admin_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=admin_kb
-            )
-        elif file_type and message.voice:
-            await bot.send_voice(
-                ADMIN_ID_INT,
-                message.voice.file_id,
-                caption=admin_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=admin_kb
-            )
-        elif file_type and message.video_note:
-            await bot.send_video_note(
-                ADMIN_ID_INT,
-                message.video_note.file_id,
-                reply_markup=admin_kb
-            )
-            await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML)
-        else:
-            await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
+        await bot.send_message(
+            ADMIN_ID_INT,
+            f"برای پاسخ به تیکت #{chat_id} دکمه را بزنید.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💬 پاسخ", callback_data=f"admin_chat_{chat_id}")
+            ]]),
+        )
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام به ادمین: {e}")
-        await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
+        logger.error(f"پیام تیکت #{chat_id} ارسال شد اما دکمه پاسخ ارسال نشد: {e}")
     
     if lang == "fa":
         await message.reply("✅ پیام شما ارسال شد.")
@@ -31535,18 +31538,13 @@ async def admin_chat_reply(message: Message):
         )
         user_states.pop(admin_id, None)
         return
-    reply_text = message.text or '[پیام]'
     try:
-        await bot.send_message(
+        reply_text = await relay_support_message(
+            message,
             chat['user_id'],
-            f"💬 <b>پیام از پشتیبانی:</b>\n\n{html.escape(reply_text)}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="🔒 پایان تیکت" if get_user(chat['user_id']).get('lang', 'fa') == "fa" else "🔒 Close ticket",
-                    callback_data=f"ticket_close_user_{chat_id}",
-                )]
-            ]),
+            chat_id,
+            sender_label="admin",
+            close_ticket_for_user=True,
         )
     except Exception as e:
         logger.error(f"خطا در ارسال پاسخ تیکت #{chat_id} به کاربر {chat['user_id']}: {e}")
@@ -33569,100 +33567,48 @@ async def handle_text_messages(message: Message):
 
 # ✅ لیست کلمات نامناسب فارسی و انگلیسی
 BAD_WORDS_FA = [
-    'کیر', 'کیرم', 'کیری', 'کس', 'کسم', 'کسی', 'کونی', 'کون', 'کونم',
+    'کیر', 'کیرم', 'کیری', 'کس', 'کسم', 'کونی', 'کون', 'کونم',
     'مادرجنده', 'مادرقحبه', 'مادرکصه', 'جنده', 'قحبه', 'کص', 'کصم',
     'کصکش', 'کصخل', 'خارکصه', 'خواهرجنده', 'خواهرقحبه',
-    'گوه', 'گه', 'گوه خور', 'گه خور', 'عن', 'عین',
-    'آشغال', 'اشغال', 'سگ', 'سگم', 'سگی', 'خر', 'خرت', 'خری',
-    'گاو', 'گاوم', 'گاوی', 'الاغ', 'الاغی',
-    'دیوث', 'دیوس', 'نامرد', 'بیشرف', 'بی شرف', 'بی‌شرف',
-    'حرومزاده', 'حرامزاده', 'توله سگ', 'توله‌سگ',
-    'کسکش', 'کس کش', 'کیرم', 'کیرم تو', 'کیر تو',
-    'زنا زاده', 'زنازاده', 'ولگرد', 'بی‌پدر', 'بی پدر', 'بی‌مادر', 'بی مادر',
-    'پدرسگ', 'پدر سگ', 'مادرسگ', 'مادر سگ',
-    'فحش', 'فحشی', 'فوش', 'فوشی',
+    'گوه', 'گه', 'گوه خور', 'گه خور',
+    'دیوث', 'دیوس', 'بیشرف', 'بی شرف', 'حرومزاده', 'حرامزاده',
+    'کسکش', 'کس کش', 'کیرم تو', 'کیر تو', 'زنا زاده', 'زنازاده',
+    'بی پدر', 'بی مادر', 'پدرسگ', 'پدر سگ', 'مادرسگ', 'مادر سگ',
 ]
 
 BAD_WORDS_EN = [
-    'fuck', 'fucking', 'fucker', 'fucked', 'fuckyou', 'fuck_you',
+    'fuck', 'fucking', 'fucker', 'fucked', 'fuckyou', 'fuck you',
     'shit', 'shitty', 'bullshit', 'bull shit',
-    'bitch', 'bitches', 'bitching',
-    'asshole', 'ass hole', 'ass',
-    'bastard', 'bastards',
-    'damn', 'damnit', 'dammit',
+    'bitch', 'bitches', 'bitching', 'asshole', 'ass hole',
+    'bastard', 'bastards', 'damn it', 'damnit', 'dammit',
     'motherfucker', 'mother fucker', 'motherfucking',
-    'cunt', 'cunts',
-    'dick', 'dicks', 'dickhead',
-    'pussy', 'pussies',
-    'whore', 'whores',
-    'slut', 'sluts',
-    'idiot', 'idiots', 'stupid', 'stupids',
-    'retard', 'retards', 'retarded',
-    'moron', 'morons',
-    'nigger', 'nigga',
-    'faggot', 'fag', 'fags',
-    'cock', 'cocks',
-    'suck', 'sucks', 'sucking',
-    'screw', 'screwed',
-    'hell', 'hellish',
-    'crap', 'crappy',
-    'jackass', 'jackasses',
-    'dumbass', 'dumbasses',
-    'douche', 'douchebag',
-    'wanker', 'wankers',
-    'bollocks', 'bollock',
-    'arse', 'arsehole',
+    'cunt', 'cunts', 'dick', 'dicks', 'dickhead',
+    'pussy', 'pussies', 'whore', 'whores', 'slut', 'sluts',
+    'retard', 'retards', 'retarded', 'nigger', 'nigga',
+    'faggot', 'fag', 'fags', 'cock', 'cocks', 'douche', 'douchebag',
+    'wanker', 'wankers', 'bollocks', 'bollock', 'arsehole',
     'twat', 'twats',
-    'knob', 'knobs',
 ]
 
 def contains_bad_words(text: str) -> tuple:
-    """
-    تشخیص فحش و کلمات نامناسب در متن
-    
-    Returns:
-        tuple: (has_bad_word: bool, bad_word: str or None, language: str or None)
-    """
     if not text:
         return False, None, None
-    
-    # ✅ نرمال‌سازی متن
-    text_lower = text.lower().strip()
-    
-    # ✅ حذف فاصله‌های اضافی
-    text_lower = ' '.join(text_lower.split())
-    
-    # ✅ حذف علائم نگارشی
-    text_clean = re.sub(r'[^\w\s\u0600-\u06FF]', ' ', text_lower)
-    text_clean = ' '.join(text_clean.split())
-    
-    # ✅ چک کردن کلمات فارسی
-    for bad_word in BAD_WORDS_FA:
-        # چک کردن کلمه کامل
-        pattern = r'(?:^|[\s\u0600-\u06FF])' + re.escape(bad_word) + r'(?:$|[\s\u0600-\u06FF])'
-        if re.search(pattern, text_clean):
-            return True, bad_word, 'fa'
-        
-        # چک کردن بدون فاصله
-        if bad_word in text_clean:
-            return True, bad_word, 'fa'
-    
-    # ✅ چک کردن کلمات انگلیسی
-    for bad_word in BAD_WORDS_EN:
-        # چک کردن کلمه کامل
-        pattern = r'(?:^|\s)' + re.escape(bad_word) + r'(?:$|\s)'
-        if re.search(pattern, text_clean):
-            return True, bad_word, 'en'
-        
-        # چک کردن کلمه با علائم
-        pattern = r'(?:^|\s)' + re.escape(bad_word) + r'[s\']?(?:$|\s)'
-        if re.search(pattern, text_clean):
-            return True, bad_word, 'en'
-        
-        # چک کردن بدون فاصله
-        if bad_word in text_clean:
-            return True, bad_word, 'en'
-    
+
+    normalized = (
+        text.lower()
+        .replace('ي', 'ی')
+        .replace('ك', 'ک')
+        .replace('\u200c', '')
+    )
+    words = re.findall(r'[a-z0-9]+|[\u0600-\u06ff]+', normalized)
+    for word_list, language in ((BAD_WORDS_FA, 'fa'), (BAD_WORDS_EN, 'en')):
+        for bad_word in word_list:
+            phrase = bad_word.lower().replace('ي', 'ی').replace('ك', 'ک').replace('\u200c', '')
+            phrase_words = re.findall(r'[a-z0-9]+|[\u0600-\u06ff]+', phrase)
+            size = len(phrase_words)
+            if size and any(words[index:index + size] == phrase_words for index in range(len(words) - size + 1)):
+                return True, bad_word.strip(), language
+
     return False, None, None
 
 
@@ -33713,7 +33659,7 @@ def strip_ai_button_directives(text: str) -> str:
     return re.sub(r"\[\[BUTTON:[A-Z_]+(?::\d+)?\|[^\]\r\n]{1,64}\]\]", "", text).strip()
 
 
-def build_ai_reply_keyboard(answer: str, user_id: int, lang: str):
+def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: str = ""):
     buttons = []
     seen_callbacks = set()
     allowed_actions = set(re.findall(
@@ -33731,14 +33677,63 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str):
     }
     callback_map = {
         "CLEAR_MEMORY": "clear_ai_memory",
-        "HUMAN_SUPPORT": "ai_chat",
+        "HUMAN_SUPPORT": "support_create_ticket",
         "BUY_SERVICE": "buy_service",
         "GET_TEST_SERVICE": "get_test_service",
     }
-    for action, label in re.findall(
+    suggestions = re.findall(
         r"\[\[BUTTON:([A-Z_]+(?::\d+)?)\|([^\]\r\n]{1,64})\]\]",
         answer,
-    )[:2]:
+    )
+    query = (user_message or "").translate(str.maketrans(
+        "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+        "01234567890123456789",
+    )).lower()
+    available_test = "GET_TEST_SERVICE" in allowed_actions
+    available_purchase = "BUY_SERVICE" in allowed_actions
+    renewal_match = re.search(r"(?:تمدید|renew|extend).{0,50}?(?:سفارش|order|#)?\s*(\d+)", query)
+    if not renewal_match and re.search(r"(?:سفارش|order)\s*#?\s*\d+.{0,30}(?:تمدید|renew|extend)", query):
+        renewal_match = re.search(r"(?:سفارش|order)\s*#?\s*(\d+)", query)
+
+    inferred_actions = []
+    if renewal_match:
+        order_id = renewal_match.group(1)
+        if order_id in allowed_orders:
+            inferred_actions.append((
+                f"RENEW_ORDER:{order_id}",
+                f"تمدید سفارش {order_id}" if lang == "fa" else f"Renew order {order_id}",
+            ))
+    elif available_test and (
+        re.search(r"تست|آزمایش", query)
+        or re.search(r"\btest\b", query)
+        or re.search(r"تست.{0,30}(?:موجود|فعال|دریافت|می‌تونی|می‌توانید)", answer)
+        or re.search(r"\btest\b.{0,30}\b(?:available|ready|get)\b", answer, re.IGNORECASE)
+    ):
+        inferred_actions.append((
+            "GET_TEST_SERVICE",
+            "🎁 دریافت تست" if lang == "fa" else "🎁 Get test config",
+        ))
+    elif available_purchase and re.search(r"خرید|خریدار|سفارش جدید|\bbuy\b|\bpurchase\b|\border\b", query):
+        inferred_actions.append((
+            "BUY_SERVICE",
+            "🛒 خرید سرویس" if lang == "fa" else "🛒 Buy service",
+        ))
+    elif re.search(r"پشتیبان|اپراتور|انسان|human support|operator", query):
+        inferred_actions.append((
+            "HUMAN_SUPPORT",
+            "🎫 ارتباط با پشتیبان" if lang == "fa" else "🎫 Contact support",
+        ))
+
+    if inferred_actions:
+        inferred_action = inferred_actions[0][0]
+        matching_suggestions = [item for item in suggestions if item[0] == inferred_action]
+        other_suggestions = [item for item in suggestions if item[0] != inferred_action]
+        suggestions = (
+            matching_suggestions + other_suggestions
+            if matching_suggestions
+            else inferred_actions + suggestions
+        )
+    for action, label in suggestions[:2]:
         if action not in allowed_actions:
             continue
         if action.startswith("RENEW_ORDER:"):
@@ -34204,7 +34199,12 @@ async def process_ai_chat_message(message: Message):
         
         # ✅ پاسخ درست بود - محدودیت کم کن
         increment_ai_usage(user_id)
-        answer, reply_keyboard = build_ai_reply_keyboard(answer, user_id, lang)
+        answer, reply_keyboard = build_ai_reply_keyboard(
+            answer,
+            user_id,
+            lang,
+            user_message=message.text or "",
+        )
         
         # ✅ پاکسازی پاسخ
         lines = [line.strip() for line in answer.split('\n') if line.strip()]
