@@ -36,7 +36,7 @@ It provides an automated environment for selling and managing VPN configurations
 
 The bot is designed to work specifically with **MHSanaei 3X-UI** and its API.
 
-Smart support lets users choose AI chat or open a support ticket. A ticket can optionally reference one of the user's configurations; administrators can review the user's profile and available configuration details while replying. Users and administrators can exchange text and supported media in tickets, and users can pause ticket input without closing the ticket. AI receives a read-only snapshot limited to the current user's profile and orders, and can show context-aware buttons for account, configuration, coupon, balance, referral, language, purchase, test, support, and eligible renewal actions.
+Smart support lets users choose AI chat or open a support ticket. A ticket can optionally reference one of the user's configurations; administrators can review the user's profile and available configuration details while replying. Users and administrators can exchange text and supported media in tickets, and users can pause ticket input without closing the ticket. AI receives a read-only snapshot limited to the current user's profile and orders, and can show context-aware buttons for account, configuration, coupon, balance, referral, language, purchase, test, support, and eligible renewal actions. AI answers are sent and saved only when Gemini reports a normal completion; truncated outputs are discarded. The stable system prompt uses Gemini's server-side cache when available, with an uncached fallback if cache creation is rejected.
 
 ---
 
