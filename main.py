@@ -16576,6 +16576,8 @@ async def buy_specific_package(callback: CallbackQuery):
         'extend_order_id': extend_order_id,
         'current_volume': current_volume,
         'current_days': current_days,
+        'payment_ready': True,
+        'timestamp': datetime.now().isoformat(),
     }
     
     # ✅✅✅ مرحله 4: لاگ برای دیباگ
@@ -21395,7 +21397,9 @@ async def buy_service(callback: CallbackQuery):
             'category_name': category_name,
             'is_ready_package': True,
             'category_icon': category_icon,
-            'current_page': 'package_payment'
+            'current_page': 'package_payment',
+            'payment_ready': True,
+            'timestamp': datetime.now().isoformat()
         }
         
         if coupon_applied and coupon_code and discount_percent > 0:
@@ -21495,7 +21499,8 @@ async def buy_service(callback: CallbackQuery):
             'original_price': original_price,
             'discount_percent': discount_percent,
             'is_ready_package': False,
-            'current_page': 'purchase'
+            'current_page': 'purchase',
+            'timestamp': datetime.now().isoformat()
         }
         
         if coupon_applied and coupon_code and discount_percent > 0:
@@ -21521,7 +21526,9 @@ async def buy_service(callback: CallbackQuery):
         'original_price': original_price,
         'discount_percent': discount_percent,
         'is_ready_package': False,
-        'current_page': 'purchase'
+        'current_page': 'purchase',
+        'payment_ready': True,
+        'timestamp': datetime.now().isoformat()
     }
     
     if coupon_applied and coupon_code and discount_percent > 0:
@@ -23049,11 +23056,56 @@ async def day_up(callback: CallbackQuery):
             await callback.answer("⚠️ حداکثر مدت 365 روز است!", show_alert=True)
         else:
             await callback.answer("⚠️ Maximum duration is 365 days!", show_alert=True)
+
+
+def is_valid_checkout_state(state):
+    if not isinstance(state, dict) or not state.get('payment_ready'):
+        return False
+
+    payment_type = state.get('payment_type')
+    if payment_type not in ('purchase', 'ready_package'):
+        return False
+
+    try:
+        created_at = datetime.fromisoformat(state.get('timestamp', ''))
+    except (TypeError, ValueError):
+        return False
+
+    age_seconds = (datetime.now() - created_at).total_seconds()
+    if age_seconds < 0 or age_seconds > 1800:
+        return False
+
+    volume = state.get('volume')
+    days = state.get('days')
+    price = state.get('price')
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in (volume, days, price)):
+        return False
+    if volume < 0 or days < 0 or price < 0:
+        return False
+
+    if payment_type == 'ready_package':
+        return (
+            state.get('is_ready_package') is True
+            and state.get('category_id') is not None
+            and state.get('package_id') is not None
+        )
+
+    return state.get('is_ready_package') is False
+
+
+async def reject_expired_checkout(callback, lang):
+    message = (
+        "⌛ مهلت این صفحه پرداخت تمام شده یا اطلاعات خرید معتبر نیست. لطفاً خرید را دوباره از منوی اصلی آغاز کنید."
+        if lang == 'fa'
+        else "⌛ This checkout has expired or is invalid. Please restart your purchase from the main menu."
+    )
+    await callback.answer(message, show_alert=True)
+
+
 @dp.callback_query(F.data == "pay_card")
 async def pay_card(callback: CallbackQuery):
     """پرداخت با کارت بانکی - نسخه کامل با پشتیبانی از تمدید"""
     user_id = callback.from_user.id
-    save_coupon_to_user_db(user_id)
     logger.info(f"🔍 [pay_card] شروع برای کاربر {user_id}")
     debug_coupon_state(user_id, "pay_card_start")
     if user_id in BLACKLIST:
@@ -23071,6 +23123,12 @@ async def pay_card(callback: CallbackQuery):
     
     # ✅✅✅ خواندن مستقیم از user_states (نه از full_state)
     current_user_state = user_states.get(user_id, {})
+    if not is_valid_checkout_state(current_user_state):
+        logger.warning(f"⚠️ [pay_card] پرداخت رد شد؛ state خرید معتبر یا تازه نیست (کاربر {user_id})")
+        await reject_expired_checkout(callback, lang)
+        return
+
+    save_coupon_to_user_db(user_id)
     
     is_extend = current_user_state.get('is_extend', False)
     extend_order_id = current_user_state.get('extend_order_id')
@@ -23951,6 +24009,10 @@ async def pay_balance(callback: CallbackQuery):
     
     # ✅✅✅ خواندن مستقیم از user_states (نه از full_state)
     current_user_state = user_states.get(user_id, {})
+    if not is_valid_checkout_state(current_user_state):
+        logger.warning(f"⚠️ [pay_balance] پرداخت رد شد؛ state خرید معتبر یا تازه نیست (کاربر {user_id})")
+        await reject_expired_checkout(callback, lang)
+        return
     
     is_extend = current_user_state.get('is_extend', False)
     extend_order_id = current_user_state.get('extend_order_id')
