@@ -9,6 +9,14 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
 
+RLM = "\u200F"
+PERSIAN_DIGITS = str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
+
+def to_persian_number(text) -> str:
+    if text is None:
+        return ''
+    return str(text).translate(PERSIAN_DIGITS)
+
 
 class AlertSystem:
     """سیستم مدیریت هشدارهای حجم و انقضای سرویس با ارسال یکبار برای هر آستانه"""
@@ -431,15 +439,19 @@ class AlertSystem:
         except Exception:
             return "Unknown"
     
-    def _format_volume(self, gb: float) -> str:
+    def _format_volume(self, gb: float, lang: str = "fa") -> str:
         """فرمت حجم"""
         if gb >= 1:
+            if lang == "fa":
+                return f"{to_persian_number(f'{gb:.2f}')} گیگ"
             return f"{gb:.2f} GB"
         elif gb >= 0.001:
             mb = gb * 1024
+            if lang == "fa":
+                return f"{to_persian_number(f'{mb:.0f}')} مگ"
             return f"{mb:.0f} MB"
         else:
-            return "0 MB"
+            return f"{to_persian_number('0')} مگ" if lang == "fa" else "0 MB"
     
     # ═══════════════════════════════════════════
     # Cache Management
@@ -698,9 +710,9 @@ class AlertSystem:
         user = self.get_user(user_id)
         lang = user.get('lang', 'fa') if user else 'fa'
         
-        used_display = self._format_volume(used_gb)
-        total_display = self._format_volume(total_gb)
-        remaining_display = self._format_volume(remaining_gb)
+        used_display = self._format_volume(used_gb, lang)
+        total_display = self._format_volume(total_gb, lang)
+        remaining_display = self._format_volume(remaining_gb, lang)
         exhausted = threshold_label == "exhausted"
         service_name = "سرویس آزمایشی" if is_test else "سرویس"
         service_name_en = "test service" if is_test else "service"
@@ -709,39 +721,39 @@ class AlertSystem:
             if exhausted:
                 if is_test:
                     text = (
-                        f"❌ <b>حجم سرویس آزمایشی به پایان رسیده است</b>\n\n"
-                        f"🧪 حجم تست شما به‌طور کامل مصرف شده است.\n\n"
-                        f"🆔 شماره سفارش: #{order_id}\n"
-                        f"📊 میزان مصرف: {used_display} از {total_display}\n\n"
-                        f"سرویس آزمایشی قابل تمدید نیست. برای ادامه استفاده، سرویس اصلی را از بخش خرید تهیه کنید."
+                        f"{RLM}❌ <b>حجم سرویس آزمایشی به پایان رسیده است</b>\n\n"
+                        f"{RLM}🧪 حجم تست شما به‌طور کامل مصرف شده است.\n\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
+                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n\n"
+                        f"{RLM}سرویس آزمایشی قابل تمدید نیست. برای ادامه استفاده، سرویس اصلی را از بخش خرید تهیه کنید."
                     )
                 else:
                     text = (
-                        f"❌ <b>حجم سرویس به پایان رسیده است</b>\n\n"
-                        f"📡 حجم {service_name} شما به‌طور کامل مصرف شده است.\n\n"
-                        f"🆔 شماره سفارش: #{order_id}\n"
-                        f"📊 میزان مصرف: {used_display} از {total_display}\n"
-                        f"📉 حجم باقی‌مانده: {remaining_display}\n\n"
-                        f"برای ادامه استفاده، کانفیگ را مشاهده کنید یا سرویس خود را تمدید کنید."
+                        f"{RLM}❌ <b>حجم سرویس به پایان رسیده است</b>\n\n"
+                        f"{RLM}📡 حجم {service_name} شما به‌طور کامل مصرف شده است.\n\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
+                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n"
+                        f"{RLM}📉 حجم باقی‌مانده: {remaining_display}\n\n"
+                        f"{RLM}برای ادامه استفاده، کانفیگ را مشاهده کنید یا سرویس خود را تمدید کنید."
                     )
             else:
                 if is_test:
                     text = (
-                        f"⚠️ <b>حجم سرویس آزمایشی رو به اتمام است</b>\n\n"
-                        f"🧪 بخش عمده‌ای از حجم تست شما مصرف شده است.\n\n"
-                        f"🆔 شماره سفارش: #{order_id}\n"
-                        f"📊 میزان مصرف: {used_display} از {total_display}\n"
-                        f"📉 حجم باقی‌مانده: {remaining_display} ({remaining_percent:.1f}٪)\n\n"
-                        f"سرویس تست قابل تمدید نیست؛ برای ادامه پس از پایان تست، سرویس اصلی را خریداری کنید."
+                        f"{RLM}⚠️ <b>حجم سرویس آزمایشی رو به اتمام است</b>\n\n"
+                        f"{RLM}🧪 بخش عمده‌ای از حجم تست شما مصرف شده است.\n\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
+                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n"
+                        f"{RLM}📉 حجم باقی‌مانده: {remaining_display} ({to_persian_number(f'{remaining_percent:.1f}')}٪)\n\n"
+                        f"{RLM}سرویس تست قابل تمدید نیست؛ برای ادامه پس از پایان تست، سرویس اصلی را خریداری کنید."
                     )
                 else:
                     text = (
-                        f"⚠️ <b>حجم سرویس رو به اتمام است</b>\n\n"
-                        f"📡 بخش عمده‌ای از حجم {service_name} شما مصرف شده است.\n\n"
-                        f"🆔 شماره سفارش: #{order_id}\n"
-                        f"📊 میزان مصرف: {used_display} از {total_display}\n"
-                        f"📉 حجم باقی‌مانده: {remaining_display} ({remaining_percent:.1f}٪)\n\n"
-                        f"برای جلوگیری از وقفه، وضعیت کانفیگ را بررسی و در صورت نیاز آن را تمدید کنید."
+                        f"{RLM}⚠️ <b>حجم سرویس رو به اتمام است</b>\n\n"
+                        f"{RLM}📡 بخش عمده‌ای از حجم {service_name} شما مصرف شده است.\n\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
+                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n"
+                        f"{RLM}📉 حجم باقی‌مانده: {remaining_display} ({to_persian_number(f'{remaining_percent:.1f}')}٪)\n\n"
+                        f"{RLM}برای جلوگیری از وقفه، وضعیت کانفیگ را بررسی و در صورت نیاز آن را تمدید کنید."
                     )
         else:
             if exhausted:
@@ -812,12 +824,12 @@ class AlertSystem:
         if notify_label == "expired":
             time_left = "منقضی شده" if lang == 'fa' else "Expired"
         elif days_left > 0:
-            time_left = f"{days_left} روز" if lang == 'fa' else f"{days_left} days"
+            time_left = f"{to_persian_number(days_left)} روز" if lang == 'fa' else f"{days_left} days"
         elif hours_left >= 1:
-            time_left = f"{int(hours_left)} ساعت" if lang == 'fa' else f"{int(hours_left)} hours"
+            time_left = f"{to_persian_number(int(hours_left))} ساعت" if lang == 'fa' else f"{int(hours_left)} hours"
         else:
             minutes_left = max(0, int(hours_left * 60))
-            time_left = f"{minutes_left} دقیقه" if lang == 'fa' else f"{minutes_left} minutes"
+            time_left = f"{to_persian_number(minutes_left)} دقیقه" if lang == 'fa' else f"{minutes_left} minutes"
 
         service_name = "سرویس آزمایشی" if is_test else "سرویس"
         service_name_en = "test service" if is_test else "service"
@@ -827,33 +839,33 @@ class AlertSystem:
             if expired:
                 if is_test:
                     text = (
-                        f"❌ <b>مهلت سرویس آزمایشی به پایان رسیده است</b>\n\n"
-                        f"🧪 زمان استفاده از تست شما تمام شده است.\n\n"
-                        f"🆔 شماره سفارش: #{order_id}\n\n"
-                        f"سرویس تست قابل تمدید نیست. برای ادامه، یک سرویس اصلی خریداری کنید."
+                        f"{RLM}❌ <b>مهلت سرویس آزمایشی به پایان رسیده است</b>\n\n"
+                        f"{RLM}🧪 زمان استفاده از تست شما تمام شده است.\n\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
+                        f"{RLM}سرویس تست قابل تمدید نیست. برای ادامه، یک سرویس اصلی خریداری کنید."
                     )
                 else:
                     text = (
-                        f"❌ <b>مهلت استفاده از سرویس به پایان رسیده است</b>\n\n"
-                        f"📡 اعتبار زمانی {service_name} شما منقضی شده است.\n\n"
-                        f"🆔 شماره سفارش: #{order_id}\n\n"
-                        f"برای استفادهٔ دوباره، کانفیگ را بررسی کنید و در صورت نیاز سرویس را تمدید کنید."
+                        f"{RLM}❌ <b>مهلت استفاده از سرویس به پایان رسیده است</b>\n\n"
+                        f"{RLM}📡 اعتبار زمانی {service_name} شما منقضی شده است.\n\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
+                        f"{RLM}برای استفادهٔ دوباره، کانفیگ را بررسی کنید و در صورت نیاز سرویس را تمدید کنید."
                     )
             else:
                 if is_test:
                     text = (
-                        f"⚠️ <b>سرویس آزمایشی شما به‌زودی منقضی می‌شود</b>\n\n"
-                        f"🧪 زمان باقی‌مانده: {time_left}\n"
-                        f"🆔 شماره سفارش: #{order_id}\n\n"
-                        f"تست قابل تمدید نیست؛ برای استفاده بدون وقفه، سرویس اصلی را خریداری کنید."
+                        f"{RLM}⚠️ <b>سرویس آزمایشی شما به‌زودی منقضی می‌شود</b>\n\n"
+                        f"{RLM}🧪 زمان باقی‌مانده: {time_left}\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
+                        f"{RLM}تست قابل تمدید نیست؛ برای استفاده بدون وقفه، سرویس اصلی را خریداری کنید."
                     )
                 else:
                     text = (
-                        f"⚠️ <b>هشدار نزدیک‌شدن به انقضای سرویس</b>\n\n"
-                        f"📡 اعتبار زمانی {service_name} شما به‌زودی به پایان می‌رسد.\n\n"
-                        f"⏱ زمان باقی‌مانده: {time_left}\n"
-                        f"🆔 شماره سفارش: #{order_id}\n\n"
-                        f"برای جلوگیری از قطع دسترسی، وضعیت سرویس را بررسی و در صورت نیاز آن را تمدید کنید."
+                        f"{RLM}⚠️ <b>هشدار نزدیک‌شدن به انقضای سرویس</b>\n\n"
+                        f"{RLM}📡 اعتبار زمانی {service_name} شما به‌زودی به پایان می‌رسد.\n\n"
+                        f"{RLM}⏱ زمان باقی‌مانده: {time_left}\n"
+                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
+                        f"{RLM}برای جلوگیری از قطع دسترسی، وضعیت سرویس را بررسی و در صورت نیاز آن را تمدید کنید."
                     )
         else:
             if expired:
