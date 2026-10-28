@@ -32,9 +32,12 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
     CopyTextButton,
     BufferedInputFile,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from config import (
     BOT_TOKEN, ADMIN_ID, LOG_BOT_TOKEN, LOG_CHANNEL_ID, SUPPORT_USERNAME,
@@ -20100,6 +20103,7 @@ async def back_to_main(callback: CallbackQuery):
     lang = user.get('lang', 'fa')
     is_admin = (user_id == ADMIN_ID_INT)
     before_state = user_states.get(user_id, {})
+    was_ticket_input = before_state.get('awaiting_chat', False)
     logger.debug(f"کاربر {user_id} به منوی اصلی برگشت - وضعیت قبلی: {before_state}")
     coupon_code = before_state.get('coupon_code')
     coupon_discount = before_state.get('coupon_discount')
@@ -20134,6 +20138,7 @@ async def back_to_main(callback: CallbackQuery):
         logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} در back_to_main حفظ شد")
     else:
         logger.warning(f"⚠️ کوپنی برای کاربر {user_id} در back_to_main یافت نشد - coupon_applied: {coupon_applied}, coupon_code: {coupon_code}")
+    save_all()
     after_state = user_states.get(user_id, {})
     logger.info(f"🔍 وضعیت نهایی user_states در back_to_main: {after_state}")
     
@@ -20153,6 +20158,12 @@ async def back_to_main(callback: CallbackQuery):
             callback.message.chat.id,
             text,
             reply_markup=get_main_keyboard(is_admin, lang, user_id)
+        )
+    if was_ticket_input:
+        await bot.send_message(
+            user_id,
+            "✅ کنترل‌های تیکت بسته شد." if lang == "fa" else "✅ Ticket controls were dismissed.",
+            reply_markup=ReplyKeyboardRemove(),
         )
     
     try:
@@ -20361,6 +20372,9 @@ async def _send_broadcast_message(
     keyboard = _broadcast_keyboard(broadcast_data.get("buttons", []), lang)
     if broadcast_data.get("parse_mode") == ParseMode.HTML:
         caption = broadcast_data.get("caption", "")
+        if caption is None:
+            caption = ""
+        caption = str(caption)
         media = broadcast_data.get("media")
         broadcast_type = broadcast_data.get("type")
         if broadcast_type == "text":
@@ -23656,14 +23670,17 @@ async def cancel_order_direct(callback: CallbackQuery):
     is_admin = (user_id == ADMIN_ID_INT)
     
     # ✅ ساخت متن پیام - خط کوپن فقط اگه کوپن واقعی داشت
-    if lang == "fa":
-        text = f"{premium_emoji('danger', '❌')} پرداخت لغو شد"
-        if has_real_coupon:
-            text += f"\n\n🏷️ کوپن شما همچنان معتبر است."
-    else:
-        text = f"{premium_emoji('danger', '❌')} Payment cancelled"
-        if has_real_coupon:
-            text += f"\n\n🏷️ Your coupon is still valid."
+    text = (
+        f"{premium_emoji('danger', '❌')} پرداخت لغو شد"
+        if lang == "fa"
+        else f"{premium_emoji('danger', '❌')} Payment cancelled"
+    )
+    if has_real_coupon:
+        text += (
+            "\n\n🏷️ کوپن شما همچنان معتبر است."
+            if lang == "fa"
+            else "\n\n🏷️ Your coupon is still valid."
+        )
     
     try:
         await callback.message.edit_text(
@@ -24707,14 +24724,17 @@ async def cancel_payment(callback: CallbackQuery):
     
     has_real_coupon = bool(coupon_applied and coupon_code)
     
-    if lang == "fa":
-        text = f"{premium_emoji('danger', '❌')} پرداخت لغو شد"
-        if has_real_coupon:
-            text += f"\n\n🏷️ کوپن شما همچنان معتبر است."
-    else:
-        text = f"{premium_emoji('danger', '❌')} Payment cancelled"
-        if has_real_coupon:
-            text += f"\n\n🏷️ Your coupon is still valid."
+    text = (
+        f"{premium_emoji('danger', '❌')} پرداخت لغو شد"
+        if lang == "fa"
+        else f"{premium_emoji('danger', '❌')} Payment cancelled"
+    )
+    if has_real_coupon:
+        text += (
+            "\n\n🏷️ کوپن شما همچنان معتبر است."
+            if lang == "fa"
+            else "\n\n🏷️ Your coupon is still valid."
+        )
     
     await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang, user_id))
     try:
@@ -24822,11 +24842,6 @@ async def handle_receipt(message: Message):
     if user_id == ADMIN_ID_INT and user_state.get('awaiting_chat_reply'):
         await admin_chat_reply(message)
         return
-    paused_ticket = get_paused_user_ticket(user_id)
-    if paused_ticket:
-        await notify_paused_ticket_input(message, paused_ticket)
-        return
-    
     if not user_state.get('awaiting_receipt'):
         logger.debug(f"کاربر {user_id} عکس فرستاد ولی در حالت awaiting_receipt نیست")
         return
@@ -29031,10 +29046,6 @@ async def handle_wrong_file_type(message: Message):
     if user_id == ADMIN_ID_INT and user_state.get('awaiting_chat_reply'):
         await admin_chat_reply(message)
         return
-    paused_ticket = get_paused_user_ticket(user_id)
-    if paused_ticket:
-        await notify_paused_ticket_input(message, paused_ticket)
-        return
     if user_state.get('awaiting_receipt', False):
         lang = get_user(user_id).get('lang', 'fa')
         
@@ -29991,8 +30002,6 @@ async def my_account(callback: CallbackQuery):
 """
     
     buttons = []
-    
-    # ✅✅✅ دکمه‌های کوپن
     if coupon_is_valid:
         # کوپن فعال داره
         buttons.append([
@@ -30000,9 +30009,7 @@ async def my_account(callback: CallbackQuery):
                 text=f"🏷️ {'وضعیت کوپن' if lang=='fa' else 'Coupon Status'}",
                 callback_data="coupon_status",
                 style="primary"
-            )
-        ])
-        buttons.append([
+            ),
             InlineKeyboardButton(
                 text=f"❌ {'لغو کوپن' if lang == 'fa' else 'Cancel Coupon'}",
                 callback_data="cancel_coupon",
@@ -30019,7 +30026,7 @@ async def my_account(callback: CallbackQuery):
             )
         ])
 
-    # ✅✅✅ شارژ کیف پول و تراکنش‌ها کنار هم
+
     buttons.append([
         InlineKeyboardButton(
             text=f"➕ {'شارژ کیف پول' if lang == 'fa' else 'Charge Wallet'}",
@@ -30448,12 +30455,20 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
     chat = chats.get(cid)
     if chat and chat.get('status') != 'closed':
         user_id = chat.get('user_id')
+        is_ticket = chat.get('kind') == 'ticket'
+        remove_user_ticket_keyboard = bool(
+            is_ticket
+            and user_id
+            and str(user_states.get(user_id, {}).get('chat_id')) == str(chat_id)
+        )
         if log_system and user_id:
             asyncio.create_task(log_system.log_chat_closed(chat_id, user_id, closed_by))
         chat['status'] = 'closed'
         chat['closed_by'] = closed_by
         chat['closed_at'] = datetime.now().isoformat()
         chat['updated_at'] = datetime.now().isoformat()
+        if is_ticket and user_id:
+            _clear_ticket_input_state(user_id, chat_id)
         save_all()
         if notify_other and user_id:
             recipient_id = ADMIN_ID_INT if closed_by == "user" else user_id
@@ -30462,16 +30477,15 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
                 if recipient_id == user_id
                 else get_user(ADMIN_ID_INT).get('lang', 'fa')
             )
-            is_ticket = chat.get('kind') == 'ticket'
             if recipient_id == user_id:
                 notification = (
-                    f"🔒 تیکت #{chat_id} توسط پشتیبانی بسته شد."
+                    f"✅ تیکت #{chat_id} با موفقیت پیگیری شد."
                     if is_ticket
-                    else f"🔒 گفتگو #{chat_id} توسط پشتیبانی بسته شد."
+                    else f"✅ گفتگو #{chat_id} با موفقیت پیگیری شد."
                 ) if recipient_lang == "fa" else (
-                    f"🔒 Ticket #{chat_id} was closed by support."
+                    f"✅ Ticket #{chat_id} has been successfully processed."
                     if is_ticket
-                    else f"🔒 Conversation #{chat_id} was closed by support."
+                    else f"✅ Conversation #{chat_id} has been successfully processed."
                 )
             else:
                 notification = (
@@ -30488,9 +30502,13 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
                 await bot.send_message(
                     recipient_id,
                     notification,
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(text=menu_text, callback_data="back_to_main")
-                    ]]),
+                    reply_markup=(
+                        ReplyKeyboardRemove()
+                        if remove_user_ticket_keyboard and recipient_id == user_id
+                        else InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(text=menu_text, callback_data="back_to_main")
+                        ]])
+                    ),
                 )
             except Exception as e:
                 logger.error(
@@ -30508,54 +30526,37 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
     return False
 
 
-def get_user_ticket_keyboard(chat_id: int, lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="⏹ پایان ارسال و منوی اصلی" if lang == "fa" else "⏹ Stop sending · Main menu",
-            callback_data=f"ticket_pause_user_{chat_id}",
-        )],
-        [InlineKeyboardButton(
-            text="🔒 بستن تیکت" if lang == "fa" else "🔒 Close ticket",
-            callback_data=f"ticket_close_user_{chat_id}",
-            style="danger",
-        )],
-    ])
+TICKET_PAUSE_BUTTON_FA = "⏸ توقف ارسال"
+TICKET_PAUSE_BUTTON_EN = "⏸ Pause sending"
+TICKET_CLOSE_BUTTON_FA = "🔒 بستن تیکت"
+TICKET_CLOSE_BUTTON_EN = "🔒 Close ticket"
+
+
+def _clear_ticket_input_state(user_id: int, chat_id: int) -> None:
+    state = user_states.get(user_id, {})
+    if str(state.get('chat_id')) != str(chat_id):
+        return
+
+    for key in ('awaiting_chat', 'chat_id', 'timestamp'):
+        state.pop(key, None)
+    if not state:
+        user_states.pop(user_id, None)
+
+
+def get_user_ticket_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[
+            KeyboardButton(text=TICKET_PAUSE_BUTTON_FA if lang == "fa" else TICKET_PAUSE_BUTTON_EN),
+            KeyboardButton(text=TICKET_CLOSE_BUTTON_FA if lang == "fa" else TICKET_CLOSE_BUTTON_EN),
+        ]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
 
 
 def get_active_chats() -> list:
     """دریافت چت‌های فعال"""
     return [c for c in chats.values() if c.get('status') == 'open']
-
-
-def get_paused_user_ticket(user_id: int) -> Optional[dict]:
-    return next(
-        (
-            chat for chat in get_active_chats()
-            if chat.get('user_id') == user_id
-            and chat.get('kind') == 'ticket'
-            and not chat.get('user_input_enabled', True)
-        ),
-        None,
-    )
-
-
-async def notify_paused_ticket_input(message: Message, chat: dict):
-    lang = get_user(message.from_user.id).get('lang', 'fa')
-    await message.reply(
-        (
-            f"⏹ ارسال به تیکت #{chat['id']} متوقف است. "
-            "برای ادامه، از بخش پشتیبانی گزینه ادامه تیکت را بزنید."
-            if lang == "fa"
-            else f"⏹ Sending to ticket #{chat['id']} is paused. "
-            "Open support and choose Continue ticket to resume."
-        ),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(
-                text="🎫 ادامه تیکت" if lang == "fa" else "🎫 Continue ticket",
-                callback_data="ai_chat",
-            )
-        ]]),
-    )
 
 
 def get_user_support_configs(user_id: int) -> list:
@@ -30677,8 +30678,17 @@ def format_ticket_user_details(user_id: int, selected_order_id: Optional[int] = 
 async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional[int] = None):
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
+    state = user_states.get(user_id, {})
     if await block_unauthorized(callback.message, user_id):
         await callback.answer("⛔", show_alert=True)
+        return
+    if state.get('ticket_selection_message_id') == callback.message.message_id:
+        await callback.answer(
+            "برای ثبت تیکت دیگر، دوباره از بخش پشتیبانی اقدام کنید."
+            if lang == "fa"
+            else "To open another ticket, start again from the support section.",
+            show_alert=True,
+        )
         return
     if config_order_id is not None and not any(
         str(order.get('order_id')) == str(config_order_id)
@@ -30693,12 +30703,17 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
         )
         return
 
-    chat_id = create_chat(user_id, config_order_id=config_order_id)
     existing_state = user_states.get(user_id, {})
+    for existing_chat in get_active_chats():
+        if existing_chat.get('user_id') == user_id and existing_chat.get('kind') == 'ticket':
+            existing_chat['user_input_enabled'] = False
+            existing_chat['updated_at'] = datetime.now().isoformat()
+    chat_id = create_chat(user_id, config_order_id=config_order_id)
     state = {
         'awaiting_chat': True,
         'chat_id': chat_id,
         'timestamp': datetime.now().isoformat(),
+        'ticket_selection_message_id': callback.message.message_id,
     }
     for key in ('coupon_code', 'coupon_discount', 'coupon_applied'):
         if key in existing_state:
@@ -30724,28 +30739,51 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
         await callback.message.answer(
             "❌ ثبت تیکت با خطا مواجه شد. لطفاً کمی بعد دوباره تلاش کنید."
             if lang == "fa"
-            else "❌ Could not open a ticket. Please try again later."
+            else "❌ Could not open a ticket. Please try again later.",
+            reply_markup=ReplyKeyboardRemove(),
         )
         await callback.answer()
         return
+
+    edited_selection = False
+    try:
+        await callback.message.edit_text(
+            f"✅ تیکت #{chat_id} باز شد."
+            if lang == "fa"
+            else f"✅ Ticket #{chat_id} opened.",
+            reply_markup=get_back_only_keyboard(lang),
+        )
+        edited_selection = True
+    except Exception as e:
+        logger.warning(f"خطا در ویرایش پیام انتخاب تیکت: {e}")
+
     await callback.message.answer(
         (
-            f"🎫 تیکت شما با شماره #{chat_id} ثبت شد.\n"
-            "پیام خود را بنویسید؛ پاسخ پشتیبانی در همین گفتگو نمایش داده می‌شود.\n"
-            "برای پایان تیکت /end را بفرستید."
+            (
+                "پیام خود را همین‌جا بفرستید. توقف ارسال و بستن تیکت از کیبورد پایین صفحه انجام می‌شود."
+                if edited_selection
+                else f"تیکت #{chat_id} باز شد. پیام خود را بفرستید؛ توقف یا بستن از کیبورد پایین صفحه انجام می‌شود."
+            )
             if lang == "fa"
-            else f"🎫 Ticket #{chat_id} is open. Send your message here; support will reply in this chat.\n"
-            "Send /end to close it."
+            else (
+                "Send your message here. Use the keyboard below to pause or close the ticket."
+                if edited_selection
+                else f"Ticket #{chat_id} opened. Send your message; use the keyboard below to pause or close it."
+            )
         ),
-        reply_markup=get_user_ticket_keyboard(chat_id, lang),
+        reply_markup=get_user_ticket_keyboard(lang),
     )
-    await callback.answer("✅ تیکت ایجاد شد" if lang == "fa" else "✅ Ticket created")
+    await callback.answer()
 
 
 @dp.callback_query(F.data == "support_create_ticket")
 async def support_create_ticket(callback: CallbackQuery):
     user_id = callback.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
+    state = user_states.get(user_id, {})
+    state.pop('ticket_selection_message_id', None)
+    if not state:
+        user_states.pop(user_id, None)
     configs = [
         order for order in get_valid_orders().values()
         if order.get('user_id') == user_id
@@ -30844,11 +30882,15 @@ async def user_close_ticket(callback: CallbackQuery):
         await callback.answer("❌ تیکت پیدا نشد.", show_alert=True)
         return
     await close_chat(chat_id, closed_by="user")
-    user_states.pop(user_id, None)
     lang = get_user(user_id).get('lang', 'fa')
     await callback.message.edit_text(
         "✅ تیکت بسته شد. به منوی اصلی برگشتید." if lang == "fa" else "✅ Ticket closed. You are back at the main menu.",
         reply_markup=get_back_only_keyboard(lang),
+    )
+    await bot.send_message(
+        user_id,
+        "⌨️ کنترل‌های تیکت بسته شد." if lang == "fa" else "⌨️ Ticket controls were dismissed.",
+        reply_markup=ReplyKeyboardRemove(),
     )
     await callback.answer()
 
@@ -30868,14 +30910,8 @@ async def user_pause_ticket_input(callback: CallbackQuery):
 
     chat['user_input_enabled'] = False
     chat['updated_at'] = datetime.now().isoformat()
+    _clear_ticket_input_state(user_id, chat_id)
     save_all()
-    state = user_states.get(user_id, {})
-    if state.get('chat_id') == chat_id:
-        state.pop('awaiting_chat', None)
-        state.pop('chat_id', None)
-        state.pop('timestamp', None)
-        if not state:
-            user_states.pop(user_id, None)
 
     lang = get_user(user_id).get('lang', 'fa')
     await callback.message.edit_text(
@@ -30883,6 +30919,11 @@ async def user_pause_ticket_input(callback: CallbackQuery):
         if lang == "fa"
         else "✅ Sending to this ticket is paused. The ticket remains open and you can still receive support replies.",
         reply_markup=get_main_keyboard(user_id == ADMIN_ID_INT, lang, user_id),
+    )
+    await bot.send_message(
+        user_id,
+        "⌨️ کنترل‌های تیکت بسته شد." if lang == "fa" else "⌨️ Ticket controls were dismissed.",
+        reply_markup=ReplyKeyboardRemove(),
     )
     await callback.answer("⏹ دریافت پیام متوقف شد" if lang == "fa" else "⏹ Ticket input paused")
 
@@ -30909,15 +30950,23 @@ async def user_continue_ticket(callback: CallbackQuery):
         if key in existing_state:
             state[key] = existing_state[key]
     user_states[user_id] = state
+    lang = get_user(user_id).get('lang', 'fa')
+    for existing_chat in get_active_chats():
+        if (
+            existing_chat.get('user_id') == user_id
+            and existing_chat.get('kind') == 'ticket'
+            and existing_chat.get('id') != chat_id
+        ):
+            existing_chat['user_input_enabled'] = False
+            existing_chat['updated_at'] = datetime.now().isoformat()
     chat['user_input_enabled'] = True
     chat['updated_at'] = datetime.now().isoformat()
     save_all()
-    lang = get_user(user_id).get('lang', 'fa')
     await callback.message.answer(
         f"💬 ادامه تیکت #{chat_id}. پیام خود را بنویسید."
         if lang == "fa"
         else f"💬 Continue ticket #{chat_id}. Send your message here.",
-        reply_markup=get_user_ticket_keyboard(chat_id, lang),
+        reply_markup=get_user_ticket_keyboard(lang),
     )
     await callback.answer()
 
@@ -30942,7 +30991,6 @@ async def relay_support_message(
     destination_id: int,
     chat_id: int,
     sender_label: str,
-    close_ticket_for_user: bool = False,
 ):
     description = support_message_description(message)
     lang = get_user(destination_id).get('lang', 'fa')
@@ -30957,16 +31005,11 @@ async def relay_support_message(
             if sender_label == "admin"
             else f"💬 Message from user {message.from_user.id} · ticket #{chat_id}"
         )
-    keyboard = None
-    if close_ticket_for_user:
-        keyboard = get_user_ticket_keyboard(chat_id, lang)
-
     if message.text:
         await bot.send_message(
             destination_id,
             f"{title}\n\n{html.escape(message.text)}",
             parse_mode=ParseMode.HTML,
-            reply_markup=keyboard,
         )
     else:
         await message.copy_to(destination_id)
@@ -30975,11 +31018,10 @@ async def relay_support_message(
                 destination_id,
                 f"{title}\n{html.escape(description)}",
                 parse_mode=ParseMode.HTML,
-                reply_markup=keyboard,
             )
         except Exception as e:
             logger.error(
-                "پیام رسانه‌ای تیکت #%s ارسال شد اما ارسال توضیحات/دکمه ناموفق بود: %s",
+                "پیام رسانه‌ای تیکت #%s ارسال شد اما ارسال توضیحات ناموفق بود: %s",
                 chat_id,
                 e,
             )
@@ -30999,43 +31041,73 @@ async def handle_chat_message(message: Message):
     lang = get_user(user_id).get('lang', 'fa')
     
     if not chat_id:
-        return
-    
-    chat = chats.get(str(chat_id))
-    if not chat or chat.get('status') == 'closed':
-        if lang == "fa":
-            await message.reply("❌ این گفتگو بسته شده است.\nبرای شروع تیکت جدید از بخش پشتیبانی اقدام کنید.")
-        else:
-            await message.reply("❌ This conversation is closed.\nOpen a new ticket from support to continue.")
-        user_states.pop(user_id, None)
-        return
-    if not chat.get('user_input_enabled', True):
         state.pop('awaiting_chat', None)
         state.pop('chat_id', None)
         state.pop('timestamp', None)
         if not state:
             user_states.pop(user_id, None)
+        return
+
+    chat = chats.get(str(chat_id))
+    if not chat or chat.get('status') == 'closed':
+        _clear_ticket_input_state(user_id, chat_id)
+        save_all()
+        return
+
+    text = (message.text or "").strip()
+    pause_buttons = {TICKET_PAUSE_BUTTON_FA, TICKET_PAUSE_BUTTON_EN}
+    close_buttons = {TICKET_CLOSE_BUTTON_FA, TICKET_CLOSE_BUTTON_EN}
+    if text in pause_buttons:
+        chat['user_input_enabled'] = False
+        chat['updated_at'] = datetime.now().isoformat()
+        _clear_ticket_input_state(user_id, chat_id)
+        save_all()
         await message.reply(
-            (
-                "⏹ ارسال به این تیکت متوقف است. برای ادامه از بخش پشتیبانی، تیکت را انتخاب کنید."
-                if lang == "fa"
-                else "⏹ Sending to this ticket is paused. Select the ticket from support to continue."
-            ),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(
-                    text="🎫 ادامه تیکت" if lang == "fa" else "🎫 Continue ticket",
-                    callback_data="ai_chat",
-                )
-            ]]),
+            "✅ ارسال پیام به تیکت متوقف شد. برای تیکت جدید از بخش پشتیبانی اقدام کنید."
+            if lang == "fa"
+            else "✅ Ticket messages are paused. Open support to start another ticket.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await message.answer(
+            "🏠 برای بازگشت به منوی اصلی از دکمه زیر استفاده کنید."
+            if lang == "fa"
+            else "🏠 Use the button below to return to the main menu.",
+            reply_markup=get_back_only_keyboard(lang),
         )
         return
-    if message.text and message.text.strip() == '/end':
+    if text in close_buttons:
         await close_chat(chat_id, closed_by="user")
-        user_states.pop(user_id, None)
-        if lang == "fa":
-            await message.reply("✅ گفتگو پایان یافت. متشکریم!", reply_markup=get_back_only_keyboard(lang))
-        else:
-            await message.reply("✅ Conversation ended. Thank you!", reply_markup=get_back_only_keyboard(lang))
+        _clear_ticket_input_state(user_id, chat_id)
+        await message.reply(
+            "✅ تیکت بسته شد."
+            if lang == "fa"
+            else "✅ Ticket closed.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await message.answer(
+            "🏠 برای بازگشت به منوی اصلی از دکمه زیر استفاده کنید."
+            if lang == "fa"
+            else "🏠 Use the button below to return to the main menu.",
+            reply_markup=get_back_only_keyboard(lang),
+        )
+        return
+
+    if not chat.get('user_input_enabled', True):
+        _clear_ticket_input_state(user_id, chat_id)
+        save_all()
+        return
+    if text == '/end':
+        await close_chat(chat_id, closed_by="user")
+        await message.reply(
+            "✅ تیکت بسته شد." if lang == "fa" else "✅ Ticket closed.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await message.answer(
+            "🏠 برای بازگشت به منوی اصلی از دکمه زیر استفاده کنید."
+            if lang == "fa"
+            else "🏠 Use the button below to return to the main menu.",
+            reply_markup=get_back_only_keyboard(lang),
+        )
         return
     try:
         text_content = await relay_support_message(
@@ -31958,7 +32030,6 @@ async def admin_chat_reply(message: Message):
             chat['user_id'],
             chat_id,
             sender_label="admin",
-            close_ticket_for_user=True,
         )
     except Exception as e:
         logger.error(f"خطا در ارسال پاسخ تیکت #{chat_id} به کاربر {chat['user_id']}: {e}")
@@ -33972,10 +34043,6 @@ async def handle_text_messages(message: Message):
         return
     if user_id == ADMIN_ID_INT:
         await handle_admin_special_states(message, user_state)
-        return
-    paused_ticket = get_paused_user_ticket(user_id)
-    if paused_ticket:
-        await notify_paused_ticket_input(message, paused_ticket)
         return
     if AUTO_AI_RESPONSE and gemini_client:
         if is_ai_question(message.text) and len(message.text.strip()) >= 5:
@@ -37697,6 +37764,145 @@ async def admin_view_config_detail(callback: CallbackQuery):
     
     await callback.message.edit_text(text, reply_markup=keyboard)
     
+@dp.callback_query(F.data.startswith("admin_add_blacklist_"))
+async def admin_add_user_to_blacklist(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+
+    try:
+        _, target_value, page_value = callback.data.rsplit("_", 2)
+        target_id = int(target_value)
+        page = int(page_value)
+    except (TypeError, ValueError):
+        return await callback.answer("❌ اطلاعات کاربر نامعتبر است.", show_alert=True)
+
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    if target_id == ADMIN_ID_INT:
+        return await callback.answer(
+            "❌ امکان مسدودکردن ادمین وجود ندارد." if lang == "fa" else "❌ The admin account cannot be blacklisted.",
+            show_alert=True,
+        )
+    if str(target_id) not in users:
+        return await callback.answer(
+            "❌ کاربر پیدا نشد." if lang == "fa" else "❌ User not found.",
+            show_alert=True,
+        )
+    if target_id in BLACKLIST:
+        return await callback.answer(
+            "این کاربر از قبل در بلک‌لیست است." if lang == "fa" else "This user is already blacklisted.",
+            show_alert=True,
+        )
+
+    BLACKLIST.add(target_id)
+    if not save_blacklist():
+        BLACKLIST.discard(target_id)
+        return await callback.answer(
+            "❌ ذخیره بلک‌لیست ناموفق بود." if lang == "fa" else "❌ Could not save the blacklist.",
+            show_alert=True,
+        )
+
+    target_name = html.escape(get_user(target_id).get('name', f'کاربر_{target_id}'))
+    CustomLogger.log_event('BLACKLIST_ADD', f'کاربر {target_id} از صفحه جزئیات به بلک‌لیست اضافه شد', target_id)
+    if log_system:
+        await log_system.log_admin_action(
+            callback.from_user.id,
+            "افزودن کاربر به لیست سیاه",
+            target_user=target_id,
+            details=f"نام: {target_name}",
+        )
+
+    await callback.message.edit_text(
+        (
+            f"✅ کاربر <b>{target_name}</b> (ID: <code>{target_id}</code>) به بلک‌لیست اضافه شد."
+            if lang == "fa"
+            else f"✅ User <b>{target_name}</b> (ID: <code>{target_id}</code>) was added to the blacklist."
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ خروج از بلک‌لیست" if lang == "fa" else "✅ Remove from blacklist",
+                callback_data=f"blacklist_remove_{target_id}",
+            )],
+            [InlineKeyboardButton(
+                text="🔙 بازگشت به جزئیات کاربر" if lang == "fa" else "🔙 Back to user details",
+                callback_data=f"admin_user_{target_id}_{page}",
+            )],
+        ]),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("admin_user_refresh_sync_"))
+async def admin_user_refresh_sync(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+
+    try:
+        _, _, _, _, target_value, page_value = callback.data.split("_")
+        target_id = int(target_value)
+        page = int(page_value)
+    except (TypeError, ValueError):
+        return await callback.answer("❌ اطلاعات کاربر نامعتبر است.", show_alert=True)
+
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    if str(target_id) not in users:
+        return await callback.answer(
+            "❌ کاربر پیدا نشد." if lang == "fa" else "❌ User not found.",
+            show_alert=True,
+        )
+
+    await callback.answer(
+        "⏳ در حال همگام‌سازی کانفیگ‌ها..." if lang == "fa" else "⏳ Syncing user configs..."
+    )
+    try:
+        stats = await sync_user_configs(target_id)
+    except Exception as e:
+        logger.error("همگام‌سازی کاربر %s ناموفق بود: %s", target_id, e, exc_info=True)
+        error_text = "❌ همگام‌سازی ناموفق بود." if lang == "fa" else "❌ Config sync failed."
+        await callback.message.edit_text(
+            error_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🔙 جزئیات کاربر" if lang == "fa" else "🔙 User details",
+                    callback_data=f"admin_user_{target_id}_{page}",
+                )
+            ]]),
+        )
+        return
+
+    stats_text = (
+        f"✅ همگام‌سازی کانفیگ کاربر #{target_id} انجام شد.\n\n"
+        f"بررسی‌شده: {stats.get('total_checked', 0)}\n"
+        f"جدید: {stats.get('new', 0)} | فعال: {stats.get('approved', 0)}\n"
+        f"غیرفعال: {stats.get('inactive', 0)} | حذف‌شده: {stats.get('deleted', 0)}"
+        if lang == "fa"
+        else
+        f"✅ Config sync finished for user #{target_id}.\n\n"
+        f"Checked: {stats.get('total_checked', 0)}\n"
+        f"New: {stats.get('new', 0)} | Active: {stats.get('approved', 0)}\n"
+        f"Inactive: {stats.get('inactive', 0)} | Deleted: {stats.get('deleted', 0)}"
+    )
+    if not stats.get('total_checked') and not stats.get('new'):
+        stats_text += (
+            "\n\n⚠️ موردی برای همگام‌سازی پیدا نشد؛ اتصال پنل و گزارش برنامه را بررسی کنید."
+            if lang == "fa"
+            else "\n\n⚠️ Nothing was synchronized; check the panel connection and application logs."
+        )
+    await callback.message.edit_text(
+        stats_text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔄 همگام‌سازی دوباره" if lang == "fa" else "🔄 Sync again",
+                callback_data=f"admin_user_refresh_sync_{target_id}_{page}",
+            )],
+            [InlineKeyboardButton(
+                text="🔙 جزئیات کاربر" if lang == "fa" else "🔙 User details",
+                callback_data=f"admin_user_{target_id}_{page}",
+            )],
+        ]),
+    )
+
+
 @dp.callback_query(F.data.startswith("admin_user_"))
 async def admin_user_detail(callback: CallbackQuery):
     """مشاهده جزئیات کاربر - با نمایش تاریخچه سفارشات"""
@@ -37826,8 +38032,30 @@ async def admin_user_detail(callback: CallbackQuery):
     buttons.append([
         InlineKeyboardButton(text=f"❌ {'حذف موجودی' if lang=='fa' else 'Reset'}", callback_data=f"admin_reset_balance_{target_id}")
     ])
+    blacklist_button = InlineKeyboardButton(
+        text=(
+            "✅ خروج از بلک‌لیست" if lang == "fa" else "✅ Remove from Blacklist"
+        ) if target_id in BLACKLIST else (
+            "🚫 افزودن به بلک‌لیست" if lang == "fa" else "🚫 Add to Blacklist"
+        ),
+        callback_data=(
+            f"blacklist_remove_{target_id}"
+            if target_id in BLACKLIST
+            else f"admin_add_blacklist_{target_id}_{page}"
+        ),
+    )
     buttons.append([
-        InlineKeyboardButton(text=f"🔄 {'بروزرسانی' if lang=='fa' else 'Refresh'}", callback_data=f"admin_user_{target_id}_{page}"),
+        InlineKeyboardButton(
+            text=f"🧪 {'ویرایش تست کاربر' if lang=='fa' else 'Edit User Test'}",
+            callback_data=f"admin_test_user_settings_{target_id}",
+        ),
+        blacklist_button,
+    ])
+    buttons.append([
+        InlineKeyboardButton(
+            text=f"🔄 {'رفرش + سینک کانفیگ‌ها' if lang=='fa' else 'Refresh + Sync Configs'}",
+            callback_data=f"admin_user_refresh_sync_{target_id}_{page}",
+        ),
         InlineKeyboardButton(text=f"🗑 {'حذف کاربر' if lang=='fa' else 'Delete User'}", callback_data=f"admin_delete_user_{target_id}")
     ])
     cancelled_orders_count = len(cancelled) + len(rejected)
