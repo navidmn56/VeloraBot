@@ -645,12 +645,10 @@ async def cancel_increase_balance(callback: CallbackQuery):
     # ✅ ساخت متن - خط کوپن فقط اگه واقعاً کوپن داشت
     if lang == "fa":
         text = f"{_main.premium_emoji('rocket', '🚀')} منوی اصلی"
-        if has_real_coupon:
-            text += f"\n\n🏷️ کوپن شما همچنان معتبر است."
+
     else:
         text = f"{_main.premium_emoji('rocket', '🚀')} Main Menu"
-        if has_real_coupon:
-            text += f"\n\n🏷️ Your coupon is still valid."
+
 
     await callback.message.answer(
         text,
@@ -1065,11 +1063,6 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
         user_lang = _main.get_user(user_id).get('lang', 'fa')
         try:
             coupon_msg = ""
-            if coupon_applied and coupon_code:
-                coupon = _main.COUPONS.get(coupon_code)
-                if coupon and coupon.get('status') == 'active':
-                    if user_id not in coupon.get('used_by', []):
-                        coupon_msg = f"\n\n🏷️ کوپن شما ({html_module.escape(coupon_code)}) همچنان معتبر است."
 
             await _main.bot.send_message(
                 user_id,
