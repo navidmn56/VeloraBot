@@ -29,3 +29,5 @@ data/*
 # OS
 .DS_Store
 Thumbs.db
+
+temp_test/
