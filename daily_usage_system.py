@@ -472,16 +472,29 @@ class DailyUsageStore:
                         "⚠️ ریست شمارنده برای %s ثبت شد: قبلی=%d, جدید=%d",
                         service_id, last_total, total_bytes
                     )
-                    # در صورت ریست، مصرف جدید معادل همان مقدار جدید کنتور است (نه تفریق منفی!)
-                    delta_up = up_bytes
-                    delta_down = down_bytes
-                    delta_total = total_bytes
+                    # در صورتی که کنتور پنل صفر شده باشد، مصرف پس از ریست ناچیز است (مثلاً زیر ۱۰۰ مگابایت).
+                    # اما اگر مقدار جدید عدد بزرگی است (مثلاً ۴۹ گیگابایت)، این یک کالیبراسیون و اصلاح اسنپ‌شات خراب قبلی است
+                    # و نباید کل ۴۹ گیگابایت مصرف امروز تلقی شود!
+                    if total_bytes <= 100 * 1024 * 1024:
+                        delta_up = up_bytes
+                        delta_down = down_bytes
+                        delta_total = total_bytes
+                    else:
+                        delta_up = 0
+                        delta_down = 0
+                        delta_total = 0
                 else:
-                    delta_total = total_bytes - last_total
-                    delta_up = max(0, up_bytes - last_up)
-                    delta_down = max(0, down_bytes - last_down)
-                    if delta_total > 0 and (delta_up + delta_down) == 0:
-                        delta_down = delta_total
+                    # اگر آخرین اسنپ‌شات صفر بوده و اکنون یک مقدار بزرگ ثبت شده است (تعیین مبنای اولیه):
+                    if last_total == 0 and total_bytes > 0:
+                        delta_up = 0
+                        delta_down = 0
+                        delta_total = 0
+                    else:
+                        delta_total = total_bytes - last_total
+                        delta_up = max(0, up_bytes - last_up)
+                        delta_down = max(0, down_bytes - last_down)
+                        if delta_total > 0 and (delta_up + delta_down) == 0:
+                            delta_down = delta_total
             else:
                 # اولین اسنپ‌شات برای این سرویس:
                 # به عنوان نقطه صفر ثبت می‌شود تا مبنای محاسبات بعدی باشد، اما کل حجم تجمعی گذشته مصرف امروز تلقی نمی‌شود.
@@ -527,11 +540,19 @@ class DailyUsageStore:
             conn.commit()
             return True
 
-    def sanitize_service_usage(self, service_id: str, panel_total_bytes: int):
+    def sanitize_service_usage(
+        self,
+        service_id: str,
+        panel_total_bytes: int,
+        live_up: int = 0,
+        live_down: int = 0,
+        order_age_days: Optional[int] = None
+    ):
         """
         راستی‌آزمایی و اعتبارسنجی مصرف ثبت‌شده در برابر کل مصرف واقعی کلاینت در پنل:
-        اگر مجموع ترافیک ثبت‌شده برای این سرویس در دیتابیس بیشتر از کل مصرف مادام‌العمر در پنل باشد،
-        نشان‌دهنده ناهنجاری قبلی (False Resets) است و داده‌های معیوب گذشته بلافاصله اصلاح و همگام می‌شوند.
+        ۱. در صورت تشخیص ناهنجاری تخلیه کل ترافیک طول عمر به روزهای اولیه (Baseline Dump)،
+           سوابق کاذب گذشته پاک شده و اسنپ‌شات جاری به عنوان مبنای تمیز صفر تنظیم می‌گردد.
+        ۲. اگر مجموع ترافیک دیتابیس بیشتر از کل مصرف پنل باشد، به صورت متناسب اصلاح می‌شود.
         """
         if not service_id or panel_total_bytes <= 0:
             return
@@ -545,6 +566,43 @@ class DailyUsageStore:
             """, (str(service_id),))
             row = cursor.fetchone()
             db_total = row["db_total"] or 0
+
+            cursor.execute("""
+                SELECT COUNT(DISTINCT usage_date) as day_count
+                FROM daily_usage
+                WHERE service_id = ? AND total_bytes > 0;
+            """, (str(service_id),))
+            history_row = cursor.fetchone()
+            recorded_days = history_row["day_count"] or 0 if history_row else 0
+
+            now = time.time()
+            now_dt = datetime.fromtimestamp(now, TEHRAN_TZ)
+            now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            # تشخیص ناهنجاری تخلیه مبنا (Baseline Dump):
+            # اگر سفارشی قدیمی است (بیش از ۲ روز) یا ترافیک کل پنل قابل توجه است (> ۵۰۰ مگابایت)،
+            # اما در ۱ یا ۲ روز آغاز مانیتورینگ ربات تقریباً کل ترافیک طول عمر (مثلاً ۴۹ گیگابایت ۲ هفته پیش) ثبت شده باشد:
+            is_baseline_dump = False
+            if panel_total_bytes > 500 * 1024 * 1024:
+                if order_age_days is not None and order_age_days >= 3 and recorded_days <= 2 and db_total >= (panel_total_bytes * 0.80):
+                    is_baseline_dump = True
+                elif recorded_days <= 2 and db_total >= (panel_total_bytes * 0.90):
+                    is_baseline_dump = True
+
+            if is_baseline_dump:
+                logger.warning(
+                    "⚠️ ناهنجاری تخلیه مبنا (Baseline Dump) در سرویس %s شناسایی شد (دیتابیس=%d، پنل=%d در %d روز). پاکسازی سوابق کاذب و تنظیم مبنا...",
+                    service_id, db_total, panel_total_bytes, recorded_days
+                )
+                cursor.execute("DELETE FROM daily_usage WHERE service_id = ?;", (str(service_id),))
+                cursor.execute("DELETE FROM traffic_snapshots WHERE service_id = ?;", (str(service_id),))
+                cursor.execute("""
+                    INSERT INTO traffic_snapshots (service_id, timestamp, recorded_at, up_bytes, down_bytes, total_bytes, is_reset)
+                    VALUES (?, ?, ?, ?, ?, ?, 0);
+                """, (str(service_id), now, now_str, live_up, live_down, panel_total_bytes))
+                conn.commit()
+                logger.info("✅ سوابق کاذب سرویس %s پاک شد و ترافیک پنل (%d بایت) به عنوان مبنای تمیز اولیه تنظیم گردید.", service_id, panel_total_bytes)
+                return
 
             if db_total > panel_total_bytes:
                 logger.warning(
@@ -1251,6 +1309,18 @@ async def handle_daily_usage_request(
             title=f"Order #{order_id}"
         )
 
+    # محاسبه سن سفارش به روز جهت تشخیص دقیق سرویس‌های قدیمی در برابر سرویس‌های ساخته‌شده امروز
+    order_age_days = None
+    if order:
+        order_date_raw = order.get('approved_date') or order.get('date') or order.get('created_at')
+        if order_date_raw:
+            try:
+                dt_str = str(order_date_raw).replace('T', ' ').split('.')[0].strip()
+                order_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                order_age_days = max(0, (datetime.now(TEHRAN_TZ).date() - order_dt.date()).days)
+            except Exception:
+                pass
+
     # دریافت لحظه‌ای ترافیک دقیق با استفاده از منطق تجمیعی یکپارچه
     live_traffic_data = None
     if email:
@@ -1260,12 +1330,24 @@ async def handle_daily_usage_request(
             get_client_traffic_func=get_client_traffic_func
         )
         if live_traffic_data:
-            # گام ۱: راستی‌آزمایی قبل از ثبت اسنپ‌شات جدید جهت جلوگیری از False Reset و اصلاح مقادیر گذشته
-            usage_store.sanitize_service_usage(email, live_traffic_data['total'])
+            # گام ۱: راستی‌آزمایی قبل از ثبت اسنپ‌شات جدید و پاکسازی خودکار مقادیر کاذب گذشته
+            usage_store.sanitize_service_usage(
+                service_id=email,
+                panel_total_bytes=live_traffic_data['total'],
+                live_up=live_traffic_data['up'],
+                live_down=live_traffic_data['down'],
+                order_age_days=order_age_days
+            )
             # گام ۲: ثبت اسنپ‌شات
             usage_store.record_snapshot(email, live_traffic_data['up'], live_traffic_data['down'])
             # گام ۳: راستی‌آزمایی نهایی
-            usage_store.sanitize_service_usage(email, live_traffic_data['total'])
+            usage_store.sanitize_service_usage(
+                service_id=email,
+                panel_total_bytes=live_traffic_data['total'],
+                live_up=live_traffic_data['up'],
+                live_down=live_traffic_data['down'],
+                order_age_days=order_age_days
+            )
 
     # محاسبه آمار ۷ روز گذشته
     stats = usage_store.get_statistics(service_ids, days=7, lang=lang)
