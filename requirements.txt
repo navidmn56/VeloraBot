@@ -26,9 +26,12 @@ annotated-types==0.7.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 
-# --- QR & Image ---
+# --- QR & Image & Data Visualization ---
 qrcode==8.2
 pillow==12.2.0
+matplotlib>=3.9.0
+arabic-reshaper>=3.0.0
+python-bidi>=0.6.0
 
 # --- Utilities ---
 psutil==7.2.2
