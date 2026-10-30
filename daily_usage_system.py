@@ -8,16 +8,23 @@ Features:
 - Strict midnight-crossing handling with time-weighted allocation across calendar days.
 - Sanaei counter reset detection: avoids negative usage, records reset events, resets baseline.
 - On-demand live snapshot recording with duplicate/spam debouncing.
-- Modern dark-themed dashboard chart generator (Matplotlib, Persian RTL shaping, non-blocking).
+- Sanity check & auto-healing: validates recorded traffic against panel reality, preventing inflated stats.
+- Accurate Solar Hijri (Shamsi / Jalali) date conversion for Persian language.
+- True Right-to-Left (RTL) chart layout for Persian (reversed X-axis, right-positioned Y-axis).
+- Intelligent auto-detection of MB and GB units in charts and captions.
+- Full backup and restore support (both in JSON backup archive and SQLite database copy).
+- Modern dark-themed dashboard chart generator (Matplotlib, Vazirmatn font, isolated Figure, non-blocking).
 - Scheduled background collector using panel inbounds clientStats.
-- No fake/fabricated historical data; transparent notification when history is limited.
+- Transparent notification when history is limited (showing Shamsi start date).
 """
 
 import os
 import io
 import re
+import json
 import time
 import math
+import shutil
 import logging
 import sqlite3
 import asyncio
@@ -54,6 +61,7 @@ BOLD_FONT_PATH = os.path.join(FONTS_DIR, "Vazirmatn-Bold.ttf")
 # بررسی وجود موتور چیدمان متن پیشرفته libraqm (HarfBuzz & FriBidi) در Matplotlib
 HAS_RAQM = getattr(ft2font, '__libraqm_version__', None) is not None and hasattr(ft2font.FT2Font, '_layout')
 
+
 def get_font_properties(is_bold: bool = False, size: float = 11.0) -> fm.FontProperties:
     """
     دریافت مشخصات فونت اختصاصی وزیرمتن با بررسی دقیق وجود فایل فونت.
@@ -69,6 +77,7 @@ def get_font_properties(is_bold: bool = False, size: float = 11.0) -> fm.FontPro
     prop.set_size(size)
     return prop
 
+
 PERSIAN_WEEKDAYS = {
     0: "دوشنبه",
     1: "سه‌شنبه",
@@ -76,7 +85,7 @@ PERSIAN_WEEKDAYS = {
     3: "پنج‌شنبه",
     4: "جمعه",
     5: "شنبه",
-    6: "یکشنبه"
+    6: "یک‌شنبه"
 }
 
 ENGLISH_WEEKDAYS = {
@@ -90,6 +99,10 @@ ENGLISH_WEEKDAYS = {
 }
 
 
+# ====================================================================
+# Date & Text Utilities (Shamsi / Jalali, Persian Digits, Auto Units)
+# ====================================================================
+
 def to_persian_digits(text: Any) -> str:
     """تبدیل اعداد انگلیسی به فارسی"""
     persian_digits = "۰۱۲۳۴۵۶۷۸۹"
@@ -100,6 +113,95 @@ def to_persian_digits(text: Any) -> str:
         else:
             result.append(char)
     return "".join(result)
+
+
+def gregorian_to_jalali(gy: int, gm: int, gd: int) -> Tuple[int, int, int]:
+    """تبدیل تقویم میلادی به هجری شمسی (جلالی) دقیق بدون وابستگی خارجی"""
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    if gy > 1600:
+        jy = 979
+        gy -= 1600
+    else:
+        jy = 0
+        gy -= 621
+    gy2 = gy if gm > 2 else gy - 1
+    days = (365 * gy) + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) - 80 + gd + g_d_m[gm - 1]
+    jy += 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + (days // 31)
+        jd = 1 + (days % 31)
+    else:
+        jm = 7 + ((days - 186) // 30)
+        jd = 1 + ((days - 186) % 30)
+    return jy, jm, jd
+
+
+def format_date_persian(date_str: str) -> str:
+    """تبدیل رشته تاریخ میلادی YYYY-MM-DD به تاریخ شمسی YYYY/MM/DD با اعداد فارسی"""
+    if not date_str:
+        return ""
+    try:
+        parts = [int(p) for p in str(date_str).split("-")]
+        if len(parts) == 3:
+            jy, jm, jd = gregorian_to_jalali(parts[0], parts[1], parts[2])
+            shamsi_str = f"{jy:04d}/{jm:02d}/{jd:02d}"
+            return to_persian_digits(shamsi_str)
+    except Exception:
+        pass
+    return to_persian_digits(date_str)
+
+
+def format_short_date(date_str: str, lang: str = "fa") -> str:
+    """تبدیل تاریخ به فرمت کوتاه MM/DD (شمسی برای فارسی، میلادی برای انگلیسی)"""
+    if not date_str:
+        return ""
+    try:
+        parts = [int(p) for p in str(date_str).split("-")]
+        if len(parts) == 3:
+            if lang == "fa":
+                _, jm, jd = gregorian_to_jalali(parts[0], parts[1], parts[2])
+                return to_persian_digits(f"{jm:02d}/{jd:02d}")
+            else:
+                return f"{parts[1]:02d}/{parts[2]:02d}"
+    except Exception:
+        pass
+    return to_persian_digits(date_str) if lang == "fa" else date_str
+
+
+def format_traffic_auto(bytes_val: int, lang: str = "fa") -> str:
+    """
+    تشخیص و فرمت هوشمند حجم بر اساس مگابایت یا گیگابایت:
+    - کمتر از 1 گیگابایت: مگابایت (MB)
+    - 1 گیگابایت و بالاتر: گیگابایت (GB)
+    """
+    bytes_val = max(0, int(bytes_val or 0))
+    gb_val = bytes_val / (1024 ** 3)
+    mb_val = bytes_val / (1024 ** 2)
+
+    if lang == "fa":
+        if gb_val >= 1.0:
+            return f"{to_persian_digits(f'{gb_val:.2f}')} گیگابایت"
+        elif mb_val >= 1.0:
+            return f"{to_persian_digits(f'{mb_val:.1f}')} مگابایت"
+        elif bytes_val > 0:
+            return f"{to_persian_digits(f'{mb_val:.2f}')} مگابایت"
+        else:
+            return "۰ مگابایت"
+    else:
+        if gb_val >= 1.0:
+            return f"{gb_val:.2f} GB"
+        elif mb_val >= 1.0:
+            return f"{mb_val:.1f} MB"
+        elif bytes_val > 0:
+            return f"{mb_val:.2f} MB"
+        else:
+            return "0 MB"
 
 
 _reshaper_instance = None
@@ -119,6 +221,7 @@ PERSIAN_CHARS_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\
 def is_persian(text: Any) -> bool:
     """بررسی وجود حروف فارسی یا عربی در متن"""
     return bool(PERSIAN_CHARS_RE.search(str(text or "")))
+
 
 def format_persian_text(text: str) -> str:
     """
@@ -302,11 +405,6 @@ class DailyUsageStore:
     ) -> bool:
         """
         ثبت اسنپ‌شات جدید ترافیک به صورت تراکنشی و همگام‌سازی مصرف روزانه
-
-        ویژگی‌ها:
-        1. جلوگیری از داده تکراری و Debounce (اگر ترافیک تغییر نکرده باشد یا فاصله < 30 ثانیه باشد).
-        2. شناسایی هوشمند ریست شمارنده (Counter Reset) بدون تولید مقادیر منفی و لاگ رویداد.
-        3. مدیریت دقیق عبور از نیمه‌شب با تقسیم زمانی متناسب بین روزهای تقویمی.
         """
         if not service_id:
             return False
@@ -383,7 +481,7 @@ class DailyUsageStore:
                     delta_total = total_bytes - last_total
             else:
                 # اولین اسنپ‌شات برای این سرویس:
-                # اسنپ‌شات ثبت می‌شود تا مبنای محاسبات بعدی باشد، اما کل حجم تجمعی گذشته را به عنوان مصرف امروز حساب نمی‌کنیم!
+                # به عنوان نقطه صفر ثبت می‌شود تا مبنای محاسبات بعدی باشد، اما کل حجم تجمعی گذشته مصرف امروز تلقی نمی‌شود.
                 delta_up = 0
                 delta_down = 0
                 delta_total = 0
@@ -425,6 +523,48 @@ class DailyUsageStore:
 
             conn.commit()
             return True
+
+    def sanitize_service_usage(self, service_id: str, panel_total_bytes: int):
+        """
+        راستی‌آزمایی و اعتبارسنجی مصرف ثبت‌شده در برابر کل مصرف واقعی کلاینت در پنل:
+        اگر مجموع ترافیک ثبت‌شده برای این سرویس در دیتابیس بیشتر از کل مصرف مادام‌العمر در پنل باشد،
+        نشان‌دهنده ناهنجاری قبلی (False Resets) است و داده‌های معیوب گذشته بلافاصله اصلاح و همگام می‌شوند.
+        """
+        if not service_id or panel_total_bytes <= 0:
+            return
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT SUM(total_bytes) as db_total
+                FROM daily_usage
+                WHERE service_id = ?;
+            """, (str(service_id),))
+            row = cursor.fetchone()
+            db_total = row["db_total"] or 0
+
+            if db_total > panel_total_bytes:
+                logger.warning(
+                    "⚠️ ناهنجاری مصرف در سرویس %s شناسایی شد (دیتابیس=%d، پنل واقعی=%d). در حال اصلاح و راستی‌آزمایی...",
+                    service_id, db_total, panel_total_bytes
+                )
+                ratio = panel_total_bytes / db_total
+                cursor.execute("""
+                    UPDATE daily_usage
+                    SET up_bytes = CAST(ROUND(up_bytes * ?) AS INTEGER),
+                        down_bytes = CAST(ROUND(down_bytes * ?) AS INTEGER),
+                        total_bytes = CAST(ROUND(total_bytes * ?) AS INTEGER)
+                    WHERE service_id = ?;
+                """, (ratio, ratio, ratio, str(service_id)))
+
+                cursor.execute("""
+                    UPDATE traffic_snapshots
+                    SET total_bytes = MIN(total_bytes, ?)
+                    WHERE service_id = ?;
+                """, (panel_total_bytes, str(service_id)))
+
+                conn.commit()
+                logger.info("✅ مصرف سرویس %s با موفقیت راستی‌آزمایی و با پنل همگام شد.", service_id)
 
     @staticmethod
     def _split_interval_across_days(start_dt: datetime, end_dt: datetime) -> List[Tuple[str, float]]:
@@ -563,11 +703,17 @@ class DailyUsageStore:
                 peak_date_str = d_str
                 peak_day_name = day_name
 
+            # تبدیل تاریخ به فرمت کوتاه شمسی در صورت زبان فارسی
+            short_date = format_short_date(d_str, lang=lang)
+
             days_data.append({
                 "date": d_str,
-                "short_date": d.strftime("%m/%d"),
+                "short_date": short_date,
                 "day_name": day_name,
                 "weekday_idx": weekday_idx,
+                "up_bytes": rec["up"],
+                "down_bytes": rec["down"],
+                "total_bytes": day_total,
                 "up_gb": rec["up"] / (1024 ** 3),
                 "down_gb": rec["down"] / (1024 ** 3),
                 "total_gb": day_total / (1024 ** 3),
@@ -578,7 +724,7 @@ class DailyUsageStore:
         peak_gb = peak_bytes / (1024 ** 3)
         avg_gb = total_gb / days if days > 0 else 0.0
 
-        # بررسی کافی بودن تاریخچه (شرط 7)
+        # بررسی کافی بودن تاریخچه و فرمت شمسی تاریخ شروع
         has_sufficient_history = True
         history_note = ""
 
@@ -590,14 +736,17 @@ class DailyUsageStore:
             recorded_span_days = (today - first_dt).days + 1
             if recorded_span_days < days or total_historical_days < days:
                 has_sufficient_history = False
+                shamsi_start = format_date_persian(first_date) if lang == "fa" else first_date
                 history_note = (
-                    f"آمار مربوط به {to_persian_digits(total_historical_days)} روز ثبت‌شده است (شروع ثبت: {to_persian_digits(first_date)})."
+                    f"آمار مربوط به {to_persian_digits(total_historical_days)} روز ثبت‌شده است (شروع ثبت: {shamsi_start})."
                     if lang == "fa" else
                     f"Showing {total_historical_days} recorded days (started: {first_date})."
                 )
 
         return {
             "days_data": days_data,
+            "total_bytes": total_bytes,
+            "peak_bytes": peak_bytes,
             "total_gb": total_gb,
             "avg_gb": avg_gb,
             "peak_gb": peak_gb,
@@ -609,23 +758,57 @@ class DailyUsageStore:
             "first_recorded_date": first_date
         }
 
+    def export_backup_data(self) -> dict:
+        """خروجی گرفتن از تمام اطلاعات دیتابیس SQLite برای فایل بکاپ کامل ربات"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            tables = ["services", "traffic_snapshots", "daily_usage", "reset_events"]
+            backup = {}
+            for tbl in tables:
+                cursor.execute(f"SELECT * FROM {tbl};")
+                rows = cursor.fetchall()
+                backup[tbl] = [dict(r) for r in rows]
+            return backup
+
+    def import_backup_data(self, backup_dict: dict) -> bool:
+        """بازگردانی داده‌های بکاپ به درون دیتابیس SQLite"""
+        if not backup_dict or not isinstance(backup_dict, dict):
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for tbl, rows in backup_dict.items():
+                if not isinstance(rows, list) or not rows:
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    cols = list(row.keys())
+                    placeholders = ",".join("?" for _ in cols)
+                    col_names = ",".join(cols)
+                    cursor.execute(f"""
+                        INSERT OR REPLACE INTO {tbl} ({col_names})
+                        VALUES ({placeholders});
+                    """, list(row.values()))
+            conn.commit()
+            logger.info("✅ دیتابیس مصرف روزانه با موفقیت از فایل بکاپ بازگردانی شد.")
+            return True
+
 
 # ====================================================================
-# 2. Modern Dashboard Chart Generator (Matplotlib, Persian RTL, Dark UI)
+# 2. Modern Dashboard Chart Generator (Matplotlib, Vazirmatn, RTL)
 # ====================================================================
 
 class DailyUsageChartRenderer:
     """
     تولیدکننده نمودار مصرف با ظاهر داشبورد تیره پریمیوم
     طراحی شده برای مشاهده با کیفیت بالا روی موبایل تلگرام
-    کاملاً ایزوله، ایمن برای همزمانی (Thread-Safe) و بدون استفاده از متغیرهای وضعیت گلوبال pyplot
+    پشتیبانی کامل از چیدمان راست‌به‌چپ (RTL) و تشخیص خودکار واحدهای مگابایت و گیگابایت
     """
 
     @classmethod
     def render(cls, stats: dict, lang: str = "fa") -> bytes:
         """
         رسم نمودار در حافظه و بازگرداندن بایت‌های PNG
-        اعمال صریح FontProperties روی تک‌تک عناصر متنی نمودار (تایتل، برچسب‌ها، محورها و کارت‌ها)
         """
         days_data = stats.get("days_data", [])
         total_gb = stats.get("total_gb", 0.0)
@@ -634,10 +817,22 @@ class DailyUsageChartRenderer:
         peak_day = stats.get("peak_day_name", "-")
         history_note = stats.get("history_note", "")
 
-        # ساخت شیء ایزوله Figure و Canvas بدون رجیستری در حافظه گلوبال pyplot
+        is_rtl = (lang == "fa")
+
+        # تشخیص خودکار مقیاس بر اساس اوج مصرف (اگر کل روزها زیر 1 گیگابایت باشد، بر حسب مگابایت رسم می‌شود)
+        max_val_gb = max((d["total_gb"] for d in days_data), default=0.0)
+        use_mb = (max_val_gb < 1.0)
+
+        # ساخت شیء ایزوله Figure و Canvas بدون استفاده از وضعیت گلوبال pyplot
         fig = Figure(figsize=(10, 5.8), dpi=140)
         canvas = FigureCanvasAgg(fig)
         ax = fig.add_subplot(1, 1, 1)
+
+        # اعمال چیدمان راست‌به‌چپ (RTL) در زبان فارسی
+        if is_rtl:
+            ax.invert_xaxis()
+            ax.yaxis.tick_right()
+            ax.yaxis.set_label_position("right")
 
         # رنگ‌بندی تیره مدرن داشبورد
         fig_bg = "#0B0F19"
@@ -657,16 +852,23 @@ class DailyUsageChartRenderer:
         ax.set_axisbelow(True)
 
         x_indices = list(range(len(days_data)))
-        usage_values = [d["total_gb"] for d in days_data]
 
-        max_val = max(usage_values) if usage_values else 1.0
-        y_max = max(max_val * 1.30, 0.5)
+        if use_mb:
+            usage_values = [d["total_gb"] * 1024 for d in days_data]
+            max_val = max(usage_values) if usage_values else 100.0
+            y_max = max(max_val * 1.30, 50.0)
+            y_unit_label = "مگابایت" if is_rtl else "MB"
+        else:
+            usage_values = [d["total_gb"] for d in days_data]
+            max_val = max_val_gb if max_val_gb else 1.0
+            y_max = max(max_val * 1.30, 0.5)
+            y_unit_label = "گیگابایت" if is_rtl else "GB"
 
         # ساخت رنگ میله‌ها (میله اوج مصرف برجسته می‌شود)
         colors = []
         edge_colors = []
         for v in usage_values:
-            if v > 0 and math.isclose(v, peak_gb, rel_tol=1e-3):
+            if v > 0 and math.isclose(v, max_val, rel_tol=1e-3):
                 colors.append(peak_color)
                 edge_colors.append("#34D399")
             else:
@@ -684,37 +886,34 @@ class DailyUsageChartRenderer:
             alpha=0.92
         )
 
-        # افزودن برچسب حجم بالای هر میله با فونت بولد صریح
+        # برچسب حجم بالای هر میله با تشخیص خودکار MB و GB
         bar_fp = get_font_properties(is_bold=True, size=9.5)
-        for bar, val in zip(bars, usage_values):
+        for bar, d, val in zip(bars, days_data, usage_values):
             height = bar.get_height()
-            if val >= 0.1:
-                label = f"{val:.2f} GB"
-            elif val > 0:
-                mb_val = val * 1024
-                label = f"{mb_val:.0f} MB"
+            gb = d["total_gb"]
+            if gb <= 0:
+                lbl = "۰" if is_rtl else "0"
+            elif gb < 1.0:
+                mb = gb * 1024
+                lbl = f"{to_persian_digits(f'{mb:.0f}')} مگ" if is_rtl else f"{mb:.0f} MB"
             else:
-                label = "۰" if lang == "fa" else "0"
-
-            if lang == "fa":
-                label = to_persian_digits(label)
+                lbl = f"{to_persian_digits(f'{gb:.2f}')} گیگ" if is_rtl else f"{gb:.2f} GB"
 
             ax.text(
                 bar.get_x() + bar.get_width() / 2.0,
                 height + max(y_max * 0.025, 0.03),
-                label,
+                lbl,
                 fontproperties=bar_fp,
                 ha='center', va='bottom',
                 color=text_light,
                 zorder=4
             )
 
-        # برچسب محور X (روز هفته + تاریخ) با فونت صریح
-        x_labels = []
-        for d in days_data:
-            day_text = format_persian_text(d["day_name"]) if lang == "fa" else d["day_name"]
-            date_text = to_persian_digits(d["short_date"]) if lang == "fa" else d["short_date"]
-            x_labels.append(f"{day_text}\n{date_text}")
+        # برچسب محور X (روز هفته + تاریخ شمسی در فارسی)
+        x_labels = [
+            f"{format_persian_text(d['day_name'])}\n{to_persian_digits(d['short_date']) if is_rtl else d['short_date']}"
+            for d in days_data
+        ]
 
         xtick_fp = get_font_properties(is_bold=False, size=10.0)
         ax.set_xticks(x_indices)
@@ -723,7 +922,7 @@ class DailyUsageChartRenderer:
             tick.set_fontproperties(xtick_fp)
             tick.set_color(text_muted)
 
-        # برچسب و مقادیر محور Y با فونت صریح
+        # محور Y و برچسب واحد خودکار
         ytick_fp = get_font_properties(is_bold=False, size=9.0)
         ax.tick_params(axis='y', colors=text_muted, labelsize=9)
         for tick in ax.get_yticklabels():
@@ -731,42 +930,50 @@ class DailyUsageChartRenderer:
             tick.set_color(text_muted)
 
         ylabel_fp = get_font_properties(is_bold=False, size=10.5)
-        y_label_text = format_persian_text("مصرف اینترنت (گیگابایت)") if lang == "fa" else "Internet Usage (GB)"
-        ax.set_ylabel(y_label_text, fontproperties=ylabel_fp, color=text_muted, labelpad=8)
+        y_label_text = format_persian_text(f"مصرف اینترنت ({y_unit_label})") if is_rtl else f"Internet Usage ({y_unit_label})"
+        ax.set_ylabel(y_label_text, fontproperties=ylabel_fp, color=text_muted, labelpad=12)
         ax.set_ylim(0, y_max)
 
         # زیباسازی حاشیه‌ها
-        for spine in ['top', 'right']:
+        for spine in ['top', 'left' if is_rtl else 'right']:
             ax.spines[spine].set_visible(False)
-        for spine in ['left', 'bottom']:
+        for spine in ['right' if is_rtl else 'left', 'bottom']:
             ax.spines[spine].set_color(grid_color)
             ax.spines[spine].set_linewidth(1.0)
 
-        # عنوان داشبورد با فونت بولد صریح
+        # عنوان داشبورد
         title_fp = get_font_properties(is_bold=True, size=14.5)
-        title = format_persian_text("نمودار مصرف روزانه اینترنت (۷ روز اخیر)") if lang == "fa" else "Daily Internet Usage (Last 7 Days)"
+        title = format_persian_text("نمودار مصرف روزانه اینترنت (۷ روز اخیر)") if is_rtl else "Daily Internet Usage (Last 7 Days)"
         fig.text(0.5, 0.94, title, fontproperties=title_fp, ha='center', va='top', color=text_light)
 
-        # کارت آماری بالای نمودار با فرمت تک‌مرحله‌ای (جلوگیری از شکل‌دهی دوباره)
-        if lang == "fa":
-            tot_str = to_persian_digits(f"{total_gb:.2f}")
-            avg_str = to_persian_digits(f"{avg_gb:.2f}")
-            peak_str = to_persian_digits(f"{peak_gb:.2f}")
-            summary_raw = f"مجموع: {tot_str} گیگ  •  میانگین: {avg_str} گیگ/روز  •  اوج: {peak_str} گیگ ({peak_day})"
+        # کارت آماری بالای نمودار با تشخیص خودکار مگابایت و گیگابایت
+        def _fmt_brief(gb_val):
+            if gb_val >= 1.0:
+                return f"{to_persian_digits(f'{gb_val:.2f}')} گیگ" if is_rtl else f"{gb_val:.2f} GB"
+            else:
+                mb = gb_val * 1024
+                return f"{to_persian_digits(f'{mb:.0f}')} مگ" if is_rtl else f"{mb:.0f} MB"
+
+        tot_str = _fmt_brief(total_gb)
+        avg_str = _fmt_brief(avg_gb) + ("/روز" if is_rtl else "/day")
+        peak_str = _fmt_brief(peak_gb) + (f" ({peak_day})" if peak_day != "-" else "")
+
+        if is_rtl:
+            summary_raw = f"مجموع: {tot_str}  •  میانگین: {avg_str}  •  اوج: {peak_str}"
             summary_text = format_persian_text(summary_raw)
         else:
-            summary_text = f"Total: {total_gb:.2f} GB  •  Average: {avg_gb:.2f} GB/day  •  Peak: {peak_gb:.2f} GB ({peak_day})"
+            summary_text = f"Total: {tot_str}  •  Average: {avg_str}  •  Peak: {peak_str}"
 
         summary_fp = get_font_properties(is_bold=True, size=10.5)
         fig.text(0.5, 0.88, summary_text, fontproperties=summary_fp, ha='center', va='top', color=cyan_accent)
 
-        # یادداشت شفافیت تاریخی (اگر سابقه کمتر از ۷ روز باشد) با فونت صریح
+        # یادداشت شفافیت تاریخی (با تاریخ شمسی در فارسی)
         if history_note:
-            note_display = format_persian_text(history_note) if lang == "fa" else history_note
+            note_display = format_persian_text(history_note) if is_rtl else history_note
             note_fp = get_font_properties(is_bold=False, size=9.0)
             fig.text(0.5, 0.02, note_display, fontproperties=note_fp, ha='center', va='bottom', color="#EAB308")
 
-        fig.subplots_adjust(top=0.82, bottom=0.15, left=0.10, right=0.96)
+        fig.subplots_adjust(top=0.82, bottom=0.15, left=0.08 if is_rtl else 0.10, right=0.92 if is_rtl else 0.96)
 
         buf = io.BytesIO()
         fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
@@ -779,8 +986,69 @@ usage_store = DailyUsageStore()
 
 
 # ====================================================================
-# 3. Background Scheduled Collector Task (Zero-Lag, Panel Inbounds)
+# 3. Unified Traffic Fetcher & Background Collector
 # ====================================================================
+
+async def fetch_client_total_traffic(
+    email: str,
+    get_inbounds_func=None,
+    get_client_traffic_func=None
+) -> Optional[Dict[str, int]]:
+    """
+    دریافت ترافیک دقیق تجمیع‌شده کلاینت از تمام اینباندهای پنل 3X-UI.
+    این تابع تضمین می‌کند هم تسک پس‌زمینه و هم درخواست لحظه‌ای کاربر،
+    دقیقاً از یک منطق واحد و داده همسان استفاده کنند و هیچ ریست کاذبی رخ ندهد.
+    """
+    if not email:
+        return None
+
+    email_str = str(email).strip()
+
+    # ۱. اولویت اول: استعلام از لیست اینباندها و تجمیع دقیق مصرف تمام اینباندها برای این ایمیل
+    if get_inbounds_func:
+        try:
+            inbounds = await get_inbounds_func(include_disabled=True)
+            if inbounds and isinstance(inbounds, list):
+                total_up = 0
+                total_down = 0
+                found = False
+
+                for inbound in inbounds:
+                    client_stats = inbound.get('clientStats', [])
+                    if isinstance(client_stats, str):
+                        try:
+                            client_stats = json.loads(client_stats)
+                        except Exception:
+                            client_stats = []
+
+                    if isinstance(client_stats, list):
+                        for stat in client_stats:
+                            if stat.get('email') and str(stat['email']).strip() == email_str:
+                                try:
+                                    total_up += int(stat.get('up', 0) or 0)
+                                    total_down += int(stat.get('down', 0) or 0)
+                                    found = True
+                                except (TypeError, ValueError):
+                                    pass
+
+                if found:
+                    return {'up': total_up, 'down': total_down, 'total': total_up + total_down}
+        except Exception as e:
+            logger.debug(f"خطا در دریافت ترافیک تجمیعی از اینباندها برای {email}: {e}")
+
+    # ۲. فال‌بک: در صورت عدم موفقیت، از API ترافیک تک کلاینت استفاده کن
+    if get_client_traffic_func:
+        try:
+            live_traff = await get_client_traffic_func(email_str)
+            if live_traff and isinstance(live_traff, dict):
+                up = int(live_traff.get("up", 0) or 0)
+                down = int(live_traff.get("down", 0) or 0)
+                return {'up': up, 'down': down, 'total': up + down}
+        except Exception as e:
+            logger.debug(f"خطا در فال‌بک ترافیک کلاینت {email}: {e}")
+
+    return None
+
 
 class DailyUsageCollector:
     """
@@ -827,7 +1095,6 @@ class DailyUsageCollector:
             # تجمیع مصرف بر اساس email در صورتی که کلاینت در چند اینباند باشد
             client_traffics: Dict[str, Dict[str, int]] = {}
 
-            import json
             for inbound in inbounds:
                 client_stats = inbound.get('clientStats', [])
                 if isinstance(client_stats, str):
@@ -843,7 +1110,6 @@ class DailyUsageCollector:
                             continue
 
                         email_str = str(email).strip()
-                        # اگر ایمیل‌های تایید شده مشخص باشد فیلتر می‌کنیم
                         if approved_emails and email_str not in approved_emails:
                             continue
 
@@ -891,15 +1157,17 @@ async def handle_daily_usage_request(
     order_id: int,
     from_view: int = 0,
     get_order_func=None,
+    get_inbounds_func=None,
     get_client_traffic_func=None,
     lang: str = "fa"
 ):
     """
     هندلر اختصاصی کلیک روی دکمه '📊 آمار مصرف روزانه'
-    - دریافت اسنپ‌شات لحظه‌ای (Live) بدون تکرار
-    - استخراج آمار واقعی ۷ روز اخیر
-    - رندر نمودار داشبوردی به صورت غیربلاک‌کننده (Thread Pool)
-    - ارسال تصویر همراه با کپشن تفصیلی و دکمه‌های بازگشت
+    - دریافت اسنپ‌شات لحظه‌ای با استفاده از تابع تجمیعی همسان
+    - راستی‌آزمایی ترافیک مصرفی در برابر مصرف کل پنل جهت رفع خطاهای احتمالی
+    - استخراج آمار واقعی ۷ روز اخیر (با تاریخ شمسی برای فارسی)
+    - رندر نمودار داشبوردی راست‌به‌چپ با تفکیک هوشمند MB و GB
+    - ارسال تصویر همراه با کپشن تفصیلی و راست‌به‌چپ
     """
     user_id = callback.from_user.id
 
@@ -946,16 +1214,18 @@ async def handle_daily_usage_request(
             title=f"Order #{order_id}"
         )
 
-    # شرط 5 & 6: استعلام لحظه‌ای از پنل برای اطمینان از به‌روز بودن دقیق آمار
-    if get_client_traffic_func and email:
-        try:
-            live_traff = await get_client_traffic_func(email)
-            if live_traff and isinstance(live_traff, dict):
-                up = live_traff.get("up", 0)
-                down = live_traff.get("down", 0)
-                usage_store.record_snapshot(email, up, down)
-        except Exception as e:
-            logger.debug(f"خطا در استعلام لحظه‌ای ترافیک برای {email}: {e}")
+    # دریافت لحظه‌ای ترافیک دقیق با استفاده از منطق تجمیعی یکپارچه
+    live_traffic_data = None
+    if email:
+        live_traffic_data = await fetch_client_total_traffic(
+            email=email,
+            get_inbounds_func=get_inbounds_func,
+            get_client_traffic_func=get_client_traffic_func
+        )
+        if live_traffic_data:
+            usage_store.record_snapshot(email, live_traffic_data['up'], live_traffic_data['down'])
+            # راستی‌آزمایی ترافیک ثبت‌شده در برابر واقعیت پنل: اگر خطایی در گذشته ثبت شده بود اصلاح می‌شود
+            usage_store.sanitize_service_usage(email, live_traffic_data['total'])
 
     # محاسبه آمار ۷ روز گذشته
     stats = usage_store.get_statistics(service_ids, days=7, lang=lang)
@@ -963,34 +1233,39 @@ async def handle_daily_usage_request(
     # رندر نمودار در ترد مجزا تا Event Loop ربات بلاک نشود
     chart_png = await asyncio.to_thread(DailyUsageChartRenderer.render, stats, lang)
 
-    # ساخت کپشن پیام
-    total_gb = stats["total_gb"]
-    avg_gb = stats["avg_gb"]
-    peak_gb = stats["peak_gb"]
-    peak_day = stats["peak_day_name"]
+    # ساخت کپشن پیام با تشخیص خودکار مگابایت و گیگابایت و نشانگر جهت راست‌به‌چپ
+    total_bytes = stats.get("total_bytes", 0)
+    peak_bytes = stats.get("peak_bytes", 0)
+    avg_bytes = total_bytes // 7 if total_bytes > 0 else 0
+    peak_day = stats.get("peak_day_name", "-")
     history_note = stats.get("history_note", "")
 
     if lang == "fa":
-        tot_text = f"{to_persian_digits(f'{total_gb:.2f}')} گیگابایت"
-        avg_text = f"{to_persian_digits(f'{avg_gb:.2f}')} گیگابایت"
-        peak_text = f"{to_persian_digits(f'{peak_gb:.2f}')} گیگابایت ({peak_day})" if peak_gb > 0 else "ثبت نشده"
+        tot_text = format_traffic_auto(total_bytes, lang="fa")
+        avg_text = format_traffic_auto(avg_bytes, lang="fa")
+        peak_text = f"{format_traffic_auto(peak_bytes, lang='fa')} ({peak_day})" if peak_bytes > 0 else "ثبت نشده"
         
-        caption = f"""📊 <b>گزارش مصرف روزانه اینترنت</b>
+        # استفاده از نشانگر یونیکد RLM (\u200f) در ابتدای هر خط برای تضمین رندر راست‌به‌چپ در تلگرام
+        caption = f"""\u200f📊 <b>گزارش مصرف روزانه اینترنت</b>
 
-📦 <b>مجموع مصرف:</b> {tot_text}
-📈 <b>میانگین روزانه:</b> {avg_text}
-🔥 <b>بیشترین مصرف:</b> {peak_text}
+\u200f📦 <b>مجموع مصرف:</b> {tot_text}
+\u200f📈 <b>میانگین روزانه:</b> {avg_text}
+\u200f🔥 <b>بیشترین مصرف:</b> {peak_text}
 
-🗓 <b>بازه:</b> ۷ روز گذشته
+\u200f🗓 <b>بازه:</b> ۷ روز گذشته
 """
         if history_note:
-            caption += f"\nℹ️ <i>{history_note}</i>\n"
+            caption += f"\n\u200fℹ️ <i>{history_note}</i>\n"
     else:
+        tot_text = format_traffic_auto(total_bytes, lang="en")
+        avg_text = format_traffic_auto(avg_bytes, lang="en")
+        peak_text = f"{format_traffic_auto(peak_bytes, lang='en')} ({peak_day})" if peak_bytes > 0 else "None"
+
         caption = f"""📊 <b>Daily Internet Usage Report</b>
 
-📦 <b>Total Usage:</b> {total_gb:.2f} GB
-📈 <b>Daily Average:</b> {avg_gb:.2f} GB
-🔥 <b>Peak Usage:</b> {peak_gb:.2f} GB ({peak_day})
+📦 <b>Total Usage:</b> {tot_text}
+📈 <b>Daily Average:</b> {avg_text}
+🔥 <b>Peak Usage:</b> {peak_text}
 
 🗓 <b>Period:</b> Last 7 days
 """
@@ -1021,7 +1296,6 @@ async def handle_daily_usage_request(
     photo_file = BufferedInputFile(chart_png, filename=f"daily_usage_{order_id}.png")
 
     try:
-        # در صورت امکان پیام متنی قبلی حذف و عکس جدید فرستاده شود
         try:
             await callback.message.delete()
         except Exception:
