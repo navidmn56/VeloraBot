@@ -31304,8 +31304,8 @@ async def handle_feedback(callback: CallbackQuery):
             f"💬 انتقاد و پیشنهادتون رو توی تیکت برامون بفرستید."
         )
         feedback_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎫 ثبت تیکت", callback_data="support_create_ticket")],
-            [InlineKeyboardButton(text=f"{premium_emoji('rocket', '🚀')} منوی اصلی", callback_data="back_to_main")],
+            [InlineKeyboardButton(text="🎫 ثبت تیکت", callback_data="support_create_ticket", style="primary")],
+            [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="back_to_main", style="danger")],
         ])
     else:
         thanks_text = (
@@ -31314,8 +31314,8 @@ async def handle_feedback(callback: CallbackQuery):
             f"💬 Send us your suggestions and feedback via a support ticket."
         )
         feedback_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎫 Open Ticket", callback_data="support_create_ticket")],
-            [InlineKeyboardButton(text=f"{premium_emoji('rocket', '🚀')} Main Menu", callback_data="back_to_main")],
+            [InlineKeyboardButton(text="🎫 Open Ticket", callback_data="support_create_ticket", style="primary")],
+            [InlineKeyboardButton(text="🏠 Main Menu", callback_data="back_to_main", style="danger")],
         ])
     await callback.message.edit_text(
         thanks_text,
