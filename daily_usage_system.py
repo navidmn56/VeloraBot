@@ -736,18 +736,22 @@ class DailyUsageStore:
 
         total_gb = total_bytes / (1024 ** 3)
         peak_gb = peak_bytes / (1024 ** 3)
-        avg_gb = total_gb / days if days > 0 else 0.0
 
-        # بررسی کافی بودن تاریخچه و فرمت شمسی تاریخ شروع
+        # بررسی کافی بودن تاریخچه و محاسبه دقیق تعداد روزهای مؤثر برای میانگین
         has_sufficient_history = True
         history_note = ""
+        effective_days = days
 
         if not first_date:
             has_sufficient_history = False
+            effective_days = 1
             history_note = "ثبت آمار این سرویس به تازگی آغاز شده است." if lang == "fa" else "Stats collection just started for this service."
         else:
             first_dt = datetime.strptime(first_date, "%Y-%m-%d").date()
-            recorded_span_days = (today - first_dt).days + 1
+            recorded_span_days = max(1, (today - first_dt).days + 1)
+            # در صورتی که عمر سرویس کمتر از ۷ روز باشد، میانگین بر تعداد روزهای واقعی سپری‌شده تقسیم می‌شود نه عدد ۷
+            effective_days = min(days, max(1, recorded_span_days))
+
             if recorded_span_days < days or total_historical_days < days:
                 has_sufficient_history = False
                 shamsi_start = format_date_persian(first_date) if lang == "fa" else first_date
@@ -757,10 +761,15 @@ class DailyUsageStore:
                     f"Showing {total_historical_days} recorded days (started: {first_date})."
                 )
 
+        avg_gb = total_gb / effective_days if effective_days > 0 else 0.0
+        avg_bytes = int(round(total_bytes / effective_days)) if effective_days > 0 else 0
+
         return {
             "days_data": days_data,
             "total_bytes": total_bytes,
             "peak_bytes": peak_bytes,
+            "avg_bytes": avg_bytes,
+            "effective_days": effective_days,
             "total_gb": total_gb,
             "avg_gb": avg_gb,
             "peak_gb": peak_gb,
@@ -1267,7 +1276,7 @@ async def handle_daily_usage_request(
     # ساخت کپشن پیام با تشخیص خودکار مگابایت و گیگابایت و نشانگر جهت راست‌به‌چپ
     total_bytes = stats.get("total_bytes", 0)
     peak_bytes = stats.get("peak_bytes", 0)
-    avg_bytes = total_bytes // 7 if total_bytes > 0 else 0
+    avg_bytes = stats.get("avg_bytes", total_bytes)
     peak_day = stats.get("peak_day_name", "-")
     history_note = stats.get("history_note", "")
 
