@@ -47,7 +47,7 @@ from config import (
     AUTO_AI_RESPONSE,
 )
 import config as app_config
-from daily_usage_system import handle_daily_usage_request, usage_collector
+from daily_usage_system import handle_daily_usage_request, usage_collector, usage_store
 
 gemini_client = None
 gemini_error_message = None
@@ -5455,6 +5455,12 @@ def try_full_restore_from_backup():
             chats = data['chats']
         if data.get('blacklist'):
             BLACKLIST = set(data['blacklist'].get('users', []))
+        if data.get('daily_usage'):
+            try:
+                usage_store.import_backup_data(data['daily_usage'])
+                logger.info("✅ اطلاعات مصرف روزانه از بکاپ بازیابی شد")
+            except Exception as ex_u:
+                logger.warning(f"⚠️ خطا در بازیابی مصرف روزانه از بکاپ: {ex_u}")
         save_all()
         
         logger.info(f"✅ بازیابی کامل از بکاپ با موفقیت انجام شد")
@@ -8051,6 +8057,13 @@ def backup_database():
         }
     
     # ==================== 7. ساخت بکاپ کامل ====================
+    daily_usage_backup = {}
+    try:
+        daily_usage_backup = usage_store.export_backup_data()
+        logger.info(f"📊 daily_usage پشتیبان‌گیری شد: {len(daily_usage_backup.get('daily_usage', []))} رکورد")
+    except Exception as ex_d:
+        logger.error(f"❌ خطا در export_backup_data مصرف روزانه: {ex_d}")
+
     full_backup = {
         'users': users,
         'orders': orders_with_ip,
@@ -8067,6 +8080,7 @@ def backup_database():
         'user_inbound_selection': USER_INBOUND_SELECTION,
         'user_test_usage': USER_TEST_USAGE,
         'shop_status': SHOP_STATUS,
+        'daily_usage': daily_usage_backup,
         'alert_cache': alert_cache,
         'alert_settings': alert_settings,  # ✅ اضافه کردن alert_settings جداگانه
         'backup_info': {
@@ -8081,6 +8095,16 @@ def backup_database():
     backup_file = os.path.join(backup_dir, f'full_backup_{timestamp}.json')
     if save_json(backup_file, full_backup):
         logger.info(f"✅ بکاپ کامل در {backup_file} ذخیره شد")
+        
+        # کپی فایل فیزیکی دیتابیس مصرف روزانه در صورت وجود
+        db_path = os.path.join(DATA_DIR, 'daily_usage.db')
+        if os.path.exists(db_path):
+            try:
+                import shutil
+                shutil.copy2(db_path, os.path.join(backup_dir, f'daily_usage_{timestamp}.db'))
+                logger.info("✅ کپی فیزیکی daily_usage.db در بکاپ ذخیره شد")
+            except Exception as e_cp:
+                logger.warning(f"⚠️ خطا در کپی دیتابیس daily_usage.db: {e_cp}")
         
         # ==================== 9. بررسی فایل بکاپ ذخیره شده ====================
         try:
@@ -22542,6 +22566,7 @@ async def handle_daily_usage_button(callback: CallbackQuery):
         order_id=order_id,
         from_view=from_view,
         get_order_func=lambda oid: orders.get(str(oid)),
+        get_inbounds_func=xui_get_inbounds,
         get_client_traffic_func=xui_get_client_traffic,
         lang=lang
     )
@@ -35685,6 +35710,12 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         logger.info(f"  - test_service: {data.get('test_service', {}).get('inbound_ids', [])}")
         logger.info("💾 گرفتن بکاپ از وضعیت فعلی قبل از ریستور...")
         current_backup = os.path.join(DATA_DIR, 'backups', f'before_restore_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+        daily_usage_before = {}
+        try:
+            daily_usage_before = usage_store.export_backup_data()
+        except Exception:
+            pass
+
         full_backup = {
             'users': users,
             'orders': orders,
@@ -35698,6 +35729,7 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
             'user_inbound_selection': USER_INBOUND_SELECTION,
             'user_test_usage': USER_TEST_USAGE,
             'shop_status': SHOP_STATUS,
+            'daily_usage': daily_usage_before,
             'backup_info': {
                 'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
                 'date': datetime.now().isoformat(),
@@ -35794,6 +35826,16 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         BLACKLIST.clear()
         BLACKLIST.update(set(backup_blacklist.get('users', [])))
         logger.info(f"✅ {len(BLACKLIST)} کاربر در لیست سیاه بازگردانی شد")
+        
+        logger.info("📊 در حال بازگردانی آمار مصرف روزانه...")
+        backup_daily_usage = data.get('daily_usage', {})
+        if backup_daily_usage:
+            try:
+                usage_store.import_backup_data(backup_daily_usage)
+                logger.info("✅ آمار مصرف روزانه با موفقیت از فایل بکاپ بازگردانی شد")
+            except Exception as ex_du:
+                logger.error(f"❌ خطا در بازگردانی آمار مصرف روزانه: {ex_du}")
+        
         logger.info("💾 ذخیره نهایی دیتابیس...")
         
         configs_pool['ready_packages'] = READY_PACKAGES
