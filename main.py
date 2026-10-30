@@ -31281,7 +31281,7 @@ async def handle_feedback(callback: CallbackQuery):
         'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     save_all()
-    chat_id = create_chat(user_id, fid)
+    # Notify admin about new feedback (no chat created)
     try:
         user = get_user(user_id)
         user_name_escaped = html.escape(user.get('name', 'کاربر'))
@@ -31290,30 +31290,38 @@ async def handle_feedback(callback: CallbackQuery):
             f"📝 <b>بازخورد جدید</b>\n\n"
             f"👤 {user_name_escaped} (ID: {user_id})\n"
             f"⭐ {rating_text}\n"
-            f"🆔 چت: #{chat_id}\n\n"
-            f"برای پاسخ از پنل ادمین اقدام کنید.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💬 پاسخ", callback_data=f"admin_chat_{chat_id}")]
-            ])
+            f"📦 سفارش #{order_id}",
+            parse_mode=ParseMode.HTML
         )
-    except:
+    except Exception:
         pass
-    
+
+    is_admin = (user_id == ADMIN_ID_INT)
     if lang == "fa":
-        await callback.message.edit_text(
+        thanks_text = (
             f"{premium_emoji('star', '⭐')} امتیاز شما: {rating_text}\n\n"
-            f"💬 می‌توانید پیام خود را بنویسید تا پشتیبانی پاسخ دهد.\n"
-            f"برای اتمام گفتگو از /end استفاده کنید.",
-            reply_markup=get_back_only_keyboard(lang)
+            f"{premium_emoji('success', '✅')} از بازخورد شما متشکریم!\n\n"
+            f"💬 انتقاد و پیشنهادتون رو توی تیکت برامون بفرستید."
         )
+        feedback_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎫 ثبت تیکت", callback_data="support_create_ticket")],
+            [InlineKeyboardButton(text=f"{premium_emoji('rocket', '🚀')} منوی اصلی", callback_data="back_to_main")],
+        ])
     else:
-        await callback.message.edit_text(
+        thanks_text = (
             f"{premium_emoji('star', '⭐')} Your rating: {rating_text}\n\n"
-            f"💬 Write your message and support will reply.\n"
-            f"Use /end to finish the conversation.",
-            reply_markup=get_back_only_keyboard(lang)
+            f"{premium_emoji('success', '✅')} Thank you for your feedback!\n\n"
+            f"💬 Send us your suggestions and feedback via a support ticket."
         )
-    user_states[user_id] = {'awaiting_chat': True, 'chat_id': chat_id,'timestamp': datetime.now().isoformat()}
+        feedback_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎫 Open Ticket", callback_data="support_create_ticket")],
+            [InlineKeyboardButton(text=f"{premium_emoji('rocket', '🚀')} Main Menu", callback_data="back_to_main")],
+        ])
+    await callback.message.edit_text(
+        thanks_text,
+        reply_markup=feedback_keyboard,
+        parse_mode=ParseMode.HTML,
+    )
     try:
         await callback.answer()
     except Exception as e:
