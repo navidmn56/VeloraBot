@@ -456,7 +456,8 @@ class DailyUsageStore:
                     return False
 
                 # شرط 4: بررسی ریست شدن شمارنده‌ها (Counter Reset)
-                if total_bytes < last_total or up_bytes < last_up or down_bytes < last_down:
+                # در صورت ریست واقعی پنل، ترافیک کل (total_bytes) کاهش می‌یابد.
+                if total_bytes < last_total:
                     is_reset = 1
                     cursor.execute("""
                         INSERT INTO reset_events (
@@ -476,9 +477,11 @@ class DailyUsageStore:
                     delta_down = down_bytes
                     delta_total = total_bytes
                 else:
-                    delta_up = up_bytes - last_up
-                    delta_down = down_bytes - last_down
                     delta_total = total_bytes - last_total
+                    delta_up = max(0, up_bytes - last_up)
+                    delta_down = max(0, down_bytes - last_down)
+                    if delta_total > 0 and (delta_up + delta_down) == 0:
+                        delta_down = delta_total
             else:
                 # اولین اسنپ‌شات برای این سرویس:
                 # به عنوان نقطه صفر ثبت می‌شود تا مبنای محاسبات بعدی باشد، اما کل حجم تجمعی گذشته مصرف امروز تلقی نمی‌شود.
@@ -559,12 +562,23 @@ class DailyUsageStore:
 
                 cursor.execute("""
                     UPDATE traffic_snapshots
-                    SET total_bytes = MIN(total_bytes, ?)
+                    SET up_bytes = CAST(ROUND(up_bytes * ?) AS INTEGER),
+                        down_bytes = CAST(ROUND(down_bytes * ?) AS INTEGER),
+                        total_bytes = CAST(ROUND(total_bytes * ?) AS INTEGER)
                     WHERE service_id = ?;
-                """, (panel_total_bytes, str(service_id)))
+                """, (ratio, ratio, ratio, str(service_id)))
 
                 conn.commit()
                 logger.info("✅ مصرف سرویس %s با موفقیت راستی‌آزمایی و با پنل همگام شد.", service_id)
+            else:
+                cursor.execute("""
+                    UPDATE traffic_snapshots
+                    SET up_bytes = MIN(up_bytes, ?),
+                        down_bytes = MIN(down_bytes, ?),
+                        total_bytes = MIN(total_bytes, ?)
+                    WHERE service_id = ? AND total_bytes > ?;
+                """, (panel_total_bytes, panel_total_bytes, panel_total_bytes, str(service_id), panel_total_bytes))
+                conn.commit()
 
     @staticmethod
     def _split_interval_across_days(start_dt: datetime, end_dt: datetime) -> List[Tuple[str, float]]:
@@ -952,7 +966,12 @@ class DailyUsageChartRenderer:
                 return f"{to_persian_digits(f'{gb_val:.2f}')} گیگ" if is_rtl else f"{gb_val:.2f} GB"
             else:
                 mb = gb_val * 1024
-                return f"{to_persian_digits(f'{mb:.0f}')} مگ" if is_rtl else f"{mb:.0f} MB"
+                if mb >= 10:
+                    return f"{to_persian_digits(f'{mb:.1f}')} مگ" if is_rtl else f"{mb:.1f} MB"
+                elif mb > 0:
+                    return f"{to_persian_digits(f'{mb:.2f}')} مگ" if is_rtl else f"{mb:.2f} MB"
+                else:
+                    return "۰ مگ" if is_rtl else "0 MB"
 
         tot_str = _fmt_brief(total_gb)
         avg_str = _fmt_brief(avg_gb) + ("/روز" if is_rtl else "/day")
@@ -995,22 +1014,35 @@ async def fetch_client_total_traffic(
     get_client_traffic_func=None
 ) -> Optional[Dict[str, int]]:
     """
-    دریافت ترافیک دقیق تجمیع‌شده کلاینت از تمام اینباندهای پنل 3X-UI.
+    دریافت ترافیک دقیق کلاینت از پنل 3X-UI.
+    در 3X-UI، جدول client_traffics برای هر ایمیل سراسری و یکتا است.
     این تابع تضمین می‌کند هم تسک پس‌زمینه و هم درخواست لحظه‌ای کاربر،
-    دقیقاً از یک منطق واحد و داده همسان استفاده کنند و هیچ ریست کاذبی رخ ندهد.
+    دقیقاً از داده همسان استفاده کنند و ترافیک در صورت وجود در چند اینباند ضرب نشود.
     """
     if not email:
         return None
 
     email_str = str(email).strip()
 
-    # ۱. اولویت اول: استعلام از لیست اینباندها و تجمیع دقیق مصرف تمام اینباندها برای این ایمیل
+    # ۱. اولویت اول: استعلام مستقیم از API ترافیک تک کلاینت (/panel/api/clients/traffic/{email})
+    # این متد منبع اصلی و معتبر داده در 3X-UI است و مقدار واقعی سراسری را بدون ضرب اینباندی برمی‌گرداند.
+    if get_client_traffic_func:
+        try:
+            live_traff = await get_client_traffic_func(email_str)
+            if live_traff and isinstance(live_traff, dict):
+                up = int(live_traff.get("up", 0) or 0)
+                down = int(live_traff.get("down", 0) or 0)
+                return {'up': up, 'down': down, 'total': up + down}
+        except Exception as e:
+            logger.debug(f"خطا در استعلام ترافیک کلاینت {email}: {e}")
+
+    # ۲. فال‌بک: در صورت عدم دسترسی به API تک کلاینت، استعلام از لیست اینباندها
     if get_inbounds_func:
         try:
             inbounds = await get_inbounds_func(include_disabled=True)
             if inbounds and isinstance(inbounds, list):
-                total_up = 0
-                total_down = 0
+                max_up = 0
+                max_down = 0
                 found = False
 
                 for inbound in inbounds:
@@ -1025,27 +1057,20 @@ async def fetch_client_total_traffic(
                         for stat in client_stats:
                             if stat.get('email') and str(stat['email']).strip() == email_str:
                                 try:
-                                    total_up += int(stat.get('up', 0) or 0)
-                                    total_down += int(stat.get('down', 0) or 0)
+                                    up = int(stat.get('up', 0) or 0)
+                                    down = int(stat.get('down', 0) or 0)
+                                    # در 3X-UI ترافیک کلاینت‌ها سراسری (Global per email) است
+                                    # و نباید در صورت عضویت کلاینت در چندین اینباند، با هم جمع شوند!
+                                    max_up = max(max_up, up)
+                                    max_down = max(max_down, down)
                                     found = True
                                 except (TypeError, ValueError):
                                     pass
 
                 if found:
-                    return {'up': total_up, 'down': total_down, 'total': total_up + total_down}
+                    return {'up': max_up, 'down': max_down, 'total': max_up + max_down}
         except Exception as e:
-            logger.debug(f"خطا در دریافت ترافیک تجمیعی از اینباندها برای {email}: {e}")
-
-    # ۲. فال‌بک: در صورت عدم موفقیت، از API ترافیک تک کلاینت استفاده کن
-    if get_client_traffic_func:
-        try:
-            live_traff = await get_client_traffic_func(email_str)
-            if live_traff and isinstance(live_traff, dict):
-                up = int(live_traff.get("up", 0) or 0)
-                down = int(live_traff.get("down", 0) or 0)
-                return {'up': up, 'down': down, 'total': up + down}
-        except Exception as e:
-            logger.debug(f"خطا در فال‌بک ترافیک کلاینت {email}: {e}")
+            logger.debug(f"خطا در دریافت ترافیک از اینباندها برای {email}: {e}")
 
     return None
 
@@ -1119,10 +1144,13 @@ class DailyUsageCollector:
                         except (TypeError, ValueError):
                             continue
 
+                        # در 3X-UI هر ایمیل رکورد یکتا در client_traffics دارد.
+                        # اگر کلاینت در چند اینباند عضو باشد، نباید ترافیک آن ضرب شود.
                         if email_str not in client_traffics:
-                            client_traffics[email_str] = {'up': 0, 'down': 0}
-                        client_traffics[email_str]['up'] += up
-                        client_traffics[email_str]['down'] += down
+                            client_traffics[email_str] = {'up': up, 'down': down}
+                        else:
+                            client_traffics[email_str]['up'] = max(client_traffics[email_str]['up'], up)
+                            client_traffics[email_str]['down'] = max(client_traffics[email_str]['down'], down)
 
             updated_count = 0
             now = time.time()
@@ -1223,8 +1251,11 @@ async def handle_daily_usage_request(
             get_client_traffic_func=get_client_traffic_func
         )
         if live_traffic_data:
+            # گام ۱: راستی‌آزمایی قبل از ثبت اسنپ‌شات جدید جهت جلوگیری از False Reset و اصلاح مقادیر گذشته
+            usage_store.sanitize_service_usage(email, live_traffic_data['total'])
+            # گام ۲: ثبت اسنپ‌شات
             usage_store.record_snapshot(email, live_traffic_data['up'], live_traffic_data['down'])
-            # راستی‌آزمایی ترافیک ثبت‌شده در برابر واقعیت پنل: اگر خطایی در گذشته ثبت شده بود اصلاح می‌شود
+            # گام ۳: راستی‌آزمایی نهایی
             usage_store.sanitize_service_usage(email, live_traffic_data['total'])
 
     # محاسبه آمار ۷ روز گذشته
