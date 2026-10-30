@@ -47,6 +47,7 @@ from config import (
     AUTO_AI_RESPONSE,
 )
 import config as app_config
+from daily_usage_system import handle_daily_usage_request, usage_collector
 
 gemini_client = None
 gemini_error_message = None
@@ -9461,11 +9462,18 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
             style="primary"
         )])
 
-    buttons.append([InlineKeyboardButton(
-        text="🔗 تغییر لینک اشتراک" if lang == "fa" else "🔗 Change subscription link",
-        callback_data=f"change_link_{order_id}_{int(show_qr)}",
-        style="primary",
-    )])
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔗 تغییر لینک اشتراک" if lang == "fa" else "🔗 Change subscription link",
+            callback_data=f"change_link_{order_id}_{int(show_qr)}",
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="📊 آمار مصرف روزانه" if lang == "fa" else "📊 Daily Usage Stats",
+            callback_data=f"daily_usage_{order_id}_{int(show_qr)}",
+            style="primary",
+        )
+    ])
     
     # ─── ردیف 3: راهنمای اتصال هر پلتفرم ───
     buttons.append([
@@ -22521,6 +22529,24 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
     logger.info("کاربر %s لینک اشتراک سفارش #%s را تغییر داد", user_id, order_id)
 
 
+@dp.callback_query(F.data.regexp(r"^daily_usage_\d+(_\d+)?$"))
+async def handle_daily_usage_button(callback: CallbackQuery):
+    """هندلر دکمه آمار مصرف روزانه اینترنت"""
+    parts = callback.data.split("_")
+    order_id = int(parts[2])
+    from_view = int(parts[3]) if len(parts) > 3 else 0
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+
+    await handle_daily_usage_request(
+        callback=callback,
+        order_id=order_id,
+        from_view=from_view,
+        get_order_func=lambda oid: orders.get(str(oid)),
+        get_client_traffic_func=xui_get_client_traffic,
+        lang=lang
+    )
+
+
 async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
     """دریافت لینک‌های کانفیگ با کش (برای صفحه‌بندی)"""
     now = datetime.now()
@@ -22708,11 +22734,18 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             style="success"
         )])
 
-    buttons.append([InlineKeyboardButton(
-        text="🔗 تغییر لینک اشتراک" if lang == "fa" else "🔗 Change subscription link",
-        callback_data=f"change_link_{order_id}_2",
-        style="primary",
-    )])
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔗 تغییر لینک اشتراک" if lang == "fa" else "🔗 Change subscription link",
+            callback_data=f"change_link_{order_id}_2",
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="📊 آمار مصرف روزانه" if lang == "fa" else "📊 Daily Usage Stats",
+            callback_data=f"daily_usage_{order_id}_2",
+            style="primary",
+        )
+    ])
 
     # --- دکمه‌های عملیات ---
     buttons.append([
@@ -40374,6 +40407,22 @@ async def main():
         
         logger.info("در حال ایجاد تسک‌های پس‌زمینه...")
         
+        async def daily_usage_collector_worker():
+            def _get_approved_emails():
+                valid = get_valid_orders()
+                emails = set()
+                for o in valid.values():
+                    e = get_order_client_email(o)
+                    if e:
+                        emails.add(str(e).strip())
+                return emails
+
+            await usage_collector.start(
+                get_inbounds_func=xui_get_inbounds,
+                get_approved_emails_func=_get_approved_emails,
+                interval_seconds=1800
+            )
+
         tasks = [
             asyncio.create_task(cleanup_expired_states_task(), name="cleanup_expired_states"),
             asyncio.create_task(sync_deleted_configs_task(), name="sync_deleted_configs"),
@@ -40385,6 +40434,7 @@ async def main():
             asyncio.create_task(weekly_detailed_report_task(), name="weekly_detailed_report"),
             asyncio.create_task(memory_monitor(), name="memory_monitor"),
             asyncio.create_task(auto_log_cleanup(), name="auto_log_cleanup"),
+            asyncio.create_task(daily_usage_collector_worker(), name="daily_usage_collector"),
         ]
         
         logger.info(f"✅ {len(tasks)} تسک پس‌زمینه ایجاد شد:")
