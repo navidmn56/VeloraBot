@@ -15,6 +15,7 @@ Features:
 
 import os
 import io
+import re
 import time
 import math
 import logging
@@ -26,7 +27,10 @@ from typing import Dict, List, Optional, Tuple, Any
 # Data visualization & RTL shaping
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+import matplotlib.font_manager as fm
+import matplotlib.ft2font as ft2font
 import arabic_reshaper
 from bidi.algorithm import get_display
 
@@ -41,6 +45,29 @@ logger = logging.getLogger("daily_usage")
 TEHRAN_TZ = timezone(timedelta(hours=3, minutes=30))
 
 DB_PATH = os.path.join(DATA_DIR, "daily_usage.db")
+
+# مسیر فونت‌های فارسی اختصاصی وزیرمتن
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+REGULAR_FONT_PATH = os.path.join(FONTS_DIR, "Vazirmatn-Regular.ttf")
+BOLD_FONT_PATH = os.path.join(FONTS_DIR, "Vazirmatn-Bold.ttf")
+
+# بررسی وجود موتور چیدمان متن پیشرفته libraqm (HarfBuzz & FriBidi) در Matplotlib
+HAS_RAQM = getattr(ft2font, '__libraqm_version__', None) is not None and hasattr(ft2font.FT2Font, '_layout')
+
+def get_font_properties(is_bold: bool = False, size: float = 11.0) -> fm.FontProperties:
+    """
+    دریافت مشخصات فونت اختصاصی وزیرمتن با بررسی دقیق وجود فایل فونت.
+    در صورت عدم وجود فونت، خطای واضح FileNotFoundError ایجاد می‌کند تا از رندر خراب جلوگیری شود.
+    """
+    font_path = BOLD_FONT_PATH if is_bold else REGULAR_FONT_PATH
+    if not os.path.exists(font_path):
+        raise FileNotFoundError(
+            f"فایل فونت فارسی مورد نیاز یافت نشد: {font_path}\n"
+            f"لطفاً مطمئن شوید فونت‌های Vazirmatn-Regular.ttf و Vazirmatn-Bold.ttf در مسیر {FONTS_DIR} قرار دارند."
+        )
+    prop = fm.FontProperties(fname=font_path)
+    prop.set_size(size)
+    return prop
 
 PERSIAN_WEEKDAYS = {
     0: "دوشنبه",
@@ -75,15 +102,55 @@ def to_persian_digits(text: Any) -> str:
     return "".join(result)
 
 
+_reshaper_instance = None
+
+def _get_reshaper():
+    global _reshaper_instance
+    if _reshaper_instance is None:
+        _reshaper_instance = arabic_reshaper.ArabicReshaper(configuration={
+            'delete_harakat': True,
+            'support_ligatures': True,
+            'language': 'Persian',
+        })
+    return _reshaper_instance
+
+PERSIAN_CHARS_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]')
+
+def is_persian(text: Any) -> bool:
+    """بررسی وجود حروف فارسی یا عربی در متن"""
+    return bool(PERSIAN_CHARS_RE.search(str(text or "")))
+
 def format_persian_text(text: str) -> str:
-    """شکل‌دهی صحیح متون فارسی برای نمایش در Matplotlib (RTL + Glyphs)"""
-    if not text:
+    """
+    شکل‌دهی متمرکز متون فارسی، انگلیسی و اعداد برای رندر بی‌نقص در Matplotlib.
+    
+    1. در صورت وجود موتور libraqm در Matplotlib (پشتیبانی استاندارد از HarfBuzz و FriBidi):
+       متون با کاراکترهای استاندارد یونیکد باقی می‌مانند تا اتصالات OpenType فونت وزیرمتن
+       به صورت طبیعی انجام شوند و متون ترکیبی با نشانگرهای جهت‌دار Bidi تنظیم شوند.
+       
+    2. در صورت نبود libraqm (محیط‌های فاقد HarfBuzz):
+       از arabic_reshaper و python-bidi برای شکل‌دهی اشکال متصل و برعکس‌سازی LTR استفاده می‌شود.
+    """
+    if text is None:
         return ""
-    try:
-        reshaped = arabic_reshaper.reshape(str(text))
-        return get_display(reshaped)
-    except Exception:
-        return str(text)
+    text = str(text)
+    if not text.strip():
+        return text
+
+    if HAS_RAQM:
+        # مدیریت متون دوزبانه تفکیک‌شده با Pipe (مانند Upload: 2.5 GB | دانلود: 5 GB)
+        if is_persian(text) and ' | ' in text:
+            parts = text.split(' | ')
+            processed = [f"\u202b{p}\u202c" if is_persian(p) else p for p in parts]
+            return ' | '.join(processed)
+        return text
+    else:
+        try:
+            reshaped = _get_reshaper().reshape(text)
+            return get_display(reshaped)
+        except Exception:
+            logger.exception("Persian text fallback formatting failed")
+            return text
 
 
 # ====================================================================
@@ -551,12 +618,14 @@ class DailyUsageChartRenderer:
     """
     تولیدکننده نمودار مصرف با ظاهر داشبورد تیره پریمیوم
     طراحی شده برای مشاهده با کیفیت بالا روی موبایل تلگرام
+    کاملاً ایزوله، ایمن برای همزمانی (Thread-Safe) و بدون استفاده از متغیرهای وضعیت گلوبال pyplot
     """
 
     @classmethod
     def render(cls, stats: dict, lang: str = "fa") -> bytes:
         """
         رسم نمودار در حافظه و بازگرداندن بایت‌های PNG
+        اعمال صریح FontProperties روی تک‌تک عناصر متنی نمودار (تایتل، برچسب‌ها، محورها و کارت‌ها)
         """
         days_data = stats.get("days_data", [])
         total_gb = stats.get("total_gb", 0.0)
@@ -565,13 +634,12 @@ class DailyUsageChartRenderer:
         peak_day = stats.get("peak_day_name", "-")
         history_note = stats.get("history_note", "")
 
-        # فونت‌های پیشنهادی سیستم
-        plt.rcParams['font.sans-serif'] = ['Vazir', 'Segoe UI', 'Segoe UI Emoji', 'Tahoma', 'Arial']
-        plt.rcParams['axes.unicode_minus'] = False
+        # ساخت شیء ایزوله Figure و Canvas بدون رجیستری در حافظه گلوبال pyplot
+        fig = Figure(figsize=(10, 5.8), dpi=140)
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_subplot(1, 1, 1)
 
-        fig, ax = plt.subplots(figsize=(10, 5.8), dpi=140)
-
-        # رنگ‌بندی تیره مدرن
+        # رنگ‌بندی تیره مدرن داشبورد
         fig_bg = "#0B0F19"
         card_bg = "#111827"
         grid_color = "#334155"
@@ -616,7 +684,8 @@ class DailyUsageChartRenderer:
             alpha=0.92
         )
 
-        # افزودن برچسب حجم بالای هر میله
+        # افزودن برچسب حجم بالای هر میله با فونت بولد صریح
+        bar_fp = get_font_properties(is_bold=True, size=9.5)
         for bar, val in zip(bars, usage_values):
             height = bar.get_height()
             if val >= 0.1:
@@ -634,26 +703,36 @@ class DailyUsageChartRenderer:
                 bar.get_x() + bar.get_width() / 2.0,
                 height + max(y_max * 0.025, 0.03),
                 label,
+                fontproperties=bar_fp,
                 ha='center', va='bottom',
-                fontsize=9.5, fontweight='bold',
                 color=text_light,
                 zorder=4
             )
 
-        # برچسب محور X (روز هفته + تاریخ)
+        # برچسب محور X (روز هفته + تاریخ) با فونت صریح
         x_labels = []
         for d in days_data:
             day_text = format_persian_text(d["day_name"]) if lang == "fa" else d["day_name"]
             date_text = to_persian_digits(d["short_date"]) if lang == "fa" else d["short_date"]
             x_labels.append(f"{day_text}\n{date_text}")
 
+        xtick_fp = get_font_properties(is_bold=False, size=10.0)
         ax.set_xticks(x_indices)
-        ax.set_xticklabels(x_labels, color=text_muted, fontsize=10, fontweight='500')
+        ax.set_xticklabels(x_labels, fontproperties=xtick_fp, color=text_muted)
+        for tick in ax.get_xticklabels():
+            tick.set_fontproperties(xtick_fp)
+            tick.set_color(text_muted)
 
-        # برچسب محور Y
+        # برچسب و مقادیر محور Y با فونت صریح
+        ytick_fp = get_font_properties(is_bold=False, size=9.0)
         ax.tick_params(axis='y', colors=text_muted, labelsize=9)
+        for tick in ax.get_yticklabels():
+            tick.set_fontproperties(ytick_fp)
+            tick.set_color(text_muted)
+
+        ylabel_fp = get_font_properties(is_bold=False, size=10.5)
         y_label_text = format_persian_text("مصرف اینترنت (گیگابایت)") if lang == "fa" else "Internet Usage (GB)"
-        ax.set_ylabel(y_label_text, color=text_muted, fontsize=10.5, labelpad=8)
+        ax.set_ylabel(y_label_text, fontproperties=ylabel_fp, color=text_muted, labelpad=8)
         ax.set_ylim(0, y_max)
 
         # زیباسازی حاشیه‌ها
@@ -663,32 +742,34 @@ class DailyUsageChartRenderer:
             ax.spines[spine].set_color(grid_color)
             ax.spines[spine].set_linewidth(1.0)
 
-        # عنوان داشبورد
+        # عنوان داشبورد با فونت بولد صریح
+        title_fp = get_font_properties(is_bold=True, size=14.5)
         title = format_persian_text("نمودار مصرف روزانه اینترنت (۷ روز اخیر)") if lang == "fa" else "Daily Internet Usage (Last 7 Days)"
-        fig.text(0.5, 0.94, title, ha='center', va='top', fontsize=14.5, fontweight='bold', color=text_light)
+        fig.text(0.5, 0.94, title, fontproperties=title_fp, ha='center', va='top', color=text_light)
 
-        # کارت آماری بالای نمودار
+        # کارت آماری بالای نمودار با فرمت تک‌مرحله‌ای (جلوگیری از شکل‌دهی دوباره)
         if lang == "fa":
             tot_str = to_persian_digits(f"{total_gb:.2f}")
             avg_str = to_persian_digits(f"{avg_gb:.2f}")
             peak_str = to_persian_digits(f"{peak_gb:.2f}")
-            peak_day_shw = format_persian_text(peak_day)
-            summary_text = format_persian_text(f"مجموع: {tot_str} گیگ  •  میانگین: {avg_str} گیگ/روز  •  اوج: {peak_str} گیگ ({peak_day_shw})")
+            summary_raw = f"مجموع: {tot_str} گیگ  •  میانگین: {avg_str} گیگ/روز  •  اوج: {peak_str} گیگ ({peak_day})"
+            summary_text = format_persian_text(summary_raw)
         else:
             summary_text = f"Total: {total_gb:.2f} GB  •  Average: {avg_gb:.2f} GB/day  •  Peak: {peak_gb:.2f} GB ({peak_day})"
 
-        fig.text(0.5, 0.88, summary_text, ha='center', va='top', fontsize=10.5, color=cyan_accent, fontweight='600')
+        summary_fp = get_font_properties(is_bold=True, size=10.5)
+        fig.text(0.5, 0.88, summary_text, fontproperties=summary_fp, ha='center', va='top', color=cyan_accent)
 
-        # یادداشت شفافیت تاریخی (اگر سابقه کمتر از ۷ روز باشد)
+        # یادداشت شفافیت تاریخی (اگر سابقه کمتر از ۷ روز باشد) با فونت صریح
         if history_note:
             note_display = format_persian_text(history_note) if lang == "fa" else history_note
-            fig.text(0.5, 0.02, note_display, ha='center', va='bottom', fontsize=9, color="#EAB308", fontweight='500')
+            note_fp = get_font_properties(is_bold=False, size=9.0)
+            fig.text(0.5, 0.02, note_display, fontproperties=note_fp, ha='center', va='bottom', color="#EAB308")
 
-        plt.subplots_adjust(top=0.82, bottom=0.15, left=0.10, right=0.96)
+        fig.subplots_adjust(top=0.82, bottom=0.15, left=0.10, right=0.96)
 
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
-        plt.close(fig)
+        fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
 
         return buf.getvalue()
 
