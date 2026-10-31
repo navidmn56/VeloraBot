@@ -28,6 +28,10 @@ SENAI_PANEL_PASSWORD = "Panel_password"
 SENAI_SUB_URL = "https://sub.Domain.com:2083"
 SUPPORT_USERNAME = "@your_username_here"
 
+# =============== 🟡 OPTIONAL: REACTION SETTINGS ===============
+START_REACTION_EMOJI = "⚡"  # Emoji reaction for /start message (e.g. "🔥", "⚡", "👍", "❤️", "🎉")
+
+
 # =============== 🟡 OPTIONAL: LOGS SETTINGS ===============
 LOG_BOT_TOKEN = ""  # Token of the second bot
 LOG_CHANNEL_ID = None  # replace None to group ID where logs will be sent
