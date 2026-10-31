@@ -267,6 +267,7 @@ PREMIUM_EMOJI_IDS = {
 
 STICKER_IDS = {
     'welcome': 'CAACAgQAAxkBAAERYvFqLYSw1e7mqt0LreZQ5iAXYLYgwQACmRIAAnZ5WVFtqjwTk98wTTwE',      # استیکر خوش آمدید
+    'halloween': 'CAACAgIAAxkBAAESI_Jq5i2BFCUOaY6qP7yuNzGyTU7Y7gACQAEAAladvQps6VtALEnWJT0E',
     'success': 'CAACAgIAAxkBAAERYvNqLYUtRvn80WovxY4pmS_w0Gl4IAAC_gADVp29CtoEYTAu-df_PAQ',      # استیکر موفقیت
     'error': 'CAACAgIAAxkBAAEB',   
     'payment': 'CAACAgQAAxkBAAERYvVqLYW--BzhGTmOkLiUrL0Nqi0IewAC9BMAAkziGVLzMxdaDdc2ojwE',      # استیکر پرداخت
@@ -5765,7 +5766,7 @@ async def cmd_start(message: Message):
     user_name = message.from_user.first_name or message.from_user.username or "کاربر"
     user_name_escaped = html.escape(user_name)
     
-    await send_sticker(user_id, 'welcome', '🚀', reply_markup=ReplyKeyboardRemove())
+    await send_sticker(user_id, 'halloween', '🚀', reply_markup=ReplyKeyboardRemove())
     if message.from_user.last_name:
         user_name += f" {message.from_user.last_name}"
         user_name_escaped = html.escape(user_name)
