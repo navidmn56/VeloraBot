@@ -38,6 +38,7 @@ from aiogram.types import (
     BufferedInputFile,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    ReactionTypeEmoji,
 )
 from config import (
     BOT_TOKEN, ADMIN_ID, LOG_BOT_TOKEN, LOG_CHANNEL_ID, SUPPORT_USERNAME,
@@ -45,6 +46,7 @@ from config import (
     SENAI_PANEL_URL, SENAI_PANEL_USERNAME, SENAI_PANEL_PASSWORD, SENAI_SUB_URL,
     GEMINI_API_KEY, GEMINI_ENABLED, GEMINI_MODEL, GEMINI_TEMPERATURE, GEMINI_MAX_TOKENS, GEMINI_DAILY_LIMIT,
     AUTO_AI_RESPONSE,
+    START_REACTION_EMOJI,
 )
 import config as app_config
 from daily_usage_system import handle_daily_usage_request, usage_collector, usage_store
@@ -5755,6 +5757,11 @@ async def errors_handler(event: types.ErrorEvent):
 async def cmd_start(message: Message):
     """دستور استارت - نسخه نهایی با مدیریت کامل تایید دستی و عضویت اجباری"""
     user_id = message.from_user.id
+    if START_REACTION_EMOJI:
+        try:
+            await message.react([ReactionTypeEmoji(emoji=START_REACTION_EMOJI)])
+        except Exception as e:
+            logger.debug(f"خطا در ثبت ری‌اکشن استارت: {e}")
     await auto_pause_user_ticket_if_active(user_id)
     if await _is_admin_broadcasting(message):
         await admin_broadcast_send(message)
