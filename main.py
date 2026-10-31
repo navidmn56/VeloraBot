@@ -284,18 +284,24 @@ STICKER_IDS = {
     'cart': 'CAACAgIAAxkBAAEB',             
 }
 
-async def send_sticker(chat_id: int, sticker_key: str, fallback_emoji: str = "📌"):
+async def send_sticker(chat_id: int, sticker_key: str, fallback_emoji: str = "📌", reply_markup: Any = None):
     sticker_id = STICKER_IDS.get(sticker_key)
     
     if sticker_id:
         try:
-            await bot.send_sticker(chat_id, sticker_id)
+            if reply_markup is not None:
+                await bot.send_sticker(chat_id, sticker_id, reply_markup=reply_markup)
+            else:
+                await bot.send_sticker(chat_id, sticker_id)
             return True
         except Exception as e:
             logger.warning(f"خطا در ارسال استیکر {sticker_key}: {e}")
     
 
-    await bot.send_message(chat_id, fallback_emoji)
+    if reply_markup is not None:
+        await bot.send_message(chat_id, fallback_emoji, reply_markup=reply_markup)
+    else:
+        await bot.send_message(chat_id, fallback_emoji)
     return False
 
 
@@ -5759,7 +5765,7 @@ async def cmd_start(message: Message):
     user_name = message.from_user.first_name or message.from_user.username or "کاربر"
     user_name_escaped = html.escape(user_name)
     
-    await send_sticker(user_id, 'welcome', '🚀')
+    await send_sticker(user_id, 'welcome', '🚀', reply_markup=ReplyKeyboardRemove())
     if message.from_user.last_name:
         user_name += f" {message.from_user.last_name}"
         user_name_escaped = html.escape(user_name)
@@ -20201,12 +20207,12 @@ async def back_to_main(callback: CallbackQuery):
             text,
             reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
-    if was_ticket_input:
-        await bot.send_message(
-            user_id,
-            "✅ کنترل‌های تیکت بسته شد." if lang == "fa" else "✅ Ticket controls were dismissed.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+    has_active_ticket_input = any(
+        chat.get('user_id') == user_id and chat.get('kind') == 'ticket' and chat.get('user_input_enabled')
+        for chat in get_active_chats()
+    )
+    if was_ticket_input or has_active_ticket_input:
+        await auto_pause_user_ticket_if_active(user_id)
     
     try:
         await callback.answer()
@@ -30569,15 +30575,12 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
                         else f"✅ Conversation #{chat_id} has been successfully processed."
                     )
                     try:
-                        rm = await bot.send_message(user_id, "⏳", reply_markup=ReplyKeyboardRemove())
-                        try:
-                            await rm.delete()
-                        except Exception:
-                            pass
-                        msg_text = (
-                            f"{notification}\n\n"
-                            f"{premium_emoji('rocket', '🚀')} <b>{'منوی اصلی' if recipient_lang == 'fa' else 'Main Menu'}</b>"
+                        await bot.send_message(
+                            user_id,
+                            notification,
+                            reply_markup=ReplyKeyboardRemove(),
                         )
+                        msg_text = f"{premium_emoji('rocket', '🚀')} <b>{'منوی اصلی' if recipient_lang == 'fa' else 'Main Menu'}</b>"
                         await bot.send_message(
                             user_id,
                             msg_text,
@@ -30614,30 +30617,41 @@ def _clear_ticket_input_state(user_id: int, chat_id: int) -> None:
 async def auto_pause_user_ticket_if_active(user_id: int) -> bool:
     """اگر کاربر در حالت ارسال پیام به تیکت باشد، ارسال را خودکار متوقف کرده و کیبورد تیکت را می‌بندد"""
     state = user_states.get(user_id, {})
-    if not state.get('awaiting_chat'):
-        return False
-
+    had_state = bool(state.get('awaiting_chat'))
     chat_id = state.get('chat_id')
-    if chat_id is not None:
-        chat = chats.get(str(chat_id))
-        if chat and chat.get('status') == 'open' and chat.get('kind') == 'ticket':
+    has_active_input_ticket = False
+
+    for chat in get_active_chats():
+        if chat.get('user_id') == user_id and chat.get('kind') == 'ticket' and chat.get('user_input_enabled'):
             chat['user_input_enabled'] = False
             chat['updated_at'] = datetime.now().isoformat()
+            has_active_input_ticket = True
+            if not chat_id:
+                chat_id = chat.get('id')
+
+    if not (had_state or has_active_input_ticket):
+        return False
+
+    if chat_id is not None:
         _clear_ticket_input_state(user_id, chat_id)
-        save_all()
     else:
         state.pop('awaiting_chat', None)
         state.pop('chat_id', None)
         state.pop('timestamp', None)
         if not state:
             user_states.pop(user_id, None)
+    save_all()
 
+    lang = get_user(user_id).get('lang', 'fa')
+    notice = (
+        f"⏸ ارسال پیام به تیکت #{chat_id} متوقف شد." if chat_id
+        else "⏸ ارسال پیام به پشتیبانی متوقف شد."
+    ) if lang == "fa" else (
+        f"⏸ Sending messages to ticket #{chat_id} paused." if chat_id
+        else "⏸ Sending messages to support paused."
+    )
     try:
-        rm = await bot.send_message(user_id, "⏳", reply_markup=ReplyKeyboardRemove())
-        try:
-            await rm.delete()
-        except Exception:
-            pass
+        await bot.send_message(user_id, notice, reply_markup=ReplyKeyboardRemove())
     except Exception as e:
         logger.debug(f"خطا در بستن کیبورد تیکت: {e}")
 
@@ -30677,7 +30691,7 @@ def get_user_ticket_keyboard(lang: str) -> ReplyKeyboardMarkup:
             KeyboardButton(text=TICKET_CLOSE_BUTTON_FA if lang == "fa" else TICKET_CLOSE_BUTTON_EN),
         ]],
         resize_keyboard=True,
-        one_time_keyboard=False,
+        one_time_keyboard=True,
     )
 
 
@@ -31021,11 +31035,14 @@ async def user_close_ticket(callback: CallbackQuery):
         reply_markup=get_main_keyboard(is_admin, lang, user_id),
         parse_mode=ParseMode.HTML,
     )
-    rm = await bot.send_message(user_id, "⏳", reply_markup=ReplyKeyboardRemove())
     try:
-        await rm.delete()
-    except Exception:
-        pass
+        await bot.send_message(
+            user_id,
+            f"✅ تیکت #{chat_id} با موفقیت پیگیری شد." if lang == "fa" else f"✅ Ticket #{chat_id} has been successfully processed.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    except Exception as e:
+        logger.debug(f"خطا در ارسال تایید بستن تیکت به کاربر: {e}")
     await callback.answer()
 
 
@@ -31064,11 +31081,14 @@ async def user_pause_ticket_input(callback: CallbackQuery):
         reply_markup=get_main_keyboard(is_admin, lang, user_id),
         parse_mode=ParseMode.HTML,
     )
-    rm = await bot.send_message(user_id, "⏳", reply_markup=ReplyKeyboardRemove())
     try:
-        await rm.delete()
-    except Exception:
-        pass
+        await bot.send_message(
+            user_id,
+            f"⏸ ارسال پیام به تیکت #{chat_id} متوقف شد." if lang == "fa" else f"⏸ Sending messages to ticket #{chat_id} paused.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    except Exception as e:
+        logger.debug(f"خطا در ارسال اعلان توقف تیکت به کاربر: {e}")
     await callback.answer("⏹ ارسال پیام متوقف شد" if lang == "fa" else "⏹ Input paused")
 
 
@@ -31183,6 +31203,105 @@ async def relay_support_message(
 
 
 
+TICKET_PAUSE_BUTTONS = {
+    TICKET_PAUSE_BUTTON_FA, TICKET_PAUSE_BUTTON_EN,
+    "🔵 توقف ارسال", "⏸ توقف ارسال", "توقف ارسال",
+    "🔵 Pause sending", "⏸ Pause sending", "Pause sending",
+}
+TICKET_CLOSE_BUTTONS = {
+    TICKET_CLOSE_BUTTON_FA, TICKET_CLOSE_BUTTON_EN,
+    "🔴 بستن تیکت", "🔒 بستن تیکت", "بستن تیکت",
+    "🔴 Close ticket", "🔒 Close ticket", "Close ticket",
+    "/end",
+}
+
+
+@dp.message(F.text.in_(TICKET_PAUSE_BUTTONS | TICKET_CLOSE_BUTTONS))
+async def handle_ticket_button_press(message: Message):
+    """مدیریت دکمه‌های بستن و توقف تیکت در هر شرایطی (حتی بعد از ری‌استارت ربات) با بستن قطعی کیبورد."""
+    user_id = message.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    is_admin = (user_id == ADMIN_ID_INT)
+    text = (message.text or "").strip()
+
+    state = user_states.get(user_id, {})
+    chat_id = state.get('chat_id')
+    if not chat_id:
+        for chat in get_active_chats():
+            if chat.get('user_id') == user_id and chat.get('kind') == 'ticket':
+                chat_id = chat.get('id')
+                break
+
+    if text in TICKET_PAUSE_BUTTONS:
+        if chat_id:
+            chat = chats.get(str(chat_id))
+            if chat:
+                chat['user_input_enabled'] = False
+                chat['updated_at'] = datetime.now().isoformat()
+            _clear_ticket_input_state(user_id, chat_id)
+            save_all()
+            pause_notice = (
+                f"⏸ ارسال پیام به تیکت #{chat_id} متوقف شد.\n\n"
+                f"⏳ لطفاً منتظر پیام پشتیبانی باشید. همچنین هر زمان تمایل داشتید می‌توانید از بخش پشتیبانی این تیکت را ادامه دهید."
+                if lang == "fa" else
+                f"⏸ Sending messages to ticket #{chat_id} has been paused.\n\n"
+                f"⏳ Please wait for support response. You can also resume your ticket anytime from the support section."
+            )
+        else:
+            state.pop('awaiting_chat', None)
+            state.pop('chat_id', None)
+            if not state:
+                user_states.pop(user_id, None)
+            save_all()
+            pause_notice = (
+                "⏸ ارسال پیام به پشتیبانی متوقف شد."
+                if lang == "fa" else
+                "⏸ Sending messages to support paused."
+            )
+
+        await message.answer(pause_notice, reply_markup=ReplyKeyboardRemove())
+        menu_text = (
+            f"{premium_emoji('rocket', '🚀')} <b>{'منوی اصلی' if lang == 'fa' else 'Main Menu'}</b>"
+        )
+        await message.answer(
+            menu_text,
+            reply_markup=get_main_keyboard(is_admin, lang, user_id),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # بستن تیکت
+    if chat_id:
+        await close_chat(chat_id, closed_by="user")
+        _clear_ticket_input_state(user_id, chat_id)
+        close_notice = (
+            f"✅ تیکت #{chat_id} با موفقیت پیگیری شد."
+            if lang == "fa" else
+            f"✅ Ticket #{chat_id} has been successfully processed."
+        )
+    else:
+        state.pop('awaiting_chat', None)
+        state.pop('chat_id', None)
+        if not state:
+            user_states.pop(user_id, None)
+        save_all()
+        close_notice = (
+            "✅ کنترل‌های تیکت بسته شد."
+            if lang == "fa" else
+            "✅ Ticket controls were closed."
+        )
+
+    await message.answer(close_notice, reply_markup=ReplyKeyboardRemove())
+    menu_text = (
+        f"{premium_emoji('rocket', '🚀')} <b>{'منوی اصلی' if lang == 'fa' else 'Main Menu'}</b>"
+    )
+    await message.answer(
+        menu_text,
+        reply_markup=get_main_keyboard(is_admin, lang, user_id),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 @dp.message(lambda m: user_states.get(m.from_user.id, {}).get('awaiting_chat', False))
 async def handle_chat_message(message: Message):
     """دریافت و انتقال متن و رسانه کاربر در تیکت پشتیبانی."""
@@ -31207,65 +31326,8 @@ async def handle_chat_message(message: Message):
         return
 
     text = (message.text or "").strip()
-    pause_buttons = {
-        TICKET_PAUSE_BUTTON_FA, TICKET_PAUSE_BUTTON_EN,
-        "🔵 توقف ارسال", "⏸ توقف ارسال", "توقف ارسال",
-        "🔵 Pause sending", "⏸ Pause sending", "Pause sending",
-    }
-    close_buttons = {
-        TICKET_CLOSE_BUTTON_FA, TICKET_CLOSE_BUTTON_EN,
-        "🔴 بستن تیکت", "🔒 بستن تیکت", "بستن تیکت",
-        "🔴 Close ticket", "🔒 Close ticket", "Close ticket",
-    }
-    if text in pause_buttons:
-        chat['user_input_enabled'] = False
-        chat['updated_at'] = datetime.now().isoformat()
-        _clear_ticket_input_state(user_id, chat_id)
-        save_all()
-        rm_msg = await message.answer("⏳", reply_markup=ReplyKeyboardRemove())
-        try:
-            await rm_msg.delete()
-        except Exception:
-            pass
-        is_admin = (user_id == ADMIN_ID_INT)
-        pause_text = (
-            f"⏸ ارسال پیام به تیکت #{chat_id} متوقف شد.\n\n"
-            f"⏳ لطفاً منتظر پیام پشتیبانی باشید. همچنین هر زمان تمایل داشتید می‌توانید از بخش پشتیبانی این تیکت را ادامه دهید.\n\n"
-            f"{premium_emoji('rocket', '🚀')} <b>منوی اصلی</b>"
-            if lang == "fa"
-            else
-            f"⏸ Sending messages to ticket #{chat_id} has been paused.\n\n"
-            f"⏳ Please wait for support response. You can also resume your ticket anytime from the support section.\n\n"
-            f"{premium_emoji('rocket', '🚀')} <b>Main Menu</b>"
-        )
-        await message.answer(
-            pause_text,
-            reply_markup=get_main_keyboard(is_admin, lang, user_id),
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    if text in close_buttons or text == '/end':
-        await close_chat(chat_id, closed_by="user")
-        _clear_ticket_input_state(user_id, chat_id)
-        rm_msg = await message.answer("⏳", reply_markup=ReplyKeyboardRemove())
-        try:
-            await rm_msg.delete()
-        except Exception:
-            pass
-        is_admin = (user_id == ADMIN_ID_INT)
-        msg_text = (
-            f"✅ تیکت #{chat_id} با موفقیت پیگیری شد.\n\n"
-            f"{premium_emoji('rocket', '🚀')} <b>منوی اصلی</b>"
-            if lang == "fa"
-            else
-            f"✅ Ticket #{chat_id} has been successfully processed.\n\n"
-            f"{premium_emoji('rocket', '🚀')} <b>Main Menu</b>"
-        )
-        await message.answer(
-            msg_text,
-            reply_markup=get_main_keyboard(is_admin, lang, user_id),
-            parse_mode=ParseMode.HTML,
-        )
+    if text in (TICKET_PAUSE_BUTTONS | TICKET_CLOSE_BUTTONS):
+        await handle_ticket_button_press(message)
         return
 
     if not chat.get('user_input_enabled', True):
