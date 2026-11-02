@@ -11709,7 +11709,7 @@ def generate_wireguard_qr_code(data: str, order_id: int):
     )
     draw.text(
         (image_size // 2, 112),
-        f"SECURE CONFIG  |  ORDER #{order_id}",
+        f"GAMING CONFIG  |  ORDER #{order_id}",
         fill="#f05269",
         font=ImageFont.load_default(size=18),
         anchor="mm",
@@ -23288,12 +23288,14 @@ async def show_wireguard_config(callback: CallbackQuery):
                 if lang == "fa"
                 else "🔙 Back to Config",
                 callback_data=f"view_config_{order_id}",
-            )],
-            [InlineKeyboardButton(
+                style="primary",
+            ),
+             InlineKeyboardButton(
                 text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
                 callback_data="back_to_main",
                 style="danger",
-            )],
+            )]
+            
         ])
 
         try:
