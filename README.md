@@ -53,7 +53,7 @@ Smart support lets users choose AI chat or open a support ticket. A ticket can o
 | **Smart Support**          | Choose between Google Gemini AI and a human-support ticket; AI context is read-only and user-scoped |
 | **Support Tickets**        | Two-way text/media messaging, optional config selection, and pausing user input without closing the ticket |
 | **Logging**                | Application and Telegram logging                         |
-| **Configuration Delivery** | Automated configuration and subscription delivery        |
+| **Configuration Delivery** | Automated configuration and subscription delivery, including WireGuard QR codes and `.conf` files |
 | **User Management**        | Manage users and their services                          |
 | **Local Data Storage**     | JSON-based runtime data storage                          |
 

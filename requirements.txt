@@ -29,6 +29,7 @@ typing_extensions==4.15.0
 # --- QR & Image & Data Visualization ---
 qrcode==8.2
 pillow==12.2.0
+cryptography>=41.0
 matplotlib>=3.9.0
 arabic-reshaper>=3.0.0
 python-bidi>=0.6.0
