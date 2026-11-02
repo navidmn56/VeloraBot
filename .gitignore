@@ -31,3 +31,4 @@ data/*
 Thumbs.db
 
 temp_test/
+tests/
