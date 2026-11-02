@@ -22908,10 +22908,7 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
         if '#' not in link and not link.startswith(('vmess://', '[Interface]')):
             display_link = f"{link}#{display_email}"
 
-        if protocol == "WireGuard":
-            body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
-        else:
-            body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{html.escape(display_link)}</code>\n\n"
+        body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
 
     text = body.strip()
 
@@ -22931,10 +22928,7 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             display_link = link
             if '#' not in link and not link.startswith(('vmess://', '[Interface]')):
                 display_link = f"{link}#{display_email}"
-            if protocol == "WireGuard":
-                truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
-            else:
-                truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{html.escape(display_link)}</code>\n\n"
+            truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
 
         text = truncated_body.strip()
         if lang == "fa":
@@ -22949,9 +22943,14 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     qr_buttons = []
     for local_idx in range(len(page_links)):
         abs_idx = start_idx + local_idx + 1
+        is_wireguard = page_links[local_idx].startswith("[Interface]")
         qr_buttons.append(InlineKeyboardButton(
-            text=f"📱 QR #{abs_idx}",
-            callback_data=f"show_single_qr_{order_id}_{abs_idx}_{page}"
+            text=f"{'🔴' if is_wireguard else '📱'} QR #{abs_idx}",
+            callback_data=(
+                f"wireguard_config_{order_id}"
+                if is_wireguard
+                else f"show_single_qr_{order_id}_{abs_idx}_{page}"
+            ),
         ))
 
     # دوتایی/سه‌تایی توی هر ردیف
