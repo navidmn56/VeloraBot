@@ -19,11 +19,13 @@ import re
 import traceback
 from io import BytesIO
 import aiohttp
+from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 import unicodedata
 import qrcode
 from yarl import URL
+from wireguard_system import build_wireguard_config
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -9380,6 +9382,8 @@ async def send_config_with_qr_option(
                 f"{home_emoji} To purchase full service, use the main menu."
             )
     
+    wireguard_available = await _order_has_wireguard(order_id)
+
     # ─── ارسال ───
     try:
         qr_img = generate_qr_code(config_link, order_id)
@@ -9388,7 +9392,10 @@ async def send_config_with_qr_option(
             qr_img,
             caption=caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
+            reply_markup=get_config_view_keyboard(
+                order_id, show_qr=True, lang=lang,
+                wireguard_available=wireguard_available,
+            )
         )
         logger.info(f"QR Code برای سفارش #{order_id} به کاربر {chat_id} ارسال شد")
     except Exception as e:
@@ -9397,7 +9404,10 @@ async def send_config_with_qr_option(
             chat_id,
             caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
+            reply_markup=get_config_view_keyboard(
+                order_id, show_qr=False, lang=lang,
+                wireguard_available=wireguard_available,
+            )
         )
         
 def add_config_to_pool(volume: int, days: int, link: str) -> int:
@@ -9462,7 +9472,95 @@ def delete_config(config_id: int) -> bool:
             return True
     return False
 
-def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "fa") -> InlineKeyboardMarkup:
+async def _get_order_wireguard_clients(order_id: int, force_refresh: bool = False) -> list:
+    """Find enabled WireGuard inbounds that contain this order's client."""
+    order = orders.get(str(order_id))
+    email = get_order_client_email(order) if order else None
+    if not email or not SENAI_PANEL_ENABLED:
+        return []
+
+    matches = []
+    for inbound in await xui_get_inbounds(
+        force_refresh=force_refresh,
+        include_disabled=True,
+    ):
+        if not isinstance(inbound, dict):
+            continue
+        if str(inbound.get("protocol", "")).lower() != "wireguard":
+            continue
+        if not inbound.get("enable", True):
+            continue
+
+        try:
+            settings = _decode_inbound_settings(inbound)
+        except (RuntimeError, ValueError) as error:
+            logger.error(
+                "تنظیمات اینباند WireGuard %s قابل خواندن نیست: %s",
+                inbound.get("id"),
+                error,
+            )
+            continue
+
+        clients = settings.get("clients", [])
+        if not isinstance(clients, list):
+            logger.error(
+                "فهرست کلاینت‌های اینباند WireGuard %s معتبر نیست",
+                inbound.get("id"),
+            )
+            continue
+
+        inbound_matches = [
+            client
+            for client in clients
+            if isinstance(client, dict)
+            and client.get("email") == email
+            and client.get("enable", True)
+        ]
+        if len(inbound_matches) > 1:
+            logger.error(
+                "کلاینت %s چندبار در اینباند WireGuard %s تکرار شده است",
+                email,
+                inbound.get("id"),
+            )
+            continue
+        if inbound_matches:
+            matches.append(
+                {
+                    "inbound": inbound,
+                    "settings": settings,
+                    "client": inbound_matches[0],
+                }
+            )
+    return matches
+
+
+async def _order_has_wireguard(
+    order_id: int,
+    force_refresh: bool = False,
+) -> bool:
+    try:
+        return bool(
+            await _get_order_wireguard_clients(
+                order_id,
+                force_refresh=force_refresh,
+            )
+        )
+    except Exception as error:
+        logger.error(
+            "بررسی اینباند WireGuard سفارش #%s ناموفق بود: %s",
+            order_id,
+            error,
+            exc_info=True,
+        )
+        return False
+
+
+def get_config_view_keyboard(
+    order_id: int,
+    show_qr: bool = False,
+    lang: str = "fa",
+    wireguard_available: bool = False,
+) -> InlineKeyboardMarkup:
     """ساخت کیبورد نمایش کانفیگ با دکمه‌های پلتفرم"""
     
     order = orders.get(str(order_id))
@@ -9512,6 +9610,13 @@ def get_config_view_keyboard(order_id: int, show_qr: bool = False, lang: str = "
             style="primary",
         )
     ])
+
+    if wireguard_available:
+        buttons.append([InlineKeyboardButton(
+            text="🔴 کانفیگ WireGuard" if lang == "fa" else "🔴 WireGuard Config",
+            callback_data=f"wireguard_config_{order_id}",
+            style="danger",
+        )])
     
     # ─── ردیف 3: راهنمای اتصال هر پلتفرم ───
     buttons.append([
@@ -9707,7 +9812,14 @@ async def platform_back_to_config(callback: CallbackQuery):
     """بازسازی صفحهٔ کانفیگ قبلی از روی شناسه و حالت QR/متن."""
     lang = get_user(callback.from_user.id).get("lang", "fa")
     order_id, show_qr = _parse_platform_callback(callback)
-    order = orders.get(str(order_id)) if order_id is not None else None
+    if order_id is None:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
+            show_alert=True,
+        )
+        return
+
+    order = orders.get(str(order_id))
     if not order or order.get("user_id") != callback.from_user.id or not order.get("config_link"):
         await callback.answer(
             "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
@@ -9751,11 +9863,15 @@ async def platform_back_to_config(callback: CallbackQuery):
             lang,
             traffic_info,
         )
+        wireguard_available = await _order_has_wireguard(order_id)
         await bot.send_message(
             callback.message.chat.id,
             caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang),
+            reply_markup=get_config_view_keyboard(
+                order_id, show_qr=False, lang=lang,
+                wireguard_available=wireguard_available,
+            ),
         )
     await callback.answer()
             
@@ -11552,6 +11668,79 @@ def generate_qr_code(data: str, order_id: int):
     qr_img.save(bio, 'PNG', quality=95)
     bio.seek(0)
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
+
+
+def generate_wireguard_qr_code(data: str, order_id: int):
+    """Render a WireGuard QR code on a dark red-and-black card."""
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=7,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    qr_image = qr.make_image(fill_color="#09090b", back_color="#ffffff").convert("RGB")
+
+    padding = 48
+    header_height = 150
+    footer_height = 92
+    image_width = max(680, qr_image.width + padding * 2)
+    image_height = header_height + qr_image.height + footer_height
+    image = Image.new("RGB", (image_width, image_height), "#09090b")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (16, 16, image_width - 16, image_height - 16),
+        radius=30,
+        fill="#111116",
+        outline="#e11d3e",
+        width=5,
+    )
+    draw.line(
+        (padding, header_height - 18, image_width - padding, header_height - 18),
+        fill="#e11d3e",
+        width=4,
+    )
+
+    font = ImageFont.load_default(size=30)
+    draw.text(
+        (image_width // 2, 67),
+        "WIREGUARD",
+        fill="#f3f4f6",
+        font=font,
+        anchor="mm",
+    )
+    draw.text(
+        (image_width // 2, 112),
+        f"SECURE CONFIG  |  ORDER #{order_id}",
+        fill="#f05269",
+        font=ImageFont.load_default(size=18),
+        anchor="mm",
+    )
+
+    qr_left = (image_width - qr_image.width) // 2
+    qr_top = header_height
+    draw.rounded_rectangle(
+        (
+            qr_left - 10,
+            qr_top - 10,
+            qr_left + qr_image.width + 10,
+            qr_top + qr_image.height + 10,
+        ),
+        radius=18,
+        fill="#ffffff",
+        outline="#e11d3e",
+        width=4,
+    )
+    image.paste(qr_image, (qr_left, qr_top))
+
+    bio = BytesIO()
+    image.save(bio, "PNG")
+    return BufferedInputFile(
+        bio.getvalue(),
+        filename=f"wireguard_qr_{order_id}.png",
+    )
+
 
 def get_config_caption(
     order_id: int,
@@ -21705,6 +21894,7 @@ async def show_qr_code(callback: CallbackQuery):
         order.get("volume"),
         order.get("days"),
     )
+    wireguard_available = await _order_has_wireguard(order_id)
     
     try:
         email = get_order_client_email(order)
@@ -21782,7 +21972,10 @@ async def show_qr_code(callback: CallbackQuery):
             qr_img,
             caption=caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
+            reply_markup=get_config_view_keyboard(
+                order_id, show_qr=True, lang=lang,
+                wireguard_available=wireguard_available,
+            )
         )
         
         logger.info(f"✅ QR Code با message_id={sent_msg.message_id} ارسال شد")
@@ -22389,6 +22582,7 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
 async def _show_rotated_subscription(
     chat_id: int, order_id: int, subscription_link: str, lang: str
 ):
+    wireguard_available = await _order_has_wireguard(order_id)
     caption = (
         "✅ <b>لینک اشتراک با موفقیت تغییر کرد</b>\n"
         "حجم و زمان باقی‌مانده حفظ شده است.\n\n"
@@ -22403,7 +22597,10 @@ async def _show_rotated_subscription(
         generate_qr_code(subscription_link, order_id),
         caption=caption,
         parse_mode=ParseMode.HTML,
-        reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang),
+        reply_markup=get_config_view_keyboard(
+            order_id, show_qr=True, lang=lang,
+            wireguard_available=wireguard_available,
+        ),
     )
 
 
@@ -22552,6 +22749,7 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(f"خطا در نمایش QR لینک جدید سفارش #{order_id}: {e}", exc_info=True)
+        wireguard_available = await _order_has_wireguard(order_id)
         await bot.send_message(
             callback.message.chat.id,
             (
@@ -22562,7 +22760,10 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
                 f"🔗 <code>{html.escape(subscription_link)}</code>"
             ),
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang),
+            reply_markup=get_config_view_keyboard(
+                order_id, show_qr=False, lang=lang,
+                wireguard_available=wireguard_available,
+            ),
         )
     logger.info("کاربر %s لینک اشتراک سفارش #%s را تغییر داد", user_id, order_id)
 
@@ -22614,6 +22815,23 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
                 ):
                     links.append(link)
 
+        for wireguard in await _get_order_wireguard_clients(order_id):
+            try:
+                links.append(
+                    build_wireguard_config(
+                        wireguard["inbound"],
+                        wireguard["client"],
+                        app_config.SENAI_PANEL_URL,
+                    )
+                )
+            except (TypeError, ValueError) as error:
+                logger.error(
+                    "ساخت متن وایرگارد سفارش #%s ناموفق بود: %s",
+                    order_id,
+                    error,
+                    exc_info=True,
+                )
+
     if not links and order.get('config_link'):
         links = [order['config_link']]
 
@@ -22650,8 +22868,8 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     lang = get_user(user_id).get('lang', 'fa')
 
     order = orders.get(str(order_id))
-    if not order:
-        await callback.answer("❌ سفارش یافت نشد" if lang == 'fa' else "❌ Order not found", show_alert=True)
+    if not order or order.get("user_id") != user_id:
+        await callback.answer("❌ کانفیگ یافت نشد" if lang == 'fa' else "❌ Config not found", show_alert=True)
         return
 
     links, email = await _get_cached_config_links(order_id)
@@ -22685,14 +22903,19 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             protocol = "VMESS"
         elif link.startswith('trojan://'):
             protocol = "TROJAN"
+        elif link.startswith("[Interface]"):
+            protocol = "WireGuard"
         else:
             protocol = "SS"
 
         display_link = link
-        if '#' not in link and not link.startswith('vmess://'):
+        if '#' not in link and not link.startswith(('vmess://', '[Interface]')):
             display_link = f"{link}#{display_email}"
 
-        body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{display_link}</code>\n\n"
+        if protocol == "WireGuard":
+            body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
+        else:
+            body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{html.escape(display_link)}</code>\n\n"
 
     text = body.strip()
 
@@ -22707,10 +22930,15 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
                 "VMESS" if link.startswith('vmess://') else
                 "TROJAN" if link.startswith('trojan://') else "SS"
             )
+            if link.startswith("[Interface]"):
+                protocol = "WireGuard"
             display_link = link
-            if '#' not in link and not link.startswith('vmess://'):
+            if '#' not in link and not link.startswith(('vmess://', '[Interface]')):
                 display_link = f"{link}#{display_email}"
-            truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{display_link}</code>\n\n"
+            if protocol == "WireGuard":
+                truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
+            else:
+                truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<code>{html.escape(display_link)}</code>\n\n"
 
         text = truncated_body.strip()
         if lang == "fa":
@@ -22841,6 +23069,14 @@ async def copy_all_links_file(callback: CallbackQuery):
         order_id = int(callback.data.split("_")[4])
     except (ValueError, IndexError):
         await callback.answer("❌ خطا در پردازش", show_alert=True)
+        return
+
+    order = orders.get(str(order_id))
+    if not order or order.get("user_id") != user_id:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
+            show_alert=True,
+        )
         return
 
     links, _ = await _get_cached_config_links(order_id)
@@ -22989,6 +23225,188 @@ async def show_config_text(callback: CallbackQuery):
         await callback.answer()
     except Exception:
         pass
+
+
+@dp.callback_query(F.data.regexp(r"^wireguard_config_\d+$"))
+async def show_wireguard_config(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get("lang", "fa")
+    try:
+        order_id = int(callback.data.rsplit("_", 1)[1])
+    except (ValueError, AttributeError):
+        await callback.answer(
+            "❌ درخواست نامعتبر است" if lang == "fa" else "❌ Invalid request",
+            show_alert=True,
+        )
+        return
+
+    order = orders.get(str(order_id))
+    if not order or order.get("user_id") != user_id:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+    try:
+        matches = await _get_order_wireguard_clients(order_id, force_refresh=True)
+        if not matches:
+            await callback.message.answer(
+                "❌ این کانفیگ WireGuard فعال ندارد"
+                if lang == "fa"
+                else "❌ No active WireGuard config found",
+            )
+            return
+
+        if len(matches) > 1:
+            logger.warning(
+                "سفارش #%s شامل %s اینباند WireGuard است؛ فقط نخستین اینباند نمایش داده می‌شود",
+                order_id,
+                len(matches),
+            )
+
+        target = matches[0]
+        config_text = build_wireguard_config(
+            target["inbound"],
+            target["client"],
+            app_config.SENAI_PANEL_URL,
+        )
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="📥 دریافت فایل WireGuard"
+                if lang == "fa"
+                else "📥 Download WireGuard File",
+                callback_data=f"wireguard_file_{order_id}",
+                style="success",
+            )],
+            [InlineKeyboardButton(
+                text="🔙 بازگشت به کانفیگ"
+                if lang == "fa"
+                else "🔙 Back to Config",
+                callback_data=f"view_config_{order_id}",
+            )],
+            [InlineKeyboardButton(
+                text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                callback_data="back_to_main",
+                style="danger",
+            )],
+        ])
+
+        try:
+            await callback.message.delete()
+        except Exception as error:
+            logger.debug("حذف پیام قبلی وایرگارد ناموفق بود: %s", error)
+        await bot.send_photo(
+            user_id,
+            generate_wireguard_qr_code(config_text, order_id),
+            caption=(
+                f"🔴 <b>QR Code وایرگارد سفارش #{order_id}</b>\n"
+                "برای وارد کردن در برنامه WireGuard اسکن کنید."
+                if lang == "fa"
+                else f"🔴 <b>WireGuard QR Code for order #{order_id}</b>\n"
+                "Scan it in the WireGuard app."
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    except Exception as error:
+        logger.error(
+            "ساخت یا ارسال QR وایرگارد سفارش #%s ناموفق بود: %s",
+            order_id,
+            error,
+            exc_info=True,
+        )
+        await callback.message.answer(
+            "❌ ساخت QR وایرگارد ممکن نشد. تنظیمات اینباند و کلیدها را بررسی کنید."
+            if lang == "fa"
+            else "❌ Could not build the WireGuard QR. Check the inbound settings and keys.",
+            reply_markup=get_config_view_keyboard(
+                order_id,
+                show_qr=False,
+                lang=lang,
+                wireguard_available=True,
+            ),
+        )
+
+
+@dp.callback_query(F.data.regexp(r"^wireguard_file_\d+$"))
+async def send_wireguard_config_file(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get("lang", "fa")
+    try:
+        order_id = int(callback.data.rsplit("_", 1)[1])
+    except (ValueError, AttributeError):
+        await callback.answer(
+            "❌ درخواست نامعتبر است" if lang == "fa" else "❌ Invalid request",
+            show_alert=True,
+        )
+        return
+
+    order = orders.get(str(order_id))
+    if not order or order.get("user_id") != user_id:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+    try:
+        matches = await _get_order_wireguard_clients(order_id, force_refresh=True)
+        if not matches:
+            await callback.message.answer(
+                "❌ این کانفیگ WireGuard فعال ندارد"
+                if lang == "fa"
+                else "❌ No active WireGuard config found",
+            )
+            return
+
+        config_text = build_wireguard_config(
+            matches[0]["inbound"],
+            matches[0]["client"],
+            app_config.SENAI_PANEL_URL,
+        )
+        document = BufferedInputFile(
+            config_text.encode("utf-8"),
+            filename="wireguard.conf",
+        )
+        await bot.send_document(
+            user_id,
+            document,
+            caption=(
+                f"🔴 فایل کانفیگ وایرگارد سفارش #{order_id}"
+                if lang == "fa"
+                else f"🔴 WireGuard config file for order #{order_id}"
+            ),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🔙 بازگشت به کانفیگ"
+                    if lang == "fa"
+                    else "🔙 Back to Config",
+                    callback_data=f"view_config_{order_id}",
+                )],
+                [InlineKeyboardButton(
+                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                    callback_data="back_to_main",
+                    style="danger",
+                )],
+            ]),
+        )
+    except Exception as error:
+        logger.error(
+            "ارسال فایل وایرگارد سفارش #%s ناموفق بود: %s",
+            order_id,
+            error,
+            exc_info=True,
+        )
+        await callback.message.answer(
+            "❌ ارسال فایل وایرگارد ناموفق بود"
+            if lang == "fa"
+            else "❌ Failed to send the WireGuard file",
+        )
+
+
 @dp.callback_query(F.data.startswith("show_text_page_"))
 async def show_config_text_page(callback: CallbackQuery):
     """جابه‌جایی بین صفحات"""
@@ -23043,6 +23461,13 @@ async def show_single_qr(callback: CallbackQuery):
         return
 
     lang = get_user(user_id).get('lang', 'fa')
+    order = orders.get(str(order_id))
+    if not order or order.get("user_id") != user_id:
+        await callback.answer(
+            "❌ کانفیگ یافت نشد" if lang == "fa" else "❌ Config not found",
+            show_alert=True,
+        )
+        return
 
     links, email = await _get_cached_config_links(order_id)
     if not links:
@@ -29900,6 +30325,7 @@ async def view_single_config(callback: CallbackQuery):
         lang,
         traffic_info
     )
+    wireguard_available = await _order_has_wireguard(order_id)
 
     # ─── ارسال عکس یا پیام ───
     try:
@@ -29909,7 +30335,10 @@ async def view_single_config(callback: CallbackQuery):
             qr_img,
             caption=caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=True, lang=lang)
+            reply_markup=get_config_view_keyboard(
+                order_id, show_qr=True, lang=lang,
+                wireguard_available=wireguard_available,
+            )
         )
     except Exception as e:
         logger.error(f"خطا در ارسال عکس: {e}")
@@ -29917,7 +30346,10 @@ async def view_single_config(callback: CallbackQuery):
             user_id,
             caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(order_id, show_qr=False, lang=lang)
+            reply_markup=get_config_view_keyboard(
+                order_id, show_qr=False, lang=lang,
+                wireguard_available=wireguard_available,
+            )
         )
 
     try:

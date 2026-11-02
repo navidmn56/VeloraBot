@@ -484,23 +484,18 @@ class DailyUsageStore:
                         delta_down = 0
                         delta_total = 0
                 else:
-                    # اگر آخرین اسنپ‌شات صفر بوده و اکنون یک مقدار بزرگ ثبت شده است (تعیین مبنای اولیه):
-                    if last_total == 0 and total_bytes > 0:
-                        delta_up = 0
-                        delta_down = 0
-                        delta_total = 0
-                    else:
-                        delta_total = total_bytes - last_total
-                        delta_up = max(0, up_bytes - last_up)
-                        delta_down = max(0, down_bytes - last_down)
-                        if delta_total > 0 and (delta_up + delta_down) == 0:
-                            delta_down = delta_total
+                    delta_total = total_bytes - last_total
+                    delta_up = max(0, up_bytes - last_up)
+                    delta_down = max(0, down_bytes - last_down)
+                    if delta_total > 0 and (delta_up + delta_down) == 0:
+                        delta_down = delta_total
             else:
                 # اولین اسنپ‌شات برای این سرویس:
-                # به عنوان نقطه صفر ثبت می‌شود تا مبنای محاسبات بعدی باشد، اما کل حجم تجمعی گذشته مصرف امروز تلقی نمی‌شود.
-                delta_up = 0
-                delta_down = 0
-                delta_total = 0
+                # تاریخ دقیق ترافیک قبل از شروع ثبت در دسترس نیست؛ مقدار فعلی را
+                # به روز اولین مشاهده نسبت می‌دهیم تا با شمارنده پنل همگام بماند.
+                delta_up = up_bytes
+                delta_down = down_bytes
+                delta_total = total_bytes
 
             # ثبت اسنپ‌شات جدید
             cursor.execute("""
@@ -510,9 +505,11 @@ class DailyUsageStore:
             """, (str(service_id), now, now_str, up_bytes, down_bytes, total_bytes, is_reset))
 
             # شرط 3: تخصیص مصرف روزانه با مدیریت عبور از نیمه‌شب
-            if delta_total > 0 and last:
-                last_time = last["timestamp"]
-                last_dt = datetime.fromtimestamp(last_time, TEHRAN_TZ)
+            if delta_total > 0:
+                if last:
+                    last_dt = datetime.fromtimestamp(last["timestamp"], TEHRAN_TZ)
+                else:
+                    last_dt = now_dt
                 
                 # توزیع دلتا بین روزهای تقویمی
                 day_slices = self._split_interval_across_days(last_dt, now_dt)
@@ -540,10 +537,18 @@ class DailyUsageStore:
             conn.commit()
             return True
 
-    def sanitize_service_usage(self, service_id: str, panel_total_bytes: int):
+    def sanitize_service_usage(
+        self,
+        service_id: str,
+        panel_total_bytes: int,
+        panel_up_bytes: Optional[int] = None,
+        panel_down_bytes: Optional[int] = None,
+        reconcile_missing: bool = False,
+    ):
         """
         راستی‌آزمایی و اعتبارسنجی مصرف ثبت‌شده در برابر کل مصرف واقعی کلاینت در پنل:
         اگر مجموع ترافیک ثبت‌شده در دیتابیس بیشتر از کل مصرف پنل باشد، با یک مقیاس‌بندی متناسب اصلاح می‌شود.
+        اگر تاریخچه به علت شروع دیرهنگام ثبت، از شمارنده پنل عقب باشد، اختلاف به روز اولین اسنپ‌شات افزوده می‌شود.
         تحت هیچ شرایطی رکوردهای روزهای گذشته حذف (DELETE) نمی‌شوند تا با ری‌استارت ربات هیچ داده‌ای پاک نشود.
         """
         if not service_id or panel_total_bytes <= 0:
@@ -558,6 +563,64 @@ class DailyUsageStore:
             """, (str(service_id),))
             row = cursor.fetchone()
             db_total = row["db_total"] or 0
+
+            if reconcile_missing and db_total < panel_total_bytes:
+                cursor.execute("""
+                    SELECT timestamp
+                    FROM traffic_snapshots
+                    WHERE service_id = ?
+                    ORDER BY timestamp ASC LIMIT 1;
+                """, (str(service_id),))
+                first_snapshot = cursor.fetchone()
+                cursor.execute("""
+                    SELECT 1 FROM reset_events
+                    WHERE service_id = ? LIMIT 1;
+                """, (str(service_id),))
+                has_resets = cursor.fetchone() is not None
+
+                if first_snapshot and not has_resets:
+                    missing_total = panel_total_bytes - db_total
+                    if panel_up_bytes is not None and panel_down_bytes is not None:
+                        cursor.execute("""
+                            SELECT
+                                COALESCE(SUM(up_bytes), 0) AS db_up,
+                                COALESCE(SUM(down_bytes), 0) AS db_down
+                            FROM daily_usage
+                            WHERE service_id = ?;
+                        """, (str(service_id),))
+                        direction_row = cursor.fetchone()
+                        missing_up = min(
+                            missing_total,
+                            max(0, int(panel_up_bytes) - direction_row["db_up"]),
+                        )
+                        missing_down = missing_total - missing_up
+                    else:
+                        missing_up = 0
+                        missing_down = missing_total
+
+                    first_date = datetime.fromtimestamp(
+                        first_snapshot["timestamp"], TEHRAN_TZ
+                    ).strftime("%Y-%m-%d")
+                    now = time.time()
+                    cursor.execute("""
+                        INSERT INTO daily_usage (
+                            service_id, usage_date, up_bytes, down_bytes, total_bytes, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(service_id, usage_date) DO UPDATE SET
+                            up_bytes = daily_usage.up_bytes + excluded.up_bytes,
+                            down_bytes = daily_usage.down_bytes + excluded.down_bytes,
+                            total_bytes = daily_usage.total_bytes + excluded.total_bytes,
+                            updated_at = excluded.updated_at;
+                    """, (
+                        str(service_id), first_date, missing_up, missing_down,
+                        missing_total, now,
+                    ))
+                    db_total = panel_total_bytes
+                    logger.info(
+                        "مصرف مبنای ثبت‌نشده برای %s به تاریخ اولین اسنپ‌شات افزوده شد: %d بایت",
+                        service_id,
+                        missing_total,
+                    )
 
             if db_total > panel_total_bytes:
                 logger.warning(
@@ -768,9 +831,11 @@ class DailyUsageStore:
                 has_sufficient_history = False
                 shamsi_start = format_date_persian(first_date) if lang == "fa" else first_date
                 history_note = (
-                    f"آمار مربوط به {to_persian_digits(total_historical_days)} روز ثبت‌شده است (شروع ثبت: {shamsi_start})."
+                    f"آمار مربوط به {to_persian_digits(total_historical_days)} روز ثبت‌شده است (شروع ثبت: {shamsi_start}). "
+                    "مصرف تجمعی اولین نمونه به همان روز نسبت داده شده و تفکیک دقیق روزهای قبل در دسترس نیست."
                     if lang == "fa" else
-                    f"Showing {total_historical_days} recorded days (started: {first_date})."
+                    f"Showing {total_historical_days} recorded days (started: {first_date}). "
+                    "The initial cumulative counter is assigned to that date; earlier daily breakdown is unavailable."
                 )
 
         avg_gb = total_gb / effective_days if effective_days > 0 else 0.0
@@ -1273,11 +1338,22 @@ async def handle_daily_usage_request(
         )
         if live_traffic_data:
             # گام ۱: راستی‌آزمایی قبل از ثبت اسنپ‌شات جدید
-            usage_store.sanitize_service_usage(email, live_traffic_data['total'])
+            usage_store.sanitize_service_usage(
+                email,
+                live_traffic_data['total'],
+                live_traffic_data['up'],
+                live_traffic_data['down'],
+            )
             # گام ۲: ثبت اسنپ‌شات لحظه‌ای (بدون از بین رفتن داده‌های روزهای قبل در ری‌استارت)
             usage_store.record_snapshot(email, live_traffic_data['up'], live_traffic_data['down'])
             # گام ۳: راستی‌آزمایی نهایی
-            usage_store.sanitize_service_usage(email, live_traffic_data['total'])
+            usage_store.sanitize_service_usage(
+                email,
+                live_traffic_data['total'],
+                live_traffic_data['up'],
+                live_traffic_data['down'],
+                reconcile_missing=True,
+            )
 
     # محاسبه آمار ۷ روز گذشته
     stats = usage_store.get_statistics(service_ids, days=7, lang=lang)
