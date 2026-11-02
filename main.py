@@ -22908,7 +22908,11 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
         if '#' not in link and not link.startswith(('vmess://', '[Interface]')):
             display_link = f"{link}#{display_email}"
 
-        body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
+        code_tag = "pre" if protocol == "WireGuard" else "code"
+        body += (
+            f"<b>#{abs_idx} - [{protocol}]</b>\n"
+            f"<{code_tag}>{html.escape(display_link)}</{code_tag}>\n\n"
+        )
 
     text = body.strip()
 
@@ -22928,7 +22932,11 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             display_link = link
             if '#' not in link and not link.startswith(('vmess://', '[Interface]')):
                 display_link = f"{link}#{display_email}"
-            truncated_body += f"<b>#{abs_idx} - [{protocol}]</b>\n<pre>{html.escape(display_link)}</pre>\n\n"
+            code_tag = "pre" if protocol == "WireGuard" else "code"
+            truncated_body += (
+                f"<b>#{abs_idx} - [{protocol}]</b>\n"
+                f"<{code_tag}>{html.escape(display_link)}</{code_tag}>\n\n"
+            )
 
         text = truncated_body.strip()
         if lang == "fa":
