@@ -11675,7 +11675,7 @@ def generate_wireguard_qr_code(data: str, order_id: int):
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=7,
+        box_size=6,
         border=4,
     )
     qr.add_data(data)
@@ -11684,11 +11684,10 @@ def generate_wireguard_qr_code(data: str, order_id: int):
 
     padding = 48
     header_height = 150
-    footer_height = 48
     image_size = max(
         680,
         qr_image.width + padding * 2,
-        qr_image.height + header_height + footer_height,
+        qr_image.height + header_height * 2,
     )
     image = Image.new("RGB", (image_size, image_size), "#09090b")
     draw = ImageDraw.Draw(image)
@@ -11715,12 +11714,8 @@ def generate_wireguard_qr_code(data: str, order_id: int):
         font=ImageFont.load_default(size=18),
         anchor="mm",
     )
-
     qr_left = (image_size - qr_image.width) // 2
-    qr_top = header_height + max(
-        0,
-        (image_size - header_height - footer_height - qr_image.height) // 2,
-    )
+    qr_top = (image_size - qr_image.height) // 2
     draw.rounded_rectangle(
         (
             qr_left - 10,
