@@ -11684,42 +11684,43 @@ def generate_wireguard_qr_code(data: str, order_id: int):
 
     padding = 48
     header_height = 150
-    footer_height = 92
-    image_width = max(680, qr_image.width + padding * 2)
-    image_height = header_height + qr_image.height + footer_height
-    image = Image.new("RGB", (image_width, image_height), "#09090b")
+    footer_height = 48
+    image_size = max(
+        680,
+        qr_image.width + padding * 2,
+        qr_image.height + header_height + footer_height,
+    )
+    image = Image.new("RGB", (image_size, image_size), "#09090b")
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle(
-        (16, 16, image_width - 16, image_height - 16),
+        (16, 16, image_size - 16, image_size - 16),
         radius=30,
         fill="#111116",
         outline="#e11d3e",
         width=5,
     )
-    draw.line(
-        (padding, header_height - 18, image_width - padding, header_height - 18),
-        fill="#e11d3e",
-        width=4,
-    )
 
     font = ImageFont.load_default(size=30)
     draw.text(
-        (image_width // 2, 67),
+        (image_size // 2, 67),
         "WIREGUARD",
         fill="#f3f4f6",
         font=font,
         anchor="mm",
     )
     draw.text(
-        (image_width // 2, 112),
+        (image_size // 2, 112),
         f"SECURE CONFIG  |  ORDER #{order_id}",
         fill="#f05269",
         font=ImageFont.load_default(size=18),
         anchor="mm",
     )
 
-    qr_left = (image_width - qr_image.width) // 2
-    qr_top = header_height
+    qr_left = (image_size - qr_image.width) // 2
+    qr_top = header_height + max(
+        0,
+        (image_size - header_height - footer_height - qr_image.height) // 2,
+    )
     draw.rounded_rectangle(
         (
             qr_left - 10,

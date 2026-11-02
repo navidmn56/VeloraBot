@@ -56,31 +56,47 @@ def _server_public_key(settings: dict[str, Any]) -> str:
 
 
 def _endpoint(inbound: dict[str, Any], settings: dict[str, Any], panel_host: str) -> str:
-    value = (
-        settings.get("endpoint")
-        or settings.get("server")
-        or inbound.get("listen")
-        or panel_host
-    )
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("WireGuard server endpoint is missing")
+    strategy = str(inbound.get("shareAddrStrategy", "node") or "node").lower()
+    custom_host = inbound.get("shareAddr")
+    node_host = inbound.get("nodeAddress")
+    listen_host = inbound.get("listen")
 
-    raw_endpoint = value.strip()
-    parsed = urlsplit(
-        raw_endpoint if "://" in raw_endpoint else f"//{raw_endpoint}"
-    )
-    host = parsed.hostname
-    if not host or host in {"0.0.0.0", "::", "*"}:
-        host = panel_host
+    candidates = []
+    if strategy == "custom":
+        candidates.extend(
+            (custom_host, node_host, listen_host, settings.get("endpoint"), settings.get("server"))
+        )
+    elif strategy == "listen":
+        candidates.extend((listen_host, node_host, custom_host))
+    else:
+        candidates.extend(
+            (node_host, listen_host, custom_host, settings.get("endpoint"), settings.get("server"))
+        )
+
+    candidates.extend((settings.get("endpoint"), settings.get("server"), panel_host))
+    host = None
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate.strip():
+            continue
+        parsed_candidate = urlsplit(
+            candidate.strip()
+            if "://" in candidate
+            else f"//{candidate.strip()}"
+        )
+        candidate_host = parsed_candidate.hostname
+        if candidate_host and candidate_host.lower() not in {
+            "0.0.0.0", "::", "*", "127.0.0.1", "::1", "localhost"
+        }:
+            host = candidate_host
+            break
     if not host:
-        raise ValueError("WireGuard server hostname is missing")
+        raise ValueError("WireGuard public server hostname is missing")
 
-    port = parsed.port
-    if port is None:
-        try:
-            port = int(inbound.get("port"))
-        except (TypeError, ValueError) as error:
-            raise ValueError("WireGuard inbound port is invalid") from error
+    port_value = inbound.get("port")
+    try:
+        port = int(port_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("WireGuard inbound port is invalid") from error
     if not 1 <= port <= 65535:
         raise ValueError("WireGuard inbound port is invalid")
 
@@ -123,7 +139,7 @@ def build_wireguard_config(
         f"Address = {', '.join(addresses)}",
     ]
 
-    dns = settings.get("dns")
+    dns = settings.get("dns") or "1.1.1.1, 1.0.0.1"
     if isinstance(dns, list):
         dns_values = [str(item).strip() for item in dns if str(item).strip()]
         dns = ", ".join(dns_values)
@@ -137,6 +153,19 @@ def build_wireguard_config(
         mtu = 0
     if mtu > 0:
         lines.append(f"MTU = {mtu}")
+
+    remark = inbound.get("remark")
+    client_name = client.get("email")
+    client_id = client.get("tgId") or client.get("id")
+    if remark or client_name or client_id:
+        label = " - ".join(
+            str(value).strip()
+            for value in (remark, client_name)
+            if isinstance(value, str) and value.strip()
+        )
+        if client_id:
+            label = f"{label} (ID:{client_id})"
+        lines.append(f"# {label}")
 
     lines.extend(
         [
@@ -154,8 +183,8 @@ def build_wireguard_config(
 
     lines.extend(
         [
-            f"Endpoint = {endpoint}",
             "AllowedIPs = 0.0.0.0/0, ::/0",
+            f"Endpoint = {endpoint}",
         ]
     )
 
