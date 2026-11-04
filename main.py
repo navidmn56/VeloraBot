@@ -16099,6 +16099,29 @@ async def show_ready_packages_menu(target):
             parse_mode=ParseMode.HTML
         )
 
+def format_package_volume(volume: Union[int, float], lang: str = "fa") -> str:
+    """
+    نمایش هوشمند حجم بسته به زبان انتخابی:
+    - در زبان فارسی: اگر حجم کمتر از ۱ گیگ باشد به صورت «مگ» و اگر ۱ یا بیشتر باشد به صورت «گیگ» نمایش می‌دهد (مثلاً: 20 گیگ یا 100 مگ).
+    - در زبان انگلیسی: به صورت GB یا MB نمایش می‌دهد (مثلاً: 20 GB یا 100 MB).
+    - مقدار 0 به عنوان نامحدود در نظر گرفته می‌شود.
+    """
+    if volume is None or volume == 0:
+        return "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
+    
+    try:
+        vol_float = float(volume)
+    except (ValueError, TypeError):
+        return f"{volume} گیگ" if lang == "fa" else f"{volume} GB"
+    
+    if vol_float < 1:
+        mb = vol_float * 1024
+        mb_str = f"{int(round(mb))}" if abs(mb - round(mb)) < 0.01 else f"{mb:.1f}"
+        return f"{mb_str} مگ" if lang == "fa" else f"{mb_str} MB"
+    else:
+        gb_str = f"{int(vol_float)}" if vol_float == int(vol_float) else f"{vol_float:.1f}"
+        return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str} GB"
+
 def get_user_last_purchased_package(user_id: int):
     """
     یافتن آخرین بسته آماده خریداری شده توسط کاربر برای دکمه «همون همیشگی».
@@ -16387,15 +16410,12 @@ async def show_ready_categories(callback: CallbackQuery):
             last_cat, last_pkg = last_package_info
             cat_name = last_cat.get('name') if lang == "fa" else last_cat.get('name_en', last_cat.get('name'))
             pkg_vol = last_pkg.get('volume', 0)
-            if pkg_vol == 0:
-                vol_str = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
-            else:
-                vol_str = f"{pkg_vol} GB"
+            vol_str = format_package_volume(pkg_vol, lang)
             
             if lang == "fa":
-                usual_button_text = f"همون همیشگی ({cat_name} - {vol_str})"
+                usual_button_text = f"🟢 همون همیشگی ({cat_name} - {vol_str})"
             else:
-                usual_button_text = f"The Usual ({cat_name} - {vol_str})"
+                usual_button_text = f"🟢 The Usual ({cat_name} - {vol_str})"
             
             buttons.append([InlineKeyboardButton(
                 text=usual_button_text,
@@ -16709,16 +16729,25 @@ select the volume and days you want 👇
         ip_limit = pkg.get('ip_limit', 0)
         package_id = pkg.get('id')
 
-        volume_display = "∞GB" if volume == 0 else f"{volume}GB"
-
-        if ip_limit == 0:
-            users_display = "∞ Users"
-        elif ip_limit == 1:
-            users_display = "1 User"
+        if lang == "fa":
+            volume_display = format_package_volume(volume, "fa")
+            days_display = f"{days} روز"
+            if ip_limit == 0:
+                users_display = "♾️ کاربر"
+            elif ip_limit == 1:
+                users_display = "۱ کاربر"
+            else:
+                users_display = f"{ip_limit} کاربر"
+            info_label = f"{volume_display} - {days_display} - {users_display}"
         else:
-            users_display = f"{ip_limit} Users"
-
-        info_label = f"{volume_display} - {days}d - {users_display}"
+            volume_display = "∞GB" if volume == 0 else (f"{volume * 1024:.0f}MB" if volume < 1 else f"{volume}GB")
+            if ip_limit == 0:
+                users_display = "∞ Users"
+            elif ip_limit == 1:
+                users_display = "1 User"
+            else:
+                users_display = f"{ip_limit} Users"
+            info_label = f"{volume_display} - {days}d - {users_display}"
 
         if lang == "fa":
             price_label = f"{price:,} تومان"
@@ -16825,10 +16854,7 @@ async def buy_specific_package(callback: CallbackQuery):
     original_price = package.get('price', 0)
     ip_limit = package.get('ip_limit', 0)
     
-    if volume == 0:
-        volume_display = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
-    else:
-        volume_display = f"{volume} GB"    
+    volume_display = format_package_volume(volume, lang)
     if ip_limit == 0:
         ip_display = "👤 تعداد کاربر: ♾️ نامحدود" if lang == "fa" else "👤 Users: ♾️ Unlimited"
     elif ip_limit == 1:
@@ -24026,7 +24052,7 @@ async def pay_card(callback: CallbackQuery):
                 category_display_final = f"{category_display} - "
             else:
                 category_display_final = ""
-            volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
+            volume_display_text = format_package_volume(vol, lang)
                         
             if lang == "fa":
                 text = f"""
@@ -24111,7 +24137,7 @@ async def pay_card(callback: CallbackQuery):
             price_display = f"<s>{original_price:,}</s> → {final_price:,} تومان (تخفیف {discount_percent}%)"
         else:
             price_display = f"<s>{original_price:,}</s> → {final_price:,} Toman ({discount_percent}% off)"
-    volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
+    volume_display_text = format_package_volume(vol, lang)
     order = orders.get(str(order_id))
     text = build_receipt_text(order, lang, mode="card")
     # ✅ شماره کارت بدون فاصله برای کپی
@@ -25173,7 +25199,7 @@ async def pay_balance(callback: CallbackQuery):
             user_states[user_id].pop('coupon_applied', None)
             user_states[user_id].pop('coupon_discount', None)
         
-        volume_display_text = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
+        volume_display_text = format_package_volume(vol, lang)
         if is_ready_package:
             category_display_final = f"{category_display} - "
         else:
