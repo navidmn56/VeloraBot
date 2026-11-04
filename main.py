@@ -13718,6 +13718,11 @@ Welcome to AI Support!
         welcome_text,
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🛍 خرید هوشمندانه" if lang == "fa" else "🛍 Smart purchase",
+                callback_data="ai_purchase_advisor_start",
+                style="success",
+            )],
             [InlineKeyboardButton(text="🧹 پاک کردن حافظه" if lang == "fa" else "🧹 Clear Memory", callback_data="clear_ai_memory")],
             [InlineKeyboardButton(text="❌ خروج از چت AI" if lang == "fa" else "❌ Exit AI Chat", callback_data="exit_ai_chat", style="danger")]
         ])
@@ -35075,6 +35080,482 @@ def strip_ai_button_directives(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def normalize_ai_user_text(text: str) -> str:
+    return (text or "").translate(str.maketrans(
+        "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+        "01234567890123456789",
+    )).lower()
+
+
+def parse_ai_volume_gb(text: str) -> Optional[float]:
+    match = re.search(
+        r"(\d+(?:[.,]\d+)?)\s*(گیگ(?:ابایت)?|gb|gig(?:abytes?)?|مگ(?:ابایت)?|mb)",
+        normalize_ai_user_text(text),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    volume = float(match.group(1).replace(",", "."))
+    if match.group(2).startswith(("مگ", "mb")):
+        volume /= 1024
+    return volume
+
+
+def parse_ai_budget(text: str) -> Optional[int]:
+    normalized = normalize_ai_user_text(text).replace(",", "").replace("٬", "")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(میلیون|مليون|هزار|تومن|تومان)?", normalized)
+    if not match:
+        return None
+    amount = float(match.group(1))
+    unit = match.group(2)
+    if unit in ("میلیون", "مليون"):
+        amount *= 1_000_000
+    elif unit == "هزار":
+        amount *= 1_000
+    return int(amount)
+
+
+def get_active_ai_packages() -> list:
+    active_packages = []
+    if not READY_PACKAGES.get('enabled', True):
+        return active_packages
+    for category in READY_PACKAGES.get('categories', []):
+        if not category.get('is_active', True):
+            continue
+        for package in category.get('packages', []):
+            if package.get('is_active', True):
+                active_packages.append((category, package))
+    return active_packages
+
+
+def choose_ai_recommended_package(user_id: int, answers: dict):
+    """Choose one live package using explicit needs, purchase history, and balance."""
+    packages = get_active_ai_packages()
+    if not packages:
+        return None
+
+    volume_target = parse_ai_volume_gb(answers.get('volume', ''))
+    wants_unlimited = bool(re.search(
+        r"نامحدود|unlimited",
+        normalize_ai_user_text(answers.get('volume', '')),
+    ))
+    duration_match = re.search(r"(\d+)\s*(?:روز|day|days)", normalize_ai_user_text(
+        answers.get('volume', '')
+    ))
+    duration_target = int(duration_match.group(1)) if duration_match else None
+    budget = parse_ai_budget(answers.get('preference', ''))
+    preference_text = normalize_ai_user_text(answers.get('preference', ''))
+    tunnel_preference = bool(re.search(r"تانل|تونل|tunnel", preference_text))
+    direct_preference = bool(re.search(r"مستقیم|direct|وارپ|warp", preference_text))
+    use_text = normalize_ai_user_text(answers.get('usage', ''))
+    high_usage = bool(re.search(r"ویدئو|فیلم|استریم|دانلود|video|stream|download", use_text))
+
+    previous_category, previous_package = get_user_last_purchased_package(user_id) or (None, None)
+    previous_category_id = previous_category.get('id') if previous_category else None
+    previous_volume = previous_package.get('volume') if previous_package else None
+    if volume_target is None and previous_volume is not None:
+        volume_target = float(previous_volume)
+
+    balance = int(get_user(user_id).get('balance', 0) or 0)
+
+    def package_score(item):
+        category, package = item
+        volume = float(package.get('volume', 0) or 0)
+        price = int(package.get('price', 0) or 0)
+        days = int(package.get('days', 30) or 30)
+        is_unlimited = volume == 0
+        unlimited_miss = 0 if not wants_unlimited or is_unlimited else 1
+        if wants_unlimited:
+            volume_short = 0 if is_unlimited else 1
+            volume_fit = 0 if is_unlimited else -volume
+        elif volume_target is None:
+            volume_short = 0
+            volume_fit = -volume if high_usage else 0
+        else:
+            adequate = is_unlimited or volume >= volume_target
+            volume_short = 0 if adequate else 1
+            volume_fit = (
+                1_000_000 if is_unlimited else volume - volume_target
+            ) if adequate else -volume
+        if duration_target is None:
+            duration_short, duration_fit = 0, 0
+        else:
+            duration_short = 0 if days >= duration_target else 1
+            duration_fit = days - duration_target if days >= duration_target else -days
+
+        category_name = normalize_ai_user_text(
+            f"{category.get('name', '')} {category.get('name_en', '')}"
+        )
+        if tunnel_preference:
+            category_miss = 0 if re.search(r"تانل|تونل|tunnel", category_name) else 1
+        elif direct_preference:
+            category_miss = 0 if re.search(r"مستقیم|direct|warp|وارپ", category_name) else 1
+        else:
+            category_miss = 0
+
+        budget_miss = 0 if budget is None or price <= budget else 1
+        history_miss = 0 if category.get('id') == previous_category_id else 1
+        balance_miss = 0 if balance <= 0 or price <= balance else 1
+        return (
+            budget_miss, volume_short, duration_short, category_miss, unlimited_miss,
+            volume_fit, duration_fit, history_miss, balance_miss, price,
+        )
+
+    return min(packages, key=package_score)
+
+
+def build_ai_purchase_advisor_question(user_id: int, lang: str, step: int):
+    """Build short, live-catalog choices while keeping free-text answers available."""
+    state = user_states[user_id]
+    advisor = state['purchase_advisor']
+    answers = advisor.get('answers', {})
+    usage = re.sub(r"\s+", " ", str(answers.get('usage', '')).strip())[:48]
+    volume_answer = re.sub(
+        r"\s+", " ", str(answers.get('volume', '')).strip()
+    )[:32]
+    categories = [
+        category
+        for category, _ in get_active_ai_packages()
+        if category.get('id') is not None
+    ]
+    unique_categories = {
+        category.get('id'): category
+        for category in categories
+    }
+
+    if step == 0:
+        question = (
+            "بیشتر برای چه کاری می‌خواهی؟ یکی را بزن یا جواب دقیق‌تر بنویس."
+            if lang == "fa"
+            else "What will you mainly use it for? Choose one or type a more specific answer."
+        )
+        choices = [
+            ("web", "وب‌گردی" if lang == "fa" else "Browsing"),
+            ("social", "شبکه اجتماعی" if lang == "fa" else "Social"),
+            ("video", "ویدئو" if lang == "fa" else "Video"),
+            ("gaming", "بازی" if lang == "fa" else "Gaming"),
+        ]
+    elif step == 1:
+        if lang == "fa":
+            question = (
+                f"برای «{usage}»، مصرف ماهانه‌ات حدوداً چقدره؟ حجم و مدت دلخواهت را انتخاب یا تایپ کن."
+                if usage
+                else "مصرف ماهانه‌ات حدوداً چقدر است؟ گزینه را بزن یا حجم و مدت دلخواهت را بنویس."
+            )
+        else:
+            question = (
+                f"For “{usage}”, about how much data do you need monthly?"
+                if usage
+                else "About how much data do you need monthly? Choose an option or type your volume and duration."
+            )
+        volumes = sorted({
+            float(package.get('volume', 0) or 0)
+            for _, package in get_active_ai_packages()
+        })
+        if len(volumes) > 6:
+            indexes = [
+                round(index * (len(volumes) - 1) / 5)
+                for index in range(6)
+            ]
+            volumes = [volumes[index] for index in indexes]
+        choices = [
+            (
+                f"v{index}",
+                format_package_volume(volume, lang),
+            )
+            for index, volume in enumerate(volumes)
+        ]
+    else:
+        if lang == "fa":
+            question = (
+                f"برای «{usage}» و حجم «{volume_answer}»، کدام اتصال را ترجیح می‌دهی؟ بودجه‌ات را هم می‌توانی بنویسی."
+                if usage and volume_answer
+                else "کدام نوع اتصال را ترجیح می‌دهی؟ اگر بودجه یا شرط دیگری داری، تایپش کن."
+            )
+        else:
+            question = (
+                f"For {usage} at {volume_answer}, which connection type do you prefer? Type your budget too."
+                if usage and volume_answer
+                else "Which connection type do you prefer? Type your budget or any other requirement too."
+            )
+        choices = [
+            (
+                f"c{index}",
+                str(
+                    (
+                        category.get('name') or category.get('name_en') or "بسته"
+                    ) if lang == "fa" else (
+                        category.get('name_en') or category.get('name') or "Package"
+                    )
+                )[:24],
+            )
+            for index, category in enumerate(unique_categories.values())
+        ]
+        choices.append(("any", "فرقی ندارد" if lang == "fa" else "No preference"))
+        if len(choices) > 6:
+            choices = choices[:5] + [choices[-1]]
+
+    options = {
+        key: label if step == 0 else (
+            label.replace(" گیگ", " GB") if step == 1 and lang == "fa"
+            else label
+        )
+        for key, label in choices
+    }
+    if step == 1:
+        for (key, _), volume in zip(choices, volumes):
+            options[key] = (
+                "نامحدود" if volume == 0 else format_package_volume(volume, lang)
+            )
+    elif step == 2:
+        category_values = list(unique_categories.values())
+        for index, (key, _) in enumerate(choices):
+            if key.startswith("c") and index < len(category_values):
+                category = category_values[index]
+                options[key] = str(
+                    (
+                        category.get('name') or category.get('name_en') or ""
+                    ) if lang == "fa" else (
+                        category.get('name_en') or category.get('name') or ""
+                    )
+                )
+        options["any"] = "فرقی ندارد" if lang == "fa" else "no preference"
+
+    advisor['step'] = step
+    advisor['options'] = options
+    state['ai_chat_mode'] = True
+    user_states[user_id] = state
+    rows = []
+    buttons = [
+        InlineKeyboardButton(
+            text=label[:32],
+            callback_data=f"ai_advisor_answer_{step}_{key}",
+            style="primary",
+        )
+        for key, label in choices
+    ]
+    for index in range(0, len(buttons), 2):
+        rows.append(buttons[index:index + 2])
+    prompt = (
+        f"سؤال {step + 1} از ۳\n{question}\n\n"
+        "برای پاسخ متفاوت، متن خودت را هم بفرست؛ لغو: /cancel"
+        if lang == "fa"
+        else f"Question {step + 1} of 3\n{question}\n\nType your own answer or /cancel to stop."
+    )
+    return prompt, InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+@dp.callback_query(F.data == "ai_purchase_advisor_start")
+async def start_ai_purchase_advisor(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    if not get_active_ai_packages():
+        await callback.answer(
+            "فعلاً بستهٔ فعالی برای پیشنهاد وجود ندارد."
+            if lang == "fa"
+            else "There are no active packages to recommend right now.",
+            show_alert=True,
+        )
+        return
+    state = user_states.setdefault(user_id, {})
+    state['purchase_advisor'] = {
+        'status': 'questions',
+        'step': 0,
+        'answers': {},
+        'started_at': datetime.now().isoformat(),
+    }
+    state['ai_chat_mode'] = True
+    state['timestamp'] = datetime.now().isoformat()
+    prompt, keyboard = build_ai_purchase_advisor_question(user_id, lang, 0)
+    await callback.answer()
+    await callback.message.answer(prompt, reply_markup=keyboard)
+
+
+@dp.callback_query(F.data.startswith("ai_advisor_answer_"))
+async def answer_ai_purchase_advisor_option(callback: CallbackQuery):
+    match = re.fullmatch(r"ai_advisor_answer_(\d+)_([a-zA-Z0-9]+)", callback.data or "")
+    user_id = callback.from_user.id
+    advisor = user_states.get(user_id, {}).get('purchase_advisor', {})
+    if (
+        not match
+        or advisor.get('status') != 'questions'
+        or int(advisor.get('step', -1)) != int(match.group(1))
+    ):
+        await callback.answer(
+            "این گزینه دیگر به‌روز نیست؛ پاسخ فعلی را وارد کن."
+            if get_user(user_id).get('lang', 'fa') == "fa"
+            else "This option is no longer current. Please answer the latest question.",
+            show_alert=True,
+        )
+        return
+    answer = advisor.get('options', {}).get(match.group(2))
+    if not answer:
+        await callback.answer("این گزینه در دسترس نیست.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await handle_ai_purchase_advisor(
+            callback.message,
+            user_id,
+            get_user(user_id).get('lang', 'fa'),
+            answer_override=answer,
+        )
+
+
+async def handle_ai_purchase_advisor(
+    message: Message,
+    user_id: int,
+    lang: str,
+    answer_override: Optional[str] = None,
+) -> bool:
+    state = user_states.get(user_id, {})
+    advisor = state.get('purchase_advisor')
+    user_answer = answer_override if answer_override is not None else (message.text or "")
+    query = normalize_ai_user_text(user_answer)
+
+    if isinstance(advisor, dict) and advisor.get('status') == 'questions':
+        answers = advisor.setdefault('answers', {})
+        current_step = int(advisor.get('step', 0))
+        answer_keys = ('usage', 'volume', 'preference')
+        if not 0 <= current_step < len(answer_keys):
+            advisor.update({'status': 'questions', 'step': 0, 'answers': {}})
+            current_step = 0
+        answers[answer_keys[current_step]] = user_answer.strip()
+        next_step = current_step + 1
+        if next_step < len(answer_keys):
+            user_states[user_id] = state
+            question, keyboard = build_ai_purchase_advisor_question(
+                user_id, lang, next_step
+            )
+            await message.reply(question, reply_markup=keyboard)
+            return True
+
+        recommendation = choose_ai_recommended_package(user_id, answers)
+        if not recommendation:
+            state.pop('purchase_advisor', None)
+            user_states[user_id] = state
+            await message.reply(
+                "فعلاً بستهٔ فعالی برای پیشنهاد وجود ندارد."
+                if lang == "fa"
+                else "There are no active packages to recommend right now."
+            )
+            return True
+
+        category, package = recommendation
+        advisor.update({
+            'status': 'recommended',
+            'category_id': category.get('id'),
+            'package_id': package.get('id'),
+        })
+        user_states[user_id] = state
+        volume = format_package_volume(package.get('volume', 0), lang)
+        days = package.get('days', 30)
+        price = int(package.get('price', 0) or 0)
+        category_name = html.escape(str(
+            category.get('name') if lang == "fa" else category.get(
+                'name_en', category.get('name')
+            )
+        ))
+        category_icon = html.escape(str(category.get('icon', '📦')))
+        balance = int(get_user(user_id).get('balance', 0) or 0)
+        usage = html.escape(str(answers.get('usage', '')))
+        reason = (
+            f"بر اساس مصرف «{usage}»، حجم/مدت و بودجه‌ای که گفتی"
+            if lang == "fa"
+            else f"Based on your use case, requested allowance, duration, and budget"
+        )
+        balance_note = ""
+        if balance:
+            balance_note = (
+                f"\nموجودی فعلی‌ات {balance:,} تومان است؛ "
+                f"{'برای این بسته کافی است.' if balance >= price else 'برای این بسته کافی نیست.'}"
+                if lang == "fa"
+                else f"\nYour current balance is {balance:,} Toman; "
+                f"{'it covers this package.' if balance >= price else 'it does not cover this package.'}"
+            )
+        response = (
+            f"🎯 پیشنهاد من: {category_icon} {category_name} · "
+            f"{volume} · {days} روز · {price:,} تومان\n"
+            f"{reason}. برای بررسی انتخابم، جزئیات دکمهٔ فاکتور را هم نوشته‌ام."
+            f"{balance_note}\n\n"
+            "با زدن دکمه، فقط برای همین بسته یک فاکتور کارت ساخته می‌شود؛ پرداخت انجام نمی‌شود."
+            if lang == "fa"
+            else f"🎯 My recommendation: {category_icon} {category_name} · "
+            f"{volume} · {days} days · {price:,} Toman\n{reason}.\n{balance_note}\n\n"
+            "The button creates one card invoice for this package; it does not make a payment."
+        )
+        response, reply_markup = build_ai_reply_keyboard(
+            response,
+            user_id,
+            lang,
+            include_chat_controls=True,
+        )
+        await message.reply(
+            response,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML,
+        )
+        return True
+
+    if isinstance(advisor, dict) and advisor.get('status') == 'recommended':
+        if re.search(r"از اول|شروع مجدد|دوباره پیشنهاد|start over|restart", query):
+            state.pop('purchase_advisor', None)
+            user_states[user_id] = state
+        elif re.search(r"خرید|بخر|پیشنهاد|recommend|buy|purchase", query):
+            await message.reply(
+                "پیشنهاد آماده است؛ دکمهٔ «صدور فاکتور» را بزن تا فقط همان بسته برایت فاکتور شود."
+                if lang == "fa"
+                else "Your recommendation is ready. Tap “Create invoice” to invoice that package only."
+            )
+            return True
+        else:
+            state.pop('purchase_advisor', None)
+            user_states[user_id] = state
+
+    explicit_list = re.search(
+        r"(?:همه|تمام|لیست|فهرست).{0,20}(?:پکیج|بسته)|"
+        r"(?:پکیج|بسته).{0,20}(?:همه|تمام|لیست)|all.{0,20}(?:packages?|plans?)",
+        query,
+    )
+    has_purchase_intent = re.search(
+        r"خرید|خریدار|بخریم|بخرم|بخر|سفارش جدید|\bbuy\b|\bpurchase\b|\border\b",
+        query,
+    )
+    asks_recommendation = re.search(
+        r"پیشنهاد|بهترین|راهنمای خرید|چی بخرم|کدوم.*(?:بخر|بسته)|"
+        r"recommend|best.*(?:package|plan)|which.*(?:buy|package)",
+        query,
+    )
+    if (
+        not explicit_list
+        and parse_ai_volume_gb(query) is None
+        and (has_purchase_intent or asks_recommendation)
+        and (user_id == ADMIN_ID_INT or get_user(user_id).get('registration_status') in ('approved', None))
+    ):
+        active_packages = get_active_ai_packages()
+        if not active_packages:
+            await message.reply(
+                "فعلاً بستهٔ فعالی برای پیشنهاد وجود ندارد."
+                if lang == "fa"
+                else "There are no active packages to recommend right now."
+            )
+            return True
+        state['purchase_advisor'] = {
+            'status': 'questions',
+            'step': 0,
+            'answers': {},
+            'started_at': datetime.now().isoformat(),
+        }
+        state['ai_chat_mode'] = True
+        state['timestamp'] = datetime.now().isoformat()
+        user_states[user_id] = state
+        question, keyboard = build_ai_purchase_advisor_question(user_id, lang, 0)
+        await message.reply(question, reply_markup=keyboard)
+        return True
+    return False
+
+
 def build_ai_reply_keyboard(
     answer: str,
     user_id: int,
@@ -35130,7 +35611,14 @@ def build_ai_reply_keyboard(
                         "callback_data": f"ai_action_buy_package_{category_id}_{package_id}",
                         "card_callback_data": f"ai_action_pay_package_card_{category_id}_{package_id}",
                         "balance_callback_data": f"ai_action_pay_package_balance_{category_id}_{package_id}",
+                        "advisor_callback_data": f"ai_action_advisor_invoice_{category_id}_{package_id}",
                         "volume": package.get('volume', 0),
+                        "days": days,
+                        "price": price,
+                        "category_name": category.get('name') if lang == "fa" else category.get(
+                            'name_en', category.get('name')
+                        ),
+                        "category_icon": category.get('icon', '📦'),
                         "label": label,
                         "card_label": card_label,
                         "balance_label": balance_label,
@@ -35152,6 +35640,28 @@ def build_ai_reply_keyboard(
             "style": "success",
         }
     allowed_actions.update(payment_actions)
+    advisor_actions = {}
+    advisor_state = user_states.get(user_id, {}).get('purchase_advisor', {})
+    if advisor_state.get('status') == 'recommended':
+        advisor_key = f"BUY_PACKAGE:{advisor_state.get('category_id')}:{advisor_state.get('package_id')}"
+        if advisor_key in package_actions:
+            category_id, package_id = advisor_key.split(":")[1:]
+            action = f"ADVISOR_INVOICE:{category_id}:{package_id}"
+            details = package_actions[advisor_key]
+            advisor_volume = format_package_volume(details["volume"], lang)
+            advisor_label = (
+                f"🧾 فاکتور · {advisor_volume} · {details['price']:,} تومان"
+                if lang == "fa"
+                else f"🧾 Invoice · {advisor_volume} · {details['price']:,} Toman"
+            )
+            if len(advisor_label) > 64:
+                advisor_label = f"🧾 فاکتور · {details['price']:,}" if lang == "fa" else f"🧾 Invoice · {details['price']:,}"
+            advisor_actions[action] = {
+                "callback_data": details["advisor_callback_data"],
+                "label": advisor_label,
+                "style": "primary",
+            }
+            allowed_actions.update(advisor_actions)
     allowed_orders = {
         str(order.get('order_id'))
         for order in get_user_support_configs(user_id)
@@ -35323,10 +35833,18 @@ def build_ai_reply_keyboard(
             continue
         if all_buttons_requested or re.search(pattern, query, re.IGNORECASE):
             inferred_actions.append((action, label))
-    if payment_request or purchase_intent or all_packages_requested or requested_volume:
+    if advisor_actions:
+        inferred_actions = []
+        suggestions = [
+            (action, details["label"])
+            for action, details in advisor_actions.items()
+        ]
+    elif payment_request or purchase_intent or all_packages_requested or requested_volume:
         suggestions = [
             item for item in suggestions
-            if item[0] not in package_actions and item[0] not in payment_actions
+            if item[0] not in package_actions
+            and item[0] not in payment_actions
+            and item[0] not in advisor_actions
         ]
     if inferred_actions:
         suggested_ids = {item[0] for item in suggestions}
@@ -35334,7 +35852,10 @@ def build_ai_reply_keyboard(
             item for item in inferred_actions
             if item[0] not in suggested_ids
         ] + suggestions
-    if any(action in package_actions or action in payment_actions for action, _ in suggestions):
+    if any(
+        action in package_actions or action in payment_actions or action in advisor_actions
+        for action, _ in suggestions
+    ):
         suggestions = [
             (action, label)
             for action, label in suggestions
@@ -35349,7 +35870,7 @@ def build_ai_reply_keyboard(
             if order_id not in allowed_orders:
                 continue
             callback_data = f"extend_service_{order_id}"
-            button_style = None
+            button_style = "primary"
         elif action in package_actions:
             callback_data = package_actions[action]["callback_data"]
             label = package_actions[action]["label"]
@@ -35358,15 +35879,21 @@ def build_ai_reply_keyboard(
             callback_data = payment_actions[action]["callback_data"]
             label = payment_actions[action]["label"]
             button_style = payment_actions[action]["style"]
+        elif action in advisor_actions:
+            callback_data = advisor_actions[action]["callback_data"]
+            label = advisor_actions[action]["label"]
+            button_style = advisor_actions[action]["style"]
         else:
             callback_data = callback_map.get(action, "")
             if action == "GET_TEST_SERVICE" and not TEST_SERVICE_STATUS.get('enabled', False):
                 continue
-            button_style = "success" if action in (
-                "BUY_SERVICE", "GET_TEST_SERVICE", "INCREASE_BALANCE"
-            ) else None
+            button_style = (
+                "success" if action in (
+                    "BUY_SERVICE", "GET_TEST_SERVICE", "INCREASE_BALANCE"
+                ) else "primary"
+            )
         clean_label = re.sub(r"[<>\[\]\r\n]", "", label).strip()
-        if action not in package_actions and action not in payment_actions:
+        if action not in package_actions and action not in payment_actions and action not in advisor_actions:
             clean_label = clean_label[:64]
         if callback_data:
             if action.startswith("RENEW_ORDER:"):
@@ -35375,6 +35902,8 @@ def build_ai_reply_keyboard(
                 action_callback = package_actions[action]["callback_data"]
             elif action in payment_actions:
                 action_callback = payment_actions[action]["callback_data"]
+            elif action in advisor_actions:
+                action_callback = advisor_actions[action]["callback_data"]
             else:
                 action_callback = f"ai_action_{action.lower()}"
             if clean_label and action_callback not in seen_callbacks:
@@ -35389,6 +35918,7 @@ def build_ai_reply_keyboard(
         buttons.append([InlineKeyboardButton(
             text="🧹 پاک کردن حافظه" if lang == "fa" else "🧹 Clear Memory",
             callback_data="clear_ai_memory",
+            style="primary",
         )])
     if include_chat_controls:
         buttons.append([InlineKeyboardButton(
@@ -35397,6 +35927,90 @@ def build_ai_reply_keyboard(
             style="danger",
         )])
     display_answer = strip_ai_button_directives(answer)
+    explanations = []
+    package_by_callback = {
+        details["callback_data"]: details
+        for details in package_actions.values()
+    }
+    payment_by_callback = {
+        details["callback_data"]: (action, details)
+        for action, details in payment_actions.items()
+    }
+    advisor_by_callback = {
+        details["callback_data"]: details
+        for details in advisor_actions.values()
+    }
+    action_explanations = {
+        "ai_action_buy_service": "منوی انتخاب سرویس و بسته‌ها را باز می‌کند." if lang == "fa" else "Opens the service and package menu.",
+        "ai_action_get_test_service": "درخواست دریافت تست رایگان را شروع می‌کند." if lang == "fa" else "Starts the free-test request.",
+        "ai_action_increase_balance": "صفحهٔ شارژ کیف پول را باز می‌کند." if lang == "fa" else "Opens the wallet top-up page.",
+        "ai_action_my_account": "اطلاعات حساب کاربری را نشان می‌دهد." if lang == "fa" else "Shows account details.",
+        "ai_action_my_configs": "کانفیگ‌ها و سرویس‌های شما را نشان می‌دهد." if lang == "fa" else "Shows your configurations and services.",
+        "ai_action_apply_coupon": "امکان ثبت کد تخفیف را باز می‌کند." if lang == "fa" else "Opens coupon entry.",
+        "ai_action_human_support": "درخواست ارتباط با پشتیبان را باز می‌کند." if lang == "fa" else "Opens human support.",
+        "ai_action_invite_friends": "لینک دعوت اختصاصی شما را می‌سازد." if lang == "fa" else "Creates your invitation link.",
+        "ai_action_change_language": "گزینه‌های تغییر زبان را نشان می‌دهد." if lang == "fa" else "Shows language options.",
+        "clear_ai_memory": "حافظهٔ مکالمهٔ هوش مصنوعی را پاک می‌کند." if lang == "fa" else "Clears AI conversation memory.",
+        "ai_action_clear_memory": "حافظهٔ مکالمهٔ هوش مصنوعی را پاک می‌کند." if lang == "fa" else "Clears AI conversation memory.",
+        "exit_ai_chat": "از حالت گفت‌وگو با هوش مصنوعی خارج می‌شوید." if lang == "fa" else "Exits AI chat.",
+    }
+    for row in buttons:
+        for button in row:
+            callback_data = button.callback_data
+            package = package_by_callback.get(callback_data)
+            payment = payment_by_callback.get(callback_data)
+            advisor_button = advisor_by_callback.get(callback_data)
+            if package:
+                details = package
+                explanations.append(
+                    (
+                        f"🔹 «{button.text}»: بستهٔ {html.escape(str(details['category_name'] or 'بسته'))}، "
+                        f"{format_package_volume(details['volume'], lang)}، {details['days']} روز، "
+                        f"{details['price']:,} تومان."
+                        if lang == "fa"
+                        else f"🔹 “{button.text}”: {html.escape(str(details['category_name'] or 'Package'))} package, "
+                        f"{format_package_volume(details['volume'], lang)}, {details['days']} days, "
+                        f"{details['price']:,} Toman."
+                    )
+                )
+            elif payment:
+                payment_action, details = payment
+                is_balance = payment_action.startswith("PAY_PACKAGE_BALANCE:")
+                explanation = (
+                    "با زدنش، همین بسته از موجودی پرداخت و در صورت موفقیت کانفیگ تحویل می‌شود."
+                    if is_balance and lang == "fa"
+                    else "Tap to pay for this package from your balance and receive the config on success."
+                    if is_balance
+                    else "با زدنش، فاکتور کارت همین بسته ساخته می‌شود و بعد از واریز می‌توانی رسید را ارسال کنی."
+                    if lang == "fa"
+                    else "Tap to create this package’s card invoice; you can submit the receipt after transferring."
+                )
+                explanations.append(f"🔹 «{button.text}»: {explanation}" if lang == "fa" else f"🔹 “{button.text}”: {explanation}")
+            elif advisor_button:
+                explanations.append(
+                    (
+                        f"🔹 «{button.text}»: فقط فاکتور کارتِ بستهٔ پیشنهادی ساخته می‌شود؛ پرداخت بدون تأییدت انجام نمی‌شود."
+                        if lang == "fa"
+                        else f"🔹 “{button.text}”: Creates one card invoice for the recommended package; no payment is made without your action."
+                    )
+                )
+            else:
+                description = action_explanations.get(callback_data)
+                if callback_data.startswith("extend_service_"):
+                    order_id = callback_data.removeprefix("extend_service_")
+                    description = (
+                        f"صفحهٔ تمدید سرویس سفارش {order_id} را باز می‌کند."
+                        if lang == "fa"
+                        else f"Opens renewal for service order {order_id}."
+                    )
+                if description:
+                    explanations.append(
+                        f"🔹 «{button.text}»: {description}"
+                        if lang == "fa"
+                        else f"🔹 “{button.text}”: {description}"
+                    )
+    if explanations:
+        display_answer = f"{display_answer}\n\n<b>دکمه‌ها:</b>\n" + "\n".join(explanations) if lang == "fa" else f"{display_answer}\n\n<b>Buttons:</b>\n" + "\n".join(explanations)
     if not display_answer:
         if any(
             button.callback_data in ("invite_friends", "ai_action_invite_friends")
@@ -35436,6 +36050,7 @@ async def handle_ai_menu_action(callback: CallbackQuery):
     }
     direct_payment_data = None
     ai_package_purchase = False
+    advisor_invoice = False
     if action.startswith("renew_order_"):
         order_id = action.removeprefix("renew_order_")
         if not order_id.isdigit() or not any(
@@ -35472,6 +36087,30 @@ async def handle_ai_menu_action(callback: CallbackQuery):
         handler = buy_specific_package
         direct_payment_data = "pay_card" if method == "card" else "pay_balance"
         ai_package_purchase = True
+    elif action.startswith("advisor_invoice_"):
+        package_match = re.fullmatch(r"advisor_invoice_(\d+)_(\d+)", action)
+        advisor = user_states.get(user_id, {}).get('purchase_advisor', {})
+        if (
+            not package_match
+            or advisor.get('status') != 'recommended'
+            or str(advisor.get('category_id')) != package_match.group(1)
+            or str(advisor.get('package_id')) != package_match.group(2)
+            or user_states.get(user_id, {}).get('purchase_advisor_invoice_order_id')
+        ):
+            await callback.answer(
+                "این پیشنهاد قبلاً مصرف شده یا دیگر معتبر نیست؛ دوباره نیازسنجی را شروع کن."
+                if get_user(user_id).get('lang', 'fa') == "fa"
+                else "This recommendation is no longer available. Start the advisor again.",
+                show_alert=True,
+            )
+            return
+        advisor['status'] = 'invoice_processing'
+        category_id, package_id = package_match.groups()
+        callback_data = f"buy_package_{category_id}_{package_id}"
+        handler = buy_specific_package
+        direct_payment_data = "pay_card"
+        ai_package_purchase = True
+        advisor_invoice = True
     else:
         action_handler = action_handlers.get(action)
         if not action_handler:
@@ -35493,6 +36132,8 @@ async def handle_ai_menu_action(callback: CallbackQuery):
     if direct_payment_data and is_valid_checkout_state(user_states.get(user_id, {})):
         payment_handler = pay_card if direct_payment_data == "pay_card" else pay_balance
         await payment_handler(callback.model_copy(update={"data": direct_payment_data}))
+        if advisor_invoice and user_states.get(user_id, {}).get('current_order_id'):
+            user_states[user_id]['purchase_advisor_invoice_order_id'] = user_states[user_id]['current_order_id']
 
 
 async def get_gemini_prompt_cache(session: aiohttp.ClientSession, system_prompt: str) -> Optional[str]:
@@ -35900,6 +36541,9 @@ async def process_ai_chat_message(message: Message):
             )
         
         return
+
+    if await handle_ai_purchase_advisor(message, user_id, lang):
+        return
     
     if not gemini_client:
         await message.reply(
@@ -35907,6 +36551,9 @@ async def process_ai_chat_message(message: Message):
         )
         return
     
+    if await handle_ai_purchase_advisor(message, user_id, lang):
+        return
+
     daily_limit = GEMINI_DAILY_LIMIT
     
     can_use, remaining, limit_msg = check_ai_limit(user_id)
@@ -35925,7 +36572,11 @@ async def process_ai_chat_message(message: Message):
                 user_id,
                 message.from_user.username,
                 button_context=button_context,
-                user_context=build_ai_user_database_context(user_id, message_text),
+                user_context=(
+                    build_ai_user_database_context(user_id, message_text)
+                    if should_include_ai_user_context(message_text)
+                    else ""
+                ),
             ),
             timeout=90
         )
