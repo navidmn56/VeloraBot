@@ -36690,6 +36690,7 @@ def build_ai_reply_keyboard(
         re.IGNORECASE,
     )
     response_recommendation_action = None
+    response_recommendation_candidates = []
     response_recommendation_ambiguous = False
     if identify_invoice_package:
         response_text = normalize_ai_user_text(
@@ -36780,13 +36781,14 @@ def build_ai_reply_keyboard(
                     for action, score in candidate_scores.items()
                     if score == highest_score and score > 0
                 ]
-                if len(best_candidates) == 1:
+                if best_candidates:
                     response_candidates = best_candidates
 
             if len(response_candidates) == 1:
                 response_recommendation_action = response_candidates[0]
             else:
                 response_recommendation_ambiguous = True
+                response_recommendation_candidates = response_candidates[:8]
         else:
             response_recommendation_ambiguous = True
 
@@ -36911,6 +36913,37 @@ def build_ai_reply_keyboard(
         suggestions = []
     elif response_recommendation_ambiguous:
         inferred_actions = []
+        for action in response_recommendation_candidates:
+            category_id, package_id = action.split(":")[1:3]
+            payment_id = (
+                f"PAY_PACKAGE_BALANCE:{category_id}:{package_id}"
+                if balance_payment
+                else f"PAY_PACKAGE_CARD:{category_id}:{package_id}"
+            )
+            details = package_actions[action]
+            volume = format_package_volume(details["volume"], lang)
+            amount = (
+                f"{details['price']:,} تومان"
+                if lang == "fa"
+                else f"{details['price']:,} Toman"
+            )
+            days = details["days"]
+            if lang == "fa":
+                label = (
+                    f"🧾 {details['package_name']} · {volume} · "
+                    f"{to_persian_digits(days)} روز · {amount}"
+                )
+                if len(label) > 64:
+                    label = f"🧾 {volume} · {to_persian_digits(days)} روز · {amount}"
+            else:
+                label = (
+                    f"🧾 {details['package_name']} · {volume} · "
+                    f"{days} days · {amount}"
+                )
+                if len(label) > 64:
+                    label = f"🧾 {volume} · {days} days · {amount}"
+            payment_actions[payment_id]["label"] = label
+            inferred_actions.append((payment_id, label))
         suggestions = []
     elif advisor_actions:
         inferred_actions = []
@@ -37034,13 +37067,20 @@ def build_ai_reply_keyboard(
             "Please submit that invoice’s receipt to avoid creating a duplicate."
         )
     elif identify_invoice_package and response_recommendation_ambiguous:
-        display_answer = (
-            "برای اینکه فاکتور اشتباه یا چند فاکتور صادر نشود، بستهٔ موردنظر از پاسخ مشخص نشد. "
-            "لطفاً حجم یا نام دقیق بسته را بفرست."
-            if lang == "fa"
-            else "To avoid creating the wrong or multiple invoices, I could not identify one exact package. "
-            "Please specify the package name or volume."
-        )
+        if response_recommendation_candidates:
+            display_answer = (
+                "چند بسته با توضیحات قبلی مطابقت دارند؛ برای صدور فاکتور، گزینهٔ دقیق را از دکمه‌های زیر انتخاب کن."
+                if lang == "fa"
+                else "Several packages match the previous recommendation. Choose the exact option below to create its invoice."
+            )
+        else:
+            display_answer = (
+                "برای اینکه فاکتور اشتباه یا چند فاکتور صادر نشود، بستهٔ موردنظر از پاسخ مشخص نشد. "
+                "لطفاً حجم یا نام دقیق بسته را بفرست."
+                if lang == "fa"
+                else "To avoid creating the wrong or multiple invoices, I could not identify one exact package. "
+                "Please specify the package name or volume."
+            )
     else:
         display_answer = strip_ai_button_directives(answer)
     if not display_answer:
