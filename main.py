@@ -35878,7 +35878,6 @@ async def handle_ai_purchase_advisor(
     state = user_states.get(user_id, {})
     advisor = state.get('purchase_advisor')
     user_answer = answer_override if answer_override is not None else (message.text or "")
-    query = normalize_ai_user_text(user_answer)
 
     if isinstance(advisor, dict) and advisor.get('status') == 'questions':
         answers = advisor.setdefault('answers', [])
@@ -35922,55 +35921,6 @@ async def handle_ai_purchase_advisor(
         )
         return True
 
-    if isinstance(advisor, dict) and advisor.get('status') == 'recommended':
-        if re.search(
-            r"از اول|شروع مجدد|تست جدید|دوباره پیشنهاد|start over|restart|new test",
-            query,
-        ):
-            user_states[user_id] = state
-            await start_ai_purchase_advisor_flow(message, user_id, lang)
-            return True
-        elif re.search(r"خرید|بخر|پیشنهاد|recommend|buy|purchase", query):
-            await message.reply(
-                "پیشنهاد آماده است؛ دکمهٔ «صدور فاکتور» را بزن تا فقط همان بسته برایت فاکتور شود."
-                if lang == "fa"
-                else "Your recommendation is ready. Tap “Create invoice” to invoice that package only."
-            )
-            return True
-        else:
-            state.pop('purchase_advisor', None)
-            user_states[user_id] = state
-
-    explicit_list = re.search(
-        r"(?:همه|تمام|لیست|فهرست).{0,20}(?:پکیج|بسته)|"
-        r"(?:پکیج|بسته).{0,20}(?:همه|تمام|لیست)|all.{0,20}(?:packages?|plans?)",
-        query,
-    )
-    has_purchase_intent = re.search(
-        r"خرید|خریدار|بخریم|بخرم|بخر|سفارش جدید|\bbuy\b|\bpurchase\b|\border\b",
-        query,
-    )
-    asks_recommendation = re.search(
-        r"پیشنهاد|بهترین|راهنمای خرید|چی بخرم|کدوم.*(?:بخر|بسته)|"
-        r"recommend|best.*(?:package|plan)|which.*(?:buy|package)",
-        query,
-    )
-    if (
-        not explicit_list
-        and parse_ai_volume_gb(query) is None
-        and (has_purchase_intent or asks_recommendation)
-        and (user_id == ADMIN_ID_INT or get_user(user_id).get('registration_status') in ('approved', None))
-    ):
-        active_packages = get_active_ai_packages()
-        if not active_packages:
-            await message.reply(
-                "فعلاً بستهٔ فعالی برای پیشنهاد وجود ندارد."
-                if lang == "fa"
-                else "There are no active packages to recommend right now."
-            )
-            return True
-        await start_ai_purchase_advisor_flow(message, user_id, lang)
-        return True
     return False
 
 
@@ -36974,9 +36924,6 @@ async def process_ai_chat_message(message: Message):
         await message.reply(
             "❌ هوش مصنوعی در حال حاضر در دسترس نیست." if lang == "fa" else "❌ AI is currently unavailable."
         )
-        return
-    
-    if await handle_ai_purchase_advisor(message, user_id, lang):
         return
 
     daily_limit = GEMINI_DAILY_LIMIT
