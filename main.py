@@ -35204,6 +35204,70 @@ def is_ai_purchase_advisor_high_stability_package(
     ))
 
 
+def is_ai_purchase_advisor_gaming_package(
+    category: dict,
+    package: dict,
+) -> bool:
+    package_text = get_ai_purchase_advisor_package_search_text(category, package)
+    return bool(re.search(
+        r"گیم(?:ینگ)?|بازی|gaming|games?",
+        package_text,
+    ))
+
+
+def get_ai_purchase_advisor_intent_terms(text: str) -> set[str]:
+    normalized = normalize_ai_user_text(text).translate(str.maketrans({
+        "ك": "ک",
+        "ي": "ی",
+        "ى": "ی",
+        "\u200c": " ",
+    }))
+    terms = set(re.findall(r"[a-z0-9\u0600-\u06ff]+", normalized))
+    stop_words = {
+        "and", "for", "the", "with", "want", "need", "internet", "package",
+        "service", "please", "just", "من", "میخوام", "میخواهم", "میخوامش",
+        "میخواهمش", "یه", "یک", "برای", "از", "به", "با",
+        "و", "در", "رو", "را", "که", "این", "اون", "هم", "لطفا", "لطفاً",
+        "پکیج", "بسته", "سرویس", "کانفیگ", "اینترنت",
+    }
+    terms.difference_update(stop_words)
+    if re.search(r"ترید|تریدر|معامل(?:ه|ات)|trade|trader|trading|forex", normalized):
+        terms.update({
+            "ترید", "تریدر", "معامله", "معاملات",
+            "trade", "trader", "trading", "forex",
+        })
+    return terms
+
+
+def ai_purchase_advisor_intent_matches_package(
+    intent_text: str,
+    category: dict,
+    package: dict,
+) -> bool:
+    if (
+        re.search(r"گیم(?:ینگ)?|بازی|gaming|games?", normalize_ai_user_text(intent_text))
+        and is_ai_purchase_advisor_gaming_package(category, package)
+    ):
+        return True
+
+    intent_terms = get_ai_purchase_advisor_intent_terms(intent_text)
+    package_terms = get_ai_purchase_advisor_intent_terms(
+        get_ai_purchase_advisor_package_search_text(category, package)
+    )
+    return any(
+        intent_term == package_term
+        or (
+            min(len(intent_term), len(package_term)) >= 4
+            and (
+                intent_term.startswith(package_term)
+                or package_term.startswith(intent_term)
+            )
+        )
+        for intent_term in intent_terms
+        for package_term in package_terms
+    )
+
+
 def get_ai_purchase_advisor_cooldown_remaining(user_id: int) -> Optional[timedelta]:
     last_started = get_user(user_id).get('ai_purchase_advisor_last_started_at')
     if not last_started:
@@ -35349,6 +35413,23 @@ def get_ai_purchase_advisor_eligible_packages(answers: list, lang: str) -> dict:
         if duration_target is not None and days < duration_target:
             continue
         eligible[key] = (category, package)
+
+    purpose_answer = (
+        str(answers[0].get('answer', ''))
+        if answers and isinstance(answers[0], dict)
+        else ""
+    )
+    if purpose_answer.strip():
+        matching_intent = {
+            key: item for key, item in eligible.items()
+            if ai_purchase_advisor_intent_matches_package(
+                purpose_answer,
+                *item,
+            )
+        }
+        if matching_intent:
+            eligible = matching_intent
+
     return eligible
 
 
