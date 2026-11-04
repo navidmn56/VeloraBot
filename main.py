@@ -43193,7 +43193,8 @@ async def main():
             await usage_collector.start(
                 get_inbounds_func=xui_get_inbounds,
                 get_approved_emails_func=_get_approved_emails,
-                interval_seconds=1800
+                interval_seconds=300,
+                get_client_traffic_func=xui_get_client_traffic,
             )
 
         tasks = [

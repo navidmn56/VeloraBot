@@ -8,7 +8,7 @@ Features:
 - Strict midnight-crossing handling with time-weighted allocation across calendar days.
 - Sanaei counter reset detection: avoids negative usage, records reset events, resets baseline.
 - On-demand live snapshot recording with duplicate/spam debouncing.
-- Sanity check & auto-healing: validates recorded traffic against panel reality, preventing inflated stats.
+- Counter-baseline recovery that avoids mutating cumulative panel snapshots.
 - Accurate Solar Hijri (Shamsi / Jalali) date conversion for Persian language.
 - True Right-to-Left (RTL) chart layout for Persian (reversed X-axis, right-positioned Y-axis).
 - Intelligent auto-detection of MB and GB units in charts and captions.
@@ -441,6 +441,10 @@ class DailyUsageStore:
             delta_up = 0
             delta_down = 0
             delta_total = 0
+            baseline_up = up_bytes
+            baseline_down = down_bytes
+            baseline_total = total_bytes
+            baseline_repair = False
 
             if last:
                 last_time = last["timestamp"]
@@ -448,16 +452,54 @@ class DailyUsageStore:
                 last_down = last["down_bytes"]
                 last_total = last["total_bytes"]
 
+                cursor.execute("""
+                    SELECT
+                        COALESCE(SUM(up_bytes), 0) AS up_bytes,
+                        COALESCE(SUM(down_bytes), 0) AS down_bytes,
+                        COALESCE(SUM(total_bytes), 0) AS total_bytes
+                    FROM daily_usage
+                    WHERE service_id = ?;
+                """, (str(service_id),))
+                daily_totals = cursor.fetchone()
+                cursor.execute("""
+                    SELECT 1 FROM reset_events
+                    WHERE service_id = ? LIMIT 1;
+                """, (str(service_id),))
+                has_resets = cursor.fetchone() is not None
+
+                # Older versions scaled cumulative snapshots during chart rendering.
+                # Daily totals remain the valid baseline when no counter reset occurred.
+                if not has_resets and daily_totals["total_bytes"] != last_total:
+                    baseline_up = daily_totals["up_bytes"]
+                    baseline_down = daily_totals["down_bytes"]
+                    baseline_total = baseline_up + baseline_down
+                    baseline_repair = True
+                    logger.warning(
+                        "عدم تطابق اسنپ‌شات و مجموع روزانه برای %s؛ مبنای شمارنده از داده روزانه بازیابی شد.",
+                        service_id,
+                    )
+                else:
+                    baseline_up = last_up
+                    baseline_down = last_down
+                    baseline_total = last_up + last_down
+                    if baseline_total != last_total:
+                        baseline_repair = True
+                        logger.warning(
+                            "مجموع اسنپ‌شات ذخیره‌شده برای %s با شمارنده‌های آپلود/دانلود هم‌خوان نیست؛ "
+                            "مبنای شمارنده از آپلود و دانلود بازیابی شد.",
+                            service_id,
+                        )
+
                 # شرط 5: جلوگیری از اسنپ‌شات تکراری
-                if last_up == up_bytes and last_down == down_bytes:
+                if not baseline_repair and last_up == up_bytes and last_down == down_bytes:
                     return False
 
-                if (now - last_time) < min_interval:
+                if not baseline_repair and (now - last_time) < min_interval:
                     return False
 
-                # شرط 4: بررسی ریست شدن شمارنده‌ها (Counter Reset)
-                # در صورت ریست واقعی پنل، ترافیک کل (total_bytes) کاهش می‌یابد.
-                if total_bytes < last_total:
+                up_reset = up_bytes < baseline_up
+                down_reset = down_bytes < baseline_down
+                if up_reset or down_reset:
                     is_reset = 1
                     cursor.execute("""
                         INSERT INTO reset_events (
@@ -465,30 +507,19 @@ class DailyUsageStore:
                             new_up, new_down, new_total, notes, created_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """, (
-                        str(service_id), now, last_up, last_down, last_total,
+                        str(service_id), now, baseline_up, baseline_down, baseline_total,
                         up_bytes, down_bytes, total_bytes, "Counter reset detected in Sanaei panel", now_str
                     ))
                     logger.warning(
                         "⚠️ ریست شمارنده برای %s ثبت شد: قبلی=%d, جدید=%d",
-                        service_id, last_total, total_bytes
+                        service_id, baseline_total, total_bytes
                     )
-                    # در صورتی که کنتور پنل صفر شده باشد، مصرف پس از ریست ناچیز است (مثلاً زیر ۱۰۰ مگابایت).
-                    # اما اگر مقدار جدید عدد بزرگی است (مثلاً ۴۹ گیگابایت)، این یک کالیبراسیون و اصلاح اسنپ‌شات خراب قبلی است
-                    # و نباید کل ۴۹ گیگابایت مصرف امروز تلقی شود!
-                    if total_bytes <= 100 * 1024 * 1024:
-                        delta_up = up_bytes
-                        delta_down = down_bytes
-                        delta_total = total_bytes
-                    else:
-                        delta_up = 0
-                        delta_down = 0
-                        delta_total = 0
+                    delta_up = up_bytes if up_reset else up_bytes - baseline_up
+                    delta_down = down_bytes if down_reset else down_bytes - baseline_down
                 else:
-                    delta_total = total_bytes - last_total
-                    delta_up = max(0, up_bytes - last_up)
-                    delta_down = max(0, down_bytes - last_down)
-                    if delta_total > 0 and (delta_up + delta_down) == 0:
-                        delta_down = delta_total
+                    delta_up = max(0, up_bytes - baseline_up)
+                    delta_down = max(0, down_bytes - baseline_down)
+                delta_total = delta_up + delta_down
             else:
                 # اولین اسنپ‌شات برای این سرویس:
                 # تاریخ دقیق ترافیک قبل از شروع ثبت در دسترس نیست؛ مقدار فعلی را
@@ -536,124 +567,6 @@ class DailyUsageStore:
 
             conn.commit()
             return True
-
-    def sanitize_service_usage(
-        self,
-        service_id: str,
-        panel_total_bytes: int,
-        panel_up_bytes: Optional[int] = None,
-        panel_down_bytes: Optional[int] = None,
-        reconcile_missing: bool = False,
-    ):
-        """
-        راستی‌آزمایی و اعتبارسنجی مصرف ثبت‌شده در برابر کل مصرف واقعی کلاینت در پنل:
-        اگر مجموع ترافیک ثبت‌شده در دیتابیس بیشتر از کل مصرف پنل باشد، با یک مقیاس‌بندی متناسب اصلاح می‌شود.
-        اگر تاریخچه به علت شروع دیرهنگام ثبت، از شمارنده پنل عقب باشد، اختلاف به روز اولین اسنپ‌شات افزوده می‌شود.
-        تحت هیچ شرایطی رکوردهای روزهای گذشته حذف (DELETE) نمی‌شوند تا با ری‌استارت ربات هیچ داده‌ای پاک نشود.
-        """
-        if not service_id or panel_total_bytes <= 0:
-            return
-
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT SUM(total_bytes) as db_total
-                FROM daily_usage
-                WHERE service_id = ?;
-            """, (str(service_id),))
-            row = cursor.fetchone()
-            db_total = row["db_total"] or 0
-
-            if reconcile_missing and db_total < panel_total_bytes:
-                cursor.execute("""
-                    SELECT timestamp
-                    FROM traffic_snapshots
-                    WHERE service_id = ?
-                    ORDER BY timestamp ASC LIMIT 1;
-                """, (str(service_id),))
-                first_snapshot = cursor.fetchone()
-                cursor.execute("""
-                    SELECT 1 FROM reset_events
-                    WHERE service_id = ? LIMIT 1;
-                """, (str(service_id),))
-                has_resets = cursor.fetchone() is not None
-
-                if first_snapshot and not has_resets:
-                    missing_total = panel_total_bytes - db_total
-                    if panel_up_bytes is not None and panel_down_bytes is not None:
-                        cursor.execute("""
-                            SELECT
-                                COALESCE(SUM(up_bytes), 0) AS db_up,
-                                COALESCE(SUM(down_bytes), 0) AS db_down
-                            FROM daily_usage
-                            WHERE service_id = ?;
-                        """, (str(service_id),))
-                        direction_row = cursor.fetchone()
-                        missing_up = min(
-                            missing_total,
-                            max(0, int(panel_up_bytes) - direction_row["db_up"]),
-                        )
-                        missing_down = missing_total - missing_up
-                    else:
-                        missing_up = 0
-                        missing_down = missing_total
-
-                    first_date = datetime.fromtimestamp(
-                        first_snapshot["timestamp"], TEHRAN_TZ
-                    ).strftime("%Y-%m-%d")
-                    now = time.time()
-                    cursor.execute("""
-                        INSERT INTO daily_usage (
-                            service_id, usage_date, up_bytes, down_bytes, total_bytes, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(service_id, usage_date) DO UPDATE SET
-                            up_bytes = daily_usage.up_bytes + excluded.up_bytes,
-                            down_bytes = daily_usage.down_bytes + excluded.down_bytes,
-                            total_bytes = daily_usage.total_bytes + excluded.total_bytes,
-                            updated_at = excluded.updated_at;
-                    """, (
-                        str(service_id), first_date, missing_up, missing_down,
-                        missing_total, now,
-                    ))
-                    db_total = panel_total_bytes
-                    logger.info(
-                        "مصرف مبنای ثبت‌نشده برای %s به تاریخ اولین اسنپ‌شات افزوده شد: %d بایت",
-                        service_id,
-                        missing_total,
-                    )
-
-            if db_total > panel_total_bytes:
-                logger.warning(
-                    "⚠️ مجموع مصرف دیتابیس بیشتر از پنل است (دیتابیس=%d، پنل=%d). در حال اصلاح متناسب...",
-                    db_total, panel_total_bytes
-                )
-                ratio = panel_total_bytes / db_total
-                cursor.execute("""
-                    UPDATE daily_usage
-                    SET up_bytes = CAST(ROUND(up_bytes * ?) AS INTEGER),
-                        down_bytes = CAST(ROUND(down_bytes * ?) AS INTEGER),
-                        total_bytes = CAST(ROUND(total_bytes * ?) AS INTEGER)
-                    WHERE service_id = ?;
-                """, (ratio, ratio, ratio, str(service_id)))
-
-                cursor.execute("""
-                    UPDATE traffic_snapshots
-                    SET up_bytes = CAST(ROUND(up_bytes * ?) AS INTEGER),
-                        down_bytes = CAST(ROUND(down_bytes * ?) AS INTEGER),
-                        total_bytes = CAST(ROUND(total_bytes * ?) AS INTEGER)
-                    WHERE service_id = ?;
-                """, (ratio, ratio, ratio, str(service_id)))
-                conn.commit()
-                logger.info("✅ مصرف سرویس %s با موفقیت راستی‌آزمایی و متناسب شد.", service_id)
-            else:
-                cursor.execute("""
-                    UPDATE traffic_snapshots
-                    SET up_bytes = MIN(up_bytes, ?),
-                        down_bytes = MIN(down_bytes, ?),
-                        total_bytes = MIN(total_bytes, ?)
-                    WHERE service_id = ? AND total_bytes > ?;
-                """, (panel_total_bytes, panel_total_bytes, panel_total_bytes, str(service_id), panel_total_bytes))
-                conn.commit()
 
     @staticmethod
     def _split_interval_across_days(start_dt: datetime, end_dt: datetime) -> List[Tuple[str, float]]:
@@ -1171,7 +1084,13 @@ class DailyUsageCollector:
         self.store = store
         self._running = False
 
-    async def start(self, get_inbounds_func, get_approved_emails_func, interval_seconds: int = 1800):
+    async def start(
+        self,
+        get_inbounds_func,
+        get_approved_emails_func,
+        interval_seconds: int = 300,
+        get_client_traffic_func=None,
+    ):
         """
         اجرای تسک دوره‌ای در پس‌زمینه بدون بلاک کردن ربات
         """
@@ -1180,7 +1099,11 @@ class DailyUsageCollector:
 
         while self._running:
             try:
-                await self.collect_all(get_inbounds_func, get_approved_emails_func)
+                await self.collect_all(
+                    get_inbounds_func,
+                    get_approved_emails_func,
+                    get_client_traffic_func=get_client_traffic_func,
+                )
             except asyncio.CancelledError:
                 logger.info("تسک جمع‌آوری مصرف روزانه لغو شد.")
                 break
@@ -1192,21 +1115,40 @@ class DailyUsageCollector:
             except asyncio.CancelledError:
                 break
 
-    async def collect_all(self, get_inbounds_func, get_approved_emails_func) -> int:
+    async def collect_all(
+        self,
+        get_inbounds_func,
+        get_approved_emails_func,
+        get_client_traffic_func=None,
+    ) -> int:
         """
         یک نوبت استعلام از تمام اینباندها و ثبت اسنپ‌شات کلاینت‌ها
         """
         try:
-            inbounds = await get_inbounds_func(include_disabled=True)
-            if not inbounds:
+            approved_emails = {
+                str(email).strip()
+                for email in (get_approved_emails_func() or [])
+                if email and str(email).strip()
+            }
+            if not approved_emails:
+                logger.debug("هیچ ایمیل معتبری برای جمع‌آوری مصرف وجود ندارد.")
                 return 0
 
-            approved_emails = set(get_approved_emails_func() or [])
+            try:
+                inbounds = await get_inbounds_func(include_disabled=True)
+            except Exception:
+                logger.exception("دریافت inbounds برای جمع‌آوری مصرف ناموفق بود.")
+                inbounds = []
+            if not isinstance(inbounds, list):
+                logger.warning("پاسخ inbounds برای جمع‌آوری مصرف معتبر نیست؛ از API کلاینت استفاده می‌شود.")
+                inbounds = []
 
             # تجمیع مصرف بر اساس email در صورتی که کلاینت در چند اینباند باشد
             client_traffics: Dict[str, Dict[str, int]] = {}
 
             for inbound in inbounds:
+                if not isinstance(inbound, dict):
+                    continue
                 client_stats = inbound.get('clientStats', [])
                 if isinstance(client_stats, str):
                     try:
@@ -1216,12 +1158,14 @@ class DailyUsageCollector:
 
                 if isinstance(client_stats, list):
                     for stat in client_stats:
+                        if not isinstance(stat, dict):
+                            continue
                         email = stat.get('email')
                         if not email:
                             continue
 
                         email_str = str(email).strip()
-                        if approved_emails and email_str not in approved_emails:
+                        if email_str not in approved_emails:
                             continue
 
                         try:
@@ -1237,6 +1181,29 @@ class DailyUsageCollector:
                         else:
                             client_traffics[email_str]['up'] = max(client_traffics[email_str]['up'], up)
                             client_traffics[email_str]['down'] = max(client_traffics[email_str]['down'], down)
+
+            missing_emails = approved_emails.difference(client_traffics)
+            for email in missing_emails:
+                if not get_client_traffic_func:
+                    logger.warning(
+                        "برای کلاینت %s در clientStats رکوردی نبود و API جایگزین تنظیم نشده است.",
+                        email,
+                    )
+                    continue
+                traffic = await fetch_client_total_traffic(
+                    email,
+                    get_client_traffic_func=get_client_traffic_func,
+                )
+                if traffic:
+                    client_traffics[email] = {
+                        "up": traffic["up"],
+                        "down": traffic["down"],
+                    }
+                else:
+                    logger.warning(
+                        "دریافت مصرف کلاینت %s از clientStats و API جایگزین ناموفق بود.",
+                        email,
+                    )
 
             updated_count = 0
             now = time.time()
@@ -1255,7 +1222,7 @@ class DailyUsageCollector:
             return updated_count
 
         except Exception as e:
-            logger.error(f"خطا در collect_all مصرف روزانه: {e}")
+            logger.error(f"خطا در collect_all مصرف روزانه: {e}", exc_info=True)
             return 0
 
 
@@ -1278,7 +1245,7 @@ async def handle_daily_usage_request(
     """
     هندلر اختصاصی کلیک روی دکمه '📊 آمار مصرف روزانه'
     - دریافت اسنپ‌شات لحظه‌ای با استفاده از تابع تجمیعی همسان
-    - راستی‌آزمایی ترافیک مصرفی در برابر مصرف کل پنل جهت رفع خطاهای احتمالی
+    - ثبت مستقیم شمارنده زنده بدون تغییر داده‌های تاریخی هنگام نمایش نمودار
     - استخراج آمار واقعی ۷ روز اخیر (با تاریخ شمسی برای فارسی)
     - رندر نمودار داشبوردی راست‌به‌چپ با تفکیک هوشمند MB و GB
     - ارسال تصویر همراه با کپشن تفصیلی و راست‌به‌چپ
@@ -1337,23 +1304,8 @@ async def handle_daily_usage_request(
             get_client_traffic_func=get_client_traffic_func
         )
         if live_traffic_data:
-            # گام ۱: راستی‌آزمایی قبل از ثبت اسنپ‌شات جدید
-            usage_store.sanitize_service_usage(
-                email,
-                live_traffic_data['total'],
-                live_traffic_data['up'],
-                live_traffic_data['down'],
-            )
-            # گام ۲: ثبت اسنپ‌شات لحظه‌ای (بدون از بین رفتن داده‌های روزهای قبل در ری‌استارت)
+            # Rendering the chart must not rewrite historical totals or counter baselines.
             usage_store.record_snapshot(email, live_traffic_data['up'], live_traffic_data['down'])
-            # گام ۳: راستی‌آزمایی نهایی
-            usage_store.sanitize_service_usage(
-                email,
-                live_traffic_data['total'],
-                live_traffic_data['up'],
-                live_traffic_data['down'],
-                reconcile_missing=True,
-            )
 
     # محاسبه آمار ۷ روز گذشته
     stats = usage_store.get_statistics(service_ids, days=7, lang=lang)
