@@ -36432,6 +36432,18 @@ async def handle_ai_purchase_advisor(
     return False
 
 
+def _format_ai_package_button_label(prefix: str, name: str, suffix: str) -> str:
+    separator = " · "
+    fixed_length = len(prefix) + len(suffix) + len(separator) * (
+        2 if prefix else 1
+    )
+    name_budget = max(1, 64 - fixed_length)
+    if len(name) > name_budget:
+        name = name[:max(1, name_budget - 1)].rstrip() + "…"
+    parts = [part for part in (prefix, name, suffix) if part]
+    return separator.join(parts)
+
+
 def build_ai_reply_keyboard(
     answer: str,
     user_id: int,
@@ -36474,25 +36486,28 @@ def build_ai_reply_keyboard(
                     package_name = re.sub(
                         r"\s+", " ", str(package_name or ("بسته" if lang == "fa" else "Package"))
                     ).strip()
-                    label = f"{volume} · {days} روز · {amount}"
-                    if len(label) > 64:
-                        label = f"{volume} · {amount}"
-                    if len(label) > 64:
-                        label = amount
-                    card_label = (
-                        f"🧾 فاکتور {volume} · {amount}"
-                        if lang == "fa"
-                        else f"🧾 Invoice {volume} · {amount}"
+                    category_name = (
+                        category.get('name') if lang == "fa" else
+                        category.get('name_en', category.get('name'))
                     )
-                    balance_label = (
-                        f"💰 موجودی · {volume} · {amount}"
-                        if lang == "fa"
-                        else f"💰 Balance · {volume} · {amount}"
+                    category_name = re.sub(
+                        r"\s+", " ", str(category_name or "")
+                    ).strip()
+                    display_name = category_name or package_name
+
+                    suffix = f"{volume} · {days} روز · {amount}" if lang == "fa" else (
+                        f"{volume} · {days} days · {amount}"
                     )
-                    if len(card_label) > 64:
-                        card_label = f"🧾 فاکتور · {amount}" if lang == "fa" else f"🧾 Invoice · {amount}"
-                    if len(balance_label) > 64:
-                        balance_label = f"💰 موجودی · {amount}" if lang == "fa" else f"💰 Balance · {amount}"
+                    label = _format_ai_package_button_label("", display_name, suffix)
+                    invoice_prefix = "🧾 فاکتور" if lang == "fa" else "🧾 Invoice"
+                    balance_prefix = "💰 موجودی" if lang == "fa" else "💰 Balance"
+                    payment_suffix = f"{volume} · {amount}"
+                    card_label = _format_ai_package_button_label(
+                        invoice_prefix, display_name, payment_suffix
+                    )
+                    balance_label = _format_ai_package_button_label(
+                        balance_prefix, display_name, payment_suffix
+                    )
                     package_actions[action] = {
                         "callback_data": f"ai_action_buy_package_{category_id}_{package_id}",
                         "card_callback_data": f"ai_action_pay_package_card_{category_id}_{package_id}",
@@ -36502,9 +36517,8 @@ def build_ai_reply_keyboard(
                         "days": days,
                         "price": price,
                         "package_name": package_name,
-                        "category_name": category.get('name') if lang == "fa" else category.get(
-                            'name_en', category.get('name')
-                        ),
+                        "display_name": display_name,
+                        "category_name": category_name,
                         "category_icon": category.get('icon', '📦'),
                         "label": label,
                         "card_label": card_label,
@@ -36819,11 +36833,9 @@ def build_ai_reply_keyboard(
                 suffix = f"{volume} · {days} روز · {amount}" if lang == "fa" else (
                     f"{volume} · {days} days · {amount}"
                 )
-                available_name_length = max(1, 64 - len(suffix) - 3)
-                short_name = details["package_name"]
-                if len(short_name) > available_name_length:
-                    short_name = short_name[:max(1, available_name_length - 1)].rstrip() + "…"
-                details["label"] = f"{short_name} · {suffix}"
+                details["label"] = _format_ai_package_button_label(
+                    "", details["display_name"], suffix
+                )
                 card_prefix = "🧾 فاکتور" if lang == "fa" else "🧾 Invoice"
                 balance_prefix = "💰 موجودی" if lang == "fa" else "💰 Balance"
                 payment_suffix = f" · {volume} · {amount}"
@@ -36831,16 +36843,9 @@ def build_ai_reply_keyboard(
                     ("card_label", card_prefix),
                     ("balance_label", balance_prefix),
                 ):
-                    payment_name = details["package_name"]
-                    payment_name_length = max(
-                        1, 64 - len(prefix) - len(payment_suffix) - 2
+                    details[key] = _format_ai_package_button_label(
+                        prefix, details["display_name"], payment_suffix
                     )
-                    if len(payment_name) > payment_name_length:
-                        payment_name = (
-                            payment_name[:max(1, payment_name_length - 1)].rstrip()
-                            + "…"
-                        )
-                    details[key] = f"{prefix} {payment_name}{payment_suffix}"
                 category_id, package_id = action.split(":")[1:]
                 payment_actions[f"PAY_PACKAGE_CARD:{category_id}:{package_id}"]["label"] = (
                     details["card_label"]
@@ -36906,9 +36911,9 @@ def build_ai_reply_keyboard(
             else f"{details['price']:,} Toman"
         )
         prefix = "🧾 فاکتور" if lang == "fa" else "🧾 Invoice"
-        label = f"{prefix} {details['package_name']} · {volume} · {amount}"
-        if len(label) > 64:
-            label = f"{prefix} {volume} · {amount}"
+        label = _format_ai_package_button_label(
+            prefix, details["display_name"], f"{volume} · {amount}"
+        )
         inferred_actions = [(payment_id, label)]
         suggestions = []
     elif response_recommendation_ambiguous:
@@ -36930,18 +36935,26 @@ def build_ai_reply_keyboard(
             days = details["days"]
             if lang == "fa":
                 label = (
-                    f"🧾 {details['package_name']} · {volume} · "
+                    f"🧾 {details['display_name']} · {volume} · "
                     f"{to_persian_digits(days)} روز · {amount}"
                 )
                 if len(label) > 64:
-                    label = f"🧾 {volume} · {to_persian_digits(days)} روز · {amount}"
+                    label = _format_ai_package_button_label(
+                        "🧾",
+                        details["display_name"],
+                        f"{volume} · {to_persian_digits(days)} روز · {amount}",
+                    )
             else:
                 label = (
-                    f"🧾 {details['package_name']} · {volume} · "
+                    f"🧾 {details['display_name']} · {volume} · "
                     f"{days} days · {amount}"
                 )
                 if len(label) > 64:
-                    label = f"🧾 {volume} · {days} days · {amount}"
+                    label = _format_ai_package_button_label(
+                        "🧾",
+                        details["display_name"],
+                        f"{volume} · {days} days · {amount}",
+                    )
             payment_actions[payment_id]["label"] = label
             inferred_actions.append((payment_id, label))
         suggestions = []
