@@ -35222,8 +35222,7 @@ def ai_purchase_advisor_has_stability_preference(answers: list) -> bool:
         get_ai_purchase_advisor_user_answers_text(answers)
     )
     return bool(re.search(
-        r"پایداری|پایدار|قطعی|اتصال مطمئن|تانل|تونل|مستقیم|وارپ|"
-        r"tunnel|direct|warp|"
+        r"پایداری|پایدار|قطعی|اتصال مطمئن|"
         r"stability|stable|reliab|reliable|uptime|critical",
         answer_text,
     ))
@@ -35891,7 +35890,7 @@ async def start_ai_purchase_advisor(callback: CallbackQuery):
         return
     await callback.answer()
     saved_result = get_ai_purchase_advisor_result(user_id)
-    if saved_result:
+    if saved_result and user_id != ADMIN_ID_INT:
         saved_result = dict(saved_result)
         text, keyboard = build_ai_purchase_advisor_result_text(
             user_id,
@@ -35914,7 +35913,7 @@ async def start_ai_purchase_advisor_flow(
     lang: str,
 ) -> None:
     remaining = get_ai_purchase_advisor_cooldown_remaining(user_id)
-    if remaining:
+    if remaining and user_id != ADMIN_ID_INT:
         hours = max(1, int((remaining.total_seconds() + 3599) // 3600))
         await message.reply(
             f"آزمون خرید را هر ۲۴ ساعت یک‌بار می‌توانی انجام بدهی. "
