@@ -35204,30 +35204,6 @@ def is_ai_purchase_advisor_high_stability_package(
     ))
 
 
-def ai_purchase_advisor_has_stability_choice(answers: list, lang: str) -> bool:
-    candidates = get_ai_purchase_advisor_eligible_packages(answers, lang)
-    has_high_stability = any(
-        is_ai_purchase_advisor_high_stability_package(category, package)
-        for category, package in candidates.values()
-    )
-    has_regular = any(
-        not is_ai_purchase_advisor_high_stability_package(category, package)
-        for category, package in candidates.values()
-    )
-    return has_high_stability and has_regular
-
-
-def ai_purchase_advisor_has_stability_preference(answers: list) -> bool:
-    answer_text = normalize_ai_user_text(
-        get_ai_purchase_advisor_user_answers_text(answers)
-    )
-    return bool(re.search(
-        r"پایداری|پایدار|قطعی|اتصال مطمئن|"
-        r"stability|stable|reliab|reliable|uptime|critical",
-        answer_text,
-    ))
-
-
 def get_ai_purchase_advisor_cooldown_remaining(user_id: int) -> Optional[timedelta]:
     last_started = get_user(user_id).get('ai_purchase_advisor_last_started_at')
     if not last_started:
@@ -36052,31 +36028,15 @@ async def handle_ai_purchase_advisor(
                     question_kind="volume",
                 )
                 return True
-            if (
-                ai_purchase_advisor_has_stability_choice(answers, lang)
-                and not ai_purchase_advisor_has_stability_preference(answers)
-            ):
-                await send_ai_purchase_advisor_question(
-                    message,
-                    user_id,
-                    lang,
-                    int(advisor.get('question_count', 1)) + 1,
-                    question_kind="stability",
-                )
-                return True
-        elif question_kind == "volume":
-            if (
-                ai_purchase_advisor_has_stability_choice(answers, lang)
-                and not ai_purchase_advisor_has_stability_preference(answers)
-            ):
-                await send_ai_purchase_advisor_question(
-                    message,
-                    user_id,
-                    lang,
-                    int(advisor.get('question_count', 1)) + 1,
-                    question_kind="stability",
-                )
-                return True
+        if question_kind in ("purpose", "volume"):
+            await send_ai_purchase_advisor_question(
+                message,
+                user_id,
+                lang,
+                int(advisor.get('question_count', 1)) + 1,
+                question_kind="stability",
+            )
+            return True
         await run_ai_purchase_advisor_turn(message, user_id, lang)
         return True
 
