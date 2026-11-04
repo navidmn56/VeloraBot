@@ -14,6 +14,7 @@ import time
 import html
 import secrets
 import base64
+import math
 import psutil
 import re
 import traceback
@@ -34995,24 +34996,6 @@ def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> st
     user = get_user(user_id)
     if user.get('registration_status') in ('approved', None) or user_id == ADMIN_ID_INT:
         actions.append(("BUY_SERVICE", "خرید سرویس" if lang == "fa" else "Buy a service"))
-        if READY_PACKAGES.get('enabled', True):
-            for category in READY_PACKAGES.get('categories', []):
-                if not category.get('is_active', True):
-                    continue
-                category_name = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
-                for package in category.get('packages', []):
-                    if not package.get('is_active', True):
-                        continue
-                    category_id = category.get('id')
-                    package_id = package.get('id')
-                    if not str(category_id).isdigit() or not str(package_id).isdigit():
-                        continue
-                    volume = format_package_volume(package.get('volume', 0), lang)
-                    days = package.get('days', 30)
-                    price = package.get('price', 0)
-                    icon = category.get('icon', '📦')
-                    label = f"{icon} {category_name} · {volume} · {days} روز · {price:,} تومان"
-                    actions.append((f"BUY_PACKAGE:{category_id}:{package_id}", label[:64]))
 
     test_settings = get_user_test_settings(user_id)
     test_usage = USER_TEST_USAGE.get(str(user_id), {})
@@ -35065,15 +35048,11 @@ def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> st
     available = "\n".join(f"- {action}: {label}" for action, label in actions)
     return (
         "\n\nدر صورت درخواست کاربر یا مرتبط بودن با پاسخ، دکمه‌های کاربردی را پیشنهاد بده. "
-        "می‌توانی چند دکمه را هم‌زمان بسازی. "
-        "فقط از شناسه‌های مجاز زیر استفاده کن و هر دکمه را در خط مستقل و دقیقاً با قالب "
+        "برای گزینه‌های بسته، ربات خودش بر اساس پیام کاربر دکمه‌های مناسب را می‌سازد؛ "
+        "برای بسته‌ها نشانگر BUTTON ننویس و همهٔ بسته‌ها را پیشنهاد نده مگر کاربر صریحاً فهرست کامل بخواهد. "
+        "برای عملیات دیگر فقط از شناسه‌های مجاز زیر استفاده کن و هر دکمه را در خط مستقل و دقیقاً با قالب "
         "[[BUTTON:شناسه|متن دکمه]] در انتهای پاسخ بنویس؛ جداکنندهٔ شناسه و متن فقط | است و بعد از شناسه دونقطه نگذار. "
-        "نمونه: [[BUTTON:BUY_PACKAGE:1:2|🛒 خرید بسته 10 گیگ]]. "
-        "برای خرید یک بسته از شناسهٔ کامل BUY_PACKAGE:شناسه‌دسته:شناسه‌بسته استفاده کن. "
-        "اگر کاربر فاکتور، رسید یا پرداخت خواست، برای بستهٔ مورد اشاره دکمهٔ خرید بساز تا به صفحهٔ انتخاب روش پرداخت برسد؛ "
-        "اگر بسته مشخص نیست، دکمه‌های بسته‌های فعال را برای انتخاب نشان بده. "
-        "شناسه جدید یا شماره سفارشی که در فهرست نیست نساز. "
-        "دکمه‌های بسته، انتخاب کانفیگ هستند (آبی)؛ خرید، تست و پرداخت از موجودی سبز هستند. "
+        "شناسه جدید یا شماره سفارش نساز. "
         "اگر دکمه‌ای لازم نیست، هیچ نشانگر دکمه‌ای ننویس.\n"
         "اطلاعات بعدی فقط snapshot خواندنی دیتابیس کاربر فعلی، تراکنش‌های متعلق به همان کاربر و عملیات مجاز همین ربات است. "
         "هرگز ادعا نکن که دیتابیس را تغییر داده‌ای یا عملیاتی انجام داده‌ای.\n"
@@ -35122,18 +35101,57 @@ def build_ai_reply_keyboard(
                     category_id = category.get('id')
                     package_id = package.get('id')
                     action = f"BUY_PACKAGE:{category_id}:{package_id}"
-                    if action not in allowed_actions:
+                    if not str(category_id).isdigit() or not str(package_id).isdigit():
                         continue
-                    lang_category = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
                     volume = format_package_volume(package.get('volume', 0), lang)
                     days = package.get('days', 30)
-                    price = package.get('price', 0)
-                    icon = category.get('icon', '📦')
-                    label = f"{icon} {lang_category} · {volume} · {days} روز · {price:,} تومان"
+                    price = int(package.get('price', 0) or 0)
+                    amount = f"{price:,} تومان" if lang == "fa" else f"{price:,} Toman"
+                    label = f"{volume} · {days} روز · {amount}"
+                    if len(label) > 64:
+                        label = f"{volume} · {amount}"
+                    if len(label) > 64:
+                        label = amount
+                    card_label = (
+                        f"🧾 فاکتور {volume} · {amount}"
+                        if lang == "fa"
+                        else f"🧾 Invoice {volume} · {amount}"
+                    )
+                    balance_label = (
+                        f"💰 موجودی · {volume} · {amount}"
+                        if lang == "fa"
+                        else f"💰 Balance · {volume} · {amount}"
+                    )
+                    if len(card_label) > 64:
+                        card_label = f"🧾 فاکتور · {amount}" if lang == "fa" else f"🧾 Invoice · {amount}"
+                    if len(balance_label) > 64:
+                        balance_label = f"💰 موجودی · {amount}" if lang == "fa" else f"💰 Balance · {amount}"
                     package_actions[action] = {
                         "callback_data": f"ai_action_buy_package_{category_id}_{package_id}",
-                        "label": label[:64],
+                        "card_callback_data": f"ai_action_pay_package_card_{category_id}_{package_id}",
+                        "balance_callback_data": f"ai_action_pay_package_balance_{category_id}_{package_id}",
+                        "volume": package.get('volume', 0),
+                        "label": label,
+                        "card_label": card_label,
+                        "balance_label": balance_label,
                     }
+    allowed_actions.update(package_actions)
+    payment_actions = {}
+    for action, details in package_actions.items():
+        category_id, package_id = action.split(":")[1:]
+        card_action = f"PAY_PACKAGE_CARD:{category_id}:{package_id}"
+        balance_action = f"PAY_PACKAGE_BALANCE:{category_id}:{package_id}"
+        payment_actions[card_action] = {
+            "callback_data": details["card_callback_data"],
+            "label": details["card_label"],
+            "style": "primary",
+        }
+        payment_actions[balance_action] = {
+            "callback_data": details["balance_callback_data"],
+            "label": details["balance_label"],
+            "style": "success",
+        }
+    allowed_actions.update(payment_actions)
     allowed_orders = {
         str(order.get('order_id'))
         for order in get_user_support_configs(user_id)
@@ -35189,11 +35207,6 @@ def build_ai_reply_keyboard(
             "GET_TEST_SERVICE",
             "🎁 دریافت تست" if lang == "fa" else "🎁 Get test config",
         ))
-    elif available_purchase and re.search(r"خرید|خریدار|سفارش جدید|\bbuy\b|\bpurchase\b|\border\b", query):
-        inferred_actions.append((
-            "BUY_SERVICE",
-            "🛒 خرید سرویس" if lang == "fa" else "🛒 Buy service",
-        ))
     elif re.search(r"پشتیبان|اپراتور|انسان|human support|operator", query):
         inferred_actions.append((
             "HUMAN_SUPPORT",
@@ -35236,65 +35249,98 @@ def build_ai_reply_keyboard(
         query,
         re.IGNORECASE,
     )
-    all_packages_requested = all_buttons_requested or purchase_intent or re.search(
+    all_packages_requested = all_buttons_requested or re.search(
         r"(?:همه|تمام).{0,20}(?:پکیج|بسته)|(?:پکیج|بسته).{0,20}(?:همه|تمام)|"
         r"(?:لیست|فهرست).{0,20}(?:پکیج|بسته)|"
         r"(?:all|every).{0,20}(?:packages?|plans?)|(?:packages?|plans?).{0,20}(?:all|list)",
         query,
         re.IGNORECASE,
     )
-    if all_packages_requested:
-        inferred_actions.extend(
-            (action, details["label"])
-            for action, details in package_actions.items()
-        )
     payment_request = re.search(
         r"رسید|فاکتور|پرداخت|واریز|invoice|receipt|payment",
         query,
         re.IGNORECASE,
     )
-    if payment_request and package_actions:
-        first_package = re.search(
-            r"اول(?:ی|یو|و|ین|یش|شو)?|first|1st",
-            query,
-            re.IGNORECASE,
+    requested_volume = re.search(
+        r"(\d+(?:[.,]\d+)?)\s*(گیگ(?:ابایت)?|gb|gig(?:abytes?)?|مگ(?:ابایت)?|mb)",
+        query,
+        re.IGNORECASE,
+    )
+    matching_package_actions = list(package_actions)
+    if requested_volume:
+        requested_amount = float(requested_volume.group(1).replace(",", "."))
+        if requested_volume.group(2).startswith(("مگ", "mb")):
+            requested_amount /= 1024
+        matching_package_actions = [
+            action for action in matching_package_actions
+            if math.isclose(
+                float(package_actions[action]["volume"] or 0),
+                requested_amount,
+                rel_tol=0,
+                abs_tol=0.01,
+            )
+        ]
+
+    first_package = re.search(r"اول(?:ی|یو|و|ین|یش|شو)?|first|1st", query, re.IGNORECASE)
+    balance_payment = payment_request and re.search(
+        r"موجودی|کیف.?پول|wallet|balance",
+        query,
+        re.IGNORECASE,
+    )
+    if first_package:
+        matching_package_actions = matching_package_actions[:1]
+    elif all_packages_requested:
+        matching_package_actions = matching_package_actions[:8]
+    elif requested_volume:
+        matching_package_actions = matching_package_actions[:3]
+    elif purchase_intent or payment_request:
+        matching_package_actions = matching_package_actions[:3]
+    else:
+        ai_package_actions = [
+            action for action, _ in suggestions
+            if action in package_actions
+        ]
+        matching_package_actions = ai_package_actions[:3]
+
+    if payment_request:
+        payment_action = "PAY_PACKAGE_BALANCE" if balance_payment else "PAY_PACKAGE_CARD"
+        for action in matching_package_actions:
+            payment_id = f"{payment_action}:{action.split(':')[1]}:{action.split(':')[2]}"
+            details = payment_actions[payment_id]
+            inferred_actions.append((payment_id, details["label"]))
+    else:
+        inferred_actions.extend(
+            (action, package_actions[action]["label"])
+            for action in matching_package_actions
         )
-        if first_package:
-            action = next(iter(package_actions))
-            payment_label = (
-                "🧾 پرداخت بسته اول"
-                if lang == "fa"
-                else "🧾 Pay for the first package"
-            )
-            package_actions[action]["label"] = payment_label
-            inferred_actions.append((action, payment_label))
-        elif not all_packages_requested:
-            for details in package_actions.values():
-                details["label"] = (
-                    f"🧾 پرداخت · {details['label']}"
-                    if lang == "fa"
-                    else f"🧾 Pay · {details['label']}"
-                )[:64]
-            inferred_actions.extend(
-                (action, details["label"])
-                for action, details in package_actions.items()
-            )
+    if (purchase_intent or payment_request) and not matching_package_actions and available_purchase:
+        inferred_actions.append((
+            "BUY_SERVICE",
+            "🛒 خرید سرویس" if lang == "fa" else "🛒 Buy service",
+        ))
     for action, (pattern, label) in action_triggers.items():
+        if action == "INCREASE_BALANCE" and balance_payment:
+            continue
         if all_buttons_requested or re.search(pattern, query, re.IGNORECASE):
             inferred_actions.append((action, label))
+    if payment_request or purchase_intent or all_packages_requested or requested_volume:
+        suggestions = [
+            item for item in suggestions
+            if item[0] not in package_actions and item[0] not in payment_actions
+        ]
     if inferred_actions:
         suggested_ids = {item[0] for item in suggestions}
         suggestions = [
             item for item in inferred_actions
             if item[0] not in suggested_ids
         ] + suggestions
-    if any(action in package_actions for action, _ in suggestions):
+    if any(action in package_actions or action in payment_actions for action, _ in suggestions):
         suggestions = [
             (action, label)
             for action, label in suggestions
             if action != "BUY_SERVICE"
         ]
-    suggestion_limit = max(8, len(package_actions) + 8) if all_packages_requested else 8
+    suggestion_limit = 12 if all_packages_requested else 8
     for action, label in suggestions[:suggestion_limit]:
         if action not in allowed_actions:
             continue
@@ -35308,6 +35354,10 @@ def build_ai_reply_keyboard(
             callback_data = package_actions[action]["callback_data"]
             label = package_actions[action]["label"]
             button_style = "primary"
+        elif action in payment_actions:
+            callback_data = payment_actions[action]["callback_data"]
+            label = payment_actions[action]["label"]
+            button_style = payment_actions[action]["style"]
         else:
             callback_data = callback_map.get(action, "")
             if action == "GET_TEST_SERVICE" and not TEST_SERVICE_STATUS.get('enabled', False):
@@ -35315,12 +35365,16 @@ def build_ai_reply_keyboard(
             button_style = "success" if action in (
                 "BUY_SERVICE", "GET_TEST_SERVICE", "INCREASE_BALANCE"
             ) else None
-        clean_label = re.sub(r"[<>\[\]\r\n]", "", label).strip()[:40]
+        clean_label = re.sub(r"[<>\[\]\r\n]", "", label).strip()
+        if action not in package_actions and action not in payment_actions:
+            clean_label = clean_label[:64]
         if callback_data:
             if action.startswith("RENEW_ORDER:"):
                 action_callback = f"ai_action_renew_order_{action.partition(':')[2]}"
             elif action in package_actions:
                 action_callback = package_actions[action]["callback_data"]
+            elif action in payment_actions:
+                action_callback = payment_actions[action]["callback_data"]
             else:
                 action_callback = f"ai_action_{action.lower()}"
             if clean_label and action_callback not in seen_callbacks:
@@ -35380,6 +35434,8 @@ async def handle_ai_menu_action(callback: CallbackQuery):
         "buy_service": ("buy_service", buy_service),
         "get_test_service": ("get_test_service", get_test_service),
     }
+    direct_payment_data = None
+    ai_package_purchase = False
     if action.startswith("renew_order_"):
         order_id = action.removeprefix("renew_order_")
         if not order_id.isdigit() or not any(
@@ -35402,6 +35458,20 @@ async def handle_ai_menu_action(callback: CallbackQuery):
         category_id, package_id = package_match.groups()
         callback_data = f"buy_package_{category_id}_{package_id}"
         handler = buy_specific_package
+        ai_package_purchase = True
+    elif action.startswith("pay_package_card_") or action.startswith("pay_package_balance_"):
+        payment_match = re.fullmatch(
+            r"pay_package_(card|balance)_(\d+)_(\d+)",
+            action,
+        )
+        if not payment_match:
+            await callback.answer("❌ بسته برای پرداخت معتبر نیست.", show_alert=True)
+            return
+        method, category_id, package_id = payment_match.groups()
+        callback_data = f"buy_package_{category_id}_{package_id}"
+        handler = buy_specific_package
+        direct_payment_data = "pay_card" if method == "card" else "pay_balance"
+        ai_package_purchase = True
     else:
         action_handler = action_handlers.get(action)
         if not action_handler:
@@ -35412,11 +35482,17 @@ async def handle_ai_menu_action(callback: CallbackQuery):
     state = user_states.get(user_id, {})
     state.pop('ai_chat_mode', None)
     state.pop('timestamp', None)
+    if ai_package_purchase:
+        for key in ("is_extend", "extend_order_id", "current_volume", "current_days"):
+            state.pop(key, None)
     if state:
         user_states[user_id] = state
     else:
         user_states.pop(user_id, None)
     await handler(callback.model_copy(update={"data": callback_data}))
+    if direct_payment_data and is_valid_checkout_state(user_states.get(user_id, {})):
+        payment_handler = pay_card if direct_payment_data == "pay_card" else pay_balance
+        await payment_handler(callback.model_copy(update={"data": direct_payment_data}))
 
 
 async def get_gemini_prompt_cache(session: aiohttp.ClientSession, system_prompt: str) -> Optional[str]:
@@ -35570,6 +35646,30 @@ async def get_ai_response(
                         data = await response.json()
                         candidates = data.get('candidates', [])
                         
+                        if (
+                            candidates
+                            and candidates[0].get('finishReason') == "MAX_TOKENS"
+                        ):
+                            retry_tokens = min(max_tokens * 2, 1536)
+                            logger.warning(
+                                "⚠️ پاسخ Gemini به سقف خروجی رسید؛ تلاش مجدد با %s توکن",
+                                retry_tokens,
+                            )
+                            payload["generationConfig"]["maxOutputTokens"] = retry_tokens
+                            async with session.post(
+                                url,
+                                json=payload,
+                                timeout=aiohttp.ClientTimeout(total=45),
+                            ) as retry_response:
+                                if retry_response.status != 200:
+                                    logger.warning(
+                                        "⚠️ تلاش مجدد Gemini ناموفق بود؛ HTTP %s",
+                                        retry_response.status,
+                                    )
+                                    return "⚠️ پاسخ کامل تولید نشد؛ لطفاً دوباره تلاش کنید."
+                                retry_data = await retry_response.json()
+                                candidates = retry_data.get('candidates', [])
+
                         if candidates:
                             finish_reason = candidates[0].get('finishReason', '')
                             if finish_reason != "STOP":
