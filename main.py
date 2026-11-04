@@ -16754,18 +16754,23 @@ select the volume and days you want 👇
         else:
             price_label = f"{price:,} Toman"
 
-        buttons.append([
-            InlineKeyboardButton(
-                text=info_label,
-                callback_data=f"buy_package_{category_id}_{package_id}",
-                style="primary"
-            ),
-            InlineKeyboardButton(
-                text=price_label,
-                callback_data=f"buy_package_{category_id}_{package_id}",
-                style="primary"
-            )
-        ])
+        info_btn = InlineKeyboardButton(
+            text=info_label,
+            callback_data=f"buy_package_{category_id}_{package_id}",
+            style="primary"
+        )
+        price_btn = InlineKeyboardButton(
+            text=price_label,
+            callback_data=f"buy_package_{category_id}_{package_id}",
+            style="primary"
+        )
+
+        if lang == "fa":
+            # برای زبان فارسی: دکمه قیمت سمت چپ و اطلاعات کانفیگ سمت راست
+            buttons.append([price_btn, info_btn])
+        else:
+            # برای زبان انگلیسی: اطلاعات سمت چپ و قیمت سمت راست
+            buttons.append([info_btn, price_btn])
     
     back_text = "🔙 بازگشت به دسته‌ها" if lang == "fa" else "🔙 Back to Categories"
     
