@@ -9706,10 +9706,7 @@ def get_config_view_keyboard(
             url=telegram_proxy_url.strip(),
             style="primary",
         )
-        if lang == "fa":
-            buttons.append([proxy_btn, wg_btn])
-        else:
-            buttons.append([wg_btn, proxy_btn])
+        buttons.append([wg_btn, proxy_btn])
     elif wireguard_available:
         buttons.append([InlineKeyboardButton(
             text="🔴 کانفیگ WireGuard" if lang == "fa" else "🔴 WireGuard Config",
