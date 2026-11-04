@@ -35388,14 +35388,6 @@ def choose_ai_recommended_package(
         if currency_match:
             budget = parse_ai_budget(" ".join(currency_match.groups()))
 
-    if budget is not None:
-        within_budget = {
-            key: item for key, item in eligible.items()
-            if int(item[1].get('price', 0) or 0) <= budget
-        }
-        if within_budget:
-            eligible = within_budget
-
     type_preference = None
     if re.search(r"تانل|تونل|tunnel", answer_text):
         type_preference = re.compile(r"تانل|تونل|tunnel")
@@ -35423,6 +35415,14 @@ def choose_ai_recommended_package(
         }
         if high_stability:
             eligible = high_stability
+
+    if budget is not None:
+        within_budget = {
+            key: item for key, item in eligible.items()
+            if int(item[1].get('price', 0) or 0) <= budget
+        }
+        if within_budget:
+            eligible = within_budget
 
     reliability_priority = priority in ("quality", "reliability")
     reliability_signal = bool(re.search(
