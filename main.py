@@ -35181,6 +35181,7 @@ def strip_ai_button_directives(text: str) -> str:
         text,
         flags=re.MULTILINE,
     )
+    text = re.sub(r"\]\][ \t]*(?=\r?$)", "", text, flags=re.MULTILINE)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
