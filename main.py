@@ -36264,10 +36264,10 @@ async def start_ai_purchase_advisor_flow(
     if remaining and user_id != ADMIN_ID_INT:
         hours = max(1, int((remaining.total_seconds() + 3599) // 3600))
         await message.reply(
-            f"آزمون خرید را هر ۲۴ ساعت یک‌بار می‌توانی انجام بدهی. "
+            f"پیشنهاد هوشمند را هر ۲۴ ساعت یک‌بار می‌توانی انجام بدهی. "
             f"حدود {to_persian_digits(hours)} ساعت دیگر دوباره امتحان کن."
             if lang == "fa"
-            else f"You can take the purchase assessment once every 24 hours. "
+            else f"You can take the smart recommendation once every 24 hours. "
             f"Please try again in about {hours} hours."
         )
         return

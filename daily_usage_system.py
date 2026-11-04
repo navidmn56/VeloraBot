@@ -1072,7 +1072,6 @@ class DailyUsageChartRenderer:
         avg_gb = stats.get("avg_gb", 0.0)
         peak_gb = stats.get("peak_gb", 0.0)
         peak_day = stats.get("peak_day_name", "-")
-        history_note = stats.get("history_note", "")
 
         is_rtl = (lang == "fa")
 
@@ -1228,12 +1227,6 @@ class DailyUsageChartRenderer:
 
         summary_fp = get_font_properties(is_bold=True, size=10.5)
         fig.text(0.5, 0.88, summary_text, fontproperties=summary_fp, ha='center', va='top', color=cyan_accent)
-
-        # یادداشت شفافیت تاریخی (با تاریخ شمسی در فارسی)
-        if history_note:
-            note_display = format_persian_text(history_note) if is_rtl else history_note
-            note_fp = get_font_properties(is_bold=False, size=9.0)
-            fig.text(0.5, 0.02, note_display, fontproperties=note_fp, ha='center', va='bottom', color="#EAB308")
 
         fig.subplots_adjust(top=0.82, bottom=0.15, left=0.08 if is_rtl else 0.10, right=0.92 if is_rtl else 0.96)
 
