@@ -10613,41 +10613,67 @@ class GeminiClient:
             username,
             user_context=user_context,
         )
-from collections import defaultdict
+
 
 class ConversationMemory:
     """مدیریت حافظه مکالمه برای هر کاربر"""
     
-    def __init__(self, max_history: int = 10, expire_minutes: int = 60):
-        self.max_history = max_history
-        self.expire_minutes = expire_minutes
-        self.memories = defaultdict(list)  # user_id -> list of messages
-        self.last_activity = defaultdict(datetime)  # user_id -> last activity time
+    STORAGE_KEY = "ai_conversation_memory"
+
+    def __init__(self):
+        self.memories = {}
+        self.last_activity = {}
+
+    def _load_history(self, user_id: int) -> list:
+        if user_id not in self.memories:
+            user = users.get(str(user_id), {})
+            history = user.get(self.STORAGE_KEY, []) if isinstance(user, dict) else []
+            self.memories[user_id] = history if isinstance(history, list) else []
+        return self.memories[user_id]
+
+    def _persist_history(self, user_id: int) -> bool:
+        user = users.get(str(user_id))
+        if not isinstance(user, dict):
+            user = get_user(user_id)
+        history = self.memories.get(user_id, [])
+        if history:
+            user[self.STORAGE_KEY] = history
+        else:
+            user.pop(self.STORAGE_KEY, None)
+        if not save_json(DB_FILES['users'], users):
+            logger.error("Could not persist AI conversation memory for user %s", user_id)
+            return False
+        return True
     
     def add_message(self, user_id: int, role: str, content: str):
-        """اضافه کردن پیام به حافظه کاربر"""
-        self._clean_expired(user_id)
-        if len(self.memories[user_id]) >= self.max_history * 2:
-            self.memories[user_id] = self.memories[user_id][-self.max_history:]
-        
-        self.memories[user_id].append({
+        """اضافه کردن و ذخیره دائمی پیام مکالمه کاربر"""
+        history = self._load_history(user_id)
+        history.append({
             'role': role,  # 'user' یا 'assistant'
             'content': content,
             'timestamp': datetime.now().isoformat()
         })
         self.last_activity[user_id] = datetime.now()
+        self._persist_history(user_id)
     
     def get_history(self, user_id: int) -> list:
-        """دریافت تاریخچه مکالمه کاربر"""
-        self._clean_expired(user_id)
-        return self.memories.get(user_id, [])
+        """دریافت تاریخچه کامل و ماندگار مکالمه کاربر"""
+        history = self._load_history(user_id)
+        if history and user_id not in self.last_activity:
+            try:
+                self.last_activity[user_id] = datetime.fromisoformat(
+                    str(history[-1].get('timestamp'))
+                )
+            except (TypeError, ValueError):
+                self.last_activity[user_id] = datetime.now()
+        return history
     
-    def get_context(self, user_id: int, max_messages: int = 6) -> str:
+    def get_context(self, user_id: int, max_messages: Optional[int] = None) -> str:
         """دریافت متن مکالمه برای ارسال به AI"""
         history = self.get_history(user_id)
         if not history:
             return ""
-        recent = history[-max_messages:]
+        recent = history[-max_messages:] if max_messages else history
         
         context = "تاریخچه مکالمه:\n"
         for msg in recent:
@@ -10658,34 +10684,58 @@ class ConversationMemory:
     
     def has_history(self, user_id: int) -> bool:
         """آیا کاربر تاریخچه دارد؟"""
-        self._clean_expired(user_id)
-        return len(self.memories.get(user_id, [])) > 0
+        return bool(self.get_history(user_id))
     
     def clear(self, user_id: int):
         """پاک کردن حافظه کاربر"""
-        if user_id in self.memories:
-            del self.memories[user_id]
-        if user_id in self.last_activity:
-            del self.last_activity[user_id]
-    
-    def _clean_expired(self, user_id: int):
-        """پاک کردن حافظه منقضی شده"""
-        if user_id in self.last_activity:
-            elapsed = datetime.now() - self.last_activity[user_id]
-            if elapsed.total_seconds() > self.expire_minutes * 60:
-                self.clear(user_id)
+        self.memories.pop(user_id, None)
+        self.last_activity.pop(user_id, None)
+        user = users.get(str(user_id))
+        if isinstance(user, dict):
+            user.pop(self.STORAGE_KEY, None)
+            if not save_json(DB_FILES['users'], users):
+                logger.error(
+                    "Could not clear persisted AI conversation memory for user %s",
+                    user_id,
+                )
+
+    def clear_all(self):
+        """پاک کردن حافظه مکالمه همه کاربران"""
+        self.memories.clear()
+        self.last_activity.clear()
+        for user in users.values():
+            if isinstance(user, dict):
+                user.pop(self.STORAGE_KEY, None)
+        if not save_json(DB_FILES['users'], users):
+            logger.error("Could not clear persisted AI conversation memory for all users")
     
     def get_stats(self) -> dict:
         """دریافت آمار حافظه"""
-        total_users = len(self.memories)
-        total_messages = sum(len(msgs) for msgs in self.memories.values())
+        histories = [
+            (int(user_id), user.get(self.STORAGE_KEY, []))
+            for user_id, user in users.items()
+            if str(user_id).isdigit()
+            and isinstance(user, dict)
+            and isinstance(user.get(self.STORAGE_KEY), list)
+            and user.get(self.STORAGE_KEY)
+        ]
+        now = datetime.now()
+        active_users = 0
+        for user_id, history in histories:
+            try:
+                last_activity = datetime.fromisoformat(
+                    str(history[-1].get('timestamp'))
+                )
+            except (AttributeError, TypeError, ValueError):
+                last_activity = self.last_activity.get(user_id, now)
+            if (now - last_activity).total_seconds() < 600:
+                active_users += 1
         return {
-            'total_users': total_users,
-            'total_messages': total_messages,
-            'active_users': len([uid for uid in self.last_activity 
-                               if (datetime.now() - self.last_activity[uid]).total_seconds() < 600])
+            'total_users': len(histories),
+            'total_messages': sum(len(messages) for _, messages in histories),
+            'active_users': active_users,
         }
-conversation_memory = ConversationMemory(max_history=10, expire_minutes=30)
+conversation_memory = ConversationMemory()
 
 def check_ai_limit(user_id: int) -> tuple:
     """بررسی محدودیت روزانه کاربر برای استفاده از AI
@@ -10883,8 +10933,7 @@ async def cmd_memory(message: Message):
     
     elif len(parts) >= 2 and parts[1] == "clear_all":
         if message.from_user.id == ADMIN_ID_INT:
-            conversation_memory.memories.clear()
-            conversation_memory.last_activity.clear()
+            conversation_memory.clear_all()
             await message.reply("🧹 همه حافظه‌ها پاک شدند!")
     
     elif len(parts) >= 2 and parts[1] == "user" and len(parts) >= 3:
@@ -13723,7 +13772,7 @@ Welcome to AI Support!
                 callback_data="ai_purchase_advisor_start",
                 style="success",
             )],
-            [InlineKeyboardButton(text="🧹 پاک کردن حافظه" if lang == "fa" else "🧹 Clear Memory", callback_data="clear_ai_memory")],
+            [InlineKeyboardButton(text="🧹 پاک کردن حافظه" if lang == "fa" else "🧹 Clear Memory", callback_data="clear_ai_memory", style="primary")],
             [InlineKeyboardButton(text="❌ خروج از چت AI" if lang == "fa" else "❌ Exit AI Chat", callback_data="exit_ai_chat", style="danger")]
         ])
     )
@@ -35654,6 +35703,42 @@ def get_ai_purchase_advisor_result(user_id: int) -> Optional[dict]:
     return result
 
 
+def restore_ai_purchase_advisor_state(
+    user_id: int,
+    result: Optional[dict] = None,
+) -> Optional[dict]:
+    result = result or get_ai_purchase_advisor_result(user_id)
+    if not isinstance(result, dict):
+        return None
+
+    state = user_states.setdefault(user_id, {})
+    advisor = state.get('purchase_advisor')
+    if not isinstance(advisor, dict) or advisor.get('status') not in (
+        'recommended',
+        'invoice_processing',
+    ):
+        advisor = {
+            "status": "recommended",
+            "category_id": result.get('category_id'),
+            "package_id": result.get('package_id'),
+            "answers": result.get('answers', []),
+            "reason": result.get('reason', ''),
+            "question_count": result.get('question_count', 0),
+        }
+        state['purchase_advisor'] = advisor
+
+    if (
+        str(advisor.get('category_id')) != str(result.get('category_id'))
+        or str(advisor.get('package_id')) != str(result.get('package_id'))
+    ):
+        return None
+    invoice_order_id = result.get('invoice_order_id')
+    if invoice_order_id:
+        state['purchase_advisor_invoice_order_id'] = invoice_order_id
+    user_states[user_id] = state
+    return advisor
+
+
 def build_ai_purchase_advisor_result_text(
     user_id: int,
     lang: str,
@@ -36150,6 +36235,7 @@ def build_ai_reply_keyboard(
 ):
     buttons = []
     seen_callbacks = set()
+    query = normalize_ai_user_text(user_message or "")
     allowed_actions = set(re.findall(
         r"- ([A-Z_]+(?::\d+){0,2}):",
         get_ai_button_context(user_id, lang, user_message),
@@ -36236,7 +36322,23 @@ def build_ai_reply_keyboard(
         }
     allowed_actions.update(payment_actions)
     advisor_actions = {}
-    advisor_state = user_states.get(user_id, {}).get('purchase_advisor', {})
+    recommendation_reference = bool(re.search(
+        r"همین(?:و|رو|ا| بسته)?|همون(?:و|رو|ی| بسته)?|"
+        r"پیشنهاد(?:ت| قبلی)?|همونی که|this one|that one|same (?:one|package)|"
+        r"the same|that package",
+        query,
+        re.IGNORECASE,
+    ))
+    user_state = user_states.get(user_id, {})
+    advisor_state = user_state.get('purchase_advisor', {})
+    if (
+        recommendation_reference
+        and (
+            not isinstance(advisor_state, dict)
+            or advisor_state.get('status') not in ('recommended', 'invoice_processing')
+        )
+    ):
+        advisor_state = restore_ai_purchase_advisor_state(user_id) or {}
     if (
         advisor_state.get('status') == 'recommended'
         and not user_states.get(user_id, {}).get('purchase_advisor_invoice_order_id')
@@ -36287,10 +36389,6 @@ def build_ai_reply_keyboard(
         re.IGNORECASE,
     )
     suggestions = [(action.upper(), label.strip()) for action, label in suggestions]
-    query = (user_message or "").translate(str.maketrans(
-        "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
-        "01234567890123456789",
-    )).lower()
     available_test = "GET_TEST_SERVICE" in allowed_actions
     available_purchase = "BUY_SERVICE" in allowed_actions
     renewal_match = re.search(r"(?:تمدید|renew|extend).{0,50}?(?:سفارش|order|#)?\s*(\d+)", query)
@@ -36479,6 +36577,12 @@ def build_ai_reply_keyboard(
             (action, details["label"])
             for action, details in advisor_actions.items()
         ]
+    elif (
+        recommendation_reference
+        and user_states.get(user_id, {}).get('purchase_advisor_invoice_order_id')
+    ):
+        inferred_actions = []
+        suggestions = []
     elif payment_request or purchase_intent or all_packages_requested or requested_volume:
         suggestions = [
             item for item in suggestions
@@ -36576,7 +36680,20 @@ def build_ai_reply_keyboard(
             callback_data="exit_ai_chat",
             style="danger",
         )])
-    display_answer = strip_ai_button_directives(answer)
+    if (
+        recommendation_reference
+        and user_states.get(user_id, {}).get('purchase_advisor_invoice_order_id')
+    ):
+        order_id = user_states[user_id]['purchase_advisor_invoice_order_id']
+        display_answer = (
+            f"برای این پیشنهاد قبلاً فاکتور شمارهٔ {to_persian_digits(order_id)} صادر شده؛ "
+            "برای جلوگیری از سفارش تکراری، رسید همان فاکتور را ارسال کن."
+            if lang == "fa"
+            else f"Invoice {order_id} already exists for this recommendation. "
+            "Please submit that invoice’s receipt to avoid creating a duplicate."
+        )
+    else:
+        display_answer = strip_ai_button_directives(answer)
     if not display_answer:
         if any(
             button.callback_data in ("invite_friends", "ai_action_invite_friends")
@@ -36656,6 +36773,14 @@ async def handle_ai_menu_action(callback: CallbackQuery):
     elif action.startswith("advisor_invoice_"):
         package_match = re.fullmatch(r"advisor_invoice_(\d+)_(\d+)", action)
         advisor = user_states.get(user_id, {}).get('purchase_advisor', {})
+        if (
+            package_match
+            and (
+                not isinstance(advisor, dict)
+                or advisor.get('status') != 'recommended'
+            )
+        ):
+            advisor = restore_ai_purchase_advisor_state(user_id) or {}
         if (
             not package_match
             or advisor.get('status') != 'recommended'
@@ -36806,6 +36931,7 @@ async def get_ai_response(
     system_instruction_override: Optional[str] = None,
     response_mime_type: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
+    remember_conversation: bool = True,
 ) -> str:
     """دریافت پاسخ کامل از AI؛ پاسخ‌های قطع‌شده به کاربر تحویل داده نمی‌شوند."""
     if gemini_client:
@@ -36818,15 +36944,18 @@ async def get_ai_response(
             )
             full_message = ""
             has_prior_assistant_response = False
-            if user_id and conversation_memory.has_history(user_id):
+            if (
+                user_id
+                and remember_conversation
+                and conversation_memory.has_history(user_id)
+            ):
                 prior_history = conversation_memory.get_history(user_id)
                 has_prior_assistant_response = any(
                     item.get('role') == 'assistant'
                     for item in prior_history
                     if isinstance(item, dict)
                 )
-                history = conversation_memory.get_context(user_id, max_messages=2)
-                history = history[-1200:]
+                history = conversation_memory.get_context(user_id)
                 full_message += f"{history}\n\n"
             if user_id:
                 user_info = get_user(user_id) if 'get_user' in globals() else {}
@@ -36855,6 +36984,19 @@ async def get_ai_response(
                 )
             if request_context:
                 full_message = "\n\n".join(request_context + [full_message])
+
+            if user_id and remember_conversation:
+                history = conversation_memory.get_history(user_id)
+                if not (
+                    history
+                    and history[-1].get('role') == 'user'
+                    and history[-1].get('content') == message_text
+                ):
+                    conversation_memory.add_message(
+                        user_id,
+                        'user',
+                        message_text,
+                    )
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
             
@@ -36977,13 +37119,12 @@ async def get_ai_response(
                                 if not reply:
                                     return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
                                 
-                                if user_id:
+                                if user_id and remember_conversation:
                                     memory_reply = strip_ai_button_directives(reply)
                                     if not memory_reply:
                                         memory_reply = (
                                             "برای ادامه، از دکمه‌های پیشنهادی زیر استفاده کنید."
                                         )
-                                    conversation_memory.add_message(user_id, 'user', message_text)
                                     conversation_memory.add_message(user_id, 'assistant', memory_reply)
                                 
                                 logger.info(f"✅ پاسخ Gemini دریافت شد - طول: {len(reply)} کاراکتر")
