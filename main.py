@@ -9384,6 +9384,14 @@ async def send_config_with_qr_option(
             )
     
     wireguard_available = await _order_has_wireguard(order_id)
+    telegram_proxy_url = await _get_order_telegram_proxy(order_id)
+
+    # بازسازی کپشن در صورت وجود پروکسی
+    if telegram_proxy_url:
+        caption = get_config_caption(
+            order_id, volume, days, price, config_link, lang, traffic_info,
+            telegram_proxy_url=telegram_proxy_url
+        )
 
     # ─── ارسال ───
     try:
@@ -9396,6 +9404,7 @@ async def send_config_with_qr_option(
             reply_markup=get_config_view_keyboard(
                 order_id, show_qr=True, lang=lang,
                 wireguard_available=wireguard_available,
+                telegram_proxy_url=telegram_proxy_url,
             )
         )
         logger.info(f"QR Code برای سفارش #{order_id} به کاربر {chat_id} ارسال شد")
@@ -9408,6 +9417,7 @@ async def send_config_with_qr_option(
             reply_markup=get_config_view_keyboard(
                 order_id, show_qr=False, lang=lang,
                 wireguard_available=wireguard_available,
+                telegram_proxy_url=telegram_proxy_url,
             )
         )
         
@@ -9556,11 +9566,78 @@ async def _order_has_wireguard(
         return False
 
 
+def _is_telegram_proxy(link: str) -> bool:
+    """تشخیص اینکه آیا یک لینک، پروکسی تلگرام (MTProto یا Socks5) است یا خیر"""
+    if not isinstance(link, str):
+        return False
+    clean = link.strip()
+    lower = clean.lower()
+    if lower.startswith("tg://proxy") or lower.startswith("tg://socks"):
+        return True
+    if lower.startswith("https://t.me/proxy") or lower.startswith("https://t.me/socks"):
+        return True
+    if lower.startswith("http://t.me/proxy") or lower.startswith("http://t.me/socks"):
+        return True
+    if lower.startswith("t.me/proxy") or lower.startswith("t.me/socks"):
+        return True
+    if lower.startswith("tg://") and ("server=" in lower or "secret=" in lower or "port=" in lower):
+        return True
+    return False
+
+
+async def _fetch_proxy_from_subscription(sub_link: str) -> Optional[str]:
+    """دریافت و استخراج لینک پروکسی تلگرام از محتوای ساب کاربر"""
+    try:
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.get(
+                sub_link,
+                timeout=aiohttp.ClientTimeout(total=4),
+                headers={"User-Agent": "v2rayNG/1.8.5"}
+            ) as response:
+                if response.status == 200:
+                    text_content = await response.text()
+                    if not text_content:
+                        return None
+
+                    raw_text = text_content.strip()
+                    lines = []
+                    try:
+                        pad = "=" * (-len(raw_text) % 4)
+                        decoded_bytes = base64.b64decode(raw_text + pad)
+                        decoded_text = decoded_bytes.decode('utf-8', errors='ignore')
+                        lines.extend(decoded_text.splitlines())
+                    except Exception:
+                        pass
+
+                    lines.extend(raw_text.splitlines())
+
+                    for line in lines:
+                        line = line.strip()
+                        if _is_telegram_proxy(line):
+                            return line
+    except Exception as e:
+        logger.debug(f"خطا در واکشی پروکسی از ساب {sub_link}: {e}")
+    return None
+
+
+async def _get_order_telegram_proxy(order_id: int) -> Optional[str]:
+    """یافتن لینک پروکسی تلگرام برای سفارش"""
+    try:
+        links, _ = await _get_cached_config_links(order_id)
+        for link in links:
+            if _is_telegram_proxy(link):
+                return link
+    except Exception as e:
+        logger.debug(f"خطا در بررسی پروکسی تلگرام برای سفارش #{order_id}: {e}")
+    return None
+
 def get_config_view_keyboard(
     order_id: int,
     show_qr: bool = False,
     lang: str = "fa",
     wireguard_available: bool = False,
+    telegram_proxy_url: Optional[str] = None,
 ) -> InlineKeyboardMarkup:
     """ساخت کیبورد نمایش کانفیگ با دکمه‌های پلتفرم"""
     
@@ -9612,11 +9689,38 @@ def get_config_view_keyboard(
         )
     ])
 
-    if wireguard_available:
+    if telegram_proxy_url is None and order_id in CONFIG_LINKS_CACHE:
+        for l in CONFIG_LINKS_CACHE[order_id].get('links', []):
+            if _is_telegram_proxy(l):
+                telegram_proxy_url = l
+                break
+
+    if wireguard_available and telegram_proxy_url:
+        wg_btn = InlineKeyboardButton(
+            text="🔴 کانفیگ WireGuard" if lang == "fa" else "🔴 WireGuard Config",
+            callback_data=f"wireguard_config_{order_id}",
+            style="danger",
+        )
+        proxy_btn = InlineKeyboardButton(
+            text="🔵 پروکسی تلگرام" if lang == "fa" else "🔵 Telegram Proxy",
+            url=telegram_proxy_url.strip(),
+            style="primary",
+        )
+        if lang == "fa":
+            buttons.append([proxy_btn, wg_btn])
+        else:
+            buttons.append([wg_btn, proxy_btn])
+    elif wireguard_available:
         buttons.append([InlineKeyboardButton(
             text="🔴 کانفیگ WireGuard" if lang == "fa" else "🔴 WireGuard Config",
             callback_data=f"wireguard_config_{order_id}",
             style="danger",
+        )])
+    elif telegram_proxy_url:
+        buttons.append([InlineKeyboardButton(
+            text="🔵 پروکسی تلگرام" if lang == "fa" else "🔵 Telegram Proxy",
+            url=telegram_proxy_url.strip(),
+            style="primary",
         )])
     
     # ─── ردیف 3: راهنمای اتصال هر پلتفرم ───
@@ -9855,6 +9959,7 @@ async def platform_back_to_config(callback: CallbackQuery):
             except Exception as e:
                 logger.error(f"خطا در دریافت اطلاعات ترافیک هنگام بازگشت به کانفیگ: {e}")
 
+        telegram_proxy_url = await _get_order_telegram_proxy(order_id)
         caption = get_config_caption(
             order_id,
             order.get("volume", 0),
@@ -9863,6 +9968,7 @@ async def platform_back_to_config(callback: CallbackQuery):
             order["config_link"],
             lang,
             traffic_info,
+            telegram_proxy_url=telegram_proxy_url,
         )
         wireguard_available = await _order_has_wireguard(order_id)
         await bot.send_message(
@@ -9872,6 +9978,7 @@ async def platform_back_to_config(callback: CallbackQuery):
             reply_markup=get_config_view_keyboard(
                 order_id, show_qr=False, lang=lang,
                 wireguard_available=wireguard_available,
+                telegram_proxy_url=telegram_proxy_url,
             ),
         )
     await callback.answer()
@@ -11795,7 +11902,8 @@ def get_config_caption(
     price: int,
     config_link: str,
     lang: str = "fa",
-    traffic_info: str = ""   # ✅ پارامتر جدید
+    traffic_info: str = "",   # ✅ پارامتر جدید
+    telegram_proxy_url: Optional[str] = None
 ) -> str:
     """ساخت کپشن با اطلاعات کامل + ترافیک"""
     
@@ -11869,11 +11977,15 @@ def get_config_caption(
 
 {link_emoji} <b>لینک اشتراک</b>
 <a href="{config_link}">{config_link}</a>"""
+        if telegram_proxy_url:
+            caption += f"\n\n⚡️ <b>پروکسی اختصاصی تلگرام:</b>\n🔗 <a href=\"{telegram_proxy_url.strip()}\"><b>اتصال مستقیم به پروکسی (کلیک کنید)</b></a>"
     else:
         caption = f"""{title} ({volume_display}){traffic_info}
 
 {link_emoji} <b>Subscription Link</b>
 <a href="{config_link}">{config_link}</a>"""
+        if telegram_proxy_url:
+            caption += f"\n\n⚡️ <b>Dedicated Telegram Proxy:</b>\n🔗 <a href=\"{telegram_proxy_url.strip()}\"><b>Connect to Proxy (Click here)</b></a>"
     
     return caption
 async def process_referral(new_id: int, ref_id: int):
@@ -23043,9 +23155,10 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
                     link.startswith('vless://') or
                     link.startswith('vmess://') or
                     link.startswith('trojan://') or
-                    link.startswith('ss://')
+                    link.startswith('ss://') or
+                    _is_telegram_proxy(link)
                 ):
-                    links.append(link)
+                    links.append(link.strip())
 
         for wireguard in await _get_order_wireguard_clients(order_id):
             try:
@@ -23063,6 +23176,14 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
                     error,
                     exc_info=True,
                 )
+
+    # اگر پروکسی تلگرام در لینک‌های دریافتی نبود، بررسی ساب کاربر
+    if not any(_is_telegram_proxy(l) for l in links):
+        sub_link = order.get('sub_link') or order.get('config_link')
+        if sub_link and isinstance(sub_link, str) and sub_link.startswith('http'):
+            proxy_from_sub = await _fetch_proxy_from_subscription(sub_link)
+            if proxy_from_sub and proxy_from_sub not in links:
+                links.append(proxy_from_sub)
 
     if not links and order.get('config_link'):
         links = [order['config_link']]
@@ -23129,7 +23250,10 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     for local_idx, link in enumerate(page_links):
         abs_idx = start_idx + local_idx + 1
 
-        if link.startswith('vless://'):
+        is_proxy = _is_telegram_proxy(link)
+        if is_proxy:
+            protocol = "Telegram Proxy"
+        elif link.startswith('vless://'):
             protocol = "VLESS"
         elif link.startswith('vmess://'):
             protocol = "VMESS"
@@ -23141,14 +23265,30 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             protocol = "SS"
 
         display_link = link
-        if '#' not in link and not link.startswith(('vmess://', '[Interface]')):
+        if '#' not in link and not link.startswith(('vmess://', '[Interface]')) and not is_proxy:
             display_link = f"{link}#{display_email}"
 
-        code_tag = "pre" if protocol == "WireGuard" else "code"
-        body += (
-            f"<b>#{abs_idx} - [{protocol}]</b>\n"
-            f"<{code_tag}>{html.escape(display_link)}</{code_tag}>\n\n"
-        )
+        if is_proxy:
+            proxy_url_clean = display_link.strip()
+            proxy_url_escaped = html.escape(proxy_url_clean)
+            if lang == "fa":
+                body += (
+                    f"<b>#{abs_idx} - [پروکسی تلگرام]</b>\n"
+                    f"🔗 <a href=\"{proxy_url_escaped}\"><b>🚀 برای اتصال به پروکسی کلیک کنید</b></a>\n"
+                    f"<code>{proxy_url_escaped}</code>\n\n"
+                )
+            else:
+                body += (
+                    f"<b>#{abs_idx} - [Telegram Proxy]</b>\n"
+                    f"🔗 <a href=\"{proxy_url_escaped}\"><b>🚀 Click to Connect to Proxy</b></a>\n"
+                    f"<code>{proxy_url_escaped}</code>\n\n"
+                )
+        else:
+            code_tag = "pre" if protocol == "WireGuard" else "code"
+            body += (
+                f"<b>#{abs_idx} - [{protocol}]</b>\n"
+                f"<{code_tag}>{html.escape(display_link)}</{code_tag}>\n\n"
+            )
 
     text = body.strip()
 
@@ -23183,19 +23323,28 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     # ==================== ساخت کیبورد ====================
     buttons = []
 
-    # --- دکمه‌های QR برای همین صفحه ---
+    # --- دکمه‌های QR و پروکسی برای همین صفحه ---
     qr_buttons = []
     for local_idx in range(len(page_links)):
         abs_idx = start_idx + local_idx + 1
-        is_wireguard = page_links[local_idx].startswith("[Interface]")
-        qr_buttons.append(InlineKeyboardButton(
-            text=f"{'🔴' if is_wireguard else '📱'} QR #{abs_idx}",
-            callback_data=(
-                f"wireguard_config_{order_id}"
-                if is_wireguard
-                else f"show_single_qr_{order_id}_{abs_idx}_{page}"
-            ),
-        ))
+        link_item = page_links[local_idx]
+        is_wireguard = link_item.startswith("[Interface]")
+        is_proxy = _is_telegram_proxy(link_item)
+        if is_proxy:
+            qr_buttons.append(InlineKeyboardButton(
+                text=f"🔵 اتصال #{abs_idx}" if lang == "fa" else f"🔵 Connect #{abs_idx}",
+                url=link_item.strip(),
+                style="primary",
+            ))
+        else:
+            qr_buttons.append(InlineKeyboardButton(
+                text=f"{'🔴' if is_wireguard else '📱'} QR #{abs_idx}",
+                callback_data=(
+                    f"wireguard_config_{order_id}"
+                    if is_wireguard
+                    else f"show_single_qr_{order_id}_{abs_idx}_{page}"
+                ),
+            ))
 
     # دوتایی/سه‌تایی توی هر ردیف
     for i in range(0, len(qr_buttons), 3):
@@ -30557,6 +30706,7 @@ async def view_single_config(callback: CallbackQuery):
             logger.error(f"Error fetching traffic for config view: {e}")
 
     # ─── ساخت کپشن با ترتیب صحیح ───
+    telegram_proxy_url = await _get_order_telegram_proxy(order_id)
     caption = get_config_caption(
         order_id,
         order['volume'],
@@ -30564,7 +30714,8 @@ async def view_single_config(callback: CallbackQuery):
         order['price'],
         order['config_link'],
         lang,
-        traffic_info
+        traffic_info,
+        telegram_proxy_url=telegram_proxy_url,
     )
     wireguard_available = await _order_has_wireguard(order_id)
 
@@ -30579,6 +30730,7 @@ async def view_single_config(callback: CallbackQuery):
             reply_markup=get_config_view_keyboard(
                 order_id, show_qr=True, lang=lang,
                 wireguard_available=wireguard_available,
+                telegram_proxy_url=telegram_proxy_url,
             )
         )
     except Exception as e:
@@ -30590,6 +30742,7 @@ async def view_single_config(callback: CallbackQuery):
             reply_markup=get_config_view_keyboard(
                 order_id, show_qr=False, lang=lang,
                 wireguard_available=wireguard_available,
+                telegram_proxy_url=telegram_proxy_url,
             )
         )
 
