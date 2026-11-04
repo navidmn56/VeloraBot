@@ -9,6 +9,7 @@ Features:
 - Sanaei counter reset detection: avoids negative usage, records reset events, resets baseline.
 - On-demand live snapshot recording with duplicate/spam debouncing.
 - Counter-baseline recovery that avoids mutating cumulative panel snapshots.
+- Daily collection-coverage tracking so missing samples are not mistaken for zero usage.
 - Accurate Solar Hijri (Shamsi / Jalali) date conversion for Persian language.
 - True Right-to-Left (RTL) chart layout for Persian (reversed X-axis, right-positioned Y-axis).
 - Intelligent auto-detection of MB and GB units in charts and captions.
@@ -334,6 +335,21 @@ class DailyUsageStore:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_service_date ON daily_usage(service_id, usage_date);")
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS usage_coverage (
+                    service_id TEXT NOT NULL,
+                    usage_date TEXT NOT NULL,
+                    first_seen REAL NOT NULL,
+                    last_seen REAL NOT NULL,
+                    sample_count INTEGER NOT NULL DEFAULT 1,
+                    max_gap_seconds REAL NOT NULL DEFAULT 0,
+                    expected_interval_seconds INTEGER NOT NULL DEFAULT 300,
+                    PRIMARY KEY(service_id, usage_date),
+                    FOREIGN KEY(service_id) REFERENCES services(service_id) ON DELETE CASCADE
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_coverage_date_service ON usage_coverage(usage_date, service_id);")
+
             # جدول ثبت رویدادهای ریست شدن شمارنده‌های پنل
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS reset_events (
@@ -388,7 +404,7 @@ class DailyUsageStore:
                 SELECT timestamp, up_bytes, down_bytes, total_bytes, is_reset
                 FROM traffic_snapshots
                 WHERE service_id = ?
-                ORDER BY timestamp DESC LIMIT 1;
+                ORDER BY timestamp DESC, id DESC LIMIT 1;
             """, (str(service_id),))
             row = cursor.fetchone()
             if row:
@@ -401,7 +417,8 @@ class DailyUsageStore:
         up_bytes: int,
         down_bytes: int,
         timestamp: Optional[float] = None,
-        min_interval: float = 30.0
+        min_interval: float = 30.0,
+        collection_interval_seconds: Optional[int] = None,
     ) -> bool:
         """
         ثبت اسنپ‌شات جدید ترافیک به صورت تراکنشی و همگام‌سازی مصرف روزانه
@@ -433,9 +450,20 @@ class DailyUsageStore:
                 SELECT timestamp, up_bytes, down_bytes, total_bytes
                 FROM traffic_snapshots
                 WHERE service_id = ?
-                ORDER BY timestamp DESC LIMIT 1;
+                ORDER BY timestamp DESC, id DESC LIMIT 1;
             """, (str(service_id),))
             last = cursor.fetchone()
+            if last and now <= last["timestamp"]:
+                logger.warning(
+                    "اسنپ‌شات قدیمی یا هم‌زمان برای %s نادیده گرفته شد.",
+                    service_id,
+                )
+                return False
+
+            if collection_interval_seconds is not None:
+                self._record_collection_observation(
+                    cursor, str(service_id), now, collection_interval_seconds
+                )
 
             is_reset = 0
             delta_up = 0
@@ -539,18 +567,29 @@ class DailyUsageStore:
             if delta_total > 0:
                 if last:
                     last_dt = datetime.fromtimestamp(last["timestamp"], TEHRAN_TZ)
+                    day_slices = self._split_interval_across_days(last_dt, now_dt)
+                    total_duration = (now_dt - last_dt).total_seconds()
                 else:
-                    last_dt = now_dt
-                
-                # توزیع دلتا بین روزهای تقویمی
-                day_slices = self._split_interval_across_days(last_dt, now_dt)
-                total_duration = max(1.0, (now_dt - last_dt).total_seconds())
+                    # The first cumulative sample has no known start time.
+                    day_slices = [(now_dt.strftime("%Y-%m-%d"), 1.0)]
+                    total_duration = 1.0
 
-                for target_date, slice_seconds in day_slices:
-                    fraction = min(1.0, max(0.0, slice_seconds / total_duration))
-                    slice_up = int(round(delta_up * fraction))
-                    slice_down = int(round(delta_down * fraction))
-                    slice_tot = int(round(delta_total * fraction))
+                allocated_up = 0
+                allocated_down = 0
+                elapsed_seconds = 0.0
+                for index, (target_date, slice_seconds) in enumerate(day_slices):
+                    elapsed_seconds += slice_seconds
+                    if index == len(day_slices) - 1:
+                        slice_up = delta_up - allocated_up
+                        slice_down = delta_down - allocated_down
+                    else:
+                        target_up = int(round(delta_up * elapsed_seconds / total_duration))
+                        target_down = int(round(delta_down * elapsed_seconds / total_duration))
+                        slice_up = target_up - allocated_up
+                        slice_down = target_down - allocated_down
+                    slice_tot = slice_up + slice_down
+                    allocated_up += slice_up
+                    allocated_down += slice_down
 
                     if slice_tot <= 0 and slice_up <= 0 and slice_down <= 0:
                         continue
@@ -569,20 +608,50 @@ class DailyUsageStore:
             return True
 
     @staticmethod
+    def _record_collection_observation(
+        cursor: sqlite3.Cursor,
+        service_id: str,
+        timestamp: float,
+        interval_seconds: int,
+    ) -> None:
+        observed_at = datetime.fromtimestamp(timestamp, TEHRAN_TZ)
+        usage_date = observed_at.strftime("%Y-%m-%d")
+        expected_interval = max(1, int(interval_seconds))
+        cursor.execute("""
+            INSERT INTO usage_coverage (
+                service_id, usage_date, first_seen, last_seen, sample_count,
+                max_gap_seconds, expected_interval_seconds
+            ) VALUES (?, ?, ?, ?, 1, 0, ?)
+            ON CONFLICT(service_id, usage_date) DO UPDATE SET
+                first_seen = MIN(usage_coverage.first_seen, excluded.first_seen),
+                last_seen = MAX(usage_coverage.last_seen, excluded.last_seen),
+                sample_count = usage_coverage.sample_count
+                    + CASE WHEN excluded.last_seen > usage_coverage.last_seen THEN 1 ELSE 0 END,
+                max_gap_seconds = MAX(
+                    usage_coverage.max_gap_seconds,
+                    MAX(0, excluded.last_seen - usage_coverage.last_seen)
+                ),
+                expected_interval_seconds = MAX(
+                    usage_coverage.expected_interval_seconds,
+                    excluded.expected_interval_seconds
+                );
+        """, (service_id, usage_date, timestamp, timestamp, expected_interval))
+
+    @staticmethod
     def _split_interval_across_days(start_dt: datetime, end_dt: datetime) -> List[Tuple[str, float]]:
         """
         تقسیم یک بازه زمانی بین روزهای تقویمی بر اساس نیمه‌شب محلی
         خروجی: لیستی از (تاریخ 'YYYY-MM-DD', ثانیه‌های سپری‌شده در آن روز)
         """
         if end_dt <= start_dt:
-            return [(end_dt.strftime("%Y-%m-%d"), 1.0)]
+            return []
 
         start_date = start_dt.date()
         end_date = end_dt.date()
 
         if start_date == end_date:
             duration = (end_dt - start_dt).total_seconds()
-            return [(start_date.strftime("%Y-%m-%d"), max(1.0, duration))]
+            return [(start_date.strftime("%Y-%m-%d"), duration)]
 
         slices: List[Tuple[str, float]] = []
         curr_dt = start_dt
@@ -613,49 +682,83 @@ class DailyUsageStore:
             rows = cursor.fetchall()
             return [r["service_id"] for r in rows]
 
-    def get_service_history_info(self, service_ids: List[str]) -> Tuple[Optional[str], int]:
+    def get_service_history_info(
+        self, service_ids: List[str]
+    ) -> Tuple[Optional[str], int, int]:
         """
-        دریافت اولین تاریخ ثبت‌شده و تعداد کل روزهای دارای سابقه
+        دریافت بازهٔ مشاهدهٔ سرویس‌ها و تعداد روزهای پوشش کامل همهٔ سرویس‌ها
         """
         if not service_ids:
-            return None, 0
+            return None, 0, 0
+
+        service_ids = list(dict.fromkeys(str(service_id) for service_id in service_ids if service_id))
+        if not service_ids:
+            return None, 0, 0
 
         placeholders = ",".join("?" for _ in service_ids)
+        now = time.time()
+        today = datetime.fromtimestamp(now, TEHRAN_TZ).date()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
-                SELECT MIN(usage_date) as first_date, COUNT(DISTINCT usage_date) as day_count
-                FROM daily_usage
-                WHERE service_id IN ({placeholders});
-            """, service_ids)
-            row = cursor.fetchone()
-            if row and row["first_date"]:
-                return row["first_date"], row["day_count"]
-        return None, 0
+                SELECT service_id, MIN(timestamp) AS first_timestamp
+                FROM traffic_snapshots
+                WHERE service_id IN ({placeholders}) AND timestamp <= ?
+                GROUP BY service_id;
+            """, service_ids + [now])
+            first_seen = {
+                row["service_id"]: datetime.fromtimestamp(
+                    row["first_timestamp"], TEHRAN_TZ
+                ).date()
+                for row in cursor.fetchall()
+            }
 
-    def get_daily_usage_for_services(self, service_ids: List[str], days: int = 7) -> Dict[str, Dict[str, int]]:
+        if not first_seen:
+            return None, 0, 0
+
+        first_date = min(first_seen.values())
+        latest_service_start = max(first_seen.values())
+        if len(first_seen) < len(service_ids):
+            latest_service_start = today
+        observed_span_days = max(1, (today - first_date).days + 1)
+        complete_span_days = max(1, (today - latest_service_start).days + 1)
+        return first_date.strftime("%Y-%m-%d"), observed_span_days, complete_span_days
+
+    def get_daily_usage_for_services(
+        self,
+        service_ids: List[str],
+        days: int = 7,
+        end_date: Optional[date] = None,
+    ) -> Dict[str, Dict[str, int]]:
         """
         دریافت مصرف روزانه تجمیع‌شده برای لیستی از سرویس‌ها
         خروجی دیکشنری بر اساس تاریخ: {'YYYY-MM-DD': {'up': ..., 'down': ..., 'total': ...}}
         """
+        if days < 1:
+            raise ValueError("days must be at least 1")
         if not service_ids:
             return {}
 
-        now_dt = datetime.now(TEHRAN_TZ)
-        start_date = (now_dt.date() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        service_ids = list(dict.fromkeys(str(service_id) for service_id in service_ids if service_id))
+        if not service_ids:
+            return {}
+
+        last_date = end_date or datetime.now(TEHRAN_TZ).date()
+        start_date = (last_date - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        end_date_str = last_date.strftime("%Y-%m-%d")
 
         placeholders = ",".join("?" for _ in service_ids)
         query = f"""
             SELECT usage_date,
-                   SUM(up_bytes) as total_up,
-                   SUM(down_bytes) as total_down,
-                   SUM(total_bytes) as total_tot
+                   SUM(CASE WHEN up_bytes > 0 THEN up_bytes ELSE 0 END) as total_up,
+                   SUM(CASE WHEN down_bytes > 0 THEN down_bytes ELSE 0 END) as total_down,
+                   SUM(CASE WHEN total_bytes > 0 THEN total_bytes ELSE 0 END) as total_tot
             FROM daily_usage
-            WHERE service_id IN ({placeholders}) AND usage_date >= ?
+            WHERE service_id IN ({placeholders}) AND usage_date BETWEEN ? AND ?
             GROUP BY usage_date
             ORDER BY usage_date ASC;
         """
-        params = list(service_ids) + [start_date]
+        params = service_ids + [start_date, end_date_str]
 
         result = {}
         with self._get_connection() as conn:
@@ -669,17 +772,106 @@ class DailyUsageStore:
                 }
         return result
 
+    def get_daily_usage_integrity_issues(
+        self,
+        service_ids: List[str],
+        start_date: date,
+        end_date: date,
+    ) -> int:
+        """Count historical daily rows whose stored total disagrees with direction counters."""
+        service_ids = list(dict.fromkeys(str(service_id) for service_id in service_ids if service_id))
+        if not service_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in service_ids)
+        with self._get_connection() as conn:
+            row = conn.execute(f"""
+                SELECT COUNT(*) AS issue_count
+                FROM daily_usage
+                WHERE service_id IN ({placeholders})
+                  AND usage_date BETWEEN ? AND ?
+                  AND (
+                      up_bytes < 0 OR down_bytes < 0 OR total_bytes < 0
+                      OR total_bytes != up_bytes + down_bytes
+                  );
+            """, service_ids + [start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")]).fetchone()
+            return row["issue_count"] or 0
+
+    def get_unverified_collection_days(
+        self,
+        service_ids: List[str],
+        start_date: date,
+        end_date: date,
+        now_dt: datetime,
+    ) -> int:
+        """Count days without continuous, successful sampling for every requested service."""
+        service_ids = list(dict.fromkeys(str(service_id) for service_id in service_ids if service_id))
+        if not service_ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in service_ids)
+        with self._get_connection() as conn:
+            rows = conn.execute(f"""
+                SELECT service_id, usage_date, first_seen, last_seen,
+                       max_gap_seconds, expected_interval_seconds
+                FROM usage_coverage
+                WHERE service_id IN ({placeholders})
+                  AND usage_date BETWEEN ? AND ?;
+            """, service_ids + [start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")]).fetchall()
+        coverage = {(row["service_id"], row["usage_date"]): row for row in rows}
+
+        unverified_days = 0
+        current_date = start_date
+        while current_date <= end_date:
+            date_key = current_date.strftime("%Y-%m-%d")
+            day_start = datetime.combine(current_date, datetime.min.time(), TEHRAN_TZ)
+            day_end = min(day_start + timedelta(days=1), now_dt)
+            day_is_verified = True
+
+            for service_id in service_ids:
+                row = coverage.get((service_id, date_key))
+                if row is None:
+                    day_is_verified = False
+                    break
+
+                tolerance = max(600, int(row["expected_interval_seconds"]) * 2)
+                first_seen = datetime.fromtimestamp(row["first_seen"], TEHRAN_TZ)
+                last_seen = datetime.fromtimestamp(row["last_seen"], TEHRAN_TZ)
+                if (
+                    (first_seen - day_start).total_seconds() > tolerance
+                    or (day_end - last_seen).total_seconds() > tolerance
+                    or row["max_gap_seconds"] > tolerance
+                ):
+                    day_is_verified = False
+                    break
+
+            if not day_is_verified:
+                unverified_days += 1
+            current_date += timedelta(days=1)
+
+        return unverified_days
+
     def get_statistics(self, service_ids: List[str], days: int = 7, lang: str = "fa") -> dict:
         """
         محاسبه آمار کامل ۷ روز اخیر بر اساس داده‌های واقعی
         بدون ساخت داده جعلی!
         """
+        if days < 1:
+            raise ValueError("days must be at least 1")
+        service_ids = list(dict.fromkeys(str(service_id) for service_id in service_ids if service_id))
         now_dt = datetime.now(TEHRAN_TZ)
         today = now_dt.date()
 
         date_list = [today - timedelta(days=i) for i in reversed(range(days))]
-        recorded_map = self.get_daily_usage_for_services(service_ids, days=days)
-        first_date, total_historical_days = self.get_service_history_info(service_ids)
+        recorded_map = self.get_daily_usage_for_services(service_ids, days=days, end_date=today)
+        first_date, total_historical_days, complete_history_days = self.get_service_history_info(service_ids)
+        start_date = date_list[0]
+        integrity_issue_count = self.get_daily_usage_integrity_issues(
+            service_ids, start_date, today
+        )
+        unverified_collection_days = self.get_unverified_collection_days(
+            service_ids, start_date, today, now_dt
+        )
 
         days_data = []
         total_bytes = 0
@@ -740,19 +932,69 @@ class DailyUsageStore:
             # در صورتی که عمر سرویس کمتر از ۷ روز باشد، میانگین بر تعداد روزهای واقعی سپری‌شده تقسیم می‌شود نه عدد ۷
             effective_days = min(days, max(1, recorded_span_days))
 
-            if recorded_span_days < days or total_historical_days < days:
+            if (
+                recorded_span_days < days
+                or complete_history_days < days
+                or unverified_collection_days > 0
+            ):
                 has_sufficient_history = False
                 shamsi_start = format_date_persian(first_date) if lang == "fa" else first_date
-                history_note = (
-                    f"آمار مربوط به {to_persian_digits(total_historical_days)} روز ثبت‌شده است (شروع ثبت: {shamsi_start}). "
-                    "مصرف تجمعی اولین نمونه به همان روز نسبت داده شده و تفکیک دقیق روزهای قبل در دسترس نیست."
-                    if lang == "fa" else
-                    f"Showing {total_historical_days} recorded days (started: {first_date}). "
-                    "The initial cumulative counter is assigned to that date; earlier daily breakdown is unavailable."
-                )
+                if lang == "fa":
+                    history_parts = [
+                        f"آمار از {shamsi_start} شروع شده و "
+                        f"{to_persian_digits(total_historical_days)} روز سابقهٔ مشاهده دارد. "
+                    ]
+                    if complete_history_days < total_historical_days:
+                        history_parts.append(
+                            f"بعضی کانفیگ‌ها فقط {to_persian_digits(complete_history_days)} "
+                            "روز سابقهٔ کامل دارند. "
+                        )
+                    history_parts.append(
+                        "مصرف تجمعی اولین نمونه به همان روز نسبت داده شده و "
+                        "تفکیک دقیق روزهای قبل در دسترس نیست."
+                    )
+                else:
+                    history_parts = [
+                        f"Collection has been observed for {total_historical_days} days "
+                        f"(started: {first_date}). "
+                    ]
+                    if complete_history_days < total_historical_days:
+                        history_parts.append(
+                            f"Some configurations have only {complete_history_days} "
+                            "days of complete history. "
+                        )
+                    history_parts.append(
+                        "The initial cumulative counter is assigned to that date; "
+                        "earlier daily breakdown is unavailable."
+                    )
+                history_note = "".join(history_parts)
 
         avg_gb = total_gb / effective_days if effective_days > 0 else 0.0
         avg_bytes = int(round(total_bytes / effective_days)) if effective_days > 0 else 0
+        sampling_note = (
+            "اگر فاصلهٔ دو نمونه از نیمه‌شب بگذرد، تقسیم مصرف بین روزها تقریبی است."
+            if lang == "fa" else
+            "If a sample interval crosses midnight, its daily split is estimated."
+        )
+        history_note = f"{history_note} {sampling_note}".strip()
+        if integrity_issue_count:
+            integrity_note = (
+                f"هشدار: {to_persian_digits(integrity_issue_count)} ردیف تاریخی با جمع آپلود/دانلود سازگار نیست؛ "
+                "ارقام آن‌ها قابل تأیید نیست."
+                if lang == "fa" else
+                f"Warning: {integrity_issue_count} historical row(s) disagree with upload + download; "
+                "their values cannot be verified."
+            )
+            history_note = f"{history_note}\n{integrity_note}"
+        if unverified_collection_days:
+            coverage_note = (
+                f"هشدار: ثبت پیوستهٔ همهٔ کانفیگ‌ها در {to_persian_digits(unverified_collection_days)} "
+                "روز قابل تأیید نیست؛ روز بدون داده لزوماً به معنی مصرف صفر نیست."
+                if lang == "fa" else
+                f"Warning: continuous collection for all configurations could not be verified on "
+                f"{unverified_collection_days} day(s); a blank day does not necessarily mean zero usage."
+            )
+            history_note = f"{history_note}\n{coverage_note}"
 
         return {
             "days_data": days_data,
@@ -768,14 +1010,16 @@ class DailyUsageStore:
             "days_with_traffic": days_with_traffic,
             "has_sufficient_history": has_sufficient_history,
             "history_note": history_note,
-            "first_recorded_date": first_date
+            "first_recorded_date": first_date,
+            "integrity_issue_count": integrity_issue_count,
+            "unverified_collection_days": unverified_collection_days,
         }
 
     def export_backup_data(self) -> dict:
         """خروجی گرفتن از تمام اطلاعات دیتابیس SQLite برای فایل بکاپ کامل ربات"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            tables = ["services", "traffic_snapshots", "daily_usage", "reset_events"]
+            tables = ["services", "traffic_snapshots", "daily_usage", "usage_coverage", "reset_events"]
             backup = {}
             for tbl in tables:
                 cursor.execute(f"SELECT * FROM {tbl};")
@@ -1029,9 +1273,12 @@ async def fetch_client_total_traffic(
         try:
             live_traff = await get_client_traffic_func(email_str)
             if live_traff and isinstance(live_traff, dict):
-                up = int(live_traff.get("up", 0) or 0)
-                down = int(live_traff.get("down", 0) or 0)
-                return {'up': up, 'down': down, 'total': up + down}
+                if live_traff.get("up") is not None and live_traff.get("down") is not None:
+                    up = int(live_traff["up"])
+                    down = int(live_traff["down"])
+                    if up >= 0 and down >= 0:
+                        return {'up': up, 'down': down, 'total': up + down}
+                logger.warning("پاسخ API مصرف کلاینت %s فاقد شمارنده معتبر آپلود/دانلود است.", email_str)
         except Exception as e:
             logger.debug(f"خطا در استعلام ترافیک کلاینت {email}: {e}")
 
@@ -1045,6 +1292,8 @@ async def fetch_client_total_traffic(
                 found = False
 
                 for inbound in inbounds:
+                    if not isinstance(inbound, dict):
+                        continue
                     client_stats = inbound.get('clientStats', [])
                     if isinstance(client_stats, str):
                         try:
@@ -1054,16 +1303,22 @@ async def fetch_client_total_traffic(
 
                     if isinstance(client_stats, list):
                         for stat in client_stats:
+                            if not isinstance(stat, dict):
+                                continue
                             if stat.get('email') and str(stat['email']).strip() == email_str:
+                                if stat.get('up') is None or stat.get('down') is None:
+                                    continue
                                 try:
-                                    up = int(stat.get('up', 0) or 0)
-                                    down = int(stat.get('down', 0) or 0)
+                                    up = int(stat['up'])
+                                    down = int(stat['down'])
+                                    if up < 0 or down < 0:
+                                        continue
                                     # در 3X-UI ترافیک کلاینت‌ها سراسری (Global per email) است
                                     # و نباید در صورت عضویت کلاینت در چندین اینباند، با هم جمع شوند!
                                     max_up = max(max_up, up)
                                     max_down = max(max_down, down)
                                     found = True
-                                except (TypeError, ValueError):
+                                except (TypeError, ValueError, OverflowError):
                                     pass
 
                 if found:
@@ -1103,6 +1358,7 @@ class DailyUsageCollector:
                     get_inbounds_func,
                     get_approved_emails_func,
                     get_client_traffic_func=get_client_traffic_func,
+                    interval_seconds=interval_seconds,
                 )
             except asyncio.CancelledError:
                 logger.info("تسک جمع‌آوری مصرف روزانه لغو شد.")
@@ -1120,6 +1376,7 @@ class DailyUsageCollector:
         get_inbounds_func,
         get_approved_emails_func,
         get_client_traffic_func=None,
+        interval_seconds: int = 300,
     ) -> int:
         """
         یک نوبت استعلام از تمام اینباندها و ثبت اسنپ‌شات کلاینت‌ها
@@ -1168,10 +1425,14 @@ class DailyUsageCollector:
                         if email_str not in approved_emails:
                             continue
 
+                        if stat.get('up') is None or stat.get('down') is None:
+                            continue
                         try:
-                            up = int(stat.get('up', 0) or 0)
-                            down = int(stat.get('down', 0) or 0)
-                        except (TypeError, ValueError):
+                            up = int(stat['up'])
+                            down = int(stat['down'])
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        if up < 0 or down < 0:
                             continue
 
                         # در 3X-UI هر ایمیل رکورد یکتا در client_traffics دارد.
@@ -1212,7 +1473,8 @@ class DailyUsageCollector:
                     service_id=email,
                     up_bytes=traff['up'],
                     down_bytes=traff['down'],
-                    timestamp=now
+                    timestamp=now,
+                    collection_interval_seconds=interval_seconds
                 )
                 if recorded:
                     updated_count += 1
