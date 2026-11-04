@@ -35787,14 +35787,14 @@ def build_ai_purchase_advisor_result_text(
                 f"{reason}\n\n"
                 f"فاکتور با شمارهٔ {to_persian_digits(invoice_order_id)} صادر شده؛ "
                 "برای جلوگیری از فاکتور تکراری، رسید همان سفارش را ارسال کن. "
-                "برای نیازسنجی دوباره، «آزمون جدید» را بزن."
+                "برای پیشنهاد تازه، «پیشنهاد هوشمند جدید» را بزن."
             )
         else:
             response = (
                 f"🎯 {title}: {html.escape(str(category_name or 'بسته'))} · "
                 f"{volume} · {to_persian_digits(days)} روز · {price:,} تومان\n"
                 f"{reason}\n\n"
-                "برای صدور فاکتور همین بسته، دکمهٔ فاکتور را بزن. برای بررسی دوباره، «آزمون جدید» را انتخاب کن."
+                "برای صدور فاکتور همین بسته، دکمهٔ فاکتور را بزن. برای پیشنهاد تازه، «پیشنهاد هوشمند جدید» را انتخاب کن."
             )
     else:
         title = "Saved smart-purchase recommendation" if saved_result else "Your smart recommendation"
@@ -35803,13 +35803,13 @@ def build_ai_purchase_advisor_result_text(
                 f"🎯 {title}: {html.escape(str(category_name or 'Package'))} · "
                 f"{volume} · {days} days · {price:,} Toman\n{reason}\n\n"
                 f"Invoice {invoice_order_id} already exists. Submit its receipt to avoid a duplicate, "
-                "or choose “New assessment”."
+                "or choose “New smart recommendation”."
             )
         else:
             response = (
                 f"🎯 {title}: {html.escape(str(category_name or 'Package'))} · "
                 f"{volume} · {days} days · {price:,} Toman\n{reason}\n\n"
-                "Tap the invoice button to create an invoice for this package, or choose “New assessment”."
+                "Tap the invoice button to create an invoice for this package, or choose “New smart recommendation”."
             )
     return build_ai_reply_keyboard(
         response,
@@ -36467,6 +36467,70 @@ def build_ai_reply_keyboard(
         query,
         re.IGNORECASE,
     )
+    response_recommendation_action = None
+    response_recommendation_ambiguous = False
+    if payment_request and recommendation_reference:
+        response_text = normalize_ai_user_text(
+            strip_ai_button_directives(answer)
+        )
+        response_volume = re.search(
+            r"(\d+(?:[.,]\d+)?)\s*(گیگ(?:ابایت)?|gb|gig(?:abytes?)?|مگ(?:ابایت)?|mb)",
+            response_text,
+            re.IGNORECASE,
+        )
+        if response_volume:
+            response_amount = float(
+                response_volume.group(1).replace(",", ".")
+            )
+            if response_volume.group(2).startswith(("مگ", "mb")):
+                response_amount /= 1024
+            response_candidates = [
+                action for action, details in package_actions.items()
+                if math.isclose(
+                    float(details["volume"] or 0),
+                    response_amount,
+                    rel_tol=0,
+                    abs_tol=0.01,
+                )
+            ]
+            response_price = re.search(
+                r"(\d[\d,\.]*)\s*(?:تومان|تومن|toman)",
+                response_text,
+                re.IGNORECASE,
+            )
+            if response_price:
+                price_amount = int(
+                    response_price.group(1).replace(",", "").replace(".", "")
+                )
+                priced_candidates = [
+                    action for action in response_candidates
+                    if package_actions[action]["price"] == price_amount
+                ]
+                response_candidates = priced_candidates
+
+            if len(response_candidates) > 1:
+                named_candidates = []
+                for action in response_candidates:
+                    details = package_actions[action]
+                    names = (
+                        details.get("package_name"),
+                        details.get("category_name"),
+                    )
+                    if any(
+                        len(normalize_ai_user_text(str(name or "")).strip()) >= 4
+                        and normalize_ai_user_text(str(name or "")).strip()
+                        in response_text
+                        for name in names
+                    ):
+                        named_candidates.append(action)
+                if named_candidates:
+                    response_candidates = named_candidates
+
+            if len(response_candidates) == 1:
+                response_recommendation_action = response_candidates[0]
+            else:
+                response_recommendation_ambiguous = True
+
     requested_volume = re.search(
         r"(\d+(?:[.,]\d+)?)\s*(گیگ(?:ابایت)?|gb|gig(?:abytes?)?|مگ(?:ابایت)?|mb)",
         query,
@@ -36571,7 +36635,30 @@ def build_ai_reply_keyboard(
             continue
         if all_buttons_requested or re.search(pattern, query, re.IGNORECASE):
             inferred_actions.append((action, label))
-    if advisor_actions:
+    if response_recommendation_action:
+        category_id, package_id = response_recommendation_action.split(":")[1:]
+        payment_id = (
+            f"PAY_PACKAGE_BALANCE:{category_id}:{package_id}"
+            if balance_payment
+            else f"PAY_PACKAGE_CARD:{category_id}:{package_id}"
+        )
+        details = package_actions[response_recommendation_action]
+        volume = format_package_volume(details["volume"], lang)
+        amount = (
+            f"{details['price']:,} تومان"
+            if lang == "fa"
+            else f"{details['price']:,} Toman"
+        )
+        prefix = "🧾 فاکتور" if lang == "fa" else "🧾 Invoice"
+        label = f"{prefix} {details['package_name']} · {volume} · {amount}"
+        if len(label) > 64:
+            label = f"{prefix} {volume} · {amount}"
+        inferred_actions = [(payment_id, label)]
+        suggestions = []
+    elif response_recommendation_ambiguous:
+        inferred_actions = []
+        suggestions = []
+    elif advisor_actions:
         inferred_actions = []
         suggestions = [
             (action, details["label"])
@@ -36664,7 +36751,7 @@ def build_ai_reply_keyboard(
         == 'recommended'
     ):
         buttons.append([InlineKeyboardButton(
-            text="🔄 آزمون جدید" if lang == "fa" else "🔄 New assessment",
+            text="✨ پیشنهاد هوشمند جدید" if lang == "fa" else "✨ New smart recommendation",
             callback_data="ai_purchase_advisor_new",
             style="primary",
         )])
