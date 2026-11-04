@@ -16099,6 +16099,119 @@ async def show_ready_packages_menu(target):
             parse_mode=ParseMode.HTML
         )
 
+def get_user_last_purchased_package(user_id: int):
+    """
+    یافتن آخرین بسته آماده خریداری شده توسط کاربر برای دکمه «همون همیشگی».
+    تنها سفارش‌های موفق (خریداری شده) بررسی می‌شوند و سفارش‌های در انتظار پرداخت، لغو شده، رد شده یا تست نادیده گرفته می‌شوند.
+    اگر کاربر قبلاً بسته‌ای نخریده باشد یا بسته در حال حاضر غیرفعال/حذف شده باشد، None بازمی‌گرداند.
+    خروجی: تاپل (دسته_بندی, بسته) یا None
+    """
+    try:
+        valid_orders = get_valid_orders()
+        if not valid_orders:
+            return None
+
+        user_orders = []
+        for o in valid_orders.values():
+            if not isinstance(o, dict):
+                continue
+            if o.get('user_id') != user_id:
+                continue
+
+            # فیلتر سفارش‌های تست
+            if o.get('type') == 'test':
+                continue
+
+            # فیلتر سفارش‌هایی که نهایی و خریداری نشده‌اند
+            status = o.get('status')
+            if status in ('awaiting_payment', 'rejected', 'cancelled', 'pending', 'pending_balance_charge'):
+                continue
+
+            # سفارش باید تأیید شده، منقضی شده یا دارای لینک کانفیگ باشد
+            if status in ('approved', 'inactive', 'deleted') or o.get('approved_date') or o.get('config_link'):
+                user_orders.append(o)
+
+        if not user_orders:
+            return None
+
+        # مرتب‌سازی از جدیدترین به قدیمی‌ترین بر اساس شناسه و تاریخ سفارش
+        def _order_sort_key(ord_item):
+            oid = 0
+            try:
+                oid = int(ord_item.get('order_id', 0))
+            except (ValueError, TypeError):
+                pass
+            date_str = str(ord_item.get('approved_date') or ord_item.get('date') or ord_item.get('created_at') or '')
+            return (oid, date_str)
+
+        user_orders.sort(key=_order_sort_key, reverse=True)
+
+        categories = READY_PACKAGES.get('categories', [])
+        if not categories:
+            return None
+
+        for order in user_orders:
+            cat_id = order.get('category_id')
+            pkg_id = order.get('package_id')
+
+            # 1) تطبیق مستقیم بر اساس category_id و package_id
+            if cat_id is not None and pkg_id is not None:
+                try:
+                    c_id = int(cat_id)
+                    p_id = int(pkg_id)
+                    for cat in categories:
+                        if cat.get('id') == c_id and cat.get('is_active', True):
+                            for pkg in cat.get('packages', []):
+                                if pkg.get('id') == p_id and pkg.get('is_active', True):
+                                    return cat, pkg
+                except (ValueError, TypeError):
+                    pass
+
+            # 2) تطبیق بر اساس شناسه/نام دسته و مشخصات بسته (حجم و مدت)
+            cat_name = order.get('category_name')
+            vol = order.get('volume')
+            days = order.get('days')
+            ip_lim = order.get('ip_limit', 0)
+
+            if cat_id is not None or cat_name or order.get('type') == 'ready_package':
+                target_cat = None
+                if cat_id is not None:
+                    try:
+                        c_id = int(cat_id)
+                        for cat in categories:
+                            if cat.get('id') == c_id and cat.get('is_active', True):
+                                target_cat = cat
+                                break
+                    except (ValueError, TypeError):
+                        pass
+
+                if not target_cat and cat_name:
+                    for cat in categories:
+                        if (cat.get('name') == cat_name or cat.get('name_en') == cat_name) and cat.get('is_active', True):
+                            target_cat = cat
+                            break
+
+                if target_cat and vol is not None and days is not None:
+                    # بررسی با محدودیت آی‌پی
+                    for pkg in target_cat.get('packages', []):
+                        if not pkg.get('is_active', True):
+                            continue
+                        if pkg.get('volume') == vol and pkg.get('days') == days:
+                            if ip_lim is None or pkg.get('ip_limit', 0) == ip_lim:
+                                return target_cat, pkg
+
+                    # بررسی بدون در نظر گرفتن محدودیت آی‌پی
+                    for pkg in target_cat.get('packages', []):
+                        if not pkg.get('is_active', True):
+                            continue
+                        if pkg.get('volume') == vol and pkg.get('days') == days:
+                            return target_cat, pkg
+
+        return None
+    except Exception as e:
+        logger.error(f"❌ خطا در get_user_last_purchased_package: {e}")
+        return None
+
 @dp.callback_query(F.data == "show_ready_categories")
 async def show_ready_categories(callback: CallbackQuery):
     """نمایش دسته‌بندی‌های بسته‌های آماده - با پشتیبانی از دو زبان و حالت تمدید"""
@@ -16266,6 +16379,30 @@ async def show_ready_categories(callback: CallbackQuery):
     # ساخت دکمه‌ها
     # ═══════════════════════════════════════════
     buttons = []
+    
+    # 🟢 دکمه سبز «همون همیشگی» (آخرین بسته خریداری شده) در بالای همه دکمه‌ها
+    if not is_extend:
+        last_package_info = get_user_last_purchased_package(user_id)
+        if last_package_info:
+            last_cat, last_pkg = last_package_info
+            cat_name = last_cat.get('name') if lang == "fa" else last_cat.get('name_en', last_cat.get('name'))
+            pkg_vol = last_pkg.get('volume', 0)
+            if pkg_vol == 0:
+                vol_str = "♾️ نامحدود" if lang == "fa" else "♾️ Unlimited"
+            else:
+                vol_str = f"{pkg_vol} GB"
+            
+            if lang == "fa":
+                usual_button_text = f"همون همیشگی ({cat_name} - {vol_str})"
+            else:
+                usual_button_text = f"The Usual ({cat_name} - {vol_str})"
+            
+            buttons.append([InlineKeyboardButton(
+                text=usual_button_text,
+                callback_data=f"buy_package_{last_cat.get('id')}_{last_pkg.get('id')}",
+                style="success"
+            )])
+
     
     for cat in categories:
         icon = cat.get('icon', '📦')
