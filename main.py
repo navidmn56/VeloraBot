@@ -10604,7 +10604,7 @@ class GeminiClient:
     async def chat(self, user_message: str, user_id: int = None, username: str = None, retry: int = 2) -> str:
         """ارسال درخواست از مسیر مشترک AI با cache و ردکردن پاسخ ناقص."""
         user_context = ""
-        if user_id and should_include_ai_user_context(user_message):
+        if user_id:
             user_context = build_ai_user_database_context(user_id, user_message)
         return await get_ai_response(
             user_message,
@@ -16122,9 +16122,10 @@ def format_package_volume(volume: Union[int, float], lang: str = "fa") -> str:
         gb_str = f"{int(vol_float)}" if vol_float == int(vol_float) else f"{vol_float:.1f}"
         return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str} GB"
 
-def get_user_last_purchased_package(user_id: int):
+def get_user_last_purchased_package(user_id: int, target_order_id: Optional[int] = None):
     """
     یافتن آخرین بسته آماده خریداری شده توسط کاربر برای دکمه «همون همیشگی».
+    در صورت مشخص بودن target_order_id (حالت تمدید)، ابتدا بسته همان سفارش بررسی می‌شود.
     تنها سفارش‌های موفق (خریداری شده) بررسی می‌شوند و سفارش‌های در انتظار پرداخت، لغو شده، رد شده یا تست نادیده گرفته می‌شوند.
     اگر کاربر قبلاً بسته‌ای نخریده باشد یا بسته در حال حاضر غیرفعال/حذف شده باشد، None بازمی‌گرداند.
     خروجی: تاپل (دسته_بندی, بسته) یا None
@@ -16134,46 +16135,13 @@ def get_user_last_purchased_package(user_id: int):
         if not valid_orders:
             return None
 
-        user_orders = []
-        for o in valid_orders.values():
-            if not isinstance(o, dict):
-                continue
-            if o.get('user_id') != user_id:
-                continue
-
-            # فیلتر سفارش‌های تست
-            if o.get('type') == 'test':
-                continue
-
-            # فیلتر سفارش‌هایی که نهایی و خریداری نشده‌اند
-            status = o.get('status')
-            if status in ('awaiting_payment', 'rejected', 'cancelled', 'pending', 'pending_balance_charge'):
-                continue
-
-            # سفارش باید تأیید شده، منقضی شده یا دارای لینک کانفیگ باشد
-            if status in ('approved', 'inactive', 'deleted') or o.get('approved_date') or o.get('config_link'):
-                user_orders.append(o)
-
-        if not user_orders:
-            return None
-
-        # مرتب‌سازی از جدیدترین به قدیمی‌ترین بر اساس شناسه و تاریخ سفارش
-        def _order_sort_key(ord_item):
-            oid = 0
-            try:
-                oid = int(ord_item.get('order_id', 0))
-            except (ValueError, TypeError):
-                pass
-            date_str = str(ord_item.get('approved_date') or ord_item.get('date') or ord_item.get('created_at') or '')
-            return (oid, date_str)
-
-        user_orders.sort(key=_order_sort_key, reverse=True)
-
         categories = READY_PACKAGES.get('categories', [])
         if not categories:
             return None
 
-        for order in user_orders:
+        def _resolve_order_package(order):
+            if not isinstance(order, dict):
+                return None
             cat_id = order.get('category_id')
             pkg_id = order.get('package_id')
 
@@ -16229,6 +16197,55 @@ def get_user_last_purchased_package(user_id: int):
                             continue
                         if pkg.get('volume') == vol and pkg.get('days') == days:
                             return target_cat, pkg
+            return None
+
+        # اگر شناسه سفارش هدف مشخص شده باشد (تمدید سرویس)، ابتدا بسته همان سفارش را بررسی کن
+        if target_order_id is not None:
+            target_ord = valid_orders.get(str(target_order_id)) or valid_orders.get(target_order_id)
+            if target_ord:
+                resolved = _resolve_order_package(target_ord)
+                if resolved:
+                    return resolved
+
+        user_orders = []
+        for o in valid_orders.values():
+            if not isinstance(o, dict):
+                continue
+            if o.get('user_id') != user_id:
+                continue
+
+            # فیلتر سفارش‌های تست
+            if o.get('type') == 'test':
+                continue
+
+            # فیلتر سفارش‌هایی که نهایی و خریداری نشده‌اند
+            status = o.get('status')
+            if status in ('awaiting_payment', 'rejected', 'cancelled', 'pending', 'pending_balance_charge'):
+                continue
+
+            # سفارش باید تأیید شده، منقضی شده یا دارای لینک کانفیگ باشد
+            if status in ('approved', 'inactive', 'deleted') or o.get('approved_date') or o.get('config_link'):
+                user_orders.append(o)
+
+        if not user_orders:
+            return None
+
+        # مرتب‌سازی از جدیدترین به قدیمی‌ترین بر اساس شناسه و تاریخ سفارش
+        def _order_sort_key(ord_item):
+            oid = 0
+            try:
+                oid = int(ord_item.get('order_id', 0))
+            except (ValueError, TypeError):
+                pass
+            date_str = str(ord_item.get('approved_date') or ord_item.get('date') or ord_item.get('created_at') or '')
+            return (oid, date_str)
+
+        user_orders.sort(key=_order_sort_key, reverse=True)
+
+        for order in user_orders:
+            resolved = _resolve_order_package(order)
+            if resolved:
+                return resolved
 
         return None
     except Exception as e:
@@ -16403,25 +16420,25 @@ async def show_ready_categories(callback: CallbackQuery):
     # ═══════════════════════════════════════════
     buttons = []
     
-    # 🟢 دکمه سبز «همون همیشگی» (آخرین بسته خریداری شده) در بالای همه دکمه‌ها
-    if not is_extend:
-        last_package_info = get_user_last_purchased_package(user_id)
-        if last_package_info:
-            last_cat, last_pkg = last_package_info
-            cat_name = last_cat.get('name') if lang == "fa" else last_cat.get('name_en', last_cat.get('name'))
-            pkg_vol = last_pkg.get('volume', 0)
-            vol_str = format_package_volume(pkg_vol, lang)
-            
-            if lang == "fa":
-                usual_button_text = f"🟢 همون همیشگی ({cat_name} - {vol_str})"
-            else:
-                usual_button_text = f"🟢 The Usual ({cat_name} - {vol_str})"
-            
-            buttons.append([InlineKeyboardButton(
-                text=usual_button_text,
-                callback_data=f"buy_package_{last_cat.get('id')}_{last_pkg.get('id')}",
-                style="success"
-            )])
+    # 🟢 دکمه سبز «همون همیشگی» (آخرین بسته خریداری شده یا بسته سرویس در حال تمدید) در بالای همه دکمه‌ها
+    target_order_id = extend_order_id if is_extend else None
+    last_package_info = get_user_last_purchased_package(user_id, target_order_id=target_order_id)
+    if last_package_info:
+        last_cat, last_pkg = last_package_info
+        cat_name = last_cat.get('name') if lang == "fa" else last_cat.get('name_en', last_cat.get('name'))
+        pkg_vol = last_pkg.get('volume', 0)
+        vol_str = format_package_volume(pkg_vol, lang)
+        
+        if lang == "fa":
+            usual_button_text = f"🟢 همون همیشگی ({cat_name} - {vol_str})"
+        else:
+            usual_button_text = f"🟢 The Usual ({cat_name} - {vol_str})"
+        
+        buttons.append([InlineKeyboardButton(
+            text=usual_button_text,
+            callback_data=f"buy_package_{last_cat.get('id')}_{last_pkg.get('id')}",
+            style="success"
+        )])
 
     
     for cat in categories:
@@ -17087,7 +17104,7 @@ async def buy_specific_package(callback: CallbackQuery):
             InlineKeyboardButton(
                 text=f"💰 {'پرداخت از موجودی' if lang=='fa' else 'Pay by Balance'}",
                 callback_data="pay_balance",
-                style="primary"
+                style="success"
             )
         ],
         [
@@ -31341,47 +31358,69 @@ def should_include_ai_user_context(message_text: str) -> bool:
 def build_ai_user_database_context(user_id: int, message_text: str = "") -> str:
     """Create a read-only, user-scoped snapshot without exposing config credentials."""
     user = users.get(str(user_id), {})
-    wants_profile = bool(re.search(
-        r"\b(?:account|profile|balance|wallet)\b|حساب|پروفایل|موجودی|کیف.?پول",
-        message_text,
-        re.IGNORECASE,
-    ))
-    wants_orders = bool(re.search(
-        r"\b(?:order|orders|subscription|config|configs|service|services|renew)\b"
-        r"|سفارش|کانفیگ|سرویس|تمدید|خرید",
-        message_text,
-        re.IGNORECASE,
-    ))
     user_fields = (
         'id', 'name', 'balance', 'total_spent', 'total_purchases',
         'lang', 'registration_status',
-    ) if wants_profile else ()
+    )
     user_snapshot = {field: user[field] for field in user_fields if field in user}
     order_fields = (
-        'order_id', 'status', 'type', 'volume', 'days', 'price', 'date',
-        'category_name', 'category_name_en',
+        'order_id', 'status', 'type', 'volume', 'days', 'price', 'amount',
+        'payment_method', 'date', 'approved_date', 'category_name',
+        'category_name_en',
     )
     user_orders = []
-    requested_order = re.search(r"(?:order|سفارش|#)\s*#?\s*(\d+)", message_text, re.IGNORECASE)
+    normalized_message = (message_text or "").translate(str.maketrans(
+        "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+        "01234567890123456789",
+    ))
+    requested_order = re.search(
+        r"(?:order|سفارش|#)\s*#?\s*(\d+)",
+        normalized_message,
+        re.IGNORECASE,
+    )
     requested_order_id = requested_order.group(1) if requested_order else None
-    if wants_orders:
-        for order in get_valid_orders().values():
-            if str(order.get('user_id')) != str(user_id):
-                continue
-            user_orders.append({field: order[field] for field in order_fields if field in order})
+    for order in orders.values():
+        if not isinstance(order, dict) or str(order.get('user_id')) != str(user_id):
+            continue
+        user_orders.append({field: order[field] for field in order_fields if field in order})
     user_orders.sort(
-        key=lambda order: str(order.get('created_at') or order.get('date') or ''),
+        key=lambda order: str(order.get('approved_date') or order.get('date') or ''),
         reverse=True,
     )
+    transaction_count = len(user_orders)
     if requested_order_id:
         user_orders = [
             order for order in user_orders
             if str(order.get('order_id')) == requested_order_id
         ]
     else:
-        user_orders = user_orders[:5]
+        user_orders = user_orders[:10]
+    test_settings = get_user_test_settings(user_id)
+    test_volume_mb = test_settings.get(
+        'volume_mb',
+        TEST_SERVICE_STATUS.get('volume_mb', 0),
+    )
+    try:
+        test_volume_display = format_package_volume(float(test_volume_mb) / 1024, "fa")
+    except (TypeError, ValueError):
+        test_volume_display = "نامشخص"
+    test_service = {
+        "enabled": TEST_SERVICE_STATUS.get('enabled', False),
+        "volume": test_volume_display,
+        "days": test_settings.get('days', TEST_SERVICE_STATUS.get('days', 0)),
+        "max_tests": test_settings.get('max_tests', TEST_SERVICE_STATUS.get('max_tests', 0)),
+        "used_tests": USER_TEST_USAGE.get(str(user_id), {}).get('count', 0),
+    }
     return json.dumps(
-        {'user': user_snapshot, 'orders': user_orders},
+        {
+            'user': user_snapshot,
+            'recent_transactions': user_orders,
+            'transaction_count': transaction_count,
+            'more_transactions_available': (
+                not requested_order_id and transaction_count > len(user_orders)
+            ),
+            'test_service_for_current_user': test_service,
+        },
         ensure_ascii=False,
         default=str,
         separators=(",", ":"),
@@ -34956,6 +34995,24 @@ def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> st
     user = get_user(user_id)
     if user.get('registration_status') in ('approved', None) or user_id == ADMIN_ID_INT:
         actions.append(("BUY_SERVICE", "خرید سرویس" if lang == "fa" else "Buy a service"))
+        if READY_PACKAGES.get('enabled', True):
+            for category in READY_PACKAGES.get('categories', []):
+                if not category.get('is_active', True):
+                    continue
+                category_name = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
+                for package in category.get('packages', []):
+                    if not package.get('is_active', True):
+                        continue
+                    category_id = category.get('id')
+                    package_id = package.get('id')
+                    if not str(category_id).isdigit() or not str(package_id).isdigit():
+                        continue
+                    volume = format_package_volume(package.get('volume', 0), lang)
+                    days = package.get('days', 30)
+                    price = package.get('price', 0)
+                    icon = category.get('icon', '📦')
+                    label = f"{icon} {category_name} · {volume} · {days} روز · {price:,} تومان"
+                    actions.append((f"BUY_PACKAGE:{category_id}:{package_id}", label[:64]))
 
     test_settings = get_user_test_settings(user_id)
     test_usage = USER_TEST_USAGE.get(str(user_id), {})
@@ -34963,7 +35020,21 @@ def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> st
         TEST_SERVICE_STATUS.get('enabled', False)
         and test_usage.get('count', 0) < test_settings.get('max_tests', TEST_SERVICE_STATUS.get('max_tests', 1))
     ):
-        actions.append(("GET_TEST_SERVICE", "دریافت تست" if lang == "fa" else "Get a test config"))
+        try:
+            test_volume = float(test_settings.get(
+                'volume_mb',
+                TEST_SERVICE_STATUS.get('volume_mb', 0),
+            )) / 1024
+            test_volume_display = format_package_volume(test_volume, lang)
+        except (TypeError, ValueError):
+            test_volume_display = "حجم نامشخص" if lang == "fa" else "Volume unavailable"
+        test_days = test_settings.get('days', TEST_SERVICE_STATUS.get('days', 0))
+        test_label = (
+            f"🎁 دریافت تست · {test_volume_display} · {test_days} روز"
+            if lang == "fa"
+            else f"🎁 Get test · {test_volume_display} · {test_days} days"
+        )
+        actions.append(("GET_TEST_SERVICE", test_label))
 
     if re.search(r"تمدید|renew|extend", message_text, re.IGNORECASE):
         requested_order = re.search(
@@ -34996,25 +35067,52 @@ def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> st
         "\n\nدر صورت درخواست کاربر یا مرتبط بودن با پاسخ، دکمه‌های کاربردی را پیشنهاد بده. "
         "می‌توانی چند دکمه را هم‌زمان بسازی. "
         "فقط از شناسه‌های مجاز زیر استفاده کن و هر دکمه را در خط مستقل و دقیقاً با قالب "
-        "[[BUTTON:شناسه|متن دکمه]] در انتهای پاسخ بنویس. شناسه جدید یا شماره سفارشی که در فهرست نیست نساز. "
+        "[[BUTTON:شناسه|متن دکمه]] در انتهای پاسخ بنویس. برای خرید یک بسته از شناسهٔ کامل BUY_PACKAGE:شناسه‌دسته:شناسه‌بسته استفاده کن. "
+        "شناسه جدید یا شماره سفارشی که در فهرست نیست نساز. "
+        "دکمه‌های بسته، انتخاب کانفیگ هستند (آبی)؛ خرید، تست و پرداخت از موجودی سبز هستند. "
         "اگر دکمه‌ای لازم نیست، هیچ نشانگر دکمه‌ای ننویس.\n"
-        "اطلاعات بعدی فقط snapshot خواندنی دیتابیس کاربر فعلی و سفارش‌های متعلق به همان کاربر است. "
+        "اطلاعات بعدی فقط snapshot خواندنی دیتابیس کاربر فعلی، تراکنش‌های متعلق به همان کاربر و عملیات مجاز همین ربات است. "
         "هرگز ادعا نکن که دیتابیس را تغییر داده‌ای یا عملیاتی انجام داده‌ای.\n"
         f"شناسه‌ها و عنوان‌های مجاز:\n{available}"
     )
 
 
 def strip_ai_button_directives(text: str) -> str:
-    return re.sub(r"\[\[BUTTON:[A-Z_]+(?::\d+)?\|[^\]\r\n]{1,64}\]\]", "", text).strip()
+    return re.sub(r"\[\[BUTTON:[A-Z_]+(?::\d+){0,2}\|[^\]\r\n]{1,64}\]\]", "", text).strip()
 
 
 def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: str = ""):
     buttons = []
     seen_callbacks = set()
     allowed_actions = set(re.findall(
-        r"- ([A-Z_]+(?::\d+)?):",
+        r"- ([A-Z_]+(?::\d+){0,2}):",
         get_ai_button_context(user_id, lang, user_message),
     ))
+    package_actions = {}
+    user = get_user(user_id)
+    if user.get('registration_status') in ('approved', None) or user_id == ADMIN_ID_INT:
+        if READY_PACKAGES.get('enabled', True):
+            for category in READY_PACKAGES.get('categories', []):
+                if not category.get('is_active', True):
+                    continue
+                for package in category.get('packages', []):
+                    if not package.get('is_active', True):
+                        continue
+                    category_id = category.get('id')
+                    package_id = package.get('id')
+                    action = f"BUY_PACKAGE:{category_id}:{package_id}"
+                    if action not in allowed_actions:
+                        continue
+                    lang_category = category.get('name') if lang == "fa" else category.get('name_en', category.get('name'))
+                    volume = format_package_volume(package.get('volume', 0), lang)
+                    days = package.get('days', 30)
+                    price = package.get('price', 0)
+                    icon = category.get('icon', '📦')
+                    label = f"{icon} {lang_category} · {volume} · {days} روز · {price:,} تومان"
+                    package_actions[action] = {
+                        "callback_data": f"ai_action_buy_package_{category_id}_{package_id}",
+                        "label": label[:64],
+                    }
     allowed_orders = {
         str(order.get('order_id'))
         for order in get_user_support_configs(user_id)
@@ -35037,7 +35135,7 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
         "GET_TEST_SERVICE": "get_test_service",
     }
     suggestions = re.findall(
-        r"\[\[BUTTON:([A-Z_]+(?::\d+)?)\|([^\]\r\n]{1,64})\]\]",
+        r"\[\[BUTTON:([A-Z_]+(?::\d+){0,2})\|([^\]\r\n]{1,64})\]\]",
         answer,
     )
     query = (user_message or "").translate(str.maketrans(
@@ -35110,6 +35208,18 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
         query,
         re.IGNORECASE,
     )
+    all_packages_requested = all_buttons_requested or re.search(
+        r"(?:همه|تمام).{0,20}(?:پکیج|بسته)|(?:پکیج|بسته).{0,20}(?:همه|تمام)|"
+        r"(?:لیست|فهرست).{0,20}(?:پکیج|بسته)|"
+        r"(?:all|every).{0,20}(?:packages?|plans?)|(?:packages?|plans?).{0,20}(?:all|list)",
+        query,
+        re.IGNORECASE,
+    )
+    if all_packages_requested:
+        inferred_actions.extend(
+            (action, details["label"])
+            for action, details in package_actions.items()
+        )
     for action, (pattern, label) in action_triggers.items():
         if all_buttons_requested or re.search(pattern, query, re.IGNORECASE):
             inferred_actions.append((action, label))
@@ -35119,7 +35229,8 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
             item for item in inferred_actions
             if item[0] not in suggested_ids
         ] + suggestions
-    for action, label in suggestions[:8]:
+    suggestion_limit = max(8, len(package_actions) + 8) if all_packages_requested else 8
+    for action, label in suggestions[:suggestion_limit]:
         if action not in allowed_actions:
             continue
         if action.startswith("RENEW_ORDER:"):
@@ -35127,19 +35238,32 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
             if order_id not in allowed_orders:
                 continue
             callback_data = f"extend_service_{order_id}"
+            button_style = None
+        elif action in package_actions:
+            callback_data = package_actions[action]["callback_data"]
+            label = package_actions[action]["label"]
+            button_style = "primary"
         else:
             callback_data = callback_map.get(action, "")
             if action == "GET_TEST_SERVICE" and not TEST_SERVICE_STATUS.get('enabled', False):
                 continue
+            button_style = "success" if action in (
+                "BUY_SERVICE", "GET_TEST_SERVICE", "INCREASE_BALANCE"
+            ) else None
         clean_label = re.sub(r"[<>\[\]\r\n]", "", label).strip()[:40]
         if callback_data:
-            action_callback = (
-                f"ai_action_renew_order_{action.partition(':')[2]}"
-                if action.startswith("RENEW_ORDER:")
-                else f"ai_action_{action.lower()}"
-            )
+            if action.startswith("RENEW_ORDER:"):
+                action_callback = f"ai_action_renew_order_{action.partition(':')[2]}"
+            elif action in package_actions:
+                action_callback = package_actions[action]["callback_data"]
+            else:
+                action_callback = f"ai_action_{action.lower()}"
             if clean_label and action_callback not in seen_callbacks:
-                buttons.append([InlineKeyboardButton(text=clean_label, callback_data=action_callback)])
+                buttons.append([InlineKeyboardButton(
+                    text=clean_label,
+                    callback_data=action_callback,
+                    style=button_style,
+                )])
                 seen_callbacks.add(action_callback)
 
     if "clear_ai_memory" not in seen_callbacks:
@@ -35203,6 +35327,14 @@ async def handle_ai_menu_action(callback: CallbackQuery):
             return
         callback_data = f"extend_service_{order_id}"
         handler = extend_service_start
+    elif action.startswith("buy_package_"):
+        package_match = re.fullmatch(r"buy_package_(\d+)_(\d+)", action)
+        if not package_match:
+            await callback.answer("❌ بسته برای خرید معتبر نیست.", show_alert=True)
+            return
+        category_id, package_id = package_match.groups()
+        callback_data = f"buy_package_{category_id}_{package_id}"
+        handler = buy_specific_package
     else:
         action_handler = action_handlers.get(action)
         if not action_handler:
@@ -35324,7 +35456,7 @@ async def get_ai_response(
                 full_message += f"کاربر {user_name}: {message_text}"
             else:
                 full_message += f"کاربر: {message_text}"
-            system_instruction = app_config.GEMINI_SYSTEM_PROMPT
+            system_instruction = app_config.generate_dynamic_system_prompt()
             request_context = []
             if button_context:
                 request_context.append(f"[AVAILABLE_BOT_ACTIONS]\n{button_context}")
@@ -35626,11 +35758,7 @@ async def process_ai_chat_message(message: Message):
                 user_id,
                 message.from_user.username,
                 button_context=button_context,
-                user_context=(
-                    build_ai_user_database_context(user_id, message_text)
-                    if should_include_ai_user_context(message_text)
-                    else ""
-                ),
+                user_context=build_ai_user_database_context(user_id, message_text),
             ),
             timeout=90
         )
