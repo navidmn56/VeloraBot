@@ -16732,22 +16732,18 @@ select the volume and days you want 👇
         if lang == "fa":
             volume_display = format_package_volume(volume, "fa")
             days_display = f"{days} روز"
-            if ip_limit == 0:
-                users_display = "♾️ کاربر"
-            elif ip_limit == 1:
-                users_display = "۱ کاربر"
+            if ip_limit > 0:
+                users_display = "۱ کاربر" if ip_limit == 1 else f"{ip_limit} کاربر"
+                info_label = f"{volume_display} - {days_display} - {users_display}"
             else:
-                users_display = f"{ip_limit} کاربر"
-            info_label = f"{volume_display} - {days_display} - {users_display}"
+                info_label = f"{volume_display} - {days_display}"
         else:
             volume_display = "∞GB" if volume == 0 else (f"{volume * 1024:.0f}MB" if volume < 1 else f"{volume}GB")
-            if ip_limit == 0:
-                users_display = "∞ Users"
-            elif ip_limit == 1:
-                users_display = "1 User"
+            if ip_limit > 0:
+                users_display = "1 User" if ip_limit == 1 else f"{ip_limit} Users"
+                info_label = f"{volume_display} - {days}d - {users_display}"
             else:
-                users_display = f"{ip_limit} Users"
-            info_label = f"{volume_display} - {days}d - {users_display}"
+                info_label = f"{volume_display} - {days}d"
 
         if lang == "fa":
             price_label = f"{price:,} تومان"
