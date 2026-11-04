@@ -35067,7 +35067,11 @@ def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> st
         "\n\nدر صورت درخواست کاربر یا مرتبط بودن با پاسخ، دکمه‌های کاربردی را پیشنهاد بده. "
         "می‌توانی چند دکمه را هم‌زمان بسازی. "
         "فقط از شناسه‌های مجاز زیر استفاده کن و هر دکمه را در خط مستقل و دقیقاً با قالب "
-        "[[BUTTON:شناسه|متن دکمه]] در انتهای پاسخ بنویس. برای خرید یک بسته از شناسهٔ کامل BUY_PACKAGE:شناسه‌دسته:شناسه‌بسته استفاده کن. "
+        "[[BUTTON:شناسه|متن دکمه]] در انتهای پاسخ بنویس؛ جداکنندهٔ شناسه و متن فقط | است و بعد از شناسه دونقطه نگذار. "
+        "نمونه: [[BUTTON:BUY_PACKAGE:1:2|🛒 خرید بسته 10 گیگ]]. "
+        "برای خرید یک بسته از شناسهٔ کامل BUY_PACKAGE:شناسه‌دسته:شناسه‌بسته استفاده کن. "
+        "اگر کاربر فاکتور، رسید یا پرداخت خواست، برای بستهٔ مورد اشاره دکمهٔ خرید بساز تا به صفحهٔ انتخاب روش پرداخت برسد؛ "
+        "اگر بسته مشخص نیست، دکمه‌های بسته‌های فعال را برای انتخاب نشان بده. "
         "شناسه جدید یا شماره سفارشی که در فهرست نیست نساز. "
         "دکمه‌های بسته، انتخاب کانفیگ هستند (آبی)؛ خرید، تست و پرداخت از موجودی سبز هستند. "
         "اگر دکمه‌ای لازم نیست، هیچ نشانگر دکمه‌ای ننویس.\n"
@@ -35078,10 +35082,27 @@ def get_ai_button_context(user_id: int, lang: str, message_text: str = "") -> st
 
 
 def strip_ai_button_directives(text: str) -> str:
-    return re.sub(r"\[\[BUTTON:[A-Z_]+(?::\d+){0,2}\|[^\]\r\n]{1,64}\]\]", "", text).strip()
+    text = re.sub(
+        r"(?m)^[ \t]*\[\[\s*BUTTON\b[^\r\n]*(?:\]\])?[ \t]*(?:\r?\n|$)",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"\[\[\s*BUTTON\b[^\]\r\n]*(?:\]\]|(?=\r?$))",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: str = ""):
+def build_ai_reply_keyboard(
+    answer: str,
+    user_id: int,
+    lang: str,
+    user_message: str = "",
+    include_chat_controls: bool = True,
+):
     buttons = []
     seen_callbacks = set()
     allowed_actions = set(re.findall(
@@ -35135,9 +35156,11 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
         "GET_TEST_SERVICE": "get_test_service",
     }
     suggestions = re.findall(
-        r"\[\[BUTTON:([A-Z_]+(?::\d+){0,2})\|([^\]\r\n]{1,64})\]\]",
+        r"\[\[\s*BUTTON\s*:\s*([A-Z_]+(?::\d+){0,2})(?:\s*\|\s*|\s*:\s*)([^\]\r\n]{1,128})\]\]",
         answer,
+        re.IGNORECASE,
     )
+    suggestions = [(action.upper(), label.strip()) for action, label in suggestions]
     query = (user_message or "").translate(str.maketrans(
         "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
         "01234567890123456789",
@@ -35208,7 +35231,12 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
         query,
         re.IGNORECASE,
     )
-    all_packages_requested = all_buttons_requested or re.search(
+    purchase_intent = re.search(
+        r"خرید|خریدار|بخریم|بخرم|بخر|سفارش جدید|\bbuy\b|\bpurchase\b|\border\b",
+        query,
+        re.IGNORECASE,
+    )
+    all_packages_requested = all_buttons_requested or purchase_intent or re.search(
         r"(?:همه|تمام).{0,20}(?:پکیج|بسته)|(?:پکیج|بسته).{0,20}(?:همه|تمام)|"
         r"(?:لیست|فهرست).{0,20}(?:پکیج|بسته)|"
         r"(?:all|every).{0,20}(?:packages?|plans?)|(?:packages?|plans?).{0,20}(?:all|list)",
@@ -35220,6 +35248,37 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
             (action, details["label"])
             for action, details in package_actions.items()
         )
+    payment_request = re.search(
+        r"رسید|فاکتور|پرداخت|واریز|invoice|receipt|payment",
+        query,
+        re.IGNORECASE,
+    )
+    if payment_request and package_actions:
+        first_package = re.search(
+            r"اول(?:ی|یو|و|ین|یش|شو)?|first|1st",
+            query,
+            re.IGNORECASE,
+        )
+        if first_package:
+            action = next(iter(package_actions))
+            payment_label = (
+                "🧾 پرداخت بسته اول"
+                if lang == "fa"
+                else "🧾 Pay for the first package"
+            )
+            package_actions[action]["label"] = payment_label
+            inferred_actions.append((action, payment_label))
+        elif not all_packages_requested:
+            for details in package_actions.values():
+                details["label"] = (
+                    f"🧾 پرداخت · {details['label']}"
+                    if lang == "fa"
+                    else f"🧾 Pay · {details['label']}"
+                )[:64]
+            inferred_actions.extend(
+                (action, details["label"])
+                for action, details in package_actions.items()
+            )
     for action, (pattern, label) in action_triggers.items():
         if all_buttons_requested or re.search(pattern, query, re.IGNORECASE):
             inferred_actions.append((action, label))
@@ -35229,6 +35288,12 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
             item for item in inferred_actions
             if item[0] not in suggested_ids
         ] + suggestions
+    if any(action in package_actions for action, _ in suggestions):
+        suggestions = [
+            (action, label)
+            for action, label in suggestions
+            if action != "BUY_SERVICE"
+        ]
     suggestion_limit = max(8, len(package_actions) + 8) if all_packages_requested else 8
     for action, label in suggestions[:suggestion_limit]:
         if action not in allowed_actions:
@@ -35266,16 +35331,17 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
                 )])
                 seen_callbacks.add(action_callback)
 
-    if "clear_ai_memory" not in seen_callbacks:
+    if include_chat_controls and "clear_ai_memory" not in seen_callbacks:
         buttons.append([InlineKeyboardButton(
             text="🧹 پاک کردن حافظه" if lang == "fa" else "🧹 Clear Memory",
             callback_data="clear_ai_memory",
         )])
-    buttons.append([InlineKeyboardButton(
-        text="❌ خروج از چت" if lang == "fa" else "❌ Exit Chat",
-        callback_data="exit_ai_chat",
-        style="danger",
-    )])
+    if include_chat_controls:
+        buttons.append([InlineKeyboardButton(
+            text="❌ خروج از چت" if lang == "fa" else "❌ Exit Chat",
+            callback_data="exit_ai_chat",
+            style="danger",
+        )])
     display_answer = strip_ai_button_directives(answer)
     if not display_answer:
         if any(
@@ -35294,7 +35360,8 @@ def build_ai_reply_keyboard(answer: str, user_id: int, lang: str, user_message: 
                 if lang == "fa"
                 else "Choose one of the suggested buttons below to continue."
             )
-    return display_answer, InlineKeyboardMarkup(inline_keyboard=buttons)
+    reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    return display_answer, reply_markup
 
 
 @dp.callback_query(F.data.startswith("ai_action_"))
@@ -36216,6 +36283,7 @@ async def auto_ai_response(message: Message):
             message.text or "",
             user_id,
             message.from_user.username,
+            button_context=get_ai_button_context(user_id, lang, message.text or ""),
             user_context=(
                 build_ai_user_database_context(user_id, message.text or "")
                 if should_include_ai_user_context(message.text or "")
@@ -36235,6 +36303,14 @@ async def auto_ai_response(message: Message):
         
         increment_ai_usage(user_id)
         
+        answer, reply_keyboard = build_ai_reply_keyboard(
+            answer,
+            user_id,
+            lang,
+            user_message=message.text or "",
+            include_chat_controls=False,
+        )
+
         # ✅ پاکسازی پاسخ
         answer = re.sub(r'<[^>]+>', '', answer)
         answer = answer.replace('*', '').replace('`', '')
@@ -36247,7 +36323,11 @@ async def auto_ai_response(message: Message):
 💡 برای چت اختصاصی، از دکمه «🤖 چت با AI» استفاده کنید.
 📊 سوالات باقیمانده امروز: {remaining - 1}/{daily_limit}"""
         
-        await processing_msg.edit_text(response_text, parse_mode=ParseMode.HTML)
+        await processing_msg.edit_text(
+            response_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_keyboard,
+        )
         
     except Exception as e:
         logger.error(f"خطا در auto AI: {e}")
