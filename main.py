@@ -28,6 +28,7 @@ import unicodedata
 import qrcode
 from yarl import URL
 from wireguard_system import build_wireguard_config
+from dynamic_phrases import format_start_greeting, format_main_menu_title
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -5972,10 +5973,7 @@ async def cmd_start(message: Message):
         if not can_continue:
             return
         
-        if lang == "fa":
-            text = f"{premium_emoji('rocket', '🚀')} سلام {user_name_escaped}! خوش آمدید"
-        else:
-            text = f"{premium_emoji('rocket', '🚀')} Hello {user_name_escaped}! Welcome"
+        text = format_start_greeting(user_name_escaped, lang, premium_emoji('rocket', '🚀'))
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
@@ -6007,10 +6005,7 @@ async def cmd_start(message: Message):
         if not can_continue:
             return
         
-        if lang == "fa":
-            text = f"{premium_emoji('rocket', '🚀')} سلام {user_name_escaped}! خوش آمدید"
-        else:
-            text = f"{premium_emoji('rocket', '🚀')} Hello {user_name_escaped}! Welcome"
+        text = format_start_greeting(user_name_escaped, lang, premium_emoji('rocket', '🚀'))
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
@@ -13945,10 +13940,7 @@ async def exit_ai_chat(callback: CallbackQuery):
     
     
     
-    if lang == "fa":
-        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
-    else:
-        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
+    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
     
     await callback.message.edit_text(
         text,
@@ -16713,10 +16705,7 @@ async def cancel_extend(callback: CallbackQuery):
     # ─── بازگشت به منوی اصلی ───
     is_admin = (user_id == ADMIN_ID_INT)
     
-    if lang == "fa":
-        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
-    else:
-        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
+    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
     
     keyboard = get_main_keyboard(is_admin, lang, user_id)
     
@@ -20735,10 +20724,7 @@ async def back_to_main(callback: CallbackQuery):
     after_state = user_states.get(user_id, {})
     logger.info(f"🔍 وضعیت نهایی user_states در back_to_main: {after_state}")
     
-    if lang == "fa":
-        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
-    else:
-        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
+    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
     if callback.message.content_type == 'text':
         await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang, user_id))
     else:
@@ -21615,7 +21601,7 @@ async def broadcast_back_to_main(callback: CallbackQuery):
     lang = get_user(user_id).get('lang', 'fa')
     is_admin = (user_id == ADMIN_ID_INT)
     
-    text = f"{premium_emoji('rocket', '🚀')} منوی اصلی" if lang == "fa" else f"{premium_emoji('rocket', '🚀')} Main Menu"
+    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
     
     try:
         await callback.message.answer(
