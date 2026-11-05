@@ -207,8 +207,8 @@ class AlertSystem:
             order_id = order.get('order_id')
             is_test = order.get('is_test', False) or order.get('type') == 'test'
             
-            type_emoji = "🧪" if is_test else "📡"
-            type_text = "Test" if is_test else "Normal"
+            type_emoji = "🎁" if is_test else "📡"
+            type_text = "Welcome service" if is_test else "Normal"
             
             if alert_type == 'volume':
                 emoji = "⚠️"
@@ -241,7 +241,7 @@ class AlertSystem:
     
     async def run_alert_worker(self):
         """کارگر پس‌زمینه"""
-        logger.info("🧪 Alert system started (one-time per threshold)")
+        logger.info("🔔 Alert system started (one-time per threshold)")
         
         self._save_cache_to_disk()
         
@@ -714,18 +714,18 @@ class AlertSystem:
         total_display = self._format_volume(total_gb, lang)
         remaining_display = self._format_volume(remaining_gb, lang)
         exhausted = threshold_label == "exhausted"
-        service_name = "سرویس آزمایشی" if is_test else "سرویس"
-        service_name_en = "test service" if is_test else "service"
+        service_name = "سرویس خوشامد" if is_test else "سرویس"
+        service_name_en = "welcome service" if is_test else "service"
 
         if lang == 'fa':
             if exhausted:
                 if is_test:
                     text = (
-                        f"{RLM}❌ <b>حجم سرویس آزمایشی به پایان رسیده است</b>\n\n"
-                        f"{RLM}🧪 حجم تست شما به‌طور کامل مصرف شده است.\n\n"
+                        f"{RLM}❌ <b>حجم سرویس خوشامد به پایان رسیده است</b>\n\n"
+                        f"{RLM}🎁 حجم سرویس خوشامد شما به‌طور کامل مصرف شده است.\n\n"
                         f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
                         f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n\n"
-                        f"{RLM}سرویس آزمایشی قابل تمدید نیست. برای ادامه استفاده، سرویس اصلی را از بخش خرید تهیه کنید."
+                        f"{RLM}برای ادامه استفاده، سرویس اصلی را از بخش خرید تهیه کنید."
                     )
                 else:
                     text = (
@@ -739,12 +739,12 @@ class AlertSystem:
             else:
                 if is_test:
                     text = (
-                        f"{RLM}⚠️ <b>حجم سرویس آزمایشی رو به اتمام است</b>\n\n"
-                        f"{RLM}🧪 بخش عمده‌ای از حجم تست شما مصرف شده است.\n\n"
+                        f"{RLM}⚠️ <b>حجم سرویس خوشامد رو به اتمام است</b>\n\n"
+                        f"{RLM}🎁 بخش عمده‌ای از حجم سرویس خوشامد شما مصرف شده است.\n\n"
                         f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
                         f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n"
                         f"{RLM}📉 حجم باقی‌مانده: {remaining_display} ({to_persian_number(f'{remaining_percent:.1f}')}٪)\n\n"
-                        f"{RLM}سرویس تست قابل تمدید نیست؛ برای ادامه پس از پایان تست، سرویس اصلی را خریداری کنید."
+                        f"{RLM}برای ادامه، سرویس اصلی را خریداری کنید."
                     )
                 else:
                     text = (
@@ -759,11 +759,11 @@ class AlertSystem:
             if exhausted:
                 if is_test:
                     text = (
-                        f"❌ <b>Test service data allowance exhausted</b>\n\n"
-                        f"🧪 Your test data allowance has been fully used.\n\n"
+                        f"❌ <b>Welcome service data allowance exhausted</b>\n\n"
+                        f"🎁 Your welcome-service data allowance has been fully used.\n\n"
                         f"🆔 Order: #{order_id}\n"
                         f"📊 Used: {used_display} of {total_display}\n\n"
-                        f"Test services cannot be renewed. Purchase a full service to continue."
+                        f"Purchase a full service to continue."
                     )
                 else:
                     text = (
@@ -777,12 +777,12 @@ class AlertSystem:
             else:
                 if is_test:
                     text = (
-                        f"⚠️ <b>Test service data is running low</b>\n\n"
-                        f"🧪 Most of your test data allowance has been used.\n\n"
+                        f"⚠️ <b>Welcome service data is running low</b>\n\n"
+                        f"🎁 Most of your welcome-service data allowance has been used.\n\n"
                         f"🆔 Order: #{order_id}\n"
                         f"📊 Used: {used_display} of {total_display}\n"
                         f"📉 Remaining: {remaining_display} ({remaining_percent:.1f}%)\n\n"
-                        f"Test services cannot be renewed. Purchase a full service when you are ready to continue."
+                        f"Purchase a full service when you are ready to continue."
                     )
                 else:
                     text = (
@@ -831,18 +831,18 @@ class AlertSystem:
             minutes_left = max(0, int(hours_left * 60))
             time_left = f"{to_persian_number(minutes_left)} دقیقه" if lang == 'fa' else f"{minutes_left} minutes"
 
-        service_name = "سرویس آزمایشی" if is_test else "سرویس"
-        service_name_en = "test service" if is_test else "service"
+        service_name = "سرویس خوشامد" if is_test else "سرویس"
+        service_name_en = "welcome service" if is_test else "service"
         expired = notify_label == "expired"
 
         if lang == 'fa':
             if expired:
                 if is_test:
                     text = (
-                        f"{RLM}❌ <b>مهلت سرویس آزمایشی به پایان رسیده است</b>\n\n"
-                        f"{RLM}🧪 زمان استفاده از تست شما تمام شده است.\n\n"
+                        f"{RLM}❌ <b>مهلت سرویس خوشامد به پایان رسیده است</b>\n\n"
+                        f"{RLM}🎁 زمان استفاده از سرویس خوشامد شما تمام شده است.\n\n"
                         f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
-                        f"{RLM}سرویس تست قابل تمدید نیست. برای ادامه، یک سرویس اصلی خریداری کنید."
+                        f"{RLM}برای ادامه، یک سرویس اصلی خریداری کنید."
                     )
                 else:
                     text = (
@@ -854,10 +854,10 @@ class AlertSystem:
             else:
                 if is_test:
                     text = (
-                        f"{RLM}⚠️ <b>سرویس آزمایشی شما به‌زودی منقضی می‌شود</b>\n\n"
-                        f"{RLM}🧪 زمان باقی‌مانده: {time_left}\n"
+                        f"{RLM}⚠️ <b>سرویس خوشامد شما به‌زودی منقضی می‌شود</b>\n\n"
+                        f"{RLM}🎁 زمان باقی‌مانده: {time_left}\n"
                         f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
-                        f"{RLM}تست قابل تمدید نیست؛ برای استفاده بدون وقفه، سرویس اصلی را خریداری کنید."
+                        f"{RLM}برای استفاده بدون وقفه، سرویس اصلی را خریداری کنید."
                     )
                 else:
                     text = (
@@ -871,10 +871,10 @@ class AlertSystem:
             if expired:
                 if is_test:
                     text = (
-                        f"❌ <b>Test service has expired</b>\n\n"
-                        f"🧪 Your test period has ended.\n\n"
+                        f"❌ <b>Your welcome service has expired</b>\n\n"
+                        f"🎁 Your welcome-service period has ended.\n\n"
                         f"🆔 Order: #{order_id}\n\n"
-                        f"Test services cannot be renewed. Purchase a full service to continue."
+                        f"Purchase a full service to continue."
                     )
                 else:
                     text = (
@@ -886,10 +886,10 @@ class AlertSystem:
             else:
                 if is_test:
                     text = (
-                        f"⚠️ <b>Your test service will expire soon</b>\n\n"
-                        f"🧪 Time remaining: {time_left}\n"
+                        f"⚠️ <b>Your welcome service will expire soon</b>\n\n"
+                        f"🎁 Time remaining: {time_left}\n"
                         f"🆔 Order: #{order_id}\n\n"
-                        f"Test services cannot be renewed. Purchase a full service for uninterrupted access."
+                        f"Purchase a full service for uninterrupted access."
                     )
                 else:
                     text = (
