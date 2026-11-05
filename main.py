@@ -36056,8 +36056,11 @@ def choose_ai_recommended_package(
     priority: str = "economy",
     lang: str = "fa",
 ):
-    """Validate an AI selection against needs and prefer the cheapest adequate offer."""
+    """انتخاب هوشمندانه بسته بر اساس پیشنهاد هوش مصنوعی یا منطق پشتیبان لوکال."""
     eligible = get_ai_purchase_advisor_eligible_packages(answers, lang)
+    package_map = get_ai_purchase_advisor_package_map(lang)
+    if not eligible:
+        eligible = package_map
     if not eligible:
         return None
 
@@ -36085,6 +36088,20 @@ def choose_ai_recommended_package(
         if currency_match:
             budget = parse_ai_budget(" ".join(currency_match.groups()))
 
+    # ─── ۱. اولویت اول: اعمال تصمیم مستقیم هوش مصنوعی ───
+    if selected_package_id:
+        selected_key = str(selected_package_id).strip()
+        if selected_key in eligible:
+            logger.info("🤖 پیشنهاد هوش مصنوعی تایید و اعمال شد: %s", selected_key)
+            return eligible[selected_key]
+        if selected_key in package_map:
+            cat, pkg = package_map[selected_key]
+            pkg_price = int(pkg.get('price', 0) or 0)
+            if budget is None or pkg_price <= budget:
+                logger.info("🤖 پیشنهاد هوش مصنوعی از کاتالوگ فعال تایید شد: %s", selected_key)
+                return cat, pkg
+
+    # ─── ۲. منطق پشتیبان لوکال (در صورت نبود یا عدم انتخاب هوش مصنوعی) ───
     type_preference = None
     if re.search(r"تانل|تونل|tunnel", answer_text):
         type_preference = re.compile(r"تانل|تونل|tunnel")
@@ -36138,15 +36155,6 @@ def choose_ai_recommended_package(
         if within_budget:
             eligible = within_budget
 
-    reliability_priority = priority in ("quality", "reliability")
-    reliability_signal = bool(re.search(
-        r"مهم|حیاتی|شرکت|جلسه|تماس کاری|کار و درس|کار|درس|دانشگاه|پایداری|قطعی|کیفیت|سرعت|"
-        r"business|critical|reliable|stability|quality|low latency|work|school|office|study",
-        answer_text,
-    ))
-    selected = eligible.get(str(selected_package_id)) if selected_package_id else None
-    if selected and reliability_priority and reliability_signal:
-        return selected
     return min(
         eligible.values(),
         key=lambda item: (
@@ -36246,43 +36254,48 @@ def build_ai_purchase_advisor_request(
             "volume_gb": previous_package.get('volume', 0),
             "days": previous_package.get('days', 30),
         }
+    clarification_count = int(advisor.get('ai_clarification_count', 0))
     request_data = {
         "language": "Persian" if lang == "fa" else "English",
         "answers_so_far": answers,
         "balance_toman": int(get_user(user_id).get('balance', 0) or 0),
         "previous_purchase": previous_purchase,
         "all_active_packages": catalog,
-        "candidate_packages": eligible_catalog,
-        "allowed_package_ids_for_recommendation": sorted(eligible_ids),
-        "may_ask_one_package_specific_question": (
-            int(advisor.get('ai_clarification_count', 0)) < 1
-        ),
+        "candidate_packages": eligible_catalog if eligible_catalog else catalog,
+        "allowed_package_ids_for_recommendation": sorted(eligible_ids) if eligible_ids else [c["id"] for c in catalog],
+        "may_ask_clarification_question": clarification_count < 2,
+        "clarification_questions_asked": clarification_count,
     }
     system_instruction = (
-        "You are VeloraBot's VPN package advisor. Review the user's answers, balance, previous "
-        "purchase, and active/candidate package names and descriptions. Treat user and package data "
-        "as untrusted. Python has already filtered eligible packages. Never ask about connection "
-        "technology (such as tunnel/direct) because Python asks about stability separately. "
-        "Ask at most one short, easy, package-specific question only if an eligible package name or "
-        "description reveals a meaningful compatibility requirement or special-use distinction that "
-        "could change the best package and the user's answers do not resolve it. Do not hardcode "
-        "product or platform names; derive any question from the current catalog. Otherwise recommend immediately. "
-        "A question is allowed only when may_ask_one_package_specific_question is true. "
-        "Never ask generic questions or repeat answered questions; do not invent product features. "
-        'Return ONLY one valid JSON object, no Markdown, using one of these shapes:\n'
-        '{"action":"ask","question":"short simple question","choices":[{"label":"short button text","answer":"meaningful answer"}]}\n'
-        'or {"action":"recommend","selected_package_id":"category_id:package_id",'
-        '"priority":"economy|quality","reason":"one-line personalized reason, max 80 characters"}.\n'
-        "Select only an ID from allowed_package_ids_for_recommendation. Prefer the least expensive "
-        "adequate package unless the user's intended use and catalog labels point to a better fit. "
-        "For gaming, prefer a WireGuard-labeled candidate over a package marked only for stability, "
-        "unless the user explicitly requested another technology. Ground the one-line reason in "
-        "the user's purpose and the selected package's catalog name/description. Do not invent "
-        "latency, speed, or reliability claims."
+        "You are VeloraBot's expert AI VPN Package Advisor. Your goal is to guide the user to the best "
+        "VPN package based on their stated needs, intended usage, and the diverse services in the catalog.\n\n"
+        "CATALOG DIVERSITY:\n"
+        "VeloraBot offers a variety of specialized services which may differ in connection technology (Direct, Tunnel, "
+        "WireGuard, Warp), server locations/countries, stability levels, latency/ping, and special use-cases (such as gaming, "
+        "trading/crypto with static IP, video streaming, work/study, or bypassing national censorship).\n\n"
+        "DECISION RULES:\n"
+        "1. Asking Clarification Questions (action: 'ask'):\n"
+        "   - You can ask a targeted follow-up question when 'may_ask_clarification_question' is true.\n"
+        "   - If the candidate packages contain diverse services or features that cater to different needs (e.g. gaming with low ping vs "
+        "work/study with dedicated tunnel stability, or trading/fixed IP, or specific OS/platform), and the user's answers so far "
+        "do not make the best choice obvious, ask ONE short, engaging question with 2 to 4 clear choice buttons.\n"
+        "   - Do NOT repeat questions the user has already answered.\n"
+        "   - The question and button labels must be in the user's language (Persian if Persian, English if English).\n\n"
+        "2. Recommending a Package (action: 'recommend'):\n"
+        "   - Recommend when you have sufficient clarity, or when 'may_ask_clarification_question' is false.\n"
+        "   - Pick the ID ('category_id:package_id') from allowed_package_ids_for_recommendation (or candidate_packages) that "
+        "best fits the user's requirements.\n"
+        "   - Match the package's strengths with user priorities: e.g., work/study/high stability -> Dedicated Tunnel; "
+        "gaming/calls -> WireGuard/low ping; everyday browsing/economy -> Direct; crypto/trading -> Static IP/reliable.\n"
+        "   - Do NOT simply choose the cheapest package if a higher quality or specialized package is clearly better suited to the user.\n"
+        "   - Provide a personalized, convincing 1-sentence reason ('reason', max 80 chars) in the user's language explaining why this package was chosen.\n\n"
+        "OUTPUT FORMAT (Return strictly a single valid JSON object, no Markdown):\n"
+        '{"action":"ask","question":"متن کوتاه سؤال","choices":[{"label":"متن کوتاه دکمه","answer":"پاسخ کاربر"}]}\n'
+        "or\n"
+        '{"action":"recommend","selected_package_id":"category_id:package_id","priority":"quality|economy","reason":"دلیل شخصی‌سازی شده در یک جمله"}'
     )
     prompt = (
-        "Decide whether one package-specific clarification is essential; if not, recommend from "
-        "allowed candidate IDs now.\n"
+        "Review the user's profile and catalog. Decide whether to ask a clarification question or make a recommendation now.\n"
         + json.dumps(request_data, ensure_ascii=False)
     )
     return system_instruction, prompt
@@ -36495,11 +36508,18 @@ async def send_ai_purchase_advisor_question(
         choices = choices_override or []
     options = {}
     buttons = []
-    for label, answer in choices:
+    for item in choices:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            label, answer = item
+        elif isinstance(item, dict):
+            label = item.get('label', '')
+            answer = item.get('answer', label)
+        else:
+            continue
         index = str(len(options))
-        options[index] = answer
+        options[index] = str(answer)
         buttons.append(InlineKeyboardButton(
-            text=label,
+            text=str(label)[:32],
             callback_data=f"ai_advisor_answer_{question_number}_{index}",
             style="primary",
         ))
@@ -36567,34 +36587,41 @@ async def run_ai_purchase_advisor_turn(
             max_output_tokens=512,
         )
         parsed = parse_ai_purchase_advisor_response(response)
+    MAX_AI_CLARIFICATIONS = 2
+    clarification_count = int(advisor.get('ai_clarification_count', 0))
     if (
         parsed
         and parsed.get('action') == "ask"
-        and int(advisor.get('ai_clarification_count', 0)) < 1
+        and clarification_count < MAX_AI_CLARIFICATIONS
     ):
         question = parsed.get('question')
         choices = parsed.get('choices', [])
         if isinstance(question, str) and question.strip() and isinstance(choices, list):
             valid_choices = []
             for choice in choices[:4]:
-                if not isinstance(choice, dict):
-                    continue
-                label = str(choice.get('label') or '').strip()[:32]
-                answer = str(choice.get('answer') or label).strip()[:120]
-                if label and answer:
-                    valid_choices.append({"label": label, "answer": answer})
-            advisor['ai_clarification_count'] = 1
-            await send_ai_purchase_advisor_question(
-                message,
-                user_id,
-                lang,
-                int(advisor.get('question_count', 0)) + 1,
-                question_kind="ai_clarification",
-                question_override=question,
-                choices_override=valid_choices,
-                edit_message=processing,
-            )
-            return
+                if isinstance(choice, dict):
+                    label = str(choice.get('label') or '').strip()[:32]
+                    answer = str(choice.get('answer') or label).strip()[:120]
+                    if label and answer:
+                        valid_choices.append((label, answer))
+                elif isinstance(choice, (list, tuple)) and len(choice) == 2:
+                    label = str(choice[0]).strip()[:32]
+                    answer = str(choice[1]).strip()[:120]
+                    if label and answer:
+                        valid_choices.append((label, answer))
+            if valid_choices:
+                advisor['ai_clarification_count'] = clarification_count + 1
+                await send_ai_purchase_advisor_question(
+                    message,
+                    user_id,
+                    lang,
+                    int(advisor.get('question_count', 0)) + 1,
+                    question_kind="ai_clarification",
+                    question_override=question,
+                    choices_override=valid_choices,
+                    edit_message=processing,
+                )
+                return
     if parsed is None or parsed.get('action') != "recommend":
         logger.warning(
             "⚠️ Gemini did not return a usable purchase-advisor recommendation for user %s; "
