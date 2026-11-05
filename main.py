@@ -35797,6 +35797,17 @@ def is_ai_purchase_advisor_gaming_package(
     return bool(re.search(
         r"گیم(?:ینگ)?|بازی|gaming|games?",
         package_text,
+    )) or is_ai_purchase_advisor_wireguard_package(category, package)
+
+
+def is_ai_purchase_advisor_wireguard_package(
+    category: dict,
+    package: dict,
+) -> bool:
+    package_text = get_ai_purchase_advisor_package_search_text(category, package)
+    return bool(re.search(
+        r"wire\s*guard|وایر\s*گارد|(?<![a-z])wg(?![a-z])",
+        package_text,
     ))
 
 
@@ -36069,12 +36080,29 @@ def choose_ai_recommended_package(
         if matching_type:
             eligible = matching_type
 
+    purpose_answer = (
+        str(answers[0].get('answer', ''))
+        if answers and isinstance(answers[0], dict)
+        else ""
+    )
+    requests_gaming = bool(re.search(
+        r"گیم(?:ینگ)?|بازی|gaming|games?",
+        normalize_ai_user_text(purpose_answer),
+    ))
+    gaming_wireguard = {
+        key: item for key, item in eligible.items()
+        if is_ai_purchase_advisor_wireguard_package(*item)
+    }
+    prefer_wireguard_for_gaming = requests_gaming and bool(gaming_wireguard)
+    if prefer_wireguard_for_gaming:
+        eligible = gaming_wireguard
+
     requests_high_stability = bool(re.search(
         r"پایداری بالا|پایدار(?:تر)?|اتصال مطمئن|بدون قطعی|"
         r"high stability|very stable|reliable|high reliability|uptime",
         answer_text,
     ))
-    if requests_high_stability:
+    if requests_high_stability and not prefer_wireguard_for_gaming:
         high_stability = {
             key: item for key, item in eligible.items()
             if is_ai_purchase_advisor_high_stability_package(*item)
@@ -36105,6 +36133,44 @@ def choose_ai_recommended_package(
             int(item[1].get('price', 0) or 0),
             -int(item[1].get('days', 30) or 30),
         ),
+    )
+
+
+def build_ai_purchase_advisor_fallback_reason(
+    answers: list,
+    category: dict,
+    package: dict,
+    lang: str,
+) -> str:
+    purpose_answer = (
+        str(answers[0].get('answer', ''))
+        if answers and isinstance(answers[0], dict)
+        else ""
+    )
+    answer_text = normalize_ai_user_text(
+        get_ai_purchase_advisor_user_answers_text(answers)
+    )
+    if (
+        re.search(r"گیم(?:ینگ)?|بازی|gaming|games?", normalize_ai_user_text(purpose_answer))
+        and is_ai_purchase_advisor_wireguard_package(category, package)
+    ):
+        return (
+            "برای بازی خواستی و نام این بسته WireGuard است."
+            if lang == "fa"
+            else "You said gaming, and this package is identified as WireGuard."
+        )
+    if re.search(r"پایداری بالا|high stability|very stable", answer_text) and (
+        is_ai_purchase_advisor_high_stability_package(category, package)
+    ):
+        return (
+            "پایداری بالاتر خواستی و توضیح این بسته با آن سازگار است."
+            if lang == "fa"
+            else "You prioritized stability, and this package is labeled accordingly."
+        )
+    return (
+        "این گزینه با نیاز حجم و مدتت از بین بسته‌های فعال مناسب‌تر بود."
+        if lang == "fa"
+        else "This option best fits your requested data and duration among active packages."
     )
 
 
@@ -36186,10 +36252,13 @@ def build_ai_purchase_advisor_request(
         'Return ONLY one valid JSON object, no Markdown, using one of these shapes:\n'
         '{"action":"ask","question":"short simple question","choices":[{"label":"short button text","answer":"meaningful answer"}]}\n'
         'or {"action":"recommend","selected_package_id":"category_id:package_id",'
-        '"priority":"economy|quality","reason":"brief personalized reason, max 120 characters"}.\n'
+        '"priority":"economy|quality","reason":"one-line personalized reason, max 80 characters"}.\n'
         "Select only an ID from allowed_package_ids_for_recommendation. Prefer the least expensive "
-        "adequate package unless the user chose high stability and a high-stability candidate exists. "
-        "Keep the reason short and do not state package details."
+        "adequate package unless the user's intended use and catalog labels point to a better fit. "
+        "For gaming, prefer a WireGuard-labeled candidate over a package marked only for stability, "
+        "unless the user explicitly requested another technology. Ground the one-line reason in "
+        "the user's purpose and the selected package's catalog name/description. Do not invent "
+        "latency, speed, or reliability claims."
     )
     prompt = (
         "Decide whether one package-specific clarification is essential; if not, recommend from "
@@ -36306,46 +36375,74 @@ def build_ai_purchase_advisor_result_text(
     category_name = category.get('name') if lang == "fa" else category.get(
         'name_en', category.get('name')
     )
-    reason = html.escape(
-        "این پیشنهاد بر اساس پاسخ‌های تو و بسته‌های فعال انتخاب شده است."
+    package_name = (
+        package.get('name_fa') or package.get('name') or category_name
         if lang == "fa"
-        else "This recommendation was selected from your answers and active packages."
+        else package.get('name_en') or package.get('name') or category_name
     )
+    package_name_core = re.sub(
+        r"\d+(?:[.,]\d+)?\s*(?:gb|gib|گیگ(?:ابایت)?|روز|days?)",
+        " ",
+        str(package_name or ""),
+        flags=re.IGNORECASE,
+    )
+    package_name_core = re.sub(r"[\s/|·-]+", " ", package_name_core).strip()
+    recommendation_name = str(category_name or package_name_core or ("بسته" if lang == "fa" else "Package"))
+    if (
+        category_name
+        and package_name_core
+        and normalize_ai_user_text(str(category_name).strip())
+        != normalize_ai_user_text(package_name_core)
+    ):
+        recommendation_name = f"{category_name} / {package_name_core}"
+    recommendation_name = html.escape(re.sub(r"\s+", " ", recommendation_name).strip()[:40])
+    reason_value = str(result.get('reason') or "").replace("\r", " ").replace("\n", " ")
+    reason_value = re.sub(r"\s+", " ", reason_value).strip()
+    legacy_reasons = {
+        "این پیشنهاد بر اساس پاسخ‌های تو و بسته‌های فعال انتخاب شده است.",
+        "این بسته بر اساس پاسخ‌ها و قیمت گزینه‌های فعال انتخاب شد.",
+        "This recommendation was selected from your answers and active packages.",
+        "This package was selected based on your answers and active package prices.",
+    }
+    if not reason_value or reason_value in legacy_reasons:
+        reason_value = build_ai_purchase_advisor_fallback_reason(
+            result.get('answers', []), category, package, lang
+        )
+    reason = html.escape(reason_value[:80])
     volume = format_package_volume(package.get('volume', 0), lang)
     days = package.get('days', 30)
     price = int(package.get('price', 0) or 0)
     if lang == "fa":
-        title = "پیشنهاد ذخیره‌شدهٔ خرید هوشمند" if saved_result else "پیشنهاد هوشمند برای تو"
+        title = "پیشنهاد ذخیره‌شده" if saved_result else "پیشنهاد برای تو"
         if invoice_order_id:
             response = (
-                f"🎯 {title}: {html.escape(str(category_name or 'بسته'))} · "
+                f"🎯 {title}: {recommendation_name} · "
                 f"{volume} · {to_persian_digits(days)} روز · {price:,} تومان\n"
-                f"{reason}\n\n"
-                f"فاکتور با شمارهٔ {to_persian_digits(invoice_order_id)} صادر شده؛ "
-                "برای جلوگیری از فاکتور تکراری، رسید همان سفارش را ارسال کن. "
-                "برای پیشنهاد تازه، «پیشنهاد هوشمند جدید» را بزن."
+                f"💡 {reason}\n"
+                f"🧾 فاکتور #{to_persian_digits(invoice_order_id)} صادر شده؛ رسیدش را بفرست."
             )
         else:
             response = (
-                f"🎯 {title}: {html.escape(str(category_name or 'بسته'))} · "
+                f"🎯 {title}: {recommendation_name} · "
                 f"{volume} · {to_persian_digits(days)} روز · {price:,} تومان\n"
-                f"{reason}\n\n"
-                "برای صدور فاکتور همین بسته، دکمهٔ فاکتور را بزن. برای پیشنهاد تازه، «پیشنهاد هوشمند جدید» را انتخاب کن."
+                f"💡 {reason}\n"
+                "🧾 برای خرید، دکمهٔ فاکتور را بزن."
             )
     else:
-        title = "Saved smart-purchase recommendation" if saved_result else "Your smart recommendation"
+        title = "Saved recommendation" if saved_result else "Your recommendation"
         if invoice_order_id:
             response = (
-                f"🎯 {title}: {html.escape(str(category_name or 'Package'))} · "
-                f"{volume} · {days} days · {price:,} Toman\n{reason}\n\n"
-                f"Invoice {invoice_order_id} already exists. Submit its receipt to avoid a duplicate, "
-                "or choose “New smart recommendation”."
+                f"🎯 {title}: {recommendation_name} · "
+                f"{volume} · {days} days · {price:,} Toman\n"
+                f"💡 {reason}\n"
+                f"🧾 Invoice #{invoice_order_id} is ready; submit its receipt."
             )
         else:
             response = (
-                f"🎯 {title}: {html.escape(str(category_name or 'Package'))} · "
-                f"{volume} · {days} days · {price:,} Toman\n{reason}\n\n"
-                "Tap the invoice button to create an invoice for this package, or choose “New smart recommendation”."
+                f"🎯 {title}: {recommendation_name} · "
+                f"{volume} · {days} days · {price:,} Toman\n"
+                f"💡 {reason}\n"
+                "🧾 Tap Invoice to purchase this package."
             )
     return build_ai_reply_keyboard(
         response,
@@ -36515,10 +36612,15 @@ async def run_ai_purchase_advisor_turn(
         return
 
     category, package = recommendation
+    final_package_id = f"{category.get('id')}:{package.get('id')}"
+    model_reason = str(parsed.get('reason') or "").replace("\r", " ").replace("\n", " ")
+    model_reason = re.sub(r"\s+", " ", model_reason).strip()[:100]
     reason = (
-        "این بسته بر اساس پاسخ‌ها و قیمت گزینه‌های فعال انتخاب شد."
-        if lang == "fa"
-        else "This package was selected based on your answers and active package prices."
+        model_reason
+        if selected_package_id == final_package_id and model_reason
+        else build_ai_purchase_advisor_fallback_reason(
+            advisor.get('answers', []), category, package, lang
+        )
     )
     advisor.update({
         "status": "recommended",
