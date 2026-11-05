@@ -35782,11 +35782,31 @@ def is_ai_purchase_advisor_high_stability_package(
     package: dict,
 ) -> bool:
     package_text = get_ai_purchase_advisor_package_search_text(category, package)
-    return bool(re.search(
-        r"تانل|تونل|tunnel|پایدار|پایداری|بدون قطعی|اتصال مطمئن|"
-        r"stable|stability|reliab|high.?availability|uptime",
+    # 1. صریحاً پایداری بالا یا تانل یا کیفیت و پایداری بالاتر
+    high_stability_patterns = [
+        r"تانل|تونل|tunnel",
+        r"پایدار(?:ی)?\s*(?:بالا(?:تر)?|عالی|حداکثر|بیشتر|فوق[\s‌]*العاده|تضمینی)",
+        r"کیفیت\s*و\s*پایدار(?:ی)?",
+        r"بدون\s*قطعی|اتصال\s*مطمئن|ثبات\s*بالا|ضد\s*قطعی",
+        r"high(?:er)?\s*stability",
+        r"quality\s*and\s*stability",
+        r"ultra\s*stable|very\s*stable|rock\s*solid",
+        r"high(?:ly)?\s*reliab\w*|high\s*availability|uninterrupted",
+        r"dedicated\s*tunnel",
+    ]
+    if any(re.search(pat, package_text, re.IGNORECASE) for pat in high_stability_patterns):
+        return True
+
+    # 2. اگر صریحاً پایداری معمولی ذکر شده باشد
+    if re.search(
+        r"پایدار(?:ی)?\s*(?:معمولی|عادی|متوسط)|(?:normal|regular|moderate|standard)\s*(?:speed\s*and\s*)?stability",
         package_text,
-    ))
+        re.IGNORECASE,
+    ):
+        return False
+
+    # 3. سایر عبارات عمومی پایداری
+    return bool(re.search(r"بدون\s*قطعی|اتصال\s*مطمئن|high.?availability|uptime", package_text, re.IGNORECASE))
 
 
 def is_ai_purchase_advisor_gaming_package(
@@ -36120,8 +36140,8 @@ def choose_ai_recommended_package(
 
     reliability_priority = priority in ("quality", "reliability")
     reliability_signal = bool(re.search(
-        r"مهم|حیاتی|شرکت|جلسه|تماس کاری|پایداری|قطعی|کیفیت|سرعت|"
-        r"business|critical|reliable|stability|quality|low latency",
+        r"مهم|حیاتی|شرکت|جلسه|تماس کاری|کار و درس|کار|درس|دانشگاه|پایداری|قطعی|کیفیت|سرعت|"
+        r"business|critical|reliable|stability|quality|low latency|work|school|office|study",
         answer_text,
     ))
     selected = eligible.get(str(selected_package_id)) if selected_package_id else None
