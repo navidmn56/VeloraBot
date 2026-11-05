@@ -282,7 +282,7 @@ def create_balance_order(user_id: int, amount: int) -> int:
         'receipt_photo_id': None,
         'config_link': None,
         'email': None,
-        'payment_method': None,
+        'payment_method': 'card',
         'rejected_reason': '',
         'created_at': now.isoformat(),
         'updated_at': now.isoformat()
@@ -1021,7 +1021,8 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
     try:
         _main.update_order(
             order_id, status='approved',
-            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            payment_method='card'
         )
 
         new_balance = _main.add_balance(user_id, amount)
@@ -1145,7 +1146,7 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
             logger.error(f"❌ خطا در تایید شارژ: {e}", exc_info=True)
 
         if order.get('status') == 'approved':
-            _main.update_order(order_id, status='pending_balance_charge')
+            _main.update_order(order_id, status='pending_balance_charge', payment_method='card')
 
         log_sys = _get_log_system()
         if log_sys:
