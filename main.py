@@ -31069,9 +31069,11 @@ def _build_order_details_text(order: dict, lang: str) -> str:
         price = 0
     price_text = f"{price:,} {'تومان' if lang == 'fa' else 'Toman'}"
 
-    if status == "approved":
+    if status == "approved" or status == "deleted" or (
+        status == "inactive" and order.get("approved_date")
+    ):
         payment_status = ("رایگان / تسویه‌شده", "Free / settled") if price == 0 else ("پرداخت تأیید شده", "Payment confirmed")
-    elif status in ("pending", "pending_balance_charge") or order.get("receipt_photo_id"):
+    elif status in ("pending", "pending_balance_charge"):
         payment_status = ("رسید ارسال‌شده؛ در انتظار بررسی", "Receipt submitted; under review")
     elif status == "awaiting_payment":
         payment_status = ("پرداخت انجام نشده", "Payment not received")
@@ -31079,10 +31081,17 @@ def _build_order_details_text(order: dict, lang: str) -> str:
         payment_status = ("پرداخت رد شده", "Payment rejected")
     elif status == "cancelled":
         payment_status = ("پرداخت لغو شده", "Payment cancelled")
-    elif status in ("inactive", "deleted") and order.get("approved_date"):
-        payment_status = ("پرداخت قبلاً تأیید شده", "Payment was confirmed")
     else:
         payment_status = ("—", "—")
+
+    if status == "deleted":
+        config_status = ("از پنل حذف شده", "Removed from panel")
+    elif status == "inactive":
+        config_status = ("غیرفعال", "Inactive")
+    elif status == "approved" and order.get("config_link"):
+        config_status = ("فعال", "Active")
+    else:
+        config_status = ("ایجاد نشده", "Not created")
 
     type_labels = {
         "test": ("سرویس خوشامد", "Welcome service"),
@@ -31135,7 +31144,7 @@ def _build_order_details_text(order: dict, lang: str) -> str:
             text += f"\n🔄 <b>سفارش تمدیدی:</b> #{html.escape(str(parent_order_id))}"
         if rejection:
             text += f"\n📝 <b>دلیل رد:</b> {rejection}"
-        text += f"\n🔗 <b>کانفیگ:</b> {'فعال' if order.get('config_link') else 'ایجاد نشده'}"
+        text += f"\n🔗 <b>کانفیگ:</b> {config_status[0]}"
     else:
         text = (
             f"🧾 <b>Order #{order_id}</b>\n\n"
@@ -31154,7 +31163,7 @@ def _build_order_details_text(order: dict, lang: str) -> str:
             text += f"\n🔄 <b>Renewal for:</b> #{html.escape(str(parent_order_id))}"
         if rejection:
             text += f"\n📝 <b>Rejection reason:</b> {rejection}"
-        text += f"\n🔗 <b>Config:</b> {'Active' if order.get('config_link') else 'Not created'}"
+        text += f"\n🔗 <b>Config:</b> {config_status[1]}"
     return text
 
 
