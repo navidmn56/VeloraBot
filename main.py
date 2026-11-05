@@ -28,7 +28,7 @@ import unicodedata
 import qrcode
 from yarl import URL
 from wireguard_system import build_wireguard_config
-from dynamic_phrases import format_start_greeting, format_main_menu_title
+from dynamic_phrases import format_start_greeting
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -13940,7 +13940,10 @@ async def exit_ai_chat(callback: CallbackQuery):
     
     
     
-    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
+    if lang == "fa":
+        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
+    else:
+        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
     
     await callback.message.edit_text(
         text,
@@ -16705,7 +16708,10 @@ async def cancel_extend(callback: CallbackQuery):
     # ─── بازگشت به منوی اصلی ───
     is_admin = (user_id == ADMIN_ID_INT)
     
-    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
+    if lang == "fa":
+        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
+    else:
+        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
     
     keyboard = get_main_keyboard(is_admin, lang, user_id)
     
@@ -20724,7 +20730,10 @@ async def back_to_main(callback: CallbackQuery):
     after_state = user_states.get(user_id, {})
     logger.info(f"🔍 وضعیت نهایی user_states در back_to_main: {after_state}")
     
-    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
+    if lang == "fa":
+        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
+    else:
+        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
     if callback.message.content_type == 'text':
         await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang, user_id))
     else:
@@ -21601,7 +21610,10 @@ async def broadcast_back_to_main(callback: CallbackQuery):
     lang = get_user(user_id).get('lang', 'fa')
     is_admin = (user_id == ADMIN_ID_INT)
     
-    text = format_main_menu_title(lang, premium_emoji('rocket', '🚀'))
+    if lang == "fa":
+        text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
+    else:
+        text = f"{premium_emoji('rocket', '🚀')} Main Menu"
     
     try:
         await callback.message.answer(
