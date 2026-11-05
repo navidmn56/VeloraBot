@@ -36049,6 +36049,28 @@ def get_ai_purchase_advisor_eligible_packages(answers: list, lang: str) -> dict:
     return eligible
 
 
+def is_tunnel_package(category: dict, package: dict) -> bool:
+    """تشخیص سرویس تانل / پایداری بالاتر از روی نام یا صفت‌های برتر در توضیحات"""
+    text = get_ai_purchase_advisor_package_search_text(category, package)
+    return bool(re.search(
+        r"تانل|تونل|tunnel|پایدار(?:ی)?\s*(?:بالا(?:تر)?|عالی|بیشتر)|کیفیت\s*و\s*پایدار|کیفیت\s*بالا(?:تر)?|تونل\s*اختصاصی|higher\s*stability|dedicated\s*tunnel",
+        text,
+        re.IGNORECASE,
+    ))
+
+
+def is_direct_package(category: dict, package: dict) -> bool:
+    """تشخیص سرویس مستقیم / پایداری معمولی از روی نام یا توضیحات"""
+    text = get_ai_purchase_advisor_package_search_text(category, package)
+    if is_tunnel_package(category, package):
+        return False
+    return bool(re.search(
+        r"مستقیم|direct|پایدار(?:ی)?\s*(?:معمولی|عادی)|استفاده\s*روزمره|وارپ|warp|normal\s*stability",
+        text,
+        re.IGNORECASE,
+    ))
+
+
 def choose_ai_recommended_package(
     user_id: int,
     answers: list,
@@ -36088,7 +36110,7 @@ def choose_ai_recommended_package(
         if currency_match:
             budget = parse_ai_budget(" ".join(currency_match.groups()))
 
-    # ─── ۱. اولویت اول: اعمال تصمیم مستقیم هوش مصنوعی ───
+    # ─── ۱. اولویت نخست: اعمال پیشنهاد مستقیم هوش مصنوعی ───
     if selected_package_id:
         selected_key = str(selected_package_id).strip()
         if selected_key in eligible:
@@ -36101,52 +36123,57 @@ def choose_ai_recommended_package(
                 logger.info("🤖 پیشنهاد هوش مصنوعی از کاتالوگ فعال تایید شد: %s", selected_key)
                 return cat, pkg
 
-    # ─── ۲. منطق پشتیبان لوکال (در صورت نبود یا عدم انتخاب هوش مصنوعی) ───
-    type_preference = None
-    if re.search(r"تانل|تونل|tunnel", answer_text):
-        type_preference = re.compile(r"تانل|تونل|tunnel")
-    elif re.search(r"مستقیم|direct|وارپ|warp", answer_text):
-        type_preference = re.compile(r"مستقیم|direct|وارپ|warp")
-    if type_preference:
-        matching_type = {
-            key: item for key, item in eligible.items()
-            if type_preference.search(
-                get_ai_purchase_advisor_package_search_text(*item)
-            )
-        }
-        if matching_type:
-            eligible = matching_type
-
-    purpose_answer = (
-        str(answers[0].get('answer', ''))
-        if answers and isinstance(answers[0], dict)
-        else ""
-    )
-    requests_gaming = bool(re.search(
-        r"گیم(?:ینگ)?|بازی|gaming|games?",
-        normalize_ai_user_text(purpose_answer),
+    # ─── ۲. منطق پشتیبان لوکال (در صورتی که هوش مصنوعی در دسترس نبود) ───
+    is_sensitive_trade = bool(re.search(
+        r"ترید|تریدر|معامله|صرافی|ارز دیجیتال|فارکس|کریپتو|trade|trader|trading|crypto|forex|binance",
+        answer_text,
+        re.IGNORECASE,
     ))
-    gaming_wireguard = {
-        key: item for key, item in eligible.items()
-        if is_ai_purchase_advisor_wireguard_package(*item)
-    }
-    prefer_wireguard_for_gaming = requests_gaming and bool(gaming_wireguard)
-    if prefer_wireguard_for_gaming:
-        eligible = gaming_wireguard
-
     requests_high_stability = bool(re.search(
-        r"پایداری بالا|پایدار(?:تر)?|اتصال مطمئن|بدون قطعی|"
+        r"پایداری بالا|پایدار(?:ی)?\s*بالا(?:تر)?|اتصال مطمئن|بدون قطعی|"
         r"high stability|very stable|reliable|high reliability|uptime",
         answer_text,
+        re.IGNORECASE,
     ))
-    if requests_high_stability and not prefer_wireguard_for_gaming:
-        high_stability = {
-            key: item for key, item in eligible.items()
-            if is_ai_purchase_advisor_high_stability_package(*item)
-        }
-        if high_stability:
-            eligible = high_stability
+    requests_normal_stability = bool(re.search(
+        r"معمولی|عادی|پایداری معمولی|روزمره|regular|normal",
+        answer_text,
+        re.IGNORECASE,
+    ))
+    requests_gaming = bool(re.search(
+        r"گیم(?:ینگ)?|بازی|gaming|games?",
+        answer_text,
+        re.IGNORECASE,
+    ))
 
+    # اگر کاربر ترید یا پایداری بالا خواسته بود -> حتماً تانل (پایداری بالاتر)
+    if is_sensitive_trade or requests_high_stability:
+        tunnel_packages = {
+            key: item for key, item in eligible.items()
+            if is_tunnel_package(*item)
+        }
+        if tunnel_packages:
+            eligible = tunnel_packages
+
+    # اگر بازی بود و وایرگارد موجود بود
+    elif requests_gaming:
+        gaming_wireguard = {
+            key: item for key, item in eligible.items()
+            if is_ai_purchase_advisor_wireguard_package(*item)
+        }
+        if gaming_wireguard:
+            eligible = gaming_wireguard
+
+    # اگر پایداری معمولی خواسته بود (و ترید هم نبود) -> مستقیم
+    elif requests_normal_stability:
+        direct_packages = {
+            key: item for key, item in eligible.items()
+            if is_direct_package(*item)
+        }
+        if direct_packages:
+            eligible = direct_packages
+
+    # اعمال فیلتر بودجه در صورت وجود
     if budget is not None:
         within_budget = {
             key: item for key, item in eligible.items()
@@ -36178,6 +36205,12 @@ def build_ai_purchase_advisor_fallback_reason(
     answer_text = normalize_ai_user_text(
         get_ai_purchase_advisor_user_answers_text(answers)
     )
+    if re.search(r"ترید|تریدر|معامله|صرافی|ارز دیجیتال|فارکس|trade|crypto", answer_text):
+        return (
+            "برای ترید و امور مالی، سرویس پایدار با کمترین قطعی انتخاب شد."
+            if lang == "fa"
+            else "For trading and finance, high stability with zero drops was selected."
+        )
     if (
         re.search(r"گیم(?:ینگ)?|بازی|gaming|games?", normalize_ai_user_text(purpose_answer))
         and is_ai_purchase_advisor_wireguard_package(category, package)
@@ -36187,13 +36220,17 @@ def build_ai_purchase_advisor_fallback_reason(
             if lang == "fa"
             else "You said gaming, and this package is identified as WireGuard."
         )
-    if re.search(r"پایداری بالا|high stability|very stable", answer_text) and (
-        is_ai_purchase_advisor_high_stability_package(category, package)
-    ):
+    if is_tunnel_package(category, package):
         return (
             "پایداری بالاتر خواستی و توضیح این بسته با آن سازگار است."
             if lang == "fa"
             else "You prioritized stability, and this package is labeled accordingly."
+        )
+    if is_direct_package(category, package):
+        return (
+            "برای استفاده روزمره با پایداری معمولی و سرعت مناسب انتخاب شد."
+            if lang == "fa"
+            else "Selected for daily use with standard stability and low latency."
         )
     return (
         "این گزینه با نیاز حجم و مدتت از بین بسته‌های فعال مناسب‌تر بود."
@@ -36243,59 +36280,66 @@ def build_ai_purchase_advisor_request(
     eligible = get_ai_purchase_advisor_eligible_packages(answers, lang)
     catalog = build_ai_purchase_advisor_catalog(lang)
     eligible_ids = set(eligible)
-    eligible_catalog = [
-        item for item in catalog if item["id"] in eligible_ids
-    ]
-    previous_category, previous_package = get_user_last_purchased_package(user_id) or (None, None)
-    previous_purchase = None
-    if previous_category and previous_package:
-        previous_purchase = {
-            "category": previous_category.get('name') or previous_category.get('name_en'),
-            "volume_gb": previous_package.get('volume', 0),
-            "days": previous_package.get('days', 30),
-        }
     clarification_count = int(advisor.get('ai_clarification_count', 0))
+
+    # دیتای تمیز، دقیق و بدون شلوغی برای هوش مصنوعی
     request_data = {
-        "language": "Persian" if lang == "fa" else "English",
-        "answers_so_far": answers,
-        "balance_toman": int(get_user(user_id).get('balance', 0) or 0),
-        "previous_purchase": previous_purchase,
-        "all_active_packages": catalog,
-        "candidate_packages": eligible_catalog if eligible_catalog else catalog,
-        "allowed_package_ids_for_recommendation": sorted(eligible_ids) if eligible_ids else [c["id"] for c in catalog],
-        "may_ask_clarification_question": clarification_count < 2,
-        "clarification_questions_asked": clarification_count,
+        "user_answers": [
+            {"question": str(item.get("question", "")), "answer": str(item.get("answer", ""))}
+            for item in answers if isinstance(item, dict)
+        ],
+        "available_packages": [
+            {
+                "id": p["id"],
+                "category_name": p["category"],
+                "category_description": p["category_description"],
+                "package_name": p["package"],
+                "package_description": p["package_description"],
+                "volume_gb": p["volume_gb"],
+                "days": p["days"],
+                "price_toman": p["price_toman"],
+            }
+            for p in catalog
+            if not eligible_ids or p["id"] in eligible_ids
+        ],
+        "can_ask_question": clarification_count < 2,
     }
-    system_instruction = (
-        "You are VeloraBot's expert AI VPN Package Advisor. Your goal is to guide the user to the best "
-        "VPN package based on their stated needs, intended usage, and the diverse services in the catalog.\n\n"
-        "CATALOG DIVERSITY:\n"
-        "VeloraBot offers a variety of specialized services which may differ in connection technology (Direct, Tunnel, "
-        "WireGuard, Warp), server locations/countries, stability levels, latency/ping, and special use-cases (such as gaming, "
-        "trading/crypto with static IP, video streaming, work/study, or bypassing national censorship).\n\n"
-        "DECISION RULES:\n"
-        "1. Asking Clarification Questions (action: 'ask'):\n"
-        "   - You can ask a targeted follow-up question when 'may_ask_clarification_question' is true.\n"
-        "   - If the candidate packages contain diverse services or features that cater to different needs (e.g. gaming with low ping vs "
-        "work/study with dedicated tunnel stability, or trading/fixed IP, or specific OS/platform), and the user's answers so far "
-        "do not make the best choice obvious, ask ONE short, engaging question with 2 to 4 clear choice buttons.\n"
-        "   - Do NOT repeat questions the user has already answered.\n"
-        "   - The question and button labels must be in the user's language (Persian if Persian, English if English).\n\n"
-        "2. Recommending a Package (action: 'recommend'):\n"
-        "   - Recommend when you have sufficient clarity, or when 'may_ask_clarification_question' is false.\n"
-        "   - Pick the ID ('category_id:package_id') from allowed_package_ids_for_recommendation (or candidate_packages) that "
-        "best fits the user's requirements.\n"
-        "   - Match the package's strengths with user priorities: e.g., work/study/high stability -> Dedicated Tunnel; "
-        "gaming/calls -> WireGuard/low ping; everyday browsing/economy -> Direct; crypto/trading -> Static IP/reliable.\n"
-        "   - Do NOT simply choose the cheapest package if a higher quality or specialized package is clearly better suited to the user.\n"
-        "   - Provide a personalized, convincing 1-sentence reason ('reason', max 80 chars) in the user's language explaining why this package was chosen.\n\n"
-        "OUTPUT FORMAT (Return strictly a single valid JSON object, no Markdown):\n"
-        '{"action":"ask","question":"متن کوتاه سؤال","choices":[{"label":"متن کوتاه دکمه","answer":"پاسخ کاربر"}]}\n'
-        "or\n"
-        '{"action":"recommend","selected_package_id":"category_id:package_id","priority":"quality|economy","reason":"دلیل شخصی‌سازی شده در یک جمله"}'
-    )
+
+    if lang == "fa":
+        system_instruction = (
+            "تو مشاور هوشمند خرید بسته‌های VPN در ربات VeloraBot هستی.\n"
+            "پاسخ‌های کاربر و مشخصات بسته‌ها (نام فارسی، توضیحات فارسی، حجم و قیمت) را بررسی کن "
+            "و بهترین بسته را به کاربر پیشنهاد بده.\n\n"
+            "راهنمای تصمیم‌گیری:\n"
+            "۱. کارهای حساس مثل «ترید/ارز دیجیتال/صرافی/فارکس»، «کار و درس» یا کاربرانی که «پایداری بالاتر» می‌خواهند: "
+            "حتماً سرویس‌های تونل/تانل اختصاصی که کیفیت و پایداری بالاتری دارند را پیشنهاد بده (حتی اگر کاربر اتصال معمولی زده باشد، چون ترید کار حساسی است و نباید قطع شود).\n"
+            "۲. استفاده‌های روزمره، وب‌گردی و کاربرانی که پایداری معمولی می‌خواهند: سرویس‌های مستقیم (ارزان‌تر با تاخیر پایین) مناسب‌ترند.\n"
+            "۳. برای بازی و گیمینگ آنلاین: سرویس‌های دارای وایرگارد (WireGuard) یا پینگ پایین را اولویت بده.\n"
+            "۴. فقط در صورتی که can_ask_question برابر true باشد و واقعاً برای تفکیک بین بسته‌ها نیاز به سؤال تکمیلی داشتی، می‌توانی یک سؤال کوتاه با ۲ تا ۴ گزینه بپرسی؛ در غیر این صورت فوراً بسته را پیشنهاد بده.\n\n"
+            "فرمت خروجی (فقط یک شیء JSON بدون هیچ متن اضافه یا مارک‌داون):\n"
+            '{"action": "recommend", "selected_package_id": "category_id:package_id", "reason": "دلیل انتخاب در یک جمله کوتاه"}\n'
+            "یا\n"
+            '{"action": "ask", "question": "متن سؤال", "choices": [{"label": "متن دکمه", "answer": "پاسخ"}]}'
+        )
+    else:
+        system_instruction = (
+            "You are VeloraBot's AI VPN advisor.\n"
+            "Review the user's answers and available packages (names, descriptions, volume, price) "
+            "and recommend the best package.\n\n"
+            "Guidelines:\n"
+            "1. Sensitive use cases (trading, crypto, forex, business) or users wanting higher stability: "
+            "recommend Dedicated Tunnel packages with higher quality and stability (even if regular stability was clicked, trading is sensitive).\n"
+            "2. Everyday casual browsing with regular stability: Direct packages are suitable.\n"
+            "3. Gaming: prefer WireGuard or low latency packages.\n"
+            "4. Only ask a short question with 2-4 buttons if can_ask_question is true and essential; otherwise recommend immediately.\n\n"
+            "Output format (ONLY valid JSON, no extra text):\n"
+            '{"action": "recommend", "selected_package_id": "category_id:package_id", "reason": "concise one-line reason"}\n'
+            "or\n"
+            '{"action": "ask", "question": "Question text", "choices": [{"label": "button text", "answer": "answer text"}]}'
+        )
+
     prompt = (
-        "Review the user's profile and catalog. Decide whether to ask a clarification question or make a recommendation now.\n"
+        "پاسخ‌های کاربر و بسته‌ها را بررسی کن و خروجی JSON بده:\n"
         + json.dumps(request_data, ensure_ascii=False)
     )
     return system_instruction, prompt
