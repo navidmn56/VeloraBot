@@ -22,6 +22,7 @@ from io import BytesIO
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Union
 import unicodedata
 import qrcode
@@ -52,7 +53,13 @@ from config import (
     START_REACTION_EMOJI,
 )
 import config as app_config
-from daily_usage_system import handle_daily_usage_request, usage_collector, usage_store
+from daily_usage_system import (
+    gregorian_to_jalali,
+    handle_daily_usage_request,
+    to_persian_digits,
+    usage_collector,
+    usage_store,
+)
 
 gemini_client = None
 gemini_error_message = None
@@ -22625,7 +22632,7 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
         protocol = str(inbound.get("protocol", "")).lower()
         if protocol not in {
             "vless", "vmess", "trojan", "shadowsocks",
-            "wireguard", "amneziawg", "hysteria", "tuic",
+            "wireguard", "amneziawg", "hysteria", "tuic", "mtproto",
         }:
             raise RuntimeError(f"پروتکل {protocol or 'نامشخص'} پشتیبانی نمی‌شود")
 
@@ -22691,7 +22698,9 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
             raise RuntimeError("کلیدهای فعلی WireGuard قابل شناسایی نیستند")
 
     old_links = await xui_get_client_links(email)
-    url_protocols = protocols.intersection({"vless", "vmess", "trojan", "shadowsocks"})
+    url_protocols = protocols.intersection(
+        {"vless", "vmess", "trojan", "shadowsocks", "mtproto"}
+    )
     if url_protocols and not old_links:
         raise RuntimeError("لینک‌های فعلی از پنل قابل دریافت نیستند؛ عملیات متوقف شد")
 
@@ -22703,6 +22712,17 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
     while new_sub_id == old_sub_id:
         new_sub_id = await _panel_generate_uuid()
     new_payload["subId"] = new_sub_id
+
+    mtproto_targets = [item for item in targets if item["protocol"] == "mtproto"]
+    new_mtproto_secret = None
+    if mtproto_targets:
+        mtproto_settings = mtproto_targets[0]["settings"]
+        mtproto_domain = str(
+            mtproto_settings.get("fakeTlsDomain") or "www.cloudflare.com"
+        ).strip()
+        new_mtproto_secret = (
+            f"ee{secrets.token_hex(16)}{mtproto_domain.encode('utf-8').hex()}"
+        )
 
     if old_uuid or any(protocol in protocols for protocol in ("vless", "vmess", "tuic")):
         new_payload["id"] = await _panel_generate_uuid()
@@ -22737,10 +22757,15 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
     try:
         for inbound_id in sorted(target_ids):
             attempted_ids.append(inbound_id)
+            target = next(item for item in targets if item["id"] == inbound_id)
+            target_payload = new_payload
+            if target["protocol"] == "mtproto":
+                target_payload = dict(new_payload)
+                target_payload["secret"] = new_mtproto_secret
             response = await _api_request(
                 "POST",
                 f"/panel/api/clients/update/{quote(email, safe='')}?inboundIds={inbound_id}",
-                json=new_payload,
+                json=target_payload,
             )
             if not _panel_success(response):
                 raise RuntimeError(
@@ -22788,6 +22813,8 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
                 or client.get("publicKey") != new_payload["publicKey"]
             ):
                 raise RuntimeError(f"کلید جدید در اینباند {inbound.get('id')} تأیید نشد")
+            if protocol == "mtproto" and client.get("secret") != new_mtproto_secret:
+                raise RuntimeError(f"MTProto secret جدید در اینباند {inbound.get('id')} تأیید نشد")
 
         new_links = await xui_get_client_links(email)
         if url_protocols and not new_links:
@@ -22824,10 +22851,15 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
 
         rollback_errors = []
         for inbound_id in reversed(attempted_ids):
+            target = next(item for item in targets if item["id"] == inbound_id)
+            rollback_payload = old_payload
+            if target["protocol"] == "mtproto":
+                rollback_payload = dict(old_payload)
+                rollback_payload["secret"] = target["client"].get("secret", "")
             rollback = await _api_request(
                 "POST",
                 f"/panel/api/clients/update/{quote(email, safe='')}?inboundIds={inbound_id}",
-                json=old_payload,
+                json=rollback_payload,
             )
             if not _panel_success(rollback):
                 rollback_errors.append(inbound_id)
@@ -22883,6 +22915,8 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
                             credential_fields.append("password")
                         if protocol == "hysteria":
                             credential_fields.append("auth")
+                        if protocol == "mtproto":
+                            credential_fields.append("secret")
                         if protocol in ("wireguard", "amneziawg"):
                             credential_fields.extend(("privateKey", "publicKey"))
                         if any(restored.get(field) != expected.get(field) for field in credential_fields):
@@ -27870,20 +27904,18 @@ You have an active coupon:
     # ══════════════════════════════════════════════
     if lang == "fa":
         text = (
-            f"{premium_emoji('gift', '🏷️')} <b>اعمال کوپن تخفیف</b>\n\n"
-            f"{premium_emoji('note', '📝')} کد کوپن را همین‌جا ارسال کنید:\n\n"
-            f"<code>SUMMER2025</code>\n\n"
-            f"{premium_emoji('light', '💡')} کوپن‌ها را می‌توانید از کانال‌های اطلاع‌رسانی یا از ادمین دریافت کنید.\n\n"
-            f"❌ برای انصراف /cancel را بفرستید."
+            f"{premium_emoji('gift', '🏷️')} <b>کد تخفیف داری؟</b>\n\n"
+            f"کد کوپنت رو بفرست تا تخفیف برات فعال بشه.\n"
+            f"مثال: <code>SUMMER2025</code>\n\n"
+            f"برای انصراف /cancel رو بفرست."
         )
         back_btn_text = "🏠 منوی اصلی"
     else:
         text = (
-            f"{premium_emoji('gift', '🏷️')} <b>Apply Discount Coupon</b>\n\n"
-            f"{premium_emoji('note', '📝')} Send the coupon code here:\n\n"
-            f"<code>SUMMER2025</code>\n\n"
-            f"{premium_emoji('light', '💡')} Coupons can be obtained through announcement channels or from the admin.\n\n"
-            f"❌ Send /cancel to abort."
+            f"{premium_emoji('gift', '🏷️')} <b>Got a discount code?</b>\n\n"
+            f"Send your coupon code to activate the discount.\n"
+            f"Example: <code>SUMMER2025</code>\n\n"
+            f"Send /cancel to stop."
         )
         back_btn_text = "🏠 Main Menu"
 
@@ -27952,7 +27984,17 @@ async def cancel_coupon(callback: CallbackQuery):
     logger.info(f"🗑️ کوپن {coupon_code} توسط کاربر {user_id} لغو شد")
     
     await callback.answer("✅ کوپن با موفقیت لغو شد!" if lang == "fa" else "✅ Coupon cancelled successfully!", show_alert=True)
-    await back_to_main(callback)
+    await callback.message.edit_text(
+        "✅ کوپن لغو شد. حالا می‌توانید کد دیگری اعمال کنید."
+        if lang == "fa"
+        else "✅ Coupon cancelled. You can apply another code now.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="👤 بازگشت به حساب کاربری" if lang == "fa" else "👤 Back to My Account",
+                callback_data="my_account",
+            )
+        ]]),
+    )
     
     
 
@@ -30788,9 +30830,6 @@ async def my_account(callback: CallbackQuery):
     approved_extends = [o for o in extend_orders if o.get('status') == 'approved']
     total_extends = len(approved_extends)
     
-    pending_orders = [o for o in purchase_orders if o.get('status') == 'pending']
-    rejected_orders = [o for o in purchase_orders if o.get('status') == 'rejected']
-    awaiting_payment_orders = [o for o in purchase_orders if o.get('status') == 'awaiting_payment']
     total_tests = len(test_orders)
     
     # ✅✅✅ بررسی کوپن - با پشتیبانی از کوپن ادمین
@@ -30870,12 +30909,7 @@ async def my_account(callback: CallbackQuery):
         f"{RLM}{premium_emoji('renew', '🔄')} <b>تعداد تمدیدها:</b> {total_extends}\n"
         f"{RLM}{premium_emoji('config', '🟢')} <b>کانفیگ فعال:</b> {len(active_configs)}\n"
         f"{RLM}{premium_emoji('calendar', '📅')} <b>عضویت:</b> {join_date_escaped}\n"
-        f"{RLM}{coupon_info.lstrip() if coupon_info else ''}\n"
-        f"{RLM}{premium_emoji('star', '📊')} <b>وضعیت سفارشات:</b>\n"
-        f"{RLM}{premium_emoji('success', '✅')} <b>تایید شده:</b> {len(approved_purchases)}\n"
-        f"{RLM}{premium_emoji('hourglass', '⏳')} <b>در انتظار تایید:</b> {len(pending_orders)}\n"
-        f"{RLM}{premium_emoji('fail', '🚫')} <b>رد شده:</b> {len(rejected_orders)}\n"
-        f"{RLM}{premium_emoji('hourglass', '⏳')} <b>در انتظار پرداخت:</b> {len(awaiting_payment_orders)}\n"
+        f"{RLM}{coupon_info.lstrip() if coupon_info else ''}"
         )
     else:
         text = f"""
@@ -30890,16 +30924,10 @@ async def my_account(callback: CallbackQuery):
 {premium_emoji('config', '🟢')} <b>Active Configs:</b> {len(active_configs)}
 {premium_emoji('calendar', '📅')} <b>Joined:</b> {join_date_escaped}
 {coupon_info}
-{premium_emoji('star', '📊')} <b>Order Status:</b>
-{premium_emoji('success', '✅')} <b>Approved:</b> {len(approved_purchases)}
-{premium_emoji('hourglass', '⏳')} <b>Pending Approval:</b> {len(pending_orders)}
-{premium_emoji('fail', '🚫')} <b>Rejected:</b> {len(rejected_orders)}
-{premium_emoji('hourglass', '⏳')} <b>Awaiting Payment:</b> {len(awaiting_payment_orders)}
 """
     
     buttons = []
     if coupon_is_valid:
-        # کوپن فعال داره
         buttons.append([
             InlineKeyboardButton(
                 text=f"🏷️ {'وضعیت کوپن' if lang=='fa' else 'Coupon Status'}",
@@ -30907,19 +30935,23 @@ async def my_account(callback: CallbackQuery):
                 style="primary"
             ),
             InlineKeyboardButton(
-                text=f"❌ {'لغو کوپن' if lang == 'fa' else 'Cancel Coupon'}",
-                callback_data="cancel_coupon",
-                style="danger"
-            )
+                text=f"📊 {'وضعیت سفارش‌ها' if lang == 'fa' else 'Order Status'}",
+                callback_data="order_status",
+                style="primary"
+            ),
         ])
     else:
-        # کوپن نداره
         buttons.append([
             InlineKeyboardButton(
                 text=f"🏷️ {'اعمال کوپن' if lang == 'fa' else 'Apply Coupon'}",
                 callback_data="apply_coupon",
                 style="primary"
-            )
+            ),
+            InlineKeyboardButton(
+                text=f"📊 {'وضعیت سفارش‌ها' if lang == 'fa' else 'Order Status'}",
+                callback_data="order_status",
+                style="primary"
+            ),
         ])
 
 
@@ -30969,6 +31001,295 @@ async def my_account(callback: CallbackQuery):
     except Exception as e:
         logger.warning(f"خطا در callback.answer: {e}")
 
+
+
+def _format_order_datetime(value: Any, lang: str) -> str:
+    if not value:
+        return "—"
+    try:
+        if isinstance(value, (int, float)):
+            parsed = datetime.fromtimestamp(value, tz=ZoneInfo("UTC"))
+        else:
+            parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        iran_time = parsed.astimezone(ZoneInfo("Asia/Tehran"))
+        if lang == "fa":
+            year, month, day = gregorian_to_jalali(
+                iran_time.year, iran_time.month, iran_time.day
+            )
+            return to_persian_digits(
+                f"{year:04d}/{month:02d}/{day:02d} {iran_time:%H:%M}"
+            )
+        return iran_time.strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError, OSError):
+        return html.escape(str(value))
+
+
+def _order_status_label(status: str, lang: str) -> str:
+    labels = {
+        "awaiting_payment": ("در انتظار پرداخت", "Awaiting payment"),
+        "pending": ("در انتظار تأیید پرداخت", "Payment under review"),
+        "pending_balance_charge": ("در انتظار تأیید شارژ کیف پول", "Wallet top-up under review"),
+        "approved": ("تأیید و فعال‌شده", "Approved and active"),
+        "rejected": ("ردشده", "Rejected"),
+        "cancelled": ("لغوشده", "Cancelled"),
+        "inactive": ("غیرفعال", "Inactive"),
+        "deleted": ("حذف‌شده", "Deleted"),
+    }
+    fallback = html.escape(status or ("نامشخص" if lang == "fa" else "Unknown"))
+    return labels.get(status, (fallback, fallback))[0 if lang == "fa" else 1]
+
+
+def _build_order_details_text(order: dict, lang: str) -> str:
+    order_id = html.escape(str(order.get("order_id", "?")))
+    status = str(order.get("status", ""))
+    status_label = _order_status_label(status, lang)
+    created_at = _format_order_datetime(order.get("created_at") or order.get("date"), lang)
+    approved_at = _format_order_datetime(order.get("approved_date"), lang)
+    payment_method_labels = {
+        "card": ("کارت‌به‌کارت", "Bank transfer"),
+        "balance": ("کیف پول", "Wallet"),
+        "balance_pool": ("کیف پول", "Wallet"),
+        "test": ("سرویس خوشامد", "Welcome service"),
+        "free_coupon": ("کوپن رایگان", "Free coupon"),
+        "free_coupon_extend": ("کوپن رایگان", "Free coupon"),
+        "free_extend": ("تمدید رایگان", "Free renewal"),
+        "balance_extend": ("کیف پول", "Wallet"),
+    }
+    raw_payment_method = str(order.get("payment_method") or "")
+    if raw_payment_method in payment_method_labels:
+        payment_method = payment_method_labels[raw_payment_method][0 if lang == "fa" else 1]
+    else:
+        payment_method = html.escape(str(
+            order.get("payment_label") or raw_payment_method
+            or ("نامشخص" if lang == "fa" else "Unknown")
+        ))
+    try:
+        price = int(order.get("price", 0) or 0)
+    except (TypeError, ValueError):
+        price = 0
+    price_text = f"{price:,} {'تومان' if lang == 'fa' else 'Toman'}"
+
+    if status == "approved":
+        payment_status = ("رایگان / تسویه‌شده", "Free / settled") if price == 0 else ("پرداخت تأیید شده", "Payment confirmed")
+    elif status in ("pending", "pending_balance_charge") or order.get("receipt_photo_id"):
+        payment_status = ("رسید ارسال‌شده؛ در انتظار بررسی", "Receipt submitted; under review")
+    elif status == "awaiting_payment":
+        payment_status = ("پرداخت انجام نشده", "Payment not received")
+    elif status == "rejected":
+        payment_status = ("پرداخت رد شده", "Payment rejected")
+    elif status == "cancelled":
+        payment_status = ("پرداخت لغو شده", "Payment cancelled")
+    elif status in ("inactive", "deleted") and order.get("approved_date"):
+        payment_status = ("پرداخت قبلاً تأیید شده", "Payment was confirmed")
+    else:
+        payment_status = ("—", "—")
+
+    type_labels = {
+        "test": ("سرویس خوشامد", "Welcome service"),
+        "purchase": ("خرید سرویس", "Service purchase"),
+        "ready_package": ("بستهٔ آماده", "Ready package"),
+        "category_purchase": ("خرید بسته", "Package purchase"),
+        "balance_charge": ("شارژ کیف پول", "Wallet top-up"),
+    }
+    order_type = str(order.get("type", "purchase"))
+    type_label = type_labels.get(order_type, (order_type, order_type))[0 if lang == "fa" else 1]
+    if order.get("is_extend") or order.get("parent_order_id") is not None:
+        type_label = "تمدید سرویس" if lang == "fa" else "Service renewal"
+    volume = order.get("volume")
+    if volume is None:
+        volume_text = "—"
+    elif volume == 0:
+        volume_text = "نامحدود" if lang == "fa" else "Unlimited"
+    else:
+        try:
+            volume_text = f"{float(volume):g} GB"
+        except (TypeError, ValueError):
+            volume_text = html.escape(str(volume))
+    days = order.get("days")
+    if days is None:
+        days_text = "—"
+    else:
+        try:
+            days_text = f"{int(days)} {'روز' if lang == 'fa' else 'days'}"
+        except (TypeError, ValueError):
+            days_text = html.escape(str(days))
+    receipt = bool(order.get("receipt_photo_id"))
+    rejection = html.escape(str(order.get("rejected_reason") or ""))
+    parent_order_id = order.get("parent_order_id")
+
+    if lang == "fa":
+        text = (
+            f"🧾 <b>جزئیات سفارش #{order_id}</b>\n\n"
+            f"📅 <b>تاریخ ثبت:</b> {created_at} (ساعت ایران)\n"
+            f"📍 <b>مرحلهٔ سفارش:</b> {status_label}\n"
+            f"💳 <b>وضعیت پرداخت:</b> {payment_status[0]}\n"
+            f"💰 <b>مبلغ:</b> {price_text}\n"
+            f"🏷️ <b>نوع سفارش:</b> {html.escape(type_label)}\n"
+            f"📦 <b>حجم:</b> {volume_text}\n"
+            f"⏱ <b>مدت:</b> {days_text}\n"
+            f"💠 <b>روش پرداخت:</b> {payment_method}\n"
+            f"🧾 <b>رسید:</b> {'ارسال شده' if receipt else 'ثبت نشده'}\n"
+            f"✅ <b>تاریخ تأیید:</b> {approved_at}"
+        )
+        if parent_order_id:
+            text += f"\n🔄 <b>سفارش تمدیدی:</b> #{html.escape(str(parent_order_id))}"
+        if rejection:
+            text += f"\n📝 <b>دلیل رد:</b> {rejection}"
+        text += f"\n🔗 <b>کانفیگ:</b> {'فعال' if order.get('config_link') else 'ایجاد نشده'}"
+    else:
+        text = (
+            f"🧾 <b>Order #{order_id}</b>\n\n"
+            f"📅 <b>Created:</b> {created_at} (Iran time)\n"
+            f"📍 <b>Order stage:</b> {status_label}\n"
+            f"💳 <b>Payment status:</b> {payment_status[1]}\n"
+            f"💰 <b>Amount:</b> {price_text}\n"
+            f"🏷️ <b>Order type:</b> {html.escape(type_label)}\n"
+            f"📦 <b>Volume:</b> {volume_text}\n"
+            f"⏱ <b>Duration:</b> {days_text}\n"
+            f"💠 <b>Payment method:</b> {payment_method}\n"
+            f"🧾 <b>Receipt:</b> {'Submitted' if receipt else 'Not submitted'}\n"
+            f"✅ <b>Approved:</b> {approved_at}"
+        )
+        if parent_order_id:
+            text += f"\n🔄 <b>Renewal for:</b> #{html.escape(str(parent_order_id))}"
+        if rejection:
+            text += f"\n📝 <b>Rejection reason:</b> {rejection}"
+        text += f"\n🔗 <b>Config:</b> {'Active' if order.get('config_link') else 'Not created'}"
+    return text
+
+
+@dp.callback_query(F.data == "order_status")
+async def show_order_status(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get("lang", "fa")
+    if user_id in BLACKLIST:
+        await callback.answer("⛔", show_alert=True)
+        return
+
+    user_orders = [
+        order for order in orders.values()
+        if isinstance(order, dict) and order.get("user_id") == user_id
+    ]
+    counts = {
+        "approved": sum(order.get("status") == "approved" for order in user_orders),
+        "pending": sum(order.get("status") in ("pending", "pending_balance_charge") for order in user_orders),
+        "awaiting": sum(order.get("status") == "awaiting_payment" for order in user_orders),
+        "rejected": sum(order.get("status") == "rejected" for order in user_orders),
+        "cancelled": sum(order.get("status") == "cancelled" for order in user_orders),
+    }
+    if lang == "fa":
+        text = (
+            "📊 <b>وضعیت سفارش‌های شما</b>\n\n"
+            f"✅ تأییدشده: {counts['approved']}\n"
+            f"⏳ در انتظار بررسی: {counts['pending']}\n"
+            f"💳 در انتظار پرداخت: {counts['awaiting']}\n"
+            f"❌ ردشده: {counts['rejected']}\n"
+            f"🚫 لغوشده: {counts['cancelled']}\n\n"
+            "برای دیدن جزئیات، شماره سفارش را وارد کنید."
+        )
+        lookup_text, account_text = "🔎 وضعیت سفارش من", "👤 حساب کاربری"
+    else:
+        text = (
+            "📊 <b>Your Order Status</b>\n\n"
+            f"✅ Approved: {counts['approved']}\n"
+            f"⏳ Under review: {counts['pending']}\n"
+            f"💳 Awaiting payment: {counts['awaiting']}\n"
+            f"❌ Rejected: {counts['rejected']}\n"
+            f"🚫 Cancelled: {counts['cancelled']}\n\n"
+            "Enter an order number to view its details."
+        )
+        lookup_text, account_text = "🔎 Check an order", "👤 My Account"
+
+    await callback.message.edit_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=lookup_text, callback_data="my_order_status", style="primary"),
+            InlineKeyboardButton(text=account_text, callback_data="my_account"),
+        ]]),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "my_order_status")
+async def request_order_number(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get("lang", "fa")
+    user_states.setdefault(user_id, {})["awaiting_order_number"] = True
+    text = (
+        "شماره سفارش را دقیقاً با این قالب بفرستید: <code>#580</code>\n\nبرای انصراف /cancel را بفرستید."
+        if lang == "fa"
+        else "Send the order number in this exact format: <code>#580</code>\n\nSend /cancel to stop."
+    )
+    await callback.message.edit_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🔙 بازگشت به وضعیت سفارش‌ها" if lang == "fa" else "🔙 Back to order status",
+                callback_data="order_status",
+            )
+        ]]),
+    )
+    await callback.answer()
+
+
+@dp.message(lambda message: (
+    message.from_user is not None
+    and message.text is not None
+    and user_states.get(message.from_user.id, {}).get("awaiting_order_number")
+))
+async def handle_order_number_input(message: Message):
+    user_id = message.from_user.id
+    lang = get_user(user_id).get("lang", "fa")
+    value = message.text.strip()
+    if value.lower() == "/cancel":
+        user_states[user_id].pop("awaiting_order_number", None)
+        await message.answer(
+            "جست‌وجوی سفارش لغو شد." if lang == "fa" else "Order lookup cancelled.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📊 بازگشت به وضعیت سفارش‌ها" if lang == "fa" else "📊 Back to order status",
+                    callback_data="order_status",
+                )
+            ]]),
+        )
+        return
+
+    match = re.fullmatch(r"#([0-9]{1,12})", value)
+    if not match:
+        await message.reply(
+            "فرمت شماره سفارش درست نیست؛ مثل <code>#580</code> بفرستید."
+            if lang == "fa"
+            else "Invalid order number. Use the format <code>#580</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user_states[user_id].pop("awaiting_order_number", None)
+    order = orders.get(str(int(match.group(1))))
+    if not isinstance(order, dict) or order.get("user_id") != user_id:
+        await message.answer(
+            "سفارشی با این شماره پیدا نشد." if lang == "fa" else "No order found with that number.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📊 بازگشت به وضعیت سفارش‌ها" if lang == "fa" else "📊 Back to order status",
+                    callback_data="order_status",
+                )
+            ]]),
+        )
+        return
+
+    await message.answer(
+        _build_order_details_text(order, lang),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🔙 بازگشت به وضعیت سفارش‌ها" if lang == "fa" else "🔙 Back to order status",
+                callback_data="order_status",
+            )
+        ]]),
+    )
 
 
 @dp.callback_query(F.data == "coupon_status")
