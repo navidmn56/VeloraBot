@@ -15873,8 +15873,8 @@ async def send_health_report(chat_id: int):
     free_gb = free / (1024**3)
     used_gb = used / (1024**3)
     total_gb = total / (1024**3)
-    total_balance = sum(u.get('balance', 0) for u in users.values())
-    total_revenue = sum(o.get('price', 0) for o in valid_orders.values() if o.get('status') == 'approved')
+    total_balance = sum(int(u.get('balance') or 0) for u in users.values())
+    total_revenue = sum(int(o.get('price') or 0) for o in valid_orders.values() if o.get('status') == 'approved')
     backup_count = len(get_backup_list())
     report = f"""
 📊 <b>گزارش سلامت ربات</b>
@@ -15965,8 +15965,8 @@ async def send_weekly_detailed_report(chat_id: int):
     active_users = len([u for u in users.values() if u.get('is_active', True)])
     verified_users = len([u for u in users.values() if u.get('verified', False)])
     blacklist_count = len(BLACKLIST)
-    total_balance = sum(u.get('balance', 0) for u in users.values())
-    total_revenue = sum(o.get('price', 0) for o in valid_orders.values() if o.get('status') == 'approved')
+    total_balance = sum(int(u.get('balance') or 0) for u in users.values())
+    total_revenue = sum(int(o.get('price') or 0) for o in valid_orders.values() if o.get('status') == 'approved')
     panel_status = "🔴 غیرفعال"
     inbounds_count = 0
     panel_clients = 0
@@ -25831,7 +25831,7 @@ async def handle_receipt(message: Message):
     else:
         new_status = 'pending'
     
-    update_order(order_id, receipt_photo_id=photo_id, status=new_status)
+    update_order(order_id, receipt_photo_id=photo_id, status=new_status, payment_method=pending.get('payment_method') or 'card')
     
     logger.info(f"📸 فیش برای سفارش #{order_id} دریافت شد - وضعیت جدید: {new_status}")
     if is_extend:
@@ -31043,23 +31043,32 @@ def _build_order_details_text(order: dict, lang: str) -> str:
     status_label = _order_status_label(status, lang)
     created_at = _format_order_datetime(order.get("created_at") or order.get("date"), lang)
     approved_at = _format_order_datetime(order.get("approved_date"), lang)
+    order_type = str(order.get("type", "purchase"))
     payment_method_labels = {
         "card": ("کارت‌به‌کارت", "Bank transfer"),
+        "cart": ("کارت‌به‌کارت", "Bank transfer"),
+        "card_to_card": ("کارت‌به‌کارت", "Bank transfer"),
         "balance": ("کیف پول", "Wallet"),
+        "balance_charge": ("کارت‌به‌کارت", "Bank transfer"),
         "balance_pool": ("کیف پول", "Wallet"),
         "test": ("سرویس خوشامد", "Welcome service"),
         "free_coupon": ("کوپن رایگان", "Free coupon"),
         "free_coupon_extend": ("کوپن رایگان", "Free coupon"),
         "free_extend": ("تمدید رایگان", "Free renewal"),
         "balance_extend": ("کیف پول", "Wallet"),
+        "custom_payment_receipt": ("کارت‌به‌کارت", "Bank transfer"),
     }
-    raw_payment_method = str(order.get("payment_method") or "")
+    raw_payment_method = str(order.get("payment_method") or "").strip()
+    if not raw_payment_method:
+        if order_type == "balance_charge" or order.get("receipt_photo_id") or status == "pending_balance_charge":
+            raw_payment_method = "card"
+
     if raw_payment_method in payment_method_labels:
         payment_method = payment_method_labels[raw_payment_method][0 if lang == "fa" else 1]
     else:
         payment_method = html.escape(str(
             order.get("payment_label") or raw_payment_method
-            or ("نامشخص" if lang == "fa" else "Unknown")
+            or ("کارت‌به‌کارت" if order_type == "balance_charge" else ("نامشخص" if lang == "fa" else "Unknown"))
         ))
     try:
         price = int(order.get("price", 0) or 0)
@@ -31098,7 +31107,6 @@ def _build_order_details_text(order: dict, lang: str) -> str:
         "category_purchase": ("خرید بسته", "Package purchase"),
         "balance_charge": ("شارژ کیف پول", "Wallet top-up"),
     }
-    order_type = str(order.get("type", "purchase"))
     type_label = type_labels.get(order_type, (order_type, order_type))[0 if lang == "fa" else 1]
     if order.get("is_extend") or order.get("parent_order_id") is not None:
         type_label = "تمدید سرویس" if lang == "fa" else "Service renewal"
@@ -31125,43 +31133,49 @@ def _build_order_details_text(order: dict, lang: str) -> str:
     parent_order_id = order.get("parent_order_id")
 
     if lang == "fa":
-        text = (
-            f"🧾 <b>جزئیات سفارش #{order_id}</b>\n\n"
-            f"📅 <b>تاریخ ثبت:</b> {created_at} (ساعت ایران)\n"
-            f"📍 <b>مرحلهٔ سفارش:</b> {status_label}\n"
-            f"💳 <b>وضعیت پرداخت:</b> {payment_status[0]}\n"
-            f"💰 <b>مبلغ:</b> {price_text}\n"
-            f"🏷️ <b>نوع سفارش:</b> {html.escape(type_label)}\n"
-            f"📦 <b>حجم:</b> {volume_text}\n"
-            f"⏱ <b>مدت:</b> {days_text}\n"
-            f"💠 <b>روش پرداخت:</b> {payment_method}\n"
-            f"🧾 <b>رسید:</b> {'ارسال شده' if receipt else 'ثبت نشده'}\n"
-            f"✅ <b>تاریخ تأیید:</b> {approved_at}"
-        )
+        lines = [
+            f"🧾 <b>جزئیات سفارش #{order_id}</b>\n",
+            f"📅 <b>تاریخ ثبت:</b> {created_at} (ساعت ایران)",
+            f"📍 <b>مرحلهٔ سفارش:</b> {status_label}",
+            f"💳 <b>وضعیت پرداخت:</b> {payment_status[0]}",
+            f"💰 <b>مبلغ:</b> {price_text}",
+            f"🏷️ <b>نوع سفارش:</b> {html.escape(type_label)}",
+        ]
+        if order_type != "balance_charge":
+            lines.append(f"📦 <b>حجم:</b> {volume_text}")
+            lines.append(f"⏱ <b>مدت:</b> {days_text}")
+        lines.append(f"💠 <b>روش پرداخت:</b> {payment_method}")
+        lines.append(f"🧾 <b>رسید:</b> {'ارسال شده' if receipt else 'ثبت نشده'}")
+        lines.append(f"✅ <b>تاریخ تأیید:</b> {approved_at}")
         if parent_order_id:
-            text += f"\n🔄 <b>سفارش تمدیدی:</b> #{html.escape(str(parent_order_id))}"
+            lines.append(f"🔄 <b>سفارش تمدیدی:</b> #{html.escape(str(parent_order_id))}")
         if rejection:
-            text += f"\n📝 <b>دلیل رد:</b> {rejection}"
-        text += f"\n🔗 <b>کانفیگ:</b> {config_status[0]}"
+            lines.append(f"📝 <b>دلیل رد:</b> {rejection}")
+        if order_type != "balance_charge":
+            lines.append(f"🔗 <b>کانفیگ:</b> {config_status[0]}")
+        text = "\n".join(lines)
     else:
-        text = (
-            f"🧾 <b>Order #{order_id}</b>\n\n"
-            f"📅 <b>Created:</b> {created_at} (Iran time)\n"
-            f"📍 <b>Order stage:</b> {status_label}\n"
-            f"💳 <b>Payment status:</b> {payment_status[1]}\n"
-            f"💰 <b>Amount:</b> {price_text}\n"
-            f"🏷️ <b>Order type:</b> {html.escape(type_label)}\n"
-            f"📦 <b>Volume:</b> {volume_text}\n"
-            f"⏱ <b>Duration:</b> {days_text}\n"
-            f"💠 <b>Payment method:</b> {payment_method}\n"
-            f"🧾 <b>Receipt:</b> {'Submitted' if receipt else 'Not submitted'}\n"
-            f"✅ <b>Approved:</b> {approved_at}"
-        )
+        lines = [
+            f"🧾 <b>Order #{order_id}</b>\n",
+            f"📅 <b>Created:</b> {created_at} (Iran time)",
+            f"📍 <b>Order stage:</b> {status_label}",
+            f"💳 <b>Payment status:</b> {payment_status[1]}",
+            f"💰 <b>Amount:</b> {price_text}",
+            f"🏷️ <b>Order type:</b> {html.escape(type_label)}",
+        ]
+        if order_type != "balance_charge":
+            lines.append(f"📦 <b>Volume:</b> {volume_text}")
+            lines.append(f"⏱ <b>Duration:</b> {days_text}")
+        lines.append(f"💠 <b>Payment method:</b> {payment_method}")
+        lines.append(f"🧾 <b>Receipt:</b> {'Submitted' if receipt else 'Not submitted'}")
+        lines.append(f"✅ <b>Approved:</b> {approved_at}")
         if parent_order_id:
-            text += f"\n🔄 <b>Renewal for:</b> #{html.escape(str(parent_order_id))}"
+            lines.append(f"🔄 <b>Renewal for:</b> #{html.escape(str(parent_order_id))}")
         if rejection:
-            text += f"\n📝 <b>Rejection reason:</b> {rejection}"
-        text += f"\n🔗 <b>Config:</b> {config_status[1]}"
+            lines.append(f"📝 <b>Rejection reason:</b> {rejection}")
+        if order_type != "balance_charge":
+            lines.append(f"🔗 <b>Config:</b> {config_status[1]}")
+        text = "\n".join(lines)
     return text
 
 
@@ -33333,86 +33347,87 @@ async def auto_log_cleanup():
     
     await asyncio.sleep(300)
     
-    while True:
-        try:
-            await asyncio.sleep(259200)  # 72 hours = 259200
-            
-            logger.info("🧹 Starting automatic log file cleanup...")
-            
-            # Calculate disk space before cleanup
-            import shutil
-            total_before, used_before, free_before = shutil.disk_usage(".")
-            
-            cleaned_files = []
-            errors = []
-            total_lines_before = 0
-            total_lines_after = 0
-            total_size_freed = 0  # Freed space in bytes
-            
-            log_files = ['bot_debug.log', 'bot_error.log', 'bot.log', 'events.log']
-            
-            for log_file in log_files:
-                if os.path.exists(log_file):
-                    try:
-                        # Get file size before cleanup
-                        size_before = os.path.getsize(log_file)
-                        
-                        with open(log_file, 'r', encoding='utf-8') as f:
-                            lines = f.readlines()
-                        
-                        lines_before = len(lines)
-                        total_lines_before += lines_before
-                        
-                        keep_lines = 500
-                        last_lines = lines[-keep_lines:] if len(lines) > keep_lines else lines
-                        lines_after = len(last_lines)
-                        total_lines_after += lines_after
-                        
-                        with open(log_file, 'w', encoding='utf-8') as f:
-                            f.write(f"=== Log auto cleaned: {datetime.now().isoformat()} ===\n")
-                            f.write(f"=== {lines_after} last lines kept ===\n\n")
-                            f.writelines(last_lines)
-                        
-                        # Get file size after cleanup
-                        size_after = os.path.getsize(log_file)
-                        size_freed = size_before - size_after
-                        total_size_freed += size_freed
-                        
-                        cleaned_files.append({
-                            'name': log_file,
-                            'before': lines_before,
-                            'after': lines_after,
-                            'size_before': size_before,
-                            'size_after': size_after,
-                            'size_freed': size_freed
-                        })
-                        
-                        logger.info(f"✅ File {log_file} cleaned ({lines_before} → {lines_after} lines, {size_freed / 1024:.1f} KB freed)")
-                        
-                    except Exception as e:
-                        error_msg = f"Error cleaning {log_file}: {str(e)[:50]}"
-                        errors.append(error_msg)
-                        logger.error(f"❌ {error_msg}")
-            
-            # Calculate disk space after cleanup
-            total_after, used_after, free_after = shutil.disk_usage(".")
-            free_gained_mb = (free_after - free_before) / (1024 * 1024)
-            
-            # Helper function for formatting size
-            def format_size(size_bytes):
-                if size_bytes >= 1024 * 1024:  # Larger than 1 MB
-                    return f"{size_bytes / (1024 * 1024):.2f} MB"
-                elif size_bytes >= 1024:  # Larger than 1 KB
-                    return f"{size_bytes / 1024:.1f} KB"
-                else:
-                    return f"{size_bytes} B"
-            
-            # Send report to log bot
-            if cleaned_files:
-                # Format total freed space
-                total_freed_display = format_size(total_size_freed)
+    try:
+        while True:
+            try:
+                await asyncio.sleep(259200)  # 72 hours = 259200
                 
-                report = f"""
+                logger.info("🧹 Starting automatic log file cleanup...")
+                
+                # Calculate disk space before cleanup
+                import shutil
+                total_before, used_before, free_before = shutil.disk_usage(".")
+                
+                cleaned_files = []
+                errors = []
+                total_lines_before = 0
+                total_lines_after = 0
+                total_size_freed = 0  # Freed space in bytes
+                
+                log_files = ['bot_debug.log', 'bot_error.log', 'bot.log', 'events.log']
+                
+                for log_file in log_files:
+                    if os.path.exists(log_file):
+                        try:
+                            # Get file size before cleanup
+                            size_before = os.path.getsize(log_file)
+                            
+                            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                                lines = f.readlines()
+                            
+                            lines_before = len(lines)
+                            total_lines_before += lines_before
+                            
+                            keep_lines = 500
+                            last_lines = lines[-keep_lines:] if len(lines) > keep_lines else lines
+                            lines_after = len(last_lines)
+                            total_lines_after += lines_after
+                            
+                            with open(log_file, 'w', encoding='utf-8') as f:
+                                f.write(f"=== Log auto cleaned: {datetime.now().isoformat()} ===\n")
+                                f.write(f"=== {lines_after} last lines kept ===\n\n")
+                                f.writelines(last_lines)
+                            
+                            # Get file size after cleanup
+                            size_after = os.path.getsize(log_file)
+                            size_freed = size_before - size_after
+                            total_size_freed += size_freed
+                            
+                            cleaned_files.append({
+                                'name': log_file,
+                                'before': lines_before,
+                                'after': lines_after,
+                                'size_before': size_before,
+                                'size_after': size_after,
+                                'size_freed': size_freed
+                            })
+                            
+                            logger.info(f"✅ File {log_file} cleaned ({lines_before} → {lines_after} lines, {size_freed / 1024:.1f} KB freed)")
+                            
+                        except Exception as e:
+                            error_msg = f"Error cleaning {log_file}: {str(e)[:50]}"
+                            errors.append(error_msg)
+                            logger.error(f"❌ {error_msg}")
+                
+                # Calculate disk space after cleanup
+                total_after, used_after, free_after = shutil.disk_usage(".")
+                free_gained_mb = (free_after - free_before) / (1024 * 1024)
+                
+                # Helper function for formatting size
+                def format_size(size_bytes):
+                    if size_bytes >= 1024 * 1024:  # Larger than 1 MB
+                        return f"{size_bytes / (1024 * 1024):.2f} MB"
+                    elif size_bytes >= 1024:  # Larger than 1 KB
+                        return f"{size_bytes / 1024:.1f} KB"
+                    else:
+                        return f"{size_bytes} B"
+                
+                # Send report to log bot
+                if cleaned_files:
+                    # Format total freed space
+                    total_freed_display = format_size(total_size_freed)
+                    
+                    report = f"""
 🧹 <b>Auto Log Cleanup Completed!</b>
 
 🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -33422,49 +33437,49 @@ async def auto_log_cleanup():
 
 <b>File Details:</b>
 """
-                for f in cleaned_files:
-                    size_before_display = format_size(f['size_before'])
-                    size_after_display = format_size(f['size_after'])
+                    for f in cleaned_files:
+                        size_before_display = format_size(f['size_before'])
+                        size_after_display = format_size(f['size_after'])
+                        
+                        if f['size_freed'] > 0:
+                            freed_display = f"-{format_size(f['size_freed'])}"
+                        else:
+                            freed_display = "No change"
+                        
+                        report += f"• {f['name']}: {f['before']:,} → {f['after']:,} lines | {size_before_display} → {size_after_display} ({freed_display})\n"
                     
-                    if f['size_freed'] > 0:
-                        freed_display = f"-{format_size(f['size_freed'])}"
-                    else:
-                        freed_display = "No change"
+                    # Only show total freed space
+                    report += f"\n💾 Total space freed: {free_gained_mb:.2f} MB"
                     
-                    report += f"• {f['name']}: {f['before']:,} → {f['after']:,} lines | {size_before_display} → {size_after_display} ({freed_display})\n"
-                
-                # Only show total freed space
-                report += f"\n💾 Total space freed: {free_gained_mb:.2f} MB"
-                
-                if errors:
-                    report += f"\n\n⚠️ <b>Errors:</b>\n"
-                    for err in errors:
-                        report += f"• {err}\n"
-                
-                try:
-                    await log_bot.send_message(log_chat_id, report, parse_mode=ParseMode.HTML)
-                    logger.info("✅ Auto cleanup report sent to log bot")
-                except Exception as e:
-                    logger.error(f"❌ Error sending report to log bot: {e}")
+                    if errors:
+                        report += f"\n\n⚠️ <b>Errors:</b>\n"
+                        for err in errors:
+                            report += f"• {err}\n"
+                    
                     try:
-                        await bot.send_message(ADMIN_ID_INT, 
-                            f"⚠️ Error sending to log bot: {e}\n\n{report[:500]}", 
-                            parse_mode=ParseMode.HTML)
-                    except:
-                        pass
-            
-        except asyncio.CancelledError:
-            logger.info("❌ Auto log cleanup task cancelled")
-            break
-        except Exception as e:
-            logger.error(f"❌ Error in auto log cleanup: {e}", exc_info=True)
-            await asyncio.sleep(3600)
-        finally:
-            if LOG_BOT_TOKEN and LOG_CHANNEL_ID:
-                try:
-                    await log_bot.session.close()
-                except:
-                    pass
+                        await log_bot.send_message(log_chat_id, report, parse_mode=ParseMode.HTML)
+                        logger.info("✅ Auto cleanup report sent to log bot")
+                    except Exception as e:
+                        logger.error(f"❌ Error sending report to log bot: {e}")
+                        try:
+                            await bot.send_message(ADMIN_ID_INT, 
+                                f"⚠️ Error sending to log bot: {e}\n\n{report[:500]}", 
+                                parse_mode=ParseMode.HTML)
+                        except:
+                            pass
+                
+            except asyncio.CancelledError:
+                logger.info("❌ Auto log cleanup task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in auto log cleanup: {e}", exc_info=True)
+                await asyncio.sleep(3600)
+    finally:
+        if LOG_BOT_TOKEN and LOG_CHANNEL_ID:
+            try:
+                await log_bot.session.close()
+            except:
+                pass
                 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_chat_reply'))
 async def admin_chat_reply(message: Message):
@@ -43358,7 +43373,8 @@ async def main():
                     await asyncio.sleep(21600)  # هر 6 ساعت
                     if SENAI_PANEL_ENABLED:
                         logger.info("شروع همگام‌سازی کانفیگ‌های حذف شده...")
-                        deleted = await sync_deleted_configs(batch_size=20)
+                        sync_result = await sync_deleted_configs(batch_size=20)
+                        deleted = sync_result.get('deleted', 0) if isinstance(sync_result, dict) else (sync_result if isinstance(sync_result, int) else 0)
                         if deleted > 0:
                             logger.info(f"🗑 همگام‌سازی: {deleted} کانفیگ حذف شده همگام‌سازی شد")
                         else:
@@ -43395,6 +43411,10 @@ async def main():
                     next_sunday = (now + timedelta(days=days_until_sunday)).replace(
                         hour=0, minute=0, second=0, microsecond=0
                     )
+                    if now.weekday() == 6:
+                        next_sunday = (now + timedelta(days=7)).replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        )
                     wait_seconds = (next_sunday - now).total_seconds()
                     
                     if wait_seconds < 3600:
@@ -43497,6 +43517,7 @@ async def main():
                     
                     weekly_cleanup_running = False
                     logger.info("پاکسازی هفتگی به پایان رسید")
+                    await asyncio.sleep(86400)
                     
                 except asyncio.CancelledError:
                     logger.info("❌ تسک پاکسازی هفتگی لغو شد")
@@ -43542,7 +43563,7 @@ async def main():
                     total, used, free = shutil.disk_usage(".")
                     free_gb = free / (1024**3)
                     
-                    if free_gb < 0.1:
+                    if free_gb < 1.0:
                         await send_disk_warning(ADMIN_ID_INT)  # ← اینجا صدا زده می‌شود
                         logger.info(f"هشدار فضای دیسک ارسال شد (فضای خالی: {free_gb:.1f} GB)")
                     else:
@@ -43679,7 +43700,13 @@ async def main():
                             
                             if size > 50 * 1024 * 1024:  # 50 MB
                                 backup_name = f"{log_file}.{datetime.now().strftime('%Y%m%d_%H%M%S')}.old"
-                                os.rename(log_file, backup_name)
+                                try:
+                                    os.rename(log_file, backup_name)
+                                except PermissionError:
+                                    import shutil
+                                    shutil.copy2(log_file, backup_name)
+                                    with open(log_file, 'w', encoding='utf-8') as f:
+                                        pass
                                 rotated_count += 1
                                 logger.info(f"🔄 چرخش لاگ: {log_file} -> {backup_name}")
                                 
@@ -43688,9 +43715,12 @@ async def main():
                                         file_path = os.path.join('.', old_file)
                                         file_age = time.time() - os.path.getmtime(file_path)
                                         if file_age > 30 * 24 * 3600:
-                                            os.remove(file_path)
-                                            deleted_count += 1
-                                            logger.debug(f"🗑 حذف فایل لاگ قدیمی: {old_file} (age: {file_age / 86400:.1f} days)")
+                                            try:
+                                                os.remove(file_path)
+                                                deleted_count += 1
+                                                logger.debug(f"🗑 حذف فایل لاگ قدیمی: {old_file} (age: {file_age / 86400:.1f} days)")
+                                            except Exception as rm_err:
+                                                logger.warning(f"نتوانست فایل لاگ قدیمی {old_file} را حذف کند: {rm_err}")
                     
                     logger.info(f"چرخش لاگ‌ها کامل شد: {rotated_count} فایل چرخش، {deleted_count} فایل قدیمی حذف شد")
                     
@@ -43710,7 +43740,7 @@ async def main():
                     await asyncio.sleep(24 * 3600)  # هر 24 ساعت
                     logger.info("شروع ریست محدودیت‌های پنل...")
                     
-                    if 'reset_panel_rate_limits' in dir():
+                    if callable(globals().get('reset_panel_rate_limits')):
                         await reset_panel_rate_limits()
                         logger.info("🔄 محدودیت‌های پنل با موفقیت ریست شدند")
                     else:
@@ -43774,6 +43804,7 @@ async def main():
         tasks = [
             asyncio.create_task(cleanup_expired_states_task(), name="cleanup_expired_states"),
             asyncio.create_task(sync_deleted_configs_task(), name="sync_deleted_configs"),
+            asyncio.create_task(weekly_cleanup(), name="weekly_cleanup"),
             asyncio.create_task(health_monitor(), name="health_monitor"),  # هر 8 ساعت
             asyncio.create_task(disk_space_monitor(), name="disk_space_monitor"),  # هر 48 ساعت
             asyncio.create_task(config_pool_monitor(), name="config_pool_monitor"),
@@ -43843,7 +43874,7 @@ def cleanup_expired_states():
     no_timestamp_count = 0
     expired_types = {}
     
-    for user_id, state in user_states.items():
+    for user_id, state in list(user_states.items()):
         should_delete = False
         state_type = 'unknown'
         
@@ -43871,9 +43902,10 @@ def cleanup_expired_states():
                 expired_count += 1
                 logger.debug(f"timestamp نامعتبر برای کاربر {user_id}: {state.get('timestamp')} - خطا: {e}")
         elif len(state) > 0:
-            should_delete = True
+            # دادن فرصت به وضعیت‌هایی که timestamp ندارند تا در میانه کار کاربر حذف نشوند
+            state['timestamp'] = now.isoformat()
             no_timestamp_count += 1
-            logger.debug(f"وضعیت بدون timestamp برای کاربر {user_id} (نوع: {state_type})")
+            logger.debug(f"وضعیت بدون timestamp برای کاربر {user_id} نشانه‌گذاری شد (نوع: {state_type})")
         
         if should_delete:
             expired.append(user_id)
@@ -43943,7 +43975,9 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
                     if not task.done() and task is not current_task
                 ]
                 if pending:
-                    logger.info(f"⏳ منتظر {len(pending)} تسک باقیمانده...")
+                    for task in pending:
+                        task.cancel()
+                    logger.info(f"⏳ منتظر لغو {len(pending)} تسک باقیمانده...")
                     await asyncio.wait(pending, timeout=2.0)
         except Exception as e:
             logger.warning(f"⚠️ خطا در بستن event loop: {e}")
