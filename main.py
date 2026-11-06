@@ -11843,153 +11843,13 @@ def generate_qr_code(data: str, order_id: int):
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
 
 
-def _get_wireguard_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
-    """بارگذاری فونت خوانا و مدرن با پشتیبانی از سیستم‌های مختلف"""
-    font_paths = [
-        'C:/Windows/Fonts/segoeuib.ttf' if bold else 'C:/Windows/Fonts/segoeui.ttf',
-        'C:/Windows/Fonts/arialbd.ttf' if bold else 'C:/Windows/Fonts/arial.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/TTF/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf' if bold else '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
-    ]
-    for p in font_paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except Exception:
-                pass
-    try:
-        return ImageFont.load_default(size=size)
-    except Exception:
-        return ImageFont.load_default()
-
-
-def generate_wireguard_qr_code(data: str, order_id: int):
-    """طراحی مدرن و حرفه‌ای کارت QR Code وایرگارد به سبک Dark Cyberpunk"""
-    qr = qrcode.QRCode(
-        version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=7,
-        border=2,
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-
-    if StyledPilImage and RoundedModuleDrawer and SolidFillColorMask:
-        qr_image = qr.make_image(
-            image_factory=StyledPilImage,
-            module_drawer=RoundedModuleDrawer(),
-            color_mask=SolidFillColorMask(back_color=(255, 255, 255), front_color=(15, 17, 23))
-        ).convert("RGBA")
-
-        # نشان شیک WG در مرکز QR Code
-        badge_size = int(qr_image.width * 0.17)
-        badge = Image.new("RGBA", (badge_size, badge_size), (0, 0, 0, 0))
-        bdraw = ImageDraw.Draw(badge)
-        bdraw.rounded_rectangle(
-            (0, 0, badge_size, badge_size),
-            radius=badge_size // 3,
-            fill="#88171a",
-            outline="#ffffff",
-            width=3
-        )
-        bfont = _get_wireguard_font(int(badge_size * 0.44), bold=True)
-        bdraw.text((badge_size // 2, badge_size // 2 - 1), "WG", fill="#ffffff", font=bfont, anchor="mm")
-
-        center_x = (qr_image.width - badge_size) // 2
-        center_y = (qr_image.height - badge_size) // 2
-        qr_image.paste(badge, (center_x, center_y), badge)
-    else:
-        qr_image = qr.make_image(fill_color="#09090b", back_color="#ffffff").convert("RGBA")
-
-    # ابعاد و فاصله‌بندی
-    qr_pad = 18
-    qr_box_w = qr_image.width + qr_pad * 2
-    qr_box_h = qr_image.height + qr_pad * 2
-
-    card_w = max(700, qr_box_w + 110)
-    header_h = 170
-    footer_h = 110
-    card_h = header_h + qr_box_h + footer_h
-
-    card = Image.new("RGB", (card_w, card_h), "#08090d")
-    cdraw = ImageDraw.Draw(card)
-
-    # گرادینت عمودی ملایم پس‌زمینه
-    for y in range(card_h):
-        ratio = y / card_h
-        r = int(10 + ratio * 10)
-        g = int(11 + ratio * 8)
-        b = int(18 + ratio * 16)
-        cdraw.line([(0, y), (card_w, y)], fill=(r, g, b))
-
-    # کادر کارت اصلی
-    margin = 20
-    card_rect = (margin, margin, card_w - margin, card_h - margin)
-    cdraw.rounded_rectangle(card_rect, radius=28, fill="#0f111a", outline="#1f2333", width=2)
-
-    # خط نورانی قرمز رنگ بالای کارت
-    cdraw.rounded_rectangle((margin + 2, margin + 2, card_w - margin - 2, margin + 8), radius=4, fill="#e11d48")
-
-    # برچسب پیل بالای کارت
-    pill_w, pill_h = 190, 32
-    pill_x = (card_w - pill_w) // 2
-    pill_y = margin + 28
-    cdraw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=16, fill="#220f16", outline="#e11d48", width=1)
-
-    # آیکون وکتوری صاعقه درون پیل
-    bolt_x = pill_x + 18
-    bolt_y = pill_y + 8
-    bolt_pts = [
-        (bolt_x + 5, bolt_y),
-        (bolt_x + 1, bolt_y + 8),
-        (bolt_x + 5, bolt_y + 8),
-        (bolt_x + 3, bolt_y + 15),
-        (bolt_x + 10, bolt_y + 6),
-        (bolt_x + 6, bolt_y + 6)
-    ]
-    cdraw.polygon(bolt_pts, fill="#fb7185")
-
-    tag_font = _get_wireguard_font(13, bold=True)
-    cdraw.text((pill_x + 104, pill_y + pill_h // 2), "WIREGUARD VPN", fill="#fb7185", font=tag_font, anchor="mm")
-
-    # عنوان اصلی کارت
-    title_font = _get_wireguard_font(28, bold=True)
-    cdraw.text((card_w // 2, pill_y + pill_h + 30), "HIGH SPEED TUNNEL", fill="#f8fafc", font=title_font, anchor="mm")
-
-    sub_font = _get_wireguard_font(14, bold=False)
-    cdraw.text((card_w // 2, pill_y + pill_h + 58), f"Order #{order_id}  •  UDP Gaming & Streaming", fill="#94a3b8", font=sub_font, anchor="mm")
-
-    # باکس سفید QR با حاشیه شیک نئونی
-    qr_box_x = (card_w - qr_box_w) // 2
-    qr_box_y = header_h
-
-    cdraw.rounded_rectangle(
-        (qr_box_x - 3, qr_box_y - 3, qr_box_x + qr_box_w + 3, qr_box_y + qr_box_h + 3),
-        radius=22,
-        fill="#e11d48"
-    )
-    cdraw.rounded_rectangle(
-        (qr_box_x, qr_box_y, qr_box_x + qr_box_w, qr_box_y + qr_box_h),
-        radius=20,
-        fill="#ffffff"
-    )
-    card.paste(qr_image, (qr_box_x + qr_pad, qr_box_y + qr_pad), qr_image)
-
-    # فوتر پایین کارت
-    foot_mid = qr_box_y + qr_box_h + (footer_h // 2) - 8
-    foot_main = _get_wireguard_font(15, bold=True)
-    cdraw.text((card_w // 2, foot_mid - 6), "Scan in WireGuard App to Import", fill="#cbd5e1", font=foot_main, anchor="mm")
-
-    foot_sub = _get_wireguard_font(13, bold=False)
-    cdraw.text((card_w // 2, foot_mid + 18), "Fast Handshake  •  End-to-End Encrypted", fill="#64748b", font=foot_sub, anchor="mm")
-
-    bio = BytesIO()
-    card.save(bio, "PNG", quality=95)
-    return BufferedInputFile(
-        bio.getvalue(),
-        filename=f"wireguard_qr_{order_id}.png",
-    )
+from wireguard_card_generator import (
+    generate_wireguard_qr_code,
+    generate_wireguard_qr,
+    create_premium_background,
+    compose_qr_card,
+    export_final_image,
+)
 
 
 def get_config_caption(
@@ -24405,9 +24265,14 @@ async def show_wireguard_config(callback: CallbackQuery):
             await callback.message.delete()
         except Exception as error:
             logger.debug("حذف پیام قبلی وایرگارد ناموفق بود: %s", error)
+        if lang == "fa":
+            cat_title = order.get('category_name') or 'UDP گیمینگ و استریم'
+        else:
+            cat_title = order.get('category_name_en') or order.get('category_name') or 'UDP Gaming & Streaming'
+        order_info = {'order_id': order_id, 'category': cat_title, 'lang': lang}
         await bot.send_photo(
             user_id,
-            generate_wireguard_qr_code(config_text, order_id),
+            generate_wireguard_qr_code(config_text, order_id, order_info),
             caption=(
                 f"🔴 <b>QR Code وایرگارد سفارش #{order_id}</b>\n"
                 "برای وارد کردن در برنامه WireGuard اسکن کنید."
