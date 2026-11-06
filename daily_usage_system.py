@@ -1589,8 +1589,6 @@ async def handle_daily_usage_request(
 
 \u200f🗓 <b>بازه:</b> ۷ روز گذشته
 """
-        if history_note:
-            caption += f"\n\u200fℹ️ <i>{history_note}</i>\n"
     else:
         tot_text = format_traffic_auto(total_bytes, lang="en")
         avg_text = format_traffic_auto(avg_bytes, lang="en")
@@ -1604,8 +1602,6 @@ async def handle_daily_usage_request(
 
 🗓 <b>Period:</b> Last 7 days
 """
-        if history_note:
-            caption += f"\nℹ️ <i>{history_note}</i>\n"
 
     # ساخت کیبورد بازگشت
     back_callback = f"view_config_{order_id}" if from_view != 2 else f"show_text_{order_id}"

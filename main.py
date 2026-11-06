@@ -12845,12 +12845,12 @@ async def extend_service(
             current_inbounds = [current_inbounds] if current_inbounds else []
         
         logger.info(f"📡 اینباندهای فعلی: {current_inbounds}")
-        if new_inbounds is not None:
+        if new_inbounds:
             selected_inbounds = new_inbounds
         else:
             selected_inbounds = order.get('inbound_id', [])
             if not selected_inbounds:
-                selected_inbounds = get_user_inbound(user_id)
+                selected_inbounds = current_inbounds if current_inbounds else get_user_inbound(user_id)
         
         if not isinstance(selected_inbounds, list):
             selected_inbounds = [selected_inbounds] if selected_inbounds else []
@@ -12898,6 +12898,9 @@ async def extend_service(
         elif new_category_name and old_cat_name:
             if str(new_category_name).strip() != str(old_cat_name).strip():
                 is_category_changed = True
+        elif new_category_id is not None and old_cat_id is None:
+            # سرویس قبلی سفارشی/بدون دسته بود و اکنون به یک دسته‌بندی مشخص تمدید شده است
+            is_category_changed = True
 
         # حجم فقط در صورتی جایگزین و ترافیک ریست می‌شود که:
         # ۱. سرویس قبلی نامحدود بوده باشد
@@ -16725,6 +16728,34 @@ async def show_ready_categories(callback: CallbackQuery):
                     matching_cat = c
                     break
         
+        # ✅ تطبیق هوشمند از روی اینباندها برای کانفیگ‌های سفارشی یا ثبت‌شده از پنل
+        if not matching_cat and order:
+            order_ibs = order.get('inbound_id')
+            if not order_ibs:
+                email = get_order_client_email(order) or order.get('email')
+                if email and SENAI_PANEL_ENABLED:
+                    try:
+                        order_ibs = await get_client_inbounds(email)
+                    except Exception:
+                        pass
+            if order_ibs:
+                if not isinstance(order_ibs, list):
+                    order_ibs = [order_ibs]
+                order_ibs_set = set(int(x) for x in order_ibs if str(x).isdigit())
+                if order_ibs_set:
+                    for c in categories:
+                        c_ibs = c.get('inbound_ids') or ([c.get('inbound_id')] if c.get('inbound_id') else [])
+                        if isinstance(c_ibs, list):
+                            c_ibs_set = set(int(x) for x in c_ibs if str(x).isdigit())
+                            if c_ibs_set and c_ibs_set == order_ibs_set:
+                                matching_cat = c
+                                order['category_id'] = c.get('id')
+                                order['category_name'] = c.get('name')
+                                order['category_name_en'] = c.get('name_en', c.get('name'))
+                                save_all()
+                                logger.info(f"✅ [show_ready_categories] دسته سرویس #{extend_order_id} از روی اینباندهای تطبیقی شناسایی شد: {c.get('name')}")
+                                break
+        
         if not matching_cat:
             support_user = (SUPPORT_USERNAME or 'my_name_is_navid').lstrip('@')
             support_url = f"https://t.me/{support_user}"
@@ -17149,13 +17180,18 @@ async def show_category_packages(callback: CallbackQuery):
         order_vol = order.get('volume', 0) if order else 0
         
         # حجم سرویس اولیه
+        order_ip_limit = order.get('ip_limit', 0) if order else 0
         if order_vol == 0:
-            orig_vol_str = "نامحدود"
+            if order_ip_limit > 0:
+                orig_vol_str = f"نامحدود ({order_ip_limit} کاربر)" if lang == "fa" else f"Unlimited ({order_ip_limit} Users)"
+            else:
+                orig_vol_str = "نامحدود" if lang == "fa" else "Unlimited"
         else:
             orig_vol_val = int(order_vol) if order_vol == int(order_vol) else order_vol
             orig_vol_str = f"{orig_vol_val} گیگ"
             
         remaining_display = None
+        days_left = None
         if order:
             email = get_order_client_email(order) or order.get('email')
             if email and SENAI_PANEL_ENABLED:
@@ -17163,6 +17199,14 @@ async def show_category_packages(callback: CallbackQuery):
                     client_info = await xui_get_client_info(email)
                     traffic_info = await xui_get_client_traffic(email)
                     if client_info:
+                        expiry_time = client_info.get('expiryTime', 0)
+                        if expiry_time > 0:
+                            try:
+                                exp_dt = datetime.fromtimestamp(expiry_time / 1000)
+                                days_left = max(0, (exp_dt - datetime.now()).days)
+                            except Exception:
+                                pass
+
                         total_gb = (client_info.get('totalGB', 0) or 0) / (1024**3)
                         if total_gb == 0:
                             remaining_display = "نامحدود"
@@ -17187,8 +17231,11 @@ async def show_category_packages(callback: CallbackQuery):
                 remaining_display = f"{to_persian_digits(rem_num_str) if lang == 'fa' else rem_num_str} گیگ"
 
         if lang == "fa":
-            if remaining_display == "نامحدود":
-                rem_line = "📊 این سرویس نامحدود است.\nچقدر اضافه کنم؟"
+            if remaining_display == "نامحدود" or order_vol == 0:
+                if days_left is not None:
+                    rem_line = f"📊 الان {to_persian_digits(days_left)} روز اعتبار مونده براش.\nچقدر اضافه کنم؟"
+                else:
+                    rem_line = "📊 این سرویس نامحدود است.\nچقدر اضافه کنم؟"
             else:
                 rem_line = f"📊 الان {remaining_display} حجم مونده براش.\nچقدر اضافه کنم؟"
             text = (
@@ -17197,8 +17244,11 @@ async def show_category_packages(callback: CallbackQuery):
                 f"<i>لینک اشتراکت عوض نمی‌شه، تو اپت هیچ کاری لازم نیست بکنی.</i>"
             )
         else:
-            if remaining_display == "نامحدود":
-                rem_line = "📊 This service is unlimited.\nHow much would you like to add?"
+            if remaining_display == "نامحدود" or order_vol == 0:
+                if days_left is not None:
+                    rem_line = f"📊 Currently {days_left} days remaining.\nHow much would you like to add?"
+                else:
+                    rem_line = "📊 This service is unlimited.\nHow much would you like to add?"
             else:
                 rem_line = f"📊 Currently {remaining_display} volume remaining.\nHow much would you like to add?"
             text = (
@@ -17210,27 +17260,62 @@ async def show_category_packages(callback: CallbackQuery):
         buttons = []
         for pkg in packages:
             pkg_vol = pkg.get('volume', 0)
+            pkg_days = pkg.get('days', 30)
             pkg_price = pkg.get('price', 0)
             pkg_id = pkg.get('id')
+            pkg_ip_limit = pkg.get('ip_limit', 0)
             
+            parts = []
+            
+            # ۱. حجم / نامحدود
             if lang == "fa":
                 if pkg_vol == 0:
-                    vol_label = "نامحدود"
+                    parts.append("نامحدود")
                 elif pkg_vol < 1:
-                    vol_label = f"{int(pkg_vol * 1024)} مگ"
+                    parts.append(f"{int(pkg_vol * 1024)} مگ")
                 else:
                     vol_val = int(pkg_vol) if pkg_vol == int(pkg_vol) else pkg_vol
-                    vol_label = f"{vol_val} گیگ"
-                btn_text = f"➕ {vol_label} • {pkg_price:,} تومن"
+                    parts.append(f"{vol_val} گیگ")
             else:
                 if pkg_vol == 0:
-                    vol_label = "Unlimited"
+                    parts.append("Unlimited")
                 elif pkg_vol < 1:
-                    vol_label = f"{int(pkg_vol * 1024)}MB"
+                    parts.append(f"{int(pkg_vol * 1024)}MB")
                 else:
                     vol_val = int(pkg_vol) if pkg_vol == int(pkg_vol) else pkg_vol
-                    vol_label = f"{vol_val}GB"
-                btn_text = f"➕ {vol_label} • {pkg_price:,} Toman"
+                    parts.append(f"{vol_val}GB")
+            
+            # ۲. روز (برای همه کانفیگ‌ها)
+            if pkg_days and pkg_days > 0:
+                if lang == "fa":
+                    parts.append(f"{pkg_days} روز")
+                else:
+                    parts.append(f"{pkg_days} Days")
+            
+            # ۳. تعداد کاربر (فقط برای تمدید نامحدود)
+            if pkg_vol == 0:
+                if lang == "fa":
+                    if pkg_ip_limit == 0:
+                        parts.append("کاربر نامحدود")
+                    elif pkg_ip_limit == 1:
+                        parts.append("۱ کاربر")
+                    else:
+                        parts.append(f"{pkg_ip_limit} کاربر")
+                else:
+                    if pkg_ip_limit == 0:
+                        parts.append("Unlimited Users")
+                    elif pkg_ip_limit == 1:
+                        parts.append("1 User")
+                    else:
+                        parts.append(f"{pkg_ip_limit} Users")
+            
+            # ۴. قیمت
+            if lang == "fa":
+                parts.append(f"{pkg_price:,} تومن")
+            else:
+                parts.append(f"{pkg_price:,} Toman")
+            
+            btn_text = "➕ " + " • ".join(parts)
                 
             buttons.append([InlineKeyboardButton(
                 text=btn_text,
@@ -17242,16 +17327,19 @@ async def show_category_packages(callback: CallbackQuery):
         if restrict_extend:
             back_btn = InlineKeyboardButton(
                 text="🔙 کانفیگ" if lang == "fa" else "🔙 Config",
-                callback_data=f"view_config_{extend_order_id}"
+                callback_data=f"view_config_{extend_order_id}",
+                style="primary"
             )
         else:
             back_btn = InlineKeyboardButton(
                 text="🔙 دسته‌ها" if lang == "fa" else "🔙 Categories",
-                callback_data="show_ready_categories"
+                callback_data="show_ready_categories",
+                style="primary"
             )
         home_btn = InlineKeyboardButton(
             text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
-            callback_data="back_to_main"
+            callback_data="back_to_main",
+            style="primary"
         )
         buttons.append([back_btn, home_btn])
     else:
