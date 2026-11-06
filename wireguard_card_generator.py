@@ -8,11 +8,23 @@ full Persian & English bilingual support, and verified 100% scannability.
 
 import os
 import sys
+import glob
 
-# اطمینان از دسترسی به پکیج‌های مجازی‌ساز در اولویت مسیر جستجو
-_venv_site = os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages')
-if os.path.exists(_venv_site) and _venv_site not in sys.path:
-    sys.path.insert(0, _venv_site)
+# ۱. افزودن پوشه vendor برای دسترسی تضمینی و آفلاین به arabic_reshaper و bidi در هر سیستم‌عامل
+_vendor_dir = os.path.join(os.path.dirname(__file__), 'vendor')
+if os.path.exists(_vendor_dir) and _vendor_dir not in sys.path:
+    sys.path.insert(0, _vendor_dir)
+
+# ۲. اطمینان از دسترسی به پکیج‌های مجازی‌ساز در لینوکس و ویندوز
+for _pattern in [
+    os.path.join(os.path.dirname(__file__), '.venv', 'lib', 'python*', 'site-packages'),
+    os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages'),
+    os.path.join(os.path.dirname(__file__), '.venv', 'local', 'lib', 'python*', 'site-packages'),
+    '/opt/VeloraBot/.venv/lib/python*/site-packages',
+]:
+    for _site_path in glob.glob(_pattern):
+        if os.path.exists(_site_path) and _site_path not in sys.path:
+            sys.path.insert(0, _site_path)
 
 import io
 import logging
@@ -55,9 +67,6 @@ def reshape_persian(text: str) -> str:
     """اصلاح اتصال حروف و جهت متن فارسی برای رندر صحیح در Pillow"""
     global arabic_reshaper, get_display
     if arabic_reshaper is None or get_display is None:
-        site_dir = os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages')
-        if os.path.exists(site_dir) and site_dir not in sys.path:
-            sys.path.insert(0, site_dir)
         try:
             import arabic_reshaper as _ar
             from bidi.algorithm import get_display as _gd
