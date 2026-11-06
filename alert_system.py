@@ -678,19 +678,23 @@ class AlertSystem:
                 text=(
                     "🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service"
                 ) if is_test else (
-                    "🔄 تمدید سرویس" if lang == 'fa' else "🔄 Renew Service"
+                    "🔄 تمدید همین سرویس" if lang == 'fa' else "🔄 Renew This Service"
                 ),
                 callback_data="buy_service" if is_test else f"extend_service_{order_id}",
-                style="success" if is_test else "primary",
+                style="success",
             )],
-            [InlineKeyboardButton(
-                text="📁 مشاهده کانفیگ" if lang == 'fa' else "📁 View Config",
-                callback_data=f"view_config_{order_id}",
-            )],
-            [InlineKeyboardButton(
-                text="🏠 منوی اصلی" if lang == 'fa' else "🏠 Main Menu",
-                callback_data="back_to_main",
-            )],
+            [
+                InlineKeyboardButton(
+                    text="📁 مشاهده کانفیگ" if lang == 'fa' else "📁 View Config",
+                    callback_data=f"view_config_{order_id}",
+                    style="primary",
+                ),
+                InlineKeyboardButton(
+                    text="🏠 منوی اصلی" if lang == 'fa' else "🏠 Main Menu",
+                    callback_data="back_to_main",
+                    style="danger",
+                ),
+            ],
         ])
     
     async def _notify_volume(
