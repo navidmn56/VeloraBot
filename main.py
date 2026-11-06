@@ -12881,33 +12881,33 @@ async def extend_service(
         is_old_unlimited = (old_volume == 0) or (client_info.get('totalGB', 0) == 0)
         is_new_unlimited = (extra_volume == 0)
 
-        # ✅ بررسی تغییر پکیج / دسته
+        # ✅ بررسی تغییر دسته (دسته‌بندی سرویس)
         old_cat_id = order.get('category_id')
         old_cat_name = order.get('category_name')
-        old_pkg_id = order.get('package_id')
 
-        is_package_changed = False
+        if old_cat_id is None and old_cat_name:
+            for cat in READY_PACKAGES.get('categories', []):
+                if cat.get('name') and str(cat.get('name')).strip() == str(old_cat_name).strip():
+                    old_cat_id = cat.get('id')
+                    break
+
+        is_category_changed = False
         if new_category_id is not None and old_cat_id is not None:
             if int(new_category_id) != int(old_cat_id):
-                is_package_changed = True
+                is_category_changed = True
         elif new_category_name and old_cat_name:
             if str(new_category_name).strip() != str(old_cat_name).strip():
-                is_package_changed = True
+                is_category_changed = True
 
-        if not is_package_changed:
-            if new_package_id is not None and old_pkg_id is not None:
-                if int(new_package_id) != int(old_pkg_id):
-                    is_package_changed = True
-            elif new_category_id is not None and old_cat_id is None:
-                is_package_changed = True
-            elif not is_old_unlimited and not is_new_unlimited:
-                if old_pkg_id is None and new_package_id is None and old_volume > 0 and extra_volume > 0 and old_volume != extra_volume:
-                    is_package_changed = True
+        # حجم فقط در صورتی جایگزین و ترافیک ریست می‌شود که:
+        # ۱. سرویس قبلی نامحدود بوده باشد
+        # ۲. سرویس جدید نامحدود باشد
+        # ۳. دسته‌بندی سرویس تغییر کرده باشد (مثلاً از مستقیم به تانل)
+        # در صورتی که در همان دسته باشد، حجم اضافه می‌شود (تجمعی) و مصرف قبلی دست‌نخورده می‌ماند.
+        should_replace_volume = is_old_unlimited or is_new_unlimited or is_category_changed
+        should_reset_traffic = is_old_unlimited or is_new_unlimited or is_category_changed
 
-        should_replace_volume = is_old_unlimited or is_package_changed or is_new_unlimited
-        should_reset_traffic = is_old_unlimited or is_package_changed or is_new_unlimited
-
-        logger.info(f"🔍 وضعیت تمدید: is_old_unlimited={is_old_unlimited}, is_new_unlimited={is_new_unlimited}, is_package_changed={is_package_changed}")
+        logger.info(f"🔍 وضعیت تمدید: is_old_unlimited={is_old_unlimited}, is_new_unlimited={is_new_unlimited}, is_category_changed={is_category_changed}")
         logger.info(f"   ➡️ should_replace_volume={should_replace_volume}, should_reset_traffic={should_reset_traffic}")
 
         if is_new_unlimited:
@@ -16770,7 +16770,10 @@ async def show_ready_categories(callback: CallbackQuery):
             return
         else:
             target_category = matching_cat
-            categories = [matching_cat]
+            # ✅ هدایت مستقیم به بسته‌های دسته فعلی (بدون نمایش صفحه میانی دسته‌ها)
+            new_cb = callback.model_copy(update={'data': f"show_category_packages_{matching_cat['id']}"})
+            await show_category_packages(new_cb)
+            return
 
     # ✅ ساخت متن کوپن
     coupon_text = ""
@@ -16803,14 +16806,13 @@ async def show_ready_categories(callback: CallbackQuery):
         if not restrict_extend:
             warning_section_fa = (
                 f"{warning_emoji} <b>توجه مهم:</b>\n"
-                f"اگه بسته‌ی فعلی سرویس شما با بسته‌ای که انتخاب می‌کنید <b>متفاوت</b> باشه،\n"
-                f"احتمال <b>قطع شدن لینک‌های فعلی</b> شما وجود داره و باید <b>لینک جدید</b> رو از ساب‌لینک بردارید.\n\n"
+                f"در صورتی که دسته‌ای غیر از دسته فعلی سرویس خود را انتخاب کنید، "
+                f"<b>حجم باقیمانده سرویس قبلی شما از دست خواهد رفت</b> و حجم بسته جدید جایگزین می‌شود.\n\n"
             )
             warning_section_en = (
                 f"{warning_emoji} <b>Important Notice:</b>\n"
-                f"If your current service package differs from the one you select,\n"
-                f"there's a chance your <b>current links will be disconnected</b>,\n"
-                f"and you'll need to get a <b>new link</b> from the subscription.\n\n"
+                f"If you select a category other than your current service category, "
+                f"<b>your remaining volume will be lost</b> and replaced by the new package volume.\n\n"
             )
 
         if lang == "fa":
@@ -17139,30 +17141,119 @@ async def show_category_packages(callback: CallbackQuery):
     desc = category.get('description') if lang == "fa" else category.get('description_en', category.get('description'))
     
     # ═══════════════════════════════════════════
-    # ✅ متن متفاوت برای تمدید vs خرید
+    # ✅ ساخت متن و دکمه‌ها: تمدید vs خرید عادی
     # ═══════════════════════════════════════════
     if is_extend and extend_order_id:
-        # ───── حالت تمدید ─────
-        if lang == "fa":
-            text = f"""
-{premium_emoji('config', icon)} <b>{name}</b>
-
-{premium_emoji('note', '📝')} {desc}
-
-{premium_emoji('wallet', '💰')} موجودی شما: {balance:,} تومان
-
-<b>چقدر میخوای تمدید کنی</b> 👇
-"""
+        # ───── حالت تمدید (طراحی هماهنگ با عکس ارسالی) ─────
+        order = orders.get(str(extend_order_id))
+        order_vol = order.get('volume', 0) if order else 0
+        
+        # حجم سرویس اولیه
+        if order_vol == 0:
+            orig_vol_str = "نامحدود"
         else:
-            text = f"""
-{premium_emoji('config', icon)} <b>{name}</b>
+            orig_vol_val = int(order_vol) if order_vol == int(order_vol) else order_vol
+            orig_vol_str = f"{orig_vol_val} گیگ"
+            
+        remaining_display = None
+        if order:
+            email = get_order_client_email(order) or order.get('email')
+            if email and SENAI_PANEL_ENABLED:
+                try:
+                    client_info = await xui_get_client_info(email)
+                    traffic_info = await xui_get_client_traffic(email)
+                    if client_info:
+                        total_gb = (client_info.get('totalGB', 0) or 0) / (1024**3)
+                        if total_gb == 0:
+                            remaining_display = "نامحدود"
+                        else:
+                            up = (traffic_info.get('up', 0) if traffic_info else 0) / (1024**3)
+                            down = (traffic_info.get('down', 0) if traffic_info else 0) / (1024**3)
+                            used = up + down
+                            rem_val = max(0.0, total_gb - used)
+                            if rem_val == int(rem_val):
+                                rem_num_str = f"{int(rem_val)}"
+                            else:
+                                rem_num_str = f"{rem_val:.1f}"
+                            remaining_display = f"{to_persian_digits(rem_num_str) if lang == 'fa' else rem_num_str} گیگ"
+                except Exception as e:
+                    logger.warning(f"⚠️ [show_category_packages] خطا در دریافت مصرف کلاینت برای تمدید: {e}")
+        
+        if not remaining_display:
+            if order_vol == 0:
+                remaining_display = "نامحدود"
+            else:
+                rem_num_str = f"{int(order_vol) if order_vol == int(order_vol) else order_vol}"
+                remaining_display = f"{to_persian_digits(rem_num_str) if lang == 'fa' else rem_num_str} گیگ"
 
-{premium_emoji('note', '📝')} {desc}
+        if lang == "fa":
+            if remaining_display == "نامحدود":
+                rem_line = "📊 این سرویس نامحدود است.\nچقدر اضافه کنم؟"
+            else:
+                rem_line = f"📊 الان {remaining_display} حجم مونده براش.\nچقدر اضافه کنم؟"
+            text = (
+                f"🔄 <b>تمدید اشتراک {name} {orig_vol_str}</b>\n\n"
+                f"{rem_line}\n\n"
+                f"<i>لینک اشتراکت عوض نمی‌شه، تو اپت هیچ کاری لازم نیست بکنی.</i>"
+            )
+        else:
+            if remaining_display == "نامحدود":
+                rem_line = "📊 This service is unlimited.\nHow much would you like to add?"
+            else:
+                rem_line = f"📊 Currently {remaining_display} volume remaining.\nHow much would you like to add?"
+            text = (
+                f"🔄 <b>Extend Subscription {name} ({orig_vol_str})</b>\n\n"
+                f"{rem_line}\n\n"
+                f"<i>Your subscription link will not change.</i>"
+            )
 
-{premium_emoji('wallet', '💰')} Your Balance: {balance:,} Toman
+        buttons = []
+        for pkg in packages:
+            pkg_vol = pkg.get('volume', 0)
+            pkg_price = pkg.get('price', 0)
+            pkg_id = pkg.get('id')
+            
+            if lang == "fa":
+                if pkg_vol == 0:
+                    vol_label = "نامحدود"
+                elif pkg_vol < 1:
+                    vol_label = f"{int(pkg_vol * 1024)} مگ"
+                else:
+                    vol_val = int(pkg_vol) if pkg_vol == int(pkg_vol) else pkg_vol
+                    vol_label = f"{vol_val} گیگ"
+                btn_text = f"➕ {vol_label} • {pkg_price:,} تومن"
+            else:
+                if pkg_vol == 0:
+                    vol_label = "Unlimited"
+                elif pkg_vol < 1:
+                    vol_label = f"{int(pkg_vol * 1024)}MB"
+                else:
+                    vol_val = int(pkg_vol) if pkg_vol == int(pkg_vol) else pkg_vol
+                    vol_label = f"{vol_val}GB"
+                btn_text = f"➕ {vol_label} • {pkg_price:,} Toman"
+                
+            buttons.append([InlineKeyboardButton(
+                text=btn_text,
+                callback_data=f"buy_package_{category_id}_{pkg_id}",
+                style="success"
+            )])
 
-<b>How much do you want to extend</b> 👇
-"""
+        restrict_extend = READY_PACKAGES.get('restrict_extend_to_same_category', False)
+        if restrict_extend:
+            back_btn = InlineKeyboardButton(
+                text="🔙 کانفیگ" if lang == "fa" else "🔙 Config",
+                callback_data=f"view_config_{extend_order_id}"
+            )
+        else:
+            back_btn = InlineKeyboardButton(
+                text="🔙 دسته‌ها" if lang == "fa" else "🔙 Categories",
+                callback_data="show_ready_categories"
+            )
+        home_btn = InlineKeyboardButton(
+            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+            callback_data="back_to_main"
+        )
+        buttons.append([back_btn, home_btn])
     else:
         # ───── حالت خرید عادی ─────
         if lang == "fa":
@@ -17185,67 +17276,61 @@ async def show_category_packages(callback: CallbackQuery):
 
 select the volume and days you want 👇
 """
-    
-    # ═══════════════════════════════════════════
-    # ساخت دکمه‌ها
-    # ═══════════════════════════════════════════
-    buttons = []
-    
-    for pkg in packages:
-        volume = pkg.get('volume', 0)
-        days = pkg.get('days', 30)
-        price = pkg.get('price', 0)
-        ip_limit = pkg.get('ip_limit', 0)
-        package_id = pkg.get('id')
+        
+        buttons = []
+        for pkg in packages:
+            volume = pkg.get('volume', 0)
+            days = pkg.get('days', 30)
+            price = pkg.get('price', 0)
+            ip_limit = pkg.get('ip_limit', 0)
+            package_id = pkg.get('id')
 
-        if lang == "fa":
-            volume_display = format_package_volume(volume, "fa")
-            days_display = f"{days} روز"
-            if ip_limit > 0:
-                users_display = "۱ کاربر" if ip_limit == 1 else f"{ip_limit} کاربر"
-                info_label = f"{volume_display} - {days_display} - {users_display}"
+            if lang == "fa":
+                volume_display = format_package_volume(volume, "fa")
+                days_display = f"{days} روز"
+                if ip_limit > 0:
+                    users_display = "۱ کاربر" if ip_limit == 1 else f"{ip_limit} کاربر"
+                    info_label = f"{volume_display} - {days_display} - {users_display}"
+                else:
+                    info_label = f"{volume_display} - {days_display}"
             else:
-                info_label = f"{volume_display} - {days_display}"
-        else:
-            volume_display = "∞GB" if volume == 0 else (f"{volume * 1024:.0f}MB" if volume < 1 else f"{volume}GB")
-            if ip_limit > 0:
-                users_display = "1 User" if ip_limit == 1 else f"{ip_limit} Users"
-                info_label = f"{volume_display} - {days}d - {users_display}"
+                volume_display = "∞GB" if volume == 0 else (f"{volume * 1024:.0f}MB" if volume < 1 else f"{volume}GB")
+                if ip_limit > 0:
+                    users_display = "1 User" if ip_limit == 1 else f"{ip_limit} Users"
+                    info_label = f"{volume_display} - {days}d - {users_display}"
+                else:
+                    info_label = f"{volume_display} - {days}d"
+
+            if lang == "fa":
+                price_label = f"{price:,} تومان"
             else:
-                info_label = f"{volume_display} - {days}d"
+                price_label = f"{price:,} Toman"
 
-        if lang == "fa":
-            price_label = f"{price:,} تومان"
-        else:
-            price_label = f"{price:,} Toman"
+            info_btn = InlineKeyboardButton(
+                text=info_label,
+                callback_data=f"buy_package_{category_id}_{package_id}",
+                style="primary"
+            )
+            price_btn = InlineKeyboardButton(
+                text=price_label,
+                callback_data=f"buy_package_{category_id}_{package_id}",
+                style="primary"
+            )
 
-        info_btn = InlineKeyboardButton(
-            text=info_label,
-            callback_data=f"buy_package_{category_id}_{package_id}",
-            style="primary"
-        )
-        price_btn = InlineKeyboardButton(
-            text=price_label,
-            callback_data=f"buy_package_{category_id}_{package_id}",
-            style="primary"
-        )
-
-        if lang == "fa":
-            # برای زبان فارسی: دکمه قیمت سمت چپ و اطلاعات کانفیگ سمت راست
-            buttons.append([price_btn, info_btn])
-        else:
-            # برای زبان انگلیسی: اطلاعات سمت چپ و قیمت سمت راست
-            buttons.append([info_btn, price_btn])
-    
-    back_text = "🔙 بازگشت به دسته‌ها" if lang == "fa" else "🔙 Back to Categories"
-    
-    back_callback = "show_ready_categories"
-    
-    buttons.append([InlineKeyboardButton(
-        text=back_text,
-        callback_data=back_callback,
-        style="danger"
-    )])
+            if lang == "fa":
+                # برای زبان فارسی: دکمه قیمت سمت چپ و اطلاعات کانفیگ سمت راست
+                buttons.append([price_btn, info_btn])
+            else:
+                # برای زبان انگلیسی: اطلاعات سمت چپ و قیمت سمت راست
+                buttons.append([info_btn, price_btn])
+        
+        back_text = "🔙 بازگشت به دسته‌ها" if lang == "fa" else "🔙 Back to Categories"
+        back_callback = "show_ready_categories"
+        buttons.append([InlineKeyboardButton(
+            text=back_text,
+            callback_data=back_callback,
+            style="danger"
+        )])
     
     # ═══════════════════════════════════════════
     # ارسال/ویرایش پیام
@@ -17258,7 +17343,15 @@ select the volume and days you want 👇
         )
     except Exception as e:
         if "message is not modified" not in str(e):
-            logger.error(f"خطا در ویرایش پیام: {e}")
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                parse_mode=ParseMode.HTML
+            )
     
     try:
         await callback.answer()
@@ -25197,7 +25290,7 @@ async def send_admin_notification(purchase_type: str, data: dict):
     
     # ✅ اطلاعات اصلی
     is_test = (purchase_type == 'test')
-    is_extend = data.get('is_extend', False)
+    is_extend = (purchase_type == 'extend') or bool(data.get('is_extend', False))
     payment_type = data.get('payment_type', '') or ''
     price = data.get('price', 0) or 0
     
@@ -29545,7 +29638,8 @@ async def confirm_approve_package(callback: CallbackQuery):
                 'balance_before': balance,
                 'balance_after': balance,
                 'category_name': category_name,
-                'inbound_ids': final_inbounds
+                'inbound_ids': final_inbounds,
+                'is_extend': True,
             })
             
             try:
