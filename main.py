@@ -27,6 +27,14 @@ from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Union
 import unicodedata
 import qrcode
+try:
+    from qrcode.image.styledpil import StyledPilImage
+    from qrcode.image.styles.moduledrawers import RoundedModuleDrawer
+    from qrcode.image.styles.colormasks import SolidFillColorMask
+except ImportError:
+    StyledPilImage = None
+    RoundedModuleDrawer = None
+    SolidFillColorMask = None
 from yarl import URL
 from wireguard_system import build_wireguard_config
 from dynamic_phrases import format_start_greeting
@@ -1276,6 +1284,7 @@ def get_extension_success_keyboard(order_id: int, lang: str) -> InlineKeyboardMa
         [InlineKeyboardButton(
             text="📁 مشاهده کانفیگ تمدیدشده" if lang == "fa" else "📁 View Extended Config",
             callback_data=f"view_config_{order_id}",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
@@ -11834,68 +11843,149 @@ def generate_qr_code(data: str, order_id: int):
     return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
 
 
+def _get_wireguard_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+    """بارگذاری فونت خوانا و مدرن با پشتیبانی از سیستم‌های مختلف"""
+    font_paths = [
+        'C:/Windows/Fonts/segoeuib.ttf' if bold else 'C:/Windows/Fonts/segoeui.ttf',
+        'C:/Windows/Fonts/arialbd.ttf' if bold else 'C:/Windows/Fonts/arial.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/TTF/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf' if bold else '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+    ]
+    for p in font_paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
+    try:
+        return ImageFont.load_default(size=size)
+    except Exception:
+        return ImageFont.load_default()
+
+
 def generate_wireguard_qr_code(data: str, order_id: int):
-    """Render a WireGuard QR code on a dark red-and-black card."""
+    """طراحی مدرن و حرفه‌ای کارت QR Code وایرگارد به سبک Dark Cyberpunk"""
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=6,
-        border=4,
+        box_size=7,
+        border=2,
     )
     qr.add_data(data)
     qr.make(fit=True)
-    qr_image = qr.make_image(fill_color="#09090b", back_color="#ffffff").convert("RGB")
 
-    padding = 48
-    header_height = 150
-    image_size = max(
-        680,
-        qr_image.width + padding * 2,
-        qr_image.height + header_height * 2,
-    )
-    image = Image.new("RGB", (image_size, image_size), "#09090b")
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle(
-        (16, 16, image_size - 16, image_size - 16),
-        radius=30,
-        fill="#111116",
-        outline="#e11d3e",
-        width=5,
-    )
+    if StyledPilImage and RoundedModuleDrawer and SolidFillColorMask:
+        qr_image = qr.make_image(
+            image_factory=StyledPilImage,
+            module_drawer=RoundedModuleDrawer(),
+            color_mask=SolidFillColorMask(back_color=(255, 255, 255), front_color=(15, 17, 23))
+        ).convert("RGBA")
 
-    font = ImageFont.load_default(size=30)
-    draw.text(
-        (image_size // 2, 67),
-        "WIREGUARD",
-        fill="#f3f4f6",
-        font=font,
-        anchor="mm",
+        # نشان شیک WG در مرکز QR Code
+        badge_size = int(qr_image.width * 0.17)
+        badge = Image.new("RGBA", (badge_size, badge_size), (0, 0, 0, 0))
+        bdraw = ImageDraw.Draw(badge)
+        bdraw.rounded_rectangle(
+            (0, 0, badge_size, badge_size),
+            radius=badge_size // 3,
+            fill="#88171a",
+            outline="#ffffff",
+            width=3
+        )
+        bfont = _get_wireguard_font(int(badge_size * 0.44), bold=True)
+        bdraw.text((badge_size // 2, badge_size // 2 - 1), "WG", fill="#ffffff", font=bfont, anchor="mm")
+
+        center_x = (qr_image.width - badge_size) // 2
+        center_y = (qr_image.height - badge_size) // 2
+        qr_image.paste(badge, (center_x, center_y), badge)
+    else:
+        qr_image = qr.make_image(fill_color="#09090b", back_color="#ffffff").convert("RGBA")
+
+    # ابعاد و فاصله‌بندی
+    qr_pad = 18
+    qr_box_w = qr_image.width + qr_pad * 2
+    qr_box_h = qr_image.height + qr_pad * 2
+
+    card_w = max(700, qr_box_w + 110)
+    header_h = 170
+    footer_h = 110
+    card_h = header_h + qr_box_h + footer_h
+
+    card = Image.new("RGB", (card_w, card_h), "#08090d")
+    cdraw = ImageDraw.Draw(card)
+
+    # گرادینت عمودی ملایم پس‌زمینه
+    for y in range(card_h):
+        ratio = y / card_h
+        r = int(10 + ratio * 10)
+        g = int(11 + ratio * 8)
+        b = int(18 + ratio * 16)
+        cdraw.line([(0, y), (card_w, y)], fill=(r, g, b))
+
+    # کادر کارت اصلی
+    margin = 20
+    card_rect = (margin, margin, card_w - margin, card_h - margin)
+    cdraw.rounded_rectangle(card_rect, radius=28, fill="#0f111a", outline="#1f2333", width=2)
+
+    # خط نورانی قرمز رنگ بالای کارت
+    cdraw.rounded_rectangle((margin + 2, margin + 2, card_w - margin - 2, margin + 8), radius=4, fill="#e11d48")
+
+    # برچسب پیل بالای کارت
+    pill_w, pill_h = 190, 32
+    pill_x = (card_w - pill_w) // 2
+    pill_y = margin + 28
+    cdraw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=16, fill="#220f16", outline="#e11d48", width=1)
+
+    # آیکون وکتوری صاعقه درون پیل
+    bolt_x = pill_x + 18
+    bolt_y = pill_y + 8
+    bolt_pts = [
+        (bolt_x + 5, bolt_y),
+        (bolt_x + 1, bolt_y + 8),
+        (bolt_x + 5, bolt_y + 8),
+        (bolt_x + 3, bolt_y + 15),
+        (bolt_x + 10, bolt_y + 6),
+        (bolt_x + 6, bolt_y + 6)
+    ]
+    cdraw.polygon(bolt_pts, fill="#fb7185")
+
+    tag_font = _get_wireguard_font(13, bold=True)
+    cdraw.text((pill_x + 104, pill_y + pill_h // 2), "WIREGUARD VPN", fill="#fb7185", font=tag_font, anchor="mm")
+
+    # عنوان اصلی کارت
+    title_font = _get_wireguard_font(28, bold=True)
+    cdraw.text((card_w // 2, pill_y + pill_h + 30), "HIGH SPEED TUNNEL", fill="#f8fafc", font=title_font, anchor="mm")
+
+    sub_font = _get_wireguard_font(14, bold=False)
+    cdraw.text((card_w // 2, pill_y + pill_h + 58), f"Order #{order_id}  •  UDP Gaming & Streaming", fill="#94a3b8", font=sub_font, anchor="mm")
+
+    # باکس سفید QR با حاشیه شیک نئونی
+    qr_box_x = (card_w - qr_box_w) // 2
+    qr_box_y = header_h
+
+    cdraw.rounded_rectangle(
+        (qr_box_x - 3, qr_box_y - 3, qr_box_x + qr_box_w + 3, qr_box_y + qr_box_h + 3),
+        radius=22,
+        fill="#e11d48"
     )
-    draw.text(
-        (image_size // 2, 112),
-        f"GAMING CONFIG  |  ORDER #{order_id}",
-        fill="#f05269",
-        font=ImageFont.load_default(size=18),
-        anchor="mm",
+    cdraw.rounded_rectangle(
+        (qr_box_x, qr_box_y, qr_box_x + qr_box_w, qr_box_y + qr_box_h),
+        radius=20,
+        fill="#ffffff"
     )
-    qr_left = (image_size - qr_image.width) // 2
-    qr_top = (image_size - qr_image.height) // 2
-    draw.rounded_rectangle(
-        (
-            qr_left - 10,
-            qr_top - 10,
-            qr_left + qr_image.width + 10,
-            qr_top + qr_image.height + 10,
-        ),
-        radius=18,
-        fill="#ffffff",
-        outline="#e11d3e",
-        width=4,
-    )
-    image.paste(qr_image, (qr_left, qr_top))
+    card.paste(qr_image, (qr_box_x + qr_pad, qr_box_y + qr_pad), qr_image)
+
+    # فوتر پایین کارت
+    foot_mid = qr_box_y + qr_box_h + (footer_h // 2) - 8
+    foot_main = _get_wireguard_font(15, bold=True)
+    cdraw.text((card_w // 2, foot_mid - 6), "Scan in WireGuard App to Import", fill="#cbd5e1", font=foot_main, anchor="mm")
+
+    foot_sub = _get_wireguard_font(13, bold=False)
+    cdraw.text((card_w // 2, foot_mid + 18), "Fast Handshake  •  End-to-End Encrypted", fill="#64748b", font=foot_sub, anchor="mm")
 
     bio = BytesIO()
-    image.save(bio, "PNG")
+    card.save(bio, "PNG", quality=95)
     return BufferedInputFile(
         bio.getvalue(),
         filename=f"wireguard_qr_{order_id}.png",
@@ -17188,7 +17278,7 @@ async def show_category_packages(callback: CallbackQuery):
                 orig_vol_str = "نامحدود" if lang == "fa" else "Unlimited"
         else:
             orig_vol_val = int(order_vol) if order_vol == int(order_vol) else order_vol
-            orig_vol_str = f"{orig_vol_val} گیگ"
+            orig_vol_str = f"{to_persian_digits(orig_vol_val)} گیگ" if lang == "fa" else f"{orig_vol_val} GB"
             
         remaining_display = None
         days_left = None
@@ -17209,29 +17299,36 @@ async def show_category_packages(callback: CallbackQuery):
 
                         total_gb = (client_info.get('totalGB', 0) or 0) / (1024**3)
                         if total_gb == 0:
-                            remaining_display = "نامحدود"
+                            remaining_display = "نامحدود" if lang == "fa" else "Unlimited"
                         else:
                             up = (traffic_info.get('up', 0) if traffic_info else 0) / (1024**3)
                             down = (traffic_info.get('down', 0) if traffic_info else 0) / (1024**3)
                             used = up + down
                             rem_val = max(0.0, total_gb - used)
-                            if rem_val == int(rem_val):
-                                rem_num_str = f"{int(rem_val)}"
+                            rounded_val = round(rem_val, 1)
+                            if rounded_val == int(rounded_val):
+                                rem_num_str = f"{int(rounded_val)}"
                             else:
                                 rem_num_str = f"{rem_val:.1f}"
-                            remaining_display = f"{to_persian_digits(rem_num_str) if lang == 'fa' else rem_num_str} گیگ"
+                            
+                            unit = "گیگ" if lang == "fa" else "GB"
+                            num = to_persian_digits(rem_num_str) if lang == "fa" else rem_num_str
+                            remaining_display = f"{num} {unit}"
                 except Exception as e:
                     logger.warning(f"⚠️ [show_category_packages] خطا در دریافت مصرف کلاینت برای تمدید: {e}")
         
         if not remaining_display:
             if order_vol == 0:
-                remaining_display = "نامحدود"
+                remaining_display = "نامحدود" if lang == "fa" else "Unlimited"
             else:
                 rem_num_str = f"{int(order_vol) if order_vol == int(order_vol) else order_vol}"
-                remaining_display = f"{to_persian_digits(rem_num_str) if lang == 'fa' else rem_num_str} گیگ"
+                unit = "گیگ" if lang == "fa" else "GB"
+                num = to_persian_digits(rem_num_str) if lang == "fa" else rem_num_str
+                remaining_display = f"{num} {unit}"
 
+        is_unlimited = (remaining_display in ("نامحدود", "Unlimited")) or (order_vol == 0)
         if lang == "fa":
-            if remaining_display == "نامحدود" or order_vol == 0:
+            if is_unlimited:
                 if days_left is not None:
                     rem_line = f"📊 الان {to_persian_digits(days_left)} روز اعتبار مونده براش.\nچقدر اضافه کنم؟"
                 else:
@@ -17239,12 +17336,12 @@ async def show_category_packages(callback: CallbackQuery):
             else:
                 rem_line = f"📊 الان {remaining_display} حجم مونده براش.\nچقدر اضافه کنم؟"
             text = (
-                f"🔄 <b>تمدید اشتراک {name} {orig_vol_str}</b>\n\n"
+                f"🔄 <b>تمدید اشتراک {name} ({orig_vol_str})</b>\n\n"
                 f"{rem_line}\n\n"
                 f"<i>لینک اشتراکت عوض نمی‌شه، تو اپت هیچ کاری لازم نیست بکنی.</i>"
             )
         else:
-            if remaining_display == "نامحدود" or order_vol == 0:
+            if is_unlimited:
                 if days_left is not None:
                     rem_line = f"📊 Currently {days_left} days remaining.\nHow much would you like to add?"
                 else:
@@ -24828,26 +24925,37 @@ async def pay_card(callback: CallbackQuery):
                 except:
                     pass
                 
+                RLM = "\u200F"
                 if lang == "fa":
-                    text = f"""
-✅ <b>سرویس با موفقیت تمدید شد!</b>
-
-📦 +{vol}GB به حجم شما اضافه شد
-⏱ +{days} روز به مدت شما اضافه شد
-🎁 روش پرداخت: رایگان (تمدید)
-💰 مبلغ پرداختی: ۰ تومان
-"""
+                    if vol == 0:
+                        vol_line = f"{RLM}♾️ <b>حجم:</b> نامحدود"
+                    else:
+                        vol_line = f"{RLM}📦 <b>حجم افزوده:</b> +{vol} گیگابایت"
+                    
+                    text = (
+                        f"{RLM}✅ <b>سرویس با موفقیت تمدید شد!</b>\n"
+                        f"{RLM}━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{RLM}🆔 <b>شماره سرویس:</b> #{extend_order_id}\n"
+                        f"{vol_line}\n"
+                        f"{RLM}⏱️ <b>اعتبار افزوده:</b> +{days} روز\n"
+                        f"{RLM}💰 <b>مبلغ پرداختی:</b> ۰ تومان (رایگان)"
+                    )
                 else:
-                    text = f"""
-✅ <b>Service extended successfully!</b>
-
-📦 +{vol}GB added to your volume
-⏱ +{days} days added to your duration
-🎁 Payment method: Free (Extended)
-💰 Amount paid: 0 Toman
-"""
+                    vol_line = "♾️ <b>Traffic:</b> Unlimited" if vol == 0 else f"📦 <b>Added Volume:</b> +{vol} GB"
+                    text = (
+                        f"✅ <b>Service extended successfully!</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🆔 <b>Service ID:</b> #{extend_order_id}\n"
+                        f"{vol_line}\n"
+                        f"⏱️ <b>Added Duration:</b> +{days} days\n"
+                        f"💰 <b>Amount paid:</b> 0 Toman (Free)"
+                    )
                 
-                await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
+                await callback.message.answer(
+                    text, 
+                    parse_mode=ParseMode.HTML, 
+                    reply_markup=get_extension_success_keyboard(extend_order_id, lang)
+                )
                 logger.info(f"✅ [pay_card] تمدید رایگان برای کاربر {user_id} - سفارش #{order_id}")
                 await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
                 return
@@ -25872,26 +25980,37 @@ async def pay_balance(callback: CallbackQuery):
             except:
                 pass
             
+            RLM = "\u200F"
             if lang == "fa":
-                text = f"""
-✅ <b>سرویس با موفقیت تمدید شد!</b>
-
-📦 +{vol}GB به حجم شما اضافه شد
-⏱ +{days} روز به مدت شما اضافه شد
-💰 روش پرداخت: {payment_label}
-💰 مبلغ پرداختی: {final_price:,} تومان
-"""
+                if vol == 0:
+                    vol_line = f"{RLM}♾️ <b>حجم:</b> نامحدود"
+                else:
+                    vol_line = f"{RLM}📦 <b>حجم افزوده:</b> +{vol} گیگابایت"
+                
+                text = (
+                    f"{RLM}✅ <b>سرویس با موفقیت تمدید شد!</b>\n"
+                    f"{RLM}━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{RLM}🆔 <b>شماره سرویس:</b> #{extend_order_id}\n"
+                    f"{vol_line}\n"
+                    f"{RLM}⏱️ <b>اعتبار افزوده:</b> +{days} روز\n"
+                    f"{RLM}💰 <b>مبلغ پرداختی:</b> {final_price:,} تومان"
+                )
             else:
-                text = f"""
-✅ <b>Service extended successfully!</b>
-
-📦 +{vol}GB added to your volume
-⏱ +{days} days added to your duration
-💰 Payment method: {payment_label}
-💰 Amount paid: {final_price:,} Toman
-"""
+                vol_line = "♾️ <b>Traffic:</b> Unlimited" if vol == 0 else f"📦 <b>Added Volume:</b> +{vol} GB"
+                text = (
+                    f"✅ <b>Service extended successfully!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🆔 <b>Service ID:</b> #{extend_order_id}\n"
+                    f"{vol_line}\n"
+                    f"⏱️ <b>Added Duration:</b> +{days} days\n"
+                    f"💰 <b>Amount paid:</b> {final_price:,} Toman"
+                )
             
-            await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
+            await callback.message.answer(
+                text, 
+                parse_mode=ParseMode.HTML, 
+                reply_markup=get_extension_success_keyboard(extend_order_id, lang)
+            )
             logger.info(f"✅ [pay_balance] تمدید برای کاربر {user_id} - سفارش #{order_id}")
             await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
             debug_coupon_state(user_id, "pay_balance_end")
@@ -31013,8 +31132,12 @@ async def my_configs(callback: CallbackQuery):
         if time_left:
             label_parts.append(time_left)
 
-        # کنار هم + RLM برای RTL
-        label = f"{RLM}{emoji} " + " · ".join(label_parts)
+        # کنار هم: فارسی RTL (آیکون راست) | انگلیسی LTR (آیکون چپ)
+        if lang == "fa":
+            label = f"{RLM}{emoji} " + " · ".join(label_parts)
+        else:
+            LRM = "\u200E"
+            label = f"{LRM}{emoji} " + " · ".join(label_parts)
 
         # محدودیت طول
         if len(label) > 64:
@@ -32802,10 +32925,11 @@ async def support_create_ticket(callback: CallbackQuery):
             status_icon = "💳" if order.get('status') == "approved" else "🔴"
         category = category[:20]
         label_parts = [part for part in (category, volume, duration, f"#{order.get('order_id')}") if part]
-        label = f"\u200f{status_icon} " + " · ".join(label_parts)
+        prefix = "\u200f" if lang == "fa" else "\u200e"
+        label = f"{prefix}{status_icon} " + " · ".join(label_parts)
         if len(label) > 64:
             suffix = f" · #{order.get('order_id')}"
-            label = f"\u200f{status_icon} {category[:12]} · {volume} · {duration}" + suffix
+            label = f"{prefix}{status_icon} {category[:12]} · {volume} · {duration}" + suffix
             label = label[:64]
         buttons.append([InlineKeyboardButton(
             text=label,
