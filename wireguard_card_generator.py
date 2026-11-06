@@ -7,6 +7,13 @@ full Persian & English bilingual support, and verified 100% scannability.
 """
 
 import os
+import sys
+
+# اطمینان از دسترسی به پکیج‌های مجازی‌ساز در انتهای مسیر جستجو
+_venv_site = os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages')
+if os.path.exists(_venv_site) and _venv_site not in sys.path:
+    sys.path.append(_venv_site)
+
 import io
 import logging
 from typing import Optional, Dict, Any, Union
@@ -32,9 +39,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-CANVAS_WIDTH = 1600
-CANVAS_HEIGHT = 2000
+CANVAS_WIDTH = 850
+CANVAS_HEIGHT = 1024
 NEON_RED = (255, 23, 68)  # #FF1744
+_TEMPLATE_CACHE: Dict[str, Image.Image] = {}
 
 
 def to_persian_digits(text: Union[int, str]) -> str:
@@ -45,10 +53,24 @@ def to_persian_digits(text: Union[int, str]) -> str:
 
 def reshape_persian(text: str) -> str:
     """اصلاح اتصال حروف و جهت متن فارسی برای رندر صحیح در Pillow"""
+    global arabic_reshaper, get_display
+    if arabic_reshaper is None or get_display is None:
+        site_dir = os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages')
+        if os.path.exists(site_dir) and site_dir not in sys.path:
+            sys.path.insert(0, site_dir)
+        try:
+            import arabic_reshaper as _ar
+            from bidi.algorithm import get_display as _gd
+            arabic_reshaper = _ar
+            get_display = _gd
+        except ImportError:
+            pass
+
     if arabic_reshaper and get_display:
         try:
             return get_display(arabic_reshaper.reshape(text))
-        except Exception:
+        except Exception as err:
+            logger.warning("Persian reshaping error: %s", err)
             return text
     return text
 
@@ -76,12 +98,12 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
 
 def generate_wireguard_qr(
     config: str, 
-    box_size: int = 16, 
+    box_size: int = 7, 
     border: int = 4, 
     add_logo: bool = True
 ) -> Image.Image:
     """
-    تولید کیو‌آر‌کد مستقیم از کانفیگ واقعی وایرگارد.
+    تولید کیو‌آر‌کد مستقیم از کانفیگ واقعی وایرگارد با سرعت بهینه.
     - ضریب تصحیح خطای H برای خوانایی ۱۰۰٪ در حضور لوگوی میانی.
     - حداقل ۴ ماژول حاشیه امن (Quiet Zone).
     - ماژول‌های گرد و صیقلی با پس‌زمینه سفید خالص.
@@ -105,7 +127,6 @@ def generate_wireguard_qr(
         qr_img = qr.make_image(fill_color='#0a0a0e', back_color='#ffffff').convert('RGBA')
 
     if add_logo:
-        # ابعاد لوگوی میانی: ۱۶.۵٪ کل تصویر جهت عدم تداخل با الگوی اسکن
         badge_sz = int(qr_img.width * 0.165)
         badge = Image.new('RGBA', (badge_sz, badge_sz), (0, 0, 0, 0))
         bdraw = ImageDraw.Draw(badge)
@@ -113,10 +134,10 @@ def generate_wireguard_qr(
         # نشان زرشکی وایرگارد با کادر سفید
         bdraw.rounded_rectangle(
             (0, 0, badge_sz, badge_sz),
-            radius=badge_sz // 3,
+            radius=max(6, badge_sz // 3),
             fill='#991b1b',
             outline='#ffffff',
-            width=max(4, int(badge_sz * 0.04))
+            width=max(2, int(badge_sz * 0.04))
         )
         wg_font = _load_font(int(badge_sz * 0.44), bold=True)
         bdraw.text((badge_sz // 2, badge_sz // 2 - 2), 'WG', fill='#ffffff', font=wg_font, anchor='mm')
@@ -133,8 +154,13 @@ def create_premium_background(
     lang: str = "fa"
 ) -> Image.Image:
     """
-    تولید یا بارگذاری پس‌زمینه اختصاصی با تفکیک زبان (فارسی / انگلیسی)
+    تولید یا بارگذاری پس‌زمینه اختصاصی با تفکیک زبان (فارسی / انگلیسی) به همراه کش در حافظه
     """
+    global _TEMPLATE_CACHE
+    cached = _TEMPLATE_CACHE.get(lang)
+    if cached is not None and cached.size == (width, height):
+        return cached.copy()
+
     tpl_filename = 'wireguard_template_fa.png' if lang == 'fa' else 'wireguard_template.png'
     template_path = os.path.join(os.path.dirname(__file__), 'assets', tpl_filename)
 
@@ -150,7 +176,8 @@ def create_premium_background(
             tpl = Image.open(template_path).convert('RGBA')
             if tpl.size != (width, height):
                 tpl = tpl.resize((width, height), Image.Resampling.LANCZOS)
-            return tpl
+            _TEMPLATE_CACHE[lang] = tpl
+            return tpl.copy()
         except Exception as err:
             logger.warning("Could not load %s: %s", tpl_filename, err)
 
@@ -165,50 +192,37 @@ def create_premium_background(
         b = int(10 + ratio * 14)
         draw.line([(0, y), (width, y)], fill=(r, g, b, 255))
 
-    draw.rounded_rectangle((30, 30, width - 30, height - 30), radius=50, outline=(30, 35, 50, 255), width=3)
-    draw.rounded_rectangle((34, 34, width - 34, 46), radius=6, fill=NEON_RED)
+    draw.rounded_rectangle((15, 15, width - 15, height - 15), radius=25, outline=(30, 35, 50, 255), width=2)
+    draw.rounded_rectangle((17, 17, width - 17, 23), radius=3, fill=NEON_RED)
 
     # هدر
-    pill_w, pill_h = 460, 68
+    pill_w, pill_h = 240, 36
     pill_x = (width - pill_w) // 2
-    pill_y = 70
-    draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=34, fill=(35, 12, 20, 255), outline=NEON_RED, width=2)
-    tag_font = _load_font(30 if lang == 'fa' else 26, bold=True)
-    tag_text = reshape_persian('⚡ کانفیگ اختصاصی وایرگارد') if lang == 'fa' else '⚡ WIREGUARD VPN'
+    pill_y = 35
+    draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=18, fill=(35, 12, 20, 255), outline=NEON_RED, width=1)
+    tag_font = _load_font(15, bold=True)
+    tag_text = reshape_persian('⚡ وایرگارد VPN') if lang == 'fa' else '⚡ WIREGUARD VPN'
     draw.text((width // 2, pill_y + pill_h // 2), tag_text, fill='#ff2a55', font=tag_font, anchor='mm')
 
-    title_font = _load_font(86 if lang == 'fa' else 68, bold=True)
-    title_text = reshape_persian('تونل پرسرعت وایرگارد') if lang == 'fa' else 'HIGH SPEED TUNNEL'
-    draw.text((width // 2, pill_y + pill_h + 65), title_text, fill='#ffffff', font=title_font, anchor='mm')
+    title_font = _load_font(42 if lang == 'fa' else 36, bold=True)
+    title_text = reshape_persian('تونل پرسرعت') if lang == 'fa' else 'HIGH SPEED TUNNEL'
+    draw.text((width // 2, pill_y + pill_h + 38), title_text, fill='#ffffff', font=title_font, anchor='mm')
 
     # فوتر
-    foot_w, foot_h = 1240, 140
+    foot_w, foot_h = 620, 75
     foot_x = (width - foot_w) // 2
-    foot_y = 1600
-    draw.rounded_rectangle((foot_x, foot_y, foot_x + foot_w, foot_y + foot_h), radius=36, fill=(13, 16, 24, 255), outline=NEON_RED, width=2)
-    f_title = _load_font(42 if lang == 'fa' else 36, bold=True)
-    if lang == 'fa':
-        s_p1 = reshape_persian('اسکن در برنامهٔ')
-        s_p2 = reshape_persian('وایرگارد')
-        s_p3 = reshape_persian('جهت اتصال')
-        s_sp_w = 14
-        s_w1 = draw.textbbox((0, 0), s_p1, font=f_title)[2] - draw.textbbox((0, 0), s_p1, font=f_title)[0]
-        s_w2 = draw.textbbox((0, 0), s_p2, font=f_title)[2] - draw.textbbox((0, 0), s_p2, font=f_title)[0]
-        s_w3 = draw.textbbox((0, 0), s_p3, font=f_title)[2] - draw.textbbox((0, 0), s_p3, font=f_title)[0]
-        tot_s_w = s_w1 + s_sp_w + s_w2 + s_sp_w + s_w3
-        st_s_x = 905 - tot_s_w // 2
-        base_y = foot_y + 58
-        draw.text((st_s_x, base_y), s_p3, fill='#ffffff', font=f_title, anchor='ls')
-        draw.text((st_s_x + s_w3 + s_sp_w, base_y), s_p2, fill='#ff1744', font=f_title, anchor='ls')
-        draw.text((st_s_x + s_w3 + s_sp_w + s_w2 + s_sp_w, base_y), s_p1, fill='#ffffff', font=f_title, anchor='ls')
-    else:
-        draw.text((width // 2, foot_y + 44), 'Scan in WireGuard App to Import', fill='#ffffff', font=f_title, anchor='mm')
+    foot_y = 800
+    draw.rounded_rectangle((foot_x, foot_y, foot_x + foot_w, foot_y + foot_h), radius=18, fill=(13, 16, 24, 255), outline=NEON_RED, width=1)
+    f_title = _load_font(20 if lang == 'fa' else 17, bold=True)
+    scan_text = reshape_persian('برای وارد کردن، کد را با اپلیکیشن WireGuard اسکن کنید') if lang == 'fa' else 'Scan this code with the WireGuard App to Import'
+    draw.text((width // 2, foot_y + 24), scan_text, fill='#ffffff', font=f_title, anchor='mm')
 
-    f_sub = _load_font(28 if lang == 'fa' else 24, bold=False)
-    sub_text = reshape_persian('هندشیک آنی  •  رمزنگاری سرتاسری و ایمن') if lang == 'fa' else 'Fast Handshake  •  End-to-End Encrypted'
-    draw.text((width // 2, foot_y + 92), sub_text, fill='#94a3b8', font=f_sub, anchor='mm')
+    f_sub = _load_font(14, bold=False)
+    sub_text = reshape_persian('اتصال سریع  •  رمزنگاری سرتاسری') if lang == 'fa' else 'Fast Connection  •  End-to-End Encryption'
+    draw.text((width // 2, foot_y + 50), sub_text, fill='#94a3b8', font=f_sub, anchor='mm')
 
-    return bg
+    _TEMPLATE_CACHE[lang] = bg
+    return bg.copy()
 
 
 def compose_qr_card(
@@ -219,7 +233,7 @@ def compose_qr_card(
     background: Optional[Image.Image] = None
 ) -> Image.Image:
     """
-    ترکیب نهایی کارت ۱۶۰۰ در ۲۰۰۰ با فونت و زبان هماهنگ
+    ترکیب نهایی کارت ۸۵۰ در ۱۰۲۴ با سرعت بالا و رندر بی‌نقص
     """
     order_info = order_data or {}
     lang = order_info.get('lang', 'fa')
@@ -238,55 +252,45 @@ def compose_qr_card(
         cat_display = category or 'سرویس UDP و استریمینگ'
         raw_order_text = f"سفارش شماره #{to_persian_digits(order_id)}  •  {cat_display}"
         order_text = reshape_persian(raw_order_text)
-        mid_y = 372
-        qr_x1, qr_y1 = 290, 430
-        qr_x2, qr_y2 = 1310, 1508
+        mid_y = 190
+        box_x1, box_y1 = 154, 220
+        box_x2, box_y2 = 696, 772
     else:
         cat_display = category or 'UDP Gaming & Streaming'
         order_text = f"Order #{order_id}  •  {cat_display}"
-        mid_y = 320
-        qr_x1, qr_y1 = 265, 407
-        qr_x2, qr_y2 = 1333, 1524
+        mid_y = 187
+        box_x1, box_y1 = 155, 220
+        box_x2, box_y2 = 695, 772
 
-    order_font = _load_font(32 if lang == 'fa' else 34, bold=True)
+    order_font = _load_font(17, bold=True)
     bbox = bdraw.textbbox((0, 0), order_text, font=order_font)
     tw = bbox[2] - bbox[0]
     mid_x = width // 2
 
     bdraw.text((mid_x, mid_y), order_text, fill='#e2e8f0', font=order_font, anchor='mm')
-    line_len = 160 if lang == 'fa' else 110
-    line_gap = 26
-    bdraw.line([(mid_x - tw // 2 - line_gap - line_len, mid_y), (mid_x - tw // 2 - line_gap, mid_y)], fill='#475569', width=2)
-    bdraw.line([(mid_x + tw // 2 + line_gap, mid_y), (mid_x + tw // 2 + line_gap + line_len, mid_y)], fill='#475569', width=2)
+    line_len = 80
+    line_gap = 14
+    bdraw.line([(mid_x - tw // 2 - line_gap - line_len, mid_y), (mid_x - tw // 2 - line_gap, mid_y)], fill='#475569', width=1)
+    bdraw.line([(mid_x + tw // 2 + line_gap, mid_y), (mid_x + tw // 2 + line_gap + line_len, mid_y)], fill='#475569', width=1)
 
     # ۲. محفظه سفید QR با هاله نئونی قرمز
-    box_w = qr_x2 - qr_x1
-    box_h = qr_y2 - qr_y1
+    box_w = box_x2 - box_x1
+    box_h = box_y2 - box_y1
+    radius = 24
 
     container_layer = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     cdraw = ImageDraw.Draw(container_layer)
 
-    # هاله نئونی چند لایه
-    radius = 48
-    glow_passes = [(10, 35), (8, 60), (6, 95), (4, 150), (2, 210), (0, 255)]
-    for offset, alpha in glow_passes:
-        cdraw.rounded_rectangle(
-            (qr_x1 - offset, qr_y1 - offset, qr_x2 + offset, qr_y2 + offset),
-            radius=radius + offset,
-            outline=(NEON_RED[0], NEON_RED[1], NEON_RED[2], alpha),
-            width=3
-        )
-
     # محفظه سفید صیقلی
-    cdraw.rounded_rectangle((qr_x1, qr_y1, qr_x2, qr_y2), radius=radius, fill=(255, 255, 255, 255))
+    cdraw.rounded_rectangle((box_x1, box_y1, box_x2, box_y2), radius=radius, fill=(255, 255, 255, 255))
 
     # مقیاس‌دهی و مرکزچینی دقیق کیو‌آر‌کد
-    inner_pad = 42
+    inner_pad = 22
     qr_target_size = min(box_w - inner_pad * 2, box_h - inner_pad * 2)
     qr_scaled = qr_image.resize((qr_target_size, qr_target_size), Image.Resampling.LANCZOS)
 
-    paste_x = qr_x1 + (box_w - qr_target_size) // 2
-    paste_y = qr_y1 + (box_h - qr_target_size) // 2
+    paste_x = box_x1 + (box_w - qr_target_size) // 2
+    paste_y = box_y1 + (box_h - qr_target_size) // 2
     container_layer.paste(qr_scaled, (paste_x, paste_y), qr_scaled)
 
     # ادغام لایه‌ها
@@ -295,9 +299,9 @@ def compose_qr_card(
 
 
 def export_final_image(image: Image.Image, output_format: str = 'PNG', quality: int = 95) -> bytes:
-    """خروجی نهایی به بایت با فشرده‌سازی استاندارد و بدون افت کیفیت"""
+    """خروجی نهایی به بایت با سرعت حداکثری و کیفیت کامل"""
     bio = io.BytesIO()
-    image.save(bio, format=output_format, quality=quality, optimize=True)
+    image.save(bio, format=output_format, quality=quality, optimize=False)
     return bio.getvalue()
 
 
