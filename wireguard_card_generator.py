@@ -9,10 +9,10 @@ full Persian & English bilingual support, and verified 100% scannability.
 import os
 import sys
 
-# اطمینان از دسترسی به پکیج‌های مجازی‌ساز در انتهای مسیر جستجو
+# اطمینان از دسترسی به پکیج‌های مجازی‌ساز در اولویت مسیر جستجو
 _venv_site = os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages')
 if os.path.exists(_venv_site) and _venv_site not in sys.path:
-    sys.path.append(_venv_site)
+    sys.path.insert(0, _venv_site)
 
 import io
 import logging
@@ -98,15 +98,15 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
 
 def generate_wireguard_qr(
     config: str, 
-    box_size: int = 7, 
-    border: int = 4, 
+    box_size: int = 10, 
+    border: int = 1, 
     add_logo: bool = True
 ) -> Image.Image:
     """
-    تولید کیو‌آر‌کد مستقیم از کانفیگ واقعی وایرگارد با سرعت بهینه.
+    تولید کیو‌آر‌کد مستقیم از کانفیگ واقعی وایرگارد با ماژول‌های کاملاً مشکی، شارپ و حاشیه فشرده.
     - ضریب تصحیح خطای H برای خوانایی ۱۰۰٪ در حضور لوگوی میانی.
-    - حداقل ۴ ماژول حاشیه امن (Quiet Zone).
-    - ماژول‌های گرد و صیقلی با پس‌زمینه سفید خالص.
+    - مشکی خالص (#000000) بر روی سفید خالص (#FFFFFF) با حداکثر کنتراست و شارپنس.
+    - حاشیه فشرده (border=1) برای بزرگ‌تر شدن ماژول‌ها و حذف فاصله‌های اضافی سفید.
     """
     qr = qrcode.QRCode(
         version=None,
@@ -117,17 +117,11 @@ def generate_wireguard_qr(
     qr.add_data(config)
     qr.make(fit=True)
 
-    if StyledPilImage and RoundedModuleDrawer and SolidFillColorMask:
-        qr_img = qr.make_image(
-            image_factory=StyledPilImage,
-            module_drawer=RoundedModuleDrawer(),
-            color_mask=SolidFillColorMask(back_color=(255, 255, 255), front_color=(10, 10, 14))
-        ).convert('RGBA')
-    else:
-        qr_img = qr.make_image(fill_color='#0a0a0e', back_color='#ffffff').convert('RGBA')
+    # مشکی خالص و سفید خالص با بالاترین کنتراست و شارپنس
+    qr_img = qr.make_image(fill_color='#000000', back_color='#ffffff').convert('RGBA')
 
     if add_logo:
-        badge_sz = int(qr_img.width * 0.165)
+        badge_sz = int(qr_img.width * 0.16)
         badge = Image.new('RGBA', (badge_sz, badge_sz), (0, 0, 0, 0))
         bdraw = ImageDraw.Draw(badge)
         
@@ -249,14 +243,15 @@ def compose_qr_card(
 
     # ۱. زیرنویس پویا با پشتیبانی کامل زبان فارسی و انگلیسی
     if lang == 'fa':
-        cat_display = category or 'سرویس UDP و استریمینگ'
-        raw_order_text = f"سفارش شماره #{to_persian_digits(order_id)}  •  {cat_display}"
-        order_text = reshape_persian(raw_order_text)
+        cat_display = (category or 'سرویس UDP و استریمینگ').strip()
+        cat_shaped = reshape_persian(cat_display)
+        order_shaped = reshape_persian(f"سفارش شماره \u200e#{to_persian_digits(order_id)}")
+        order_text = f"{cat_shaped}  •  {order_shaped}"
         mid_y = 190
         box_x1, box_y1 = 154, 220
         box_x2, box_y2 = 696, 772
     else:
-        cat_display = category or 'UDP Gaming & Streaming'
+        cat_display = (category or 'UDP Gaming & Streaming').strip()
         order_text = f"Order #{order_id}  •  {cat_display}"
         mid_y = 187
         box_x1, box_y1 = 155, 220
@@ -284,8 +279,8 @@ def compose_qr_card(
     # محفظه سفید صیقلی
     cdraw.rounded_rectangle((box_x1, box_y1, box_x2, box_y2), radius=radius, fill=(255, 255, 255, 255))
 
-    # مقیاس‌دهی و مرکزچینی دقیق کیو‌آر‌کد
-    inner_pad = 22
+    # مقیاس‌دهی و مرکزچینی دقیق کیو‌آر‌کد با حداقل گپ حاشیه
+    inner_pad = 12
     qr_target_size = min(box_w - inner_pad * 2, box_h - inner_pad * 2)
     qr_scaled = qr_image.resize((qr_target_size, qr_target_size), Image.Resampling.LANCZOS)
 
