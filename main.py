@@ -20866,30 +20866,26 @@ async def broadcast_type_selected(callback: CallbackQuery):
 
 
 _BROADCAST_ACTIONS = {
-    # ─── خرید، پکیج‌ها و خدمات ───
-    "buy": ("🛒 خرید سرویس", "🛒 Buy service", "buy_service"),
-    "packages": ("📦 بسته‌های آماده", "📦 Ready packages", "show_ready_categories"),
-    "test": ("🎁 کانفیگ تست رایگان", "🎁 Free test config", "get_test_service"),
-    "ai_advisor": ("💡 مشاوره هوشمند خرید", "💡 AI purchase advisor", "ai_purchase_advisor_start"),
-    
-    # ─── مدیریت سرویس‌ها و سفارشات ───
+    # ─── دکمه‌های اصلی ربات (مطابق منوی پیش‌فرض) ───
+    "buy": ("🛒 خرید سرویس", "🛒 Buy Service", "buy_service"),
     "configs": ("🌐 کانفیگ‌های من", "🌐 My Configs", "my_configs"),
-    "renew": ("🔄 تمدید سرویس", "🔄 Renew service", "my_configs"),
-    "all_configs": ("📂 لیست تمام کانفیگ‌ها", "📂 All configs list", "show_all_my_configs"),
-    "account": ("👤 حساب کاربری", "👤 My account", "my_account"),
-    "order_status": ("📋 پیگیری سفارشات", "📋 Order tracking", "order_status"),
+    "account": ("👤 حساب کاربری", "👤 My Account", "my_account"),
+    "balance": ("💰 افزایش موجودی", "💰 Increase Balance", "increase_balance"),
+    "coupon": ("🏷️ اعمال کوپن", "🏷️ Apply coupon", "apply_coupon"),
+    "invite": ("👥 دعوت از دوستان", "👥 Invite Friends", "invite_friends"),
+    "ai": ("🤖 پشتیبانی هوشمند", "🤖 Smart Support", "ai_chat"),
+    "test": ("🎁 کانفیگ خوش‌آمد", "🎁 Welcome Config", "get_test_service"),
+    "language": ("🌎 تغییر زبان", "🌎 Change Language", "change_language"),
+    "home": ("🏠 منوی اصلی", "🏠 Main Menu", "broadcast_back_to_main"),
     
-    # ─── امور مالی و جوایز ───
-    "balance": ("💰 افزایش موجودی", "💰 Add balance", "increase_balance"),
-    "coupon": ("🏷️ اعمال کوپن تخفیف", "🏷️ Apply coupon", "apply_coupon"),
-    "coupon_status": ("📊 وضعیت کوپن‌ها", "📊 Coupon status", "coupon_status"),
-    "invite": ("👥 دعوت و کسب درآمد", "👥 Invite friends", "invite_friends"),
-    
-    # ─── پشتیبانی و ابزارها ───
-    "support": ("🎫 ثبت تیکت پشتیبانی", "🎫 Support ticket", "support_create_ticket"),
-    "ai": ("🤖 چت با هوش مصنوعی", "🤖 AI chat", "ai_chat"),
-    "language": ("🌎 تغییر زبان", "🌎 Change language", "change_language"),
-    "home": ("🏠 منوی اصلی", "🏠 Main menu", "broadcast_back_to_main"),
+    # ─── سایر بخش‌های کاربردی ربات (دقیقاً هم‌نام با صفحات بات) ───
+    "packages": ("📦 خرید از بسته‌های آماده", "📦 Buy Ready Packages", "show_ready_categories"),
+    "renew": ("🔄 تمدید سرویس", "🔄 Extend Service", "my_configs"),
+    "all_configs": ("🌐 نمایش تمام ساب‌ها", "🌐 Show All Configs", "show_all_my_configs"),
+    "order_status": ("📊 وضعیت سفارش‌ها", "📊 Order Status", "order_status"),
+    "coupon_status": ("🏷️ وضعیت کوپن", "🏷️ Coupon Status", "coupon_status"),
+    "support": ("🎫 ارتباط با پشتیبانی", "🎫 Contact Support", "support_create_ticket"),
+    "ai_advisor": ("🛍 خرید هوشمندانه", "🛍 Smart purchase", "ai_purchase_advisor_start"),
 }
 
 
