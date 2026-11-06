@@ -22,6 +22,7 @@ from io import BytesIO
 import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
+from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Union
 import unicodedata
@@ -153,6 +154,7 @@ INBOUND_BACK_DATA = {}
 
 READY_PACKAGES = {
     'enabled': True,
+    'restrict_extend_to_same_category': False,
     'categories': [
         {
             'id': 1,
@@ -12682,6 +12684,115 @@ async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
         
 
 
+async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
+    """
+    ریست کردن ترافیک مصرفی کلاینت در پنل 3X-UI
+    1. ابتدا تست اندپوینت کلاینت: POST /panel/api/clients/resetTraffic/{email}
+    2. ریست روی تک تک اینباندها: POST /panel/api/inbounds/{inbound_id}/resetClientTraffic/{email}
+    3. و تست اندپوینت عمومی: POST /panel/api/inbounds/resetClientTraffic/{email}
+    """
+    if not SENAI_PANEL_ENABLED or not email:
+        return False
+    
+    success = False
+    connector = aiohttp.TCPConnector(ssl=False)
+    try:
+        async with aiohttp.ClientSession(connector=connector) as session:
+            cookie = await xui_login()
+            if not cookie:
+                logger.error(f"❌ خطا در ورود به پنل برای ریست ترافیک {email}")
+                return False
+
+            csrf = await xui_get_csrf_token(session)
+            headers = {"X-CSRF-Token": csrf} if csrf else {}
+            encoded_email = quote(str(email), safe='')
+
+            # 1. تلاش از طریق API مستقیم کلاینت
+            try:
+                url = f"{SENAI_PANEL_URL}/panel/api/clients/resetTraffic/{encoded_email}"
+                async with session.post(
+                    url,
+                    cookies={"3x-ui": cookie},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    resp_text = await resp.text()
+                    if resp.status == 200:
+                        try:
+                            data = json.loads(resp_text)
+                            if data.get("success"):
+                                logger.info(f"✅ ترافیک کلاینت {email} از اندپوینت clients/resetTraffic ریست شد")
+                                success = True
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"ℹ️ clients/resetTraffic: {e}")
+
+            # 2. ریست روی تک تک اینباندها
+            target_inbounds = list(inbounds) if inbounds else []
+            if not target_inbounds:
+                try:
+                    target_inbounds = await get_client_inbounds(email)
+                except Exception:
+                    target_inbounds = []
+
+            if target_inbounds:
+                for inb_id in target_inbounds:
+                    if not inb_id:
+                        continue
+                    try:
+                        inb_url = f"{SENAI_PANEL_URL}/panel/api/inbounds/{inb_id}/resetClientTraffic/{encoded_email}"
+                        async with session.post(
+                            inb_url,
+                            cookies={"3x-ui": cookie},
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=10)
+                        ) as resp:
+                            resp_text = await resp.text()
+                            if resp.status == 200:
+                                try:
+                                    data = json.loads(resp_text)
+                                    if data.get("success"):
+                                        logger.info(f"✅ ترافیک کلاینت {email} در اینباند {inb_id} ریست شد")
+                                        success = True
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        logger.warning(f"⚠️ خطا در ریست ترافیک اینباند {inb_id} کلاینت {email}: {e}")
+
+            # 3. تلاش با اندپوینت عمومی inbounds/resetClientTraffic/{email}
+            if not success:
+                try:
+                    alt_url = f"{SENAI_PANEL_URL}/panel/api/inbounds/resetClientTraffic/{encoded_email}"
+                    async with session.post(
+                        alt_url,
+                        cookies={"3x-ui": cookie},
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        resp_text = await resp.text()
+                        if resp.status == 200:
+                            try:
+                                data = json.loads(resp_text)
+                                if data.get("success"):
+                                    logger.info(f"✅ ترافیک کلاینت {email} از اندپوینت عمومی inbounds ریست شد")
+                                    success = True
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.debug(f"ℹ️ alt inbounds/resetClientTraffic: {e}")
+
+            return success
+    except Exception as e:
+        logger.error(f"❌ خطا در xui_reset_client_traffic برای {email}: {e}")
+        return False
+    finally:
+        try:
+            await connector.close()
+        except Exception:
+            pass
+
+
 async def extend_service(
     order_id: int, 
     user_id: int, 
@@ -12697,6 +12808,7 @@ async def extend_service(
     """
     تمدید سرویس موجود - افزایش حجم و روز + جایزینی اینباندها
     + آپدیت اطلاعات دسته در سفارش اصلی
+    + ریست ترافیک مصرفی در صورت سرویس نامحدود قبلی یا تغییر پکیج/دسته
     """
     logger.info(f"🔄 [extend_service] شروع تمدید سرویس - order_id={order_id}, user_id={user_id}")
     logger.info(f"   📦 حجم اضافی: {extra_volume}GB {'(نامحدود)' if extra_volume == 0 else ''}")
@@ -12757,21 +12869,66 @@ async def extend_service(
         logger.info(f"   📦 حجم فعلی: {current_volume_gb:.2f} GB")
         logger.info(f"   ⏱ انقضای فعلی: {datetime.fromtimestamp(current_expiry/1000).strftime('%Y-%m-%d %H:%M:%S') if current_expiry > 0 else 'نامحدود'}")
         logger.info(f"   👤 محدودیت IP فعلی: {current_ip_limit if current_ip_limit > 0 else 'نامحدود'}")
-        if extra_volume == 0:
+
+        # ✅ بررسی سرویس نامحدود
+        old_volume = order.get('volume', 0)
+        is_old_unlimited = (old_volume == 0) or (client_info.get('totalGB', 0) == 0)
+        is_new_unlimited = (extra_volume == 0)
+
+        # ✅ بررسی تغییر پکیج / دسته
+        old_cat_id = order.get('category_id')
+        old_cat_name = order.get('category_name')
+        old_pkg_id = order.get('package_id')
+
+        is_package_changed = False
+        if new_category_id is not None and old_cat_id is not None:
+            if int(new_category_id) != int(old_cat_id):
+                is_package_changed = True
+        elif new_category_name and old_cat_name:
+            if str(new_category_name).strip() != str(old_cat_name).strip():
+                is_package_changed = True
+
+        if not is_package_changed:
+            if new_package_id is not None and old_pkg_id is not None:
+                if int(new_package_id) != int(old_pkg_id):
+                    is_package_changed = True
+            elif new_category_id is not None and old_cat_id is None:
+                is_package_changed = True
+            elif not is_old_unlimited and not is_new_unlimited:
+                if old_pkg_id is None and new_package_id is None and old_volume > 0 and extra_volume > 0 and old_volume != extra_volume:
+                    is_package_changed = True
+
+        should_replace_volume = is_old_unlimited or is_package_changed or is_new_unlimited
+        should_reset_traffic = is_old_unlimited or is_package_changed or is_new_unlimited
+
+        logger.info(f"🔍 وضعیت تمدید: is_old_unlimited={is_old_unlimited}, is_new_unlimited={is_new_unlimited}, is_package_changed={is_package_changed}")
+        logger.info(f"   ➡️ should_replace_volume={should_replace_volume}, should_reset_traffic={should_reset_traffic}")
+
+        if is_new_unlimited:
             new_volume_bytes = 0
             new_volume_gb = 0
+            new_volume_total = 0
             logger.info(f"📦 حجم جدید: نامحدود (0 bytes)")
+        elif should_replace_volume:
+            new_volume_bytes = int(extra_volume * 1024 * 1024 * 1024)
+            new_volume_gb = float(extra_volume)
+            new_volume_total = extra_volume
+            logger.info(f"📦 حجم جدید (جایگزین شده): {new_volume_gb:.2f} GB")
         else:
             new_volume_bytes = int((current_volume_gb + extra_volume) * 1024 * 1024 * 1024)
             new_volume_gb = current_volume_gb + extra_volume
-            logger.info(f"📦 حجم جدید: {new_volume_gb:.2f} GB")
+            new_volume_total = current_volume_gb + extra_volume
+            logger.info(f"📦 حجم جدید (تجمعی): {new_volume_gb:.2f} GB")
+
+        now_dt = datetime.now()
         if current_expiry > 0:
             current_expiry_date = datetime.fromtimestamp(current_expiry / 1000)
-            new_expiry = int((current_expiry_date + timedelta(days=extra_days)).timestamp() * 1000)
-            new_expiry_date = current_expiry_date + timedelta(days=extra_days)
+            base_date = current_expiry_date if current_expiry_date > now_dt else now_dt
+            new_expiry_date = base_date + timedelta(days=extra_days)
+            new_expiry = int(new_expiry_date.timestamp() * 1000)
         else:
-            new_expiry = int((datetime.now() + timedelta(days=extra_days)).timestamp() * 1000)
-            new_expiry_date = datetime.now() + timedelta(days=extra_days)
+            new_expiry_date = now_dt + timedelta(days=extra_days)
+            new_expiry = int(new_expiry_date.timestamp() * 1000)
         
         logger.info(f"⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
         final_ip_limit = new_ip_limit if new_ip_limit is not None else current_ip_limit
@@ -12829,6 +12986,16 @@ async def extend_service(
                     return False
             
             logger.info(f"✅ UPDATE با موفقیت انجام شد")
+
+            # ✅ در صورت تمدید سرویس نامحدود یا تغییر پکیج، ترافیک مصرفی ریست شود
+            if should_reset_traffic:
+                logger.info(f"🔄 شروع ریست ترافیک مصرفی کلاینت {email} در پنل...")
+                reset_ok = await xui_reset_client_traffic(email, selected_inbounds)
+                if reset_ok:
+                    logger.info(f"✅ ترافیک مصرفی کلاینت {email} با موفقیت در پنل ریست شد")
+                else:
+                    logger.warning(f"⚠️ نتیجه ریست ترافیک کلاینت {email} ناموفق یا پشتیبانی نشده بود")
+
             if inbounds_to_detach:
                 logger.info(f"📤 حذف اینباندهای {inbounds_to_detach} از کلاینت {email}...")
                 detach_success = await xui_detach_inbounds(email, inbounds_to_detach)
@@ -12843,7 +13010,6 @@ async def extend_service(
                     logger.info(f"✅ اینباندهای {inbounds_to_attach} با موفقیت اضافه شدند")
                 else:
                     logger.warning(f"⚠️ خطا در attach اینباندها")
-        new_volume_total = 0 if extra_volume == 0 else (current_volume_gb + extra_volume)
         new_days_total = order.get('days', 0) + extra_days
         
         logger.info(f"📝 به‌روزرسانی سفارش #{order_id} در دیتابیس...")
@@ -12859,6 +13025,7 @@ async def extend_service(
             'inbound_id': selected_inbounds,
             'ip_limit': final_ip_limit,
             'updated_at': datetime.now().isoformat(),
+            'is_active_in_panel': True,
         }
 
         # ✅ اگه کتگوری جدید داریم، آپدیتش کن
@@ -16085,6 +16252,9 @@ async def get_ready_packages_text(lang: str = "fa") -> tuple:
     enabled = READY_PACKAGES.get('enabled', True)
     
     status_text = "🟢 فعال" if enabled else "🔴 غیرفعال"
+    restrict_extend = READY_PACKAGES.get('restrict_extend_to_same_category', False)
+    restrict_status_fa = "🟢 روشن (تمدید فقط در همان دسته)" if restrict_extend else "🔴 خاموش (تمدید به همه دسته‌ها)"
+    restrict_status_en = "🟢 ON (Same Category Only)" if restrict_extend else "🔴 OFF (All Categories Open)"
     
     total_packages = sum(len(cat.get('packages', [])) for cat in categories)
     
@@ -16094,6 +16264,7 @@ async def get_ready_packages_text(lang: str = "fa") -> tuple:
 
 ━━━━━━━━━━━━━━━━━━━━━━
 ⚙️ وضعیت کلی: {status_text}
+🔒 تمدید فقط در همان دسته: {restrict_status_fa}
 📊 تعداد دسته‌ها: {len(categories)}
 📦 تعداد کل بسته‌ها: {total_packages}
 🕐 آخرین بروزرسانی: {READY_PACKAGES.get('last_updated', 'N/A')}
@@ -16132,6 +16303,10 @@ async def get_ready_packages_text(lang: str = "fa") -> tuple:
                 callback_data="admin_packages_toggle"
             )],
             [InlineKeyboardButton(
+                text=f"🔒 تمدید فقط در همان دسته: {'🟢 روشن' if restrict_extend else '🔴 خاموش'}",
+                callback_data="admin_toggle_restrict_extend"
+            )],
+            [InlineKeyboardButton(
                 text="➕ افزودن دسته جدید",
                 callback_data="admin_category_add"
             )],
@@ -16158,6 +16333,7 @@ async def get_ready_packages_text(lang: str = "fa") -> tuple:
 
 ━━━━━━━━━━━━━━━━━━━━━━
 ⚙️ Status: {status_text}
+🔒 Restrict to Same Cat: {restrict_status_en}
 📊 Categories: {len(categories)}
 📦 Total packages: {total_packages}
 🕐 Last updated: {READY_PACKAGES.get('last_updated', 'N/A')}
@@ -16194,6 +16370,10 @@ async def get_ready_packages_text(lang: str = "fa") -> tuple:
             [InlineKeyboardButton(
                 text=f"🔘 {'Disable' if enabled else 'Enable'} All",
                 callback_data="admin_packages_toggle"
+            )],
+            [InlineKeyboardButton(
+                text=f"🔒 Restrict to Same Cat: {'🟢 ON' if restrict_extend else '🔴 OFF'}",
+                callback_data="admin_toggle_restrict_extend"
             )],
             [InlineKeyboardButton(
                 text="➕ Add Category",
@@ -16518,6 +16698,74 @@ async def show_ready_categories(callback: CallbackQuery):
     
     categories.sort(key=lambda x: x.get('order', 999))
     
+    # 🔒 بررسی محدودیت تمدید فقط در همان دسته
+    restrict_extend = READY_PACKAGES.get('restrict_extend_to_same_category', False)
+    target_category = None
+    if is_extend and extend_order_id and restrict_extend:
+        order = orders.get(str(extend_order_id))
+        order_cat_id = order.get('category_id') if order else None
+        order_cat_name = order.get('category_name') if order else None
+        
+        matching_cat = None
+        if order_cat_id:
+            for c in categories:
+                if int(c.get('id', 0)) == int(order_cat_id):
+                    matching_cat = c
+                    break
+        if not matching_cat and order_cat_name:
+            for c in categories:
+                if (c.get('name') and str(c.get('name')).strip() == str(order_cat_name).strip()) or \
+                   (c.get('name_en') and str(c.get('name_en')).strip() == str(order_cat_name).strip()):
+                    matching_cat = c
+                    break
+        
+        if not matching_cat:
+            support_user = (SUPPORT_USERNAME or 'my_name_is_navid').lstrip('@')
+            support_url = f"https://t.me/{support_user}"
+            danger_emoji = premium_emoji('danger', '⚠️')
+            if lang == "fa":
+                unknown_text = (
+                    f"{danger_emoji} <b>دسته‌بندی این کانفیگ مشخص نشده است</b>\n\n"
+                    f"با توجه به تنظیمات مدیریت، تمدید فقط در دسته‌بندی فعلی کانفیگ مجاز است؛ اما دسته‌بندی این کانفیگ در سیستم ثبت نشده است.\n\n"
+                    f"لطفاً به پشتیبانی پیام دهید تا دسته‌بندی سرویس شما تنظیم شده و امکان تمدید برایتان فعال گردد."
+                )
+                supp_text = "💬 پیام به پشتیبانی"
+                cancel_text = "❌ انصراف از تمدید"
+            else:
+                unknown_text = (
+                    f"{danger_emoji} <b>Config Category Not Set</b>\n\n"
+                    f"Extensions are restricted to the same category, but this config does not have a designated category.\n\n"
+                    f"Please contact support to assign a category and unlock renewal."
+                )
+                supp_text = "💬 Contact Support"
+                cancel_text = "❌ Cancel Extension"
+
+            buttons = [
+                [InlineKeyboardButton(text=supp_text, url=support_url)],
+                [InlineKeyboardButton(text=cancel_text, callback_data=f"cancel_extend_{extend_order_id}", style="danger")]
+            ]
+            try:
+                await callback.message.edit_text(
+                    unknown_text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
+                await callback.message.answer(
+                    unknown_text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                    parse_mode=ParseMode.HTML
+                )
+            await callback.answer()
+            return
+        else:
+            target_category = matching_cat
+            categories = [matching_cat]
+
     # ✅ ساخت متن کوپن
     coupon_text = ""
     coupon_line = ""
@@ -16545,10 +16793,16 @@ async def show_ready_categories(callback: CallbackQuery):
         warning_emoji = premium_emoji('danger', '⚠️')
         light_emoji = premium_emoji('light', '💡')
         
+        cat_info_line = ""
+        if restrict_extend and target_category:
+            cat_display = target_category.get('name') if lang == "fa" else target_category.get('name_en', target_category.get('name'))
+            cat_info_line = f"🏷️ <b>دسته سرویس شما:</b> {cat_display}\n<i>(تمدید فقط در این دسته مجاز است)</i>\n\n" if lang == "fa" else f"🏷️ <b>Your Service Category:</b> {cat_display}\n<i>(Extension restricted to this category)</i>\n\n"
+
         if lang == "fa":
             text = (
                 f"{config_emoji} <b>انتخاب بسته برای تمدید</b>\n\n"
                 f"{coupon_line}"
+                f"{cat_info_line}"
                 f"{warning_emoji} <b>توجه مهم:</b>\n"
                 f"اگه بسته‌ی فعلی سرویس شما با بسته‌ای که انتخاب می‌کنید <b>متفاوت</b> باشه،\n"
                 f"احتمال <b>قطع شدن لینک‌های فعلی</b> شما وجود داره و باید <b>لینک جدید</b> رو از ساب‌لینک بردارید.\n\n"
@@ -16558,6 +16812,7 @@ async def show_ready_categories(callback: CallbackQuery):
             text = (
                 f"{config_emoji} <b>Select Package to Extend</b>\n\n"
                 f"{coupon_line}"
+                f"{cat_info_line}"
                 f"{warning_emoji} <b>Important Notice:</b>\n"
                 f"If your current service package differs from the one you select,\n"
                 f"there's a chance your <b>current links will be disconnected</b>,\n"
@@ -16591,20 +16846,26 @@ async def show_ready_categories(callback: CallbackQuery):
     last_package_info = get_user_last_purchased_package(user_id, target_order_id=target_order_id)
     if last_package_info:
         last_cat, last_pkg = last_package_info
-        cat_name = last_cat.get('name') if lang == "fa" else last_cat.get('name_en', last_cat.get('name'))
-        pkg_vol = last_pkg.get('volume', 0)
-        vol_str = format_package_volume(pkg_vol, lang)
+        show_usual = True
+        if is_extend and restrict_extend and target_category:
+            if int(last_cat.get('id', 0)) != int(target_category.get('id', 0)):
+                show_usual = False
         
-        if lang == "fa":
-            usual_button_text = f"🟢 همون همیشگی ({cat_name} - {vol_str})"
-        else:
-            usual_button_text = f"🟢 The Usual ({cat_name} - {vol_str})"
-        
-        buttons.append([InlineKeyboardButton(
-            text=usual_button_text,
-            callback_data=f"buy_package_{last_cat.get('id')}_{last_pkg.get('id')}",
-            style="success"
-        )])
+        if show_usual:
+            cat_name = last_cat.get('name') if lang == "fa" else last_cat.get('name_en', last_cat.get('name'))
+            pkg_vol = last_pkg.get('volume', 0)
+            vol_str = format_package_volume(pkg_vol, lang)
+            
+            if lang == "fa":
+                usual_button_text = f"🟢 همون همیشگی ({cat_name} - {vol_str})"
+            else:
+                usual_button_text = f"🟢 The Usual ({cat_name} - {vol_str})"
+            
+            buttons.append([InlineKeyboardButton(
+                text=usual_button_text,
+                callback_data=f"buy_package_{last_cat.get('id')}_{last_pkg.get('id')}",
+                style="success"
+            )])
 
     
     for cat in categories:
@@ -16816,6 +17077,23 @@ async def show_category_packages(callback: CallbackQuery):
     user_state = user_states.get(user_id, {})
     is_extend = user_state.get('is_extend', False)
     extend_order_id = user_state.get('extend_order_id')
+    
+    # 🔒 بررسی محدودیت تمدید فقط در همان دسته
+    if is_extend and extend_order_id and READY_PACKAGES.get('restrict_extend_to_same_category', False):
+        order = orders.get(str(extend_order_id))
+        order_cat_id = order.get('category_id') if order else None
+        order_cat_name = order.get('category_name') if order else None
+        allowed = False
+        if order_cat_id and int(order_cat_id) == int(category_id):
+            allowed = True
+        elif order_cat_name and category.get('name') and str(category.get('name')).strip() == str(order_cat_name).strip():
+            allowed = True
+        if not allowed:
+            await callback.answer(
+                "⚠️ با توجه به تنظیمات مدیریت، تمدید فقط در همان دسته‌ی سرویس شما مجاز است." if lang == "fa" else "⚠️ Renewal is restricted to your current service category.",
+                show_alert=True
+            )
+            return
     
     packages = [p for p in category.get('packages', []) if p.get('is_active', True)]
     
@@ -17032,6 +17310,23 @@ async def buy_specific_package(callback: CallbackQuery):
     if is_extend and extend_order_id:
         logger.info(f"🔄 [buy_specific_package] کاربر {user_id} در حالت تمدید است - سفارش اصلی: #{extend_order_id}")
         logger.info(f"   📦 حجم فعلی: {current_volume}GB - ⏱ مدت فعلی: {current_days} روز")
+        
+        # 🔒 بررسی محدودیت تمدید فقط در همان دسته
+        if READY_PACKAGES.get('restrict_extend_to_same_category', False):
+            order = orders.get(str(extend_order_id))
+            order_cat_id = order.get('category_id') if order else None
+            order_cat_name = order.get('category_name') if order else None
+            allowed = False
+            if order_cat_id and int(order_cat_id) == int(category_id):
+                allowed = True
+            elif order_cat_name and category.get('name') and str(category.get('name')).strip() == str(order_cat_name).strip():
+                allowed = True
+            if not allowed:
+                await callback.answer(
+                    "⚠️ با توجه به تنظیمات مدیریت، تمدید فقط در همان دسته‌ی سرویس شما مجاز است." if lang == "fa" else "⚠️ Renewal is restricted to your current service category.",
+                    show_alert=True
+                )
+                return
     
     volume = package.get('volume', 0)
     days = package.get('days', 30)
@@ -17826,6 +18121,28 @@ async def admin_packages_toggle(callback: CallbackQuery):
         show_alert=True
     )
     
+    await show_ready_packages_menu(callback)
+
+@dp.callback_query(F.data == "admin_toggle_restrict_extend")
+async def admin_toggle_restrict_extend(callback: CallbackQuery):
+    """تغییر وضعیت محدودیت تمدید فقط در همان دسته"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    current = READY_PACKAGES.get('restrict_extend_to_same_category', False)
+    new_val = not current
+    READY_PACKAGES['restrict_extend_to_same_category'] = new_val
+    READY_PACKAGES['last_updated'] = datetime.now().isoformat()
+    configs_pool['ready_packages'] = READY_PACKAGES
+    save_all()
+    
+    if new_val:
+        alert_text = "🔒 محدودیت فعال شد:\nکاربران هنگام تمدید فقط مجاز به انتخاب از همان دسته‌ی سرویس خود هستند." if lang == "fa" else "🔒 Renewal restricted to the same category."
+    else:
+        alert_text = "🔓 محدودیت غیرفعال شد:\nتمدید به تمامی دسته‌ها برای کاربران آزاد است." if lang == "fa" else "🔓 Renewal open to all categories."
+        
+    await callback.answer(alert_text, show_alert=True)
     await show_ready_packages_menu(callback)
 
 @dp.callback_query(F.data == "admin_category_add")
@@ -40586,6 +40903,17 @@ async def view_order(callback: CallbackQuery):
                     callback_data=f"admin_view_config_{order_id}"
                 )
             ])
+        if order_type != 'balance_charge':
+            has_cat = bool(order.get('category_id') or order.get('category_name'))
+            cat_btn_label = "🏷️ تغییر دسته‌بندی" if has_cat else "🏷️ تعیین دسته‌بندی"
+            if lang != 'fa':
+                cat_btn_label = "🏷️ Change Category" if has_cat else "🏷️ Set Category"
+            buttons.append([
+                InlineKeyboardButton(
+                    text=cat_btn_label,
+                    callback_data=f"admin_set_order_cat_{order_id}"
+                )
+            ])
         
         
         
@@ -41345,11 +41673,128 @@ async def admin_view_config_detail(callback: CallbackQuery):
     
     text += f"\n<code>🕐 {datetime.now().strftime('%H:%M:%S')}</code>"
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 برگشت" if lang=="fa" else "🔙 Back", callback_data=f"admin_user_{order.get('user_id')}")]
+    keyboard_buttons = []
+    has_cat = bool(order.get('category_id') or order.get('category_name'))
+    cat_btn_label = "🏷️ تغییر دسته‌بندی" if has_cat else "🏷️ تعیین دسته‌بندی"
+    if lang != 'fa':
+        cat_btn_label = "🏷️ Change Category" if has_cat else "🏷️ Set Category"
+    keyboard_buttons.append([
+        InlineKeyboardButton(text=cat_btn_label, callback_data=f"admin_set_order_cat_{order_id}")
     ])
+    keyboard_buttons.append([
+        InlineKeyboardButton(text="🔙 برگشت به سفارش" if lang=="fa" else "🔙 Back to Order", callback_data=f"view_order_{order_id}"),
+        InlineKeyboardButton(text="👤 کاربر" if lang=="fa" else "👤 User", callback_data=f"admin_user_{order.get('user_id')}")
+    ])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     
     await callback.message.edit_text(text, reply_markup=keyboard)
+
+
+@dp.callback_query(F.data.startswith("admin_set_order_cat_"))
+async def admin_set_order_category_prompt(callback: CallbackQuery):
+    """نمایش لیست دسته‌بندی‌ها برای تعیین/تغییر دسته‌بندی سفارش توسط ادمین"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    raw_id = callback.data.replace("admin_set_order_cat_", "")
+    try:
+        order_id = int(raw_id)
+    except (IndexError, ValueError):
+        return await callback.answer("❌ خطا در شناسه سفارش", show_alert=True)
+    
+    order = orders.get(str(order_id))
+    if not order:
+        return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
+    
+    categories = READY_PACKAGES.get('categories', [])
+    if not categories:
+        return await callback.answer("❌ هیچ دسته‌بندی در سیستم تعریف نشده است", show_alert=True)
+    
+    current_cat_name = order.get('category_name') or get_order_category_name(order, lang) or ("نامشخص" if lang == "fa" else "Unknown")
+    
+    if lang == "fa":
+        text = (
+            f"🏷️ <b>تعیین دسته‌بندی برای سفارش #{order_id}</b>\n\n"
+            f"📦 دسته‌بندی فعلی: <b>{current_cat_name}</b>\n\n"
+            f"دسته‌بندی مورد نظر برای این سرویس را انتخاب کنید:\n"
+            f"<i>(با تنظیم دسته، محدودیت تمدید برای کاربر در این دسته برطرف خواهد شد)</i>"
+        )
+    else:
+        text = (
+            f"🏷️ <b>Set Category for Order #{order_id}</b>\n\n"
+            f"📦 Current Category: <b>{current_cat_name}</b>\n\n"
+            f"Please select the category for this config:"
+        )
+    
+    cat_buttons = []
+    for cat in categories:
+        icon = cat.get('icon', '📦')
+        name = cat.get('name') if lang == "fa" else cat.get('name_en', cat.get('name'))
+        is_current = (order.get('category_id') == cat.get('id'))
+        mark = " (فعلی) ✅" if is_current and lang == "fa" else (" (Current) ✅" if is_current else "")
+        cat_buttons.append([InlineKeyboardButton(
+            text=f"{icon} {name}{mark}",
+            callback_data=f"admin_apply_order_cat_{order_id}_{cat.get('id')}"
+        )])
+    
+    back_text = "🔙 بازگشت به سفارش" if lang == "fa" else "🔙 Back to Order"
+    cat_buttons.append([InlineKeyboardButton(
+        text=back_text,
+        callback_data=f"view_order_{order_id}"
+    )])
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=cat_buttons),
+        parse_mode=ParseMode.HTML
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("admin_apply_order_cat_"))
+async def admin_apply_order_category(callback: CallbackQuery):
+    """اعمال دسته‌بندی انتخابی روی سفارش توسط ادمین"""
+    if callback.from_user.id != ADMIN_ID_INT:
+        return await callback.answer("⛔", show_alert=True)
+    
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    prefix = "admin_apply_order_cat_"
+    data_body = callback.data[len(prefix):]
+    try:
+        order_id_str, cat_id_str = data_body.split("_", 1)
+        order_id = int(order_id_str)
+        cat_id = int(cat_id_str)
+    except (IndexError, ValueError):
+        return await callback.answer("❌ خطا در پردازش شناسه", show_alert=True)
+    
+    order = orders.get(str(order_id))
+    if not order:
+        return await callback.answer("❌ سفارش یافت نشد", show_alert=True)
+    
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == cat_id), None)
+    if not category:
+        return await callback.answer("❌ دسته‌بندی یافت نشد", show_alert=True)
+    
+    cat_name = category.get('name', '')
+    cat_name_en = category.get('name_en', cat_name)
+    
+    update_data = {
+        'category_id': cat_id,
+        'category_name': cat_name,
+        'category_name_en': cat_name_en,
+        'updated_at': datetime.now().isoformat()
+    }
+    if order.get('type') in ['purchase', 'custom', None, '']:
+        update_data['type'] = 'ready_package'
+    
+    update_order(order_id, **update_data)
+    
+    alert_msg = f"✅ دسته‌بندی با موفقیت روی «{cat_name}» تنظیم شد!" if lang == "fa" else f"✅ Category set to '{cat_name_en}' successfully!"
+    await callback.answer(alert_msg, show_alert=True)
+    
+    callback.data = f"view_order_{order_id}"
+    await view_order(callback)
     
 @dp.callback_query(F.data.startswith("admin_add_blacklist_"))
 async def admin_add_user_to_blacklist(callback: CallbackQuery):
