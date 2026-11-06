@@ -20866,15 +20866,27 @@ async def broadcast_type_selected(callback: CallbackQuery):
 
 
 _BROADCAST_ACTIONS = {
+    # ─── خرید، پکیج‌ها و خدمات ───
     "buy": ("🛒 خرید سرویس", "🛒 Buy service", "buy_service"),
-    "renew": ("🔄 تمدید (انتخاب کانفیگ)", "🔄 Renew (choose config)", "my_configs"),
+    "packages": ("📦 بسته‌های آماده", "📦 Ready packages", "show_ready_categories"),
+    "test": ("🎁 کانفیگ تست رایگان", "🎁 Free test config", "get_test_service"),
+    "ai_advisor": ("💡 مشاوره هوشمند خرید", "💡 AI purchase advisor", "ai_purchase_advisor_start"),
+    
+    # ─── مدیریت سرویس‌ها و سفارشات ───
     "configs": ("🌐 کانفیگ‌های من", "🌐 My Configs", "my_configs"),
-    "coupon": ("🏷️ اعمال کوپن", "🏷️ Apply coupon", "apply_coupon"),
-    "coupon_status": ("🏷️ وضعیت کوپن", "🏷️ Coupon status", "coupon_status"),
+    "renew": ("🔄 تمدید سرویس", "🔄 Renew service", "my_configs"),
+    "all_configs": ("📂 لیست تمام کانفیگ‌ها", "📂 All configs list", "show_all_my_configs"),
     "account": ("👤 حساب کاربری", "👤 My account", "my_account"),
+    "order_status": ("📋 پیگیری سفارشات", "📋 Order tracking", "order_status"),
+    
+    # ─── امور مالی و جوایز ───
     "balance": ("💰 افزایش موجودی", "💰 Add balance", "increase_balance"),
-    "invite": ("👥 دعوت از دوستان", "👥 Invite friends", "invite_friends"),
-    "test": ("🎁 کانفیگ تست", "🎁 Test config", "get_test_service"),
+    "coupon": ("🏷️ اعمال کوپن تخفیف", "🏷️ Apply coupon", "apply_coupon"),
+    "coupon_status": ("📊 وضعیت کوپن‌ها", "📊 Coupon status", "coupon_status"),
+    "invite": ("👥 دعوت و کسب درآمد", "👥 Invite friends", "invite_friends"),
+    
+    # ─── پشتیبانی و ابزارها ───
+    "support": ("🎫 ثبت تیکت پشتیبانی", "🎫 Support ticket", "support_create_ticket"),
     "ai": ("🤖 چت با هوش مصنوعی", "🤖 AI chat", "ai_chat"),
     "language": ("🌎 تغییر زبان", "🌎 Change language", "change_language"),
     "home": ("🏠 منوی اصلی", "🏠 Main menu", "broadcast_back_to_main"),
@@ -20919,9 +20931,9 @@ def _broadcast_recipient_ids() -> list:
     return list(dict.fromkeys(recipient_ids))
 
 
-def _broadcast_keyboard(buttons: list, lang: str) -> Optional[InlineKeyboardMarkup]:
+def _broadcast_keyboard(buttons: list, lang: str, layout: str = "single") -> Optional[InlineKeyboardMarkup]:
     """Build only registered navigation buttons and validated external links."""
-    rows = []
+    items = []
     for button in buttons:
         if not isinstance(button, dict):
             continue
@@ -20931,11 +20943,14 @@ def _broadcast_keyboard(buttons: list, lang: str) -> Optional[InlineKeyboardMark
             style = None
         if action in _BROADCAST_ACTIONS:
             fa_text, en_text, callback_data = _BROADCAST_ACTIONS[action]
-            rows.append([InlineKeyboardButton(
-                text=fa_text if lang == "fa" else en_text,
-                callback_data=callback_data,
-                style=style,
-            )])
+            items.append((
+                InlineKeyboardButton(
+                    text=fa_text if lang == "fa" else en_text,
+                    callback_data=callback_data,
+                    style=style,
+                ),
+                False
+            ))
         elif action == "url":
             label = button.get("label")
             url = button.get("url")
@@ -20944,12 +20959,38 @@ def _broadcast_keyboard(buttons: list, lang: str) -> Optional[InlineKeyboardMark
                 and 1 <= len(label) <= 64
                 and _is_safe_broadcast_url(url)
             ):
-                rows.append([InlineKeyboardButton(
-                    text=label,
-                    url=url,
-                    style=style,
-                )])
-    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+                items.append((
+                    InlineKeyboardButton(
+                        text=label,
+                        url=url,
+                        style=style,
+                    ),
+                    len(label) > 22
+                ))
+    if not items:
+        return None
+
+    rows = []
+    if layout == "double":
+        row = []
+        for btn, is_wide in items:
+            if is_wide:
+                if row:
+                    rows.append(row)
+                    row = []
+                rows.append([btn])
+            else:
+                row.append(btn)
+                if len(row) == 2:
+                    rows.append(row)
+                    row = []
+        if row:
+            rows.append(row)
+    else:
+        for btn, _ in items:
+            rows.append([btn])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _send_broadcast_message(
@@ -20957,7 +20998,8 @@ async def _send_broadcast_message(
     broadcast_data: dict,
     lang: str,
 ):
-    keyboard = _broadcast_keyboard(broadcast_data.get("buttons", []), lang)
+    layout = broadcast_data.get("layout", "single")
+    keyboard = _broadcast_keyboard(broadcast_data.get("buttons", []), lang, layout)
     if broadcast_data.get("parse_mode") == ParseMode.HTML:
         caption = broadcast_data.get("caption", "")
         if caption is None:
@@ -20999,20 +21041,19 @@ async def _send_broadcast_message(
 
 
 def _broadcast_button_setup_markup(
-    buttons: list, lang: str, button_styles: Optional[dict] = None
+    buttons: list, lang: str, button_styles: Optional[dict] = None, layout: str = "single"
 ) -> InlineKeyboardMarkup:
     button_styles = button_styles or {}
     selected = {
         button.get("action"): button
         for button in buttons
-        if isinstance(button, dict) and isinstance(button.get("action"), str)
+        if isinstance(button, dict) and isinstance(button.get("action"), str) and button.get("action") != "url"
     }
-    custom_url = selected.get("url")
     style_labels = {
-        None: "بدون رنگ" if lang == "fa" else "No color",
-        "primary": "آبی" if lang == "fa" else "Blue",
-        "success": "سبز" if lang == "fa" else "Green",
-        "danger": "قرمز" if lang == "fa" else "Red",
+        None: "⚪ بدون رنگ" if lang == "fa" else "⚪ Default",
+        "primary": "🔵 آبی" if lang == "fa" else "🔵 Blue",
+        "success": "🟢 سبز" if lang == "fa" else "🟢 Green",
+        "danger": "🔴 قرمز" if lang == "fa" else "🔴 Red",
     }
     rows = []
     for key, (fa_text, en_text, _) in _BROADCAST_ACTIONS.items():
@@ -21031,26 +21072,49 @@ def _broadcast_button_setup_markup(
                 callback_data=f"broadcast_button_style:{key}",
             ),
         ])
-    if custom_url:
-        custom_style = custom_url.get("style")
-        if custom_style not in style_labels:
-            custom_style = button_styles.get("url")
-        if custom_style not in style_labels:
-            custom_style = None
+
+    # ─── دکمه‌های لینک اختصاصی (پشتیبانی از چندین دکمه) ───
+    url_buttons = [
+        b for b in buttons
+        if isinstance(b, dict) and b.get("action") == "url"
+    ]
+    for idx, ub in enumerate(url_buttons):
+        u_id = ub.get("url_id") or f"url_{idx}"
+        ub["url_id"] = u_id
+        u_label = ub.get("label", "لینک")
+        u_style = ub.get("style")
+        if u_style not in style_labels:
+            u_style = None
         rows.append([
             InlineKeyboardButton(
-                text=f"✅ {custom_url.get('label', '🔗 لینک')}",
-                callback_data="broadcast_button_toggle:url",
-                style=custom_style,
+                text=f"🔗 {u_label[:14]}",
+                callback_data=f"broadcast_url_info:{u_id}",
+                style=u_style,
             ),
             InlineKeyboardButton(
-                text=style_labels[custom_style],
-                callback_data="broadcast_button_style:url",
+                text=style_labels.get(u_style, style_labels[None]),
+                callback_data=f"broadcast_url_style:{u_id}",
+            ),
+            InlineKeyboardButton(
+                text="🗑️",
+                callback_data=f"broadcast_url_delete:{u_id}",
             ),
         ])
+
+    layout_toggle_label = ("دو‌ستونه ↔️" if layout == "double" else "تک‌ستونه ↕️") if lang == "fa" else ("2 Columns ↔️" if layout == "double" else "1 Column ↕️")
     rows.extend([
+        [
+            InlineKeyboardButton(
+                text=f"📐 چیدمان: {layout_toggle_label}",
+                callback_data="broadcast_layout_toggle",
+            ),
+            InlineKeyboardButton(
+                text="🗑️ پاک‌کردن همه" if lang == "fa" else "🗑️ Clear All",
+                callback_data="broadcast_buttons_clear",
+            ),
+        ],
         [InlineKeyboardButton(
-            text="🔗 افزودن دکمهٔ لینک" if lang == "fa" else "🔗 Add URL button",
+            text="🔗 افزودن دکمهٔ لینک دلخواه" if lang == "fa" else "🔗 Add Custom URL Button",
             callback_data="broadcast_button_add_url",
         )],
         [InlineKeyboardButton(
@@ -21067,28 +21131,82 @@ def _broadcast_button_setup_markup(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def _update_broadcast_setup_message(callback: CallbackQuery, admin_id: int):
+    state = user_states.get(admin_id, {})
+    broadcast_data = state.get("broadcast_data", {})
+    lang = get_user(admin_id).get("lang", "fa")
+    buttons = broadcast_data.setdefault("buttons", [])
+    layout = broadcast_data.get("layout", "single")
+    button_styles = broadcast_data.setdefault("button_styles", {})
+
+    selected_count = len(buttons)
+    layout_name = ("دو‌ستونه ↔️" if layout == "double" else "تک‌ستونه ↕️") if lang == "fa" else ("2 Columns ↔️" if layout == "double" else "1 Column ↕️")
+
+    text = (
+        f"⚙️ <b>تنظیم دکمه‌های زیر پیام برودکست</b>\n\n"
+        f"📌 برای افزودن یا حذف هر دکمه روی آن بزنید.\n"
+        f"🎨 با دکمهٔ رنگ مقابل هر گزینه، رنگ آن را تغییر دهید.\n"
+        f"🔗 دکمه‌های لینک دلخواه خود را نیز می‌توانید اضافه کنید.\n\n"
+        f"📊 <b>دکمه‌های انتخاب‌شده:</b> {selected_count} از ۱۰\n"
+        f"📐 <b>چیدمان فعلی:</b> {layout_name}"
+    ) if lang == "fa" else (
+        f"⚙️ <b>Configure Broadcast Buttons</b>\n\n"
+        f"📌 Toggle buttons below to include them under your broadcast.\n"
+        f"🎨 Use the color button to adjust styling.\n"
+        f"🔗 You can also add custom URL buttons.\n\n"
+        f"📊 <b>Selected buttons:</b> {selected_count} / 10\n"
+        f"📐 <b>Current layout:</b> {layout_name}"
+    )
+    markup = _broadcast_button_setup_markup(buttons, lang, button_styles, layout)
+    try:
+        await callback.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                await callback.message.edit_reply_markup(reply_markup=markup)
+            except Exception:
+                pass
+
+
 async def _show_broadcast_button_setup(message: Message, admin_id: int):
     state = user_states[admin_id]
     lang = get_user(admin_id).get("lang", "fa")
-    buttons = state["broadcast_data"].setdefault("buttons", [])
+    broadcast_data = state["broadcast_data"]
+    buttons = broadcast_data.setdefault("buttons", [])
+    layout = broadcast_data.get("layout", "single")
+    button_styles = broadcast_data.setdefault("button_styles", {})
+
+    selected_count = len(buttons)
+    layout_name = ("دو‌ستونه ↔️" if layout == "double" else "تک‌ستونه ↕️") if lang == "fa" else ("2 Columns ↔️" if layout == "double" else "1 Column ↕️")
+
+    text = (
+        f"⚙️ <b>تنظیم دکمه‌های زیر پیام برودکست</b>\n\n"
+        f"📌 برای افزودن یا حذف هر دکمه روی آن بزنید.\n"
+        f"🎨 با دکمهٔ رنگ مقابل هر گزینه، رنگ آن را تغییر دهید.\n"
+        f"🔗 دکمه‌های لینک دلخواه خود را نیز می‌توانید اضافه کنید.\n\n"
+        f"📊 <b>دکمه‌های انتخاب‌شده:</b> {selected_count} از ۱۰\n"
+        f"📐 <b>چیدمان فعلی:</b> {layout_name}"
+    ) if lang == "fa" else (
+        f"⚙️ <b>Configure Broadcast Buttons</b>\n\n"
+        f"📌 Toggle buttons below to include them under your broadcast.\n"
+        f"🎨 Use the color button to adjust styling.\n"
+        f"🔗 You can also add custom URL buttons.\n\n"
+        f"📊 <b>Selected buttons:</b> {selected_count} / 10\n"
+        f"📐 <b>Current layout:</b> {layout_name}"
+    )
     await message.answer(
-        (
-            "⚙️ <b>تنظیم دکمه‌های زیر پیام</b>\n"
-            "برای افزودن یا حذف هر دکمه روی آن بزنید؛ انتخاب‌ها برای همین برودکست هستند."
-            if lang == "fa"
-            else "⚙️ <b>Configure buttons under the message</b>\n"
-            "Toggle the buttons below. These choices apply to this broadcast only."
-        ),
+        text,
         parse_mode=ParseMode.HTML,
         reply_markup=_broadcast_button_setup_markup(
-            buttons, lang, state["broadcast_data"].get("button_styles", {})
+            buttons, lang, button_styles, layout
         ),
     )
 
 
 @dp.callback_query(
     F.data.startswith("broadcast_button_")
-    | F.data.in_({"broadcast_buttons_done", "cancel_broadcast"})
+    | F.data.startswith("broadcast_url_")
+    | F.data.in_({"broadcast_layout_toggle", "broadcast_buttons_clear", "broadcast_buttons_done", "cancel_broadcast"})
 )
 async def configure_broadcast_buttons(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
@@ -21099,48 +21217,85 @@ async def configure_broadcast_buttons(callback: CallbackQuery):
     state = user_states.get(admin_id, {})
     broadcast_data = state.get("broadcast_data")
     action = callback.data
+
     if action == "cancel_broadcast":
         user_states.pop(admin_id, None)
         await callback.message.edit_text("❌ برودکست لغو شد" if lang == "fa" else "❌ Broadcast cancelled")
         await callback.answer()
         return
 
+    if not state.get("awaiting_broadcast_button_setup") or not isinstance(broadcast_data, dict):
+        return await callback.answer("درخواست منقضی شده است" if lang == "fa" else "This request has expired", show_alert=True)
+
+    selected = broadcast_data.setdefault("buttons", [])
+
+    if action == "broadcast_buttons_clear":
+        selected.clear()
+        broadcast_data.setdefault("button_styles", {}).clear()
+        await _update_broadcast_setup_message(callback, admin_id)
+        await callback.answer("🗑️ همه دکمه‌ها حذف شدند" if lang == "fa" else "🗑️ All buttons cleared")
+        return
+
+    if action == "broadcast_layout_toggle":
+        current_layout = broadcast_data.get("layout", "single")
+        broadcast_data["layout"] = "double" if current_layout == "single" else "single"
+        await _update_broadcast_setup_message(callback, admin_id)
+        layout_name = ("دو‌ستونه ↔️" if broadcast_data["layout"] == "double" else "تک‌ستونه ↕️") if lang == "fa" else ("2 Columns ↔️" if broadcast_data["layout"] == "double" else "1 Column ↕️")
+        await callback.answer(f"📐 {layout_name}")
+        return
+
+    if action.startswith("broadcast_url_info:"):
+        u_id = action.split(":", 1)[1]
+        ub = next((b for b in selected if isinstance(b, dict) and b.get("url_id") == u_id), None)
+        if ub:
+            await callback.answer(f"🔗 {ub.get('label')}\n🌐 {ub.get('url')}", show_alert=True)
+        else:
+            await callback.answer("لینک یافت نشد" if lang == "fa" else "Link not found")
+        return
+
+    if action.startswith("broadcast_url_delete:"):
+        u_id = action.split(":", 1)[1]
+        ub = next((b for b in selected if isinstance(b, dict) and b.get("url_id") == u_id), None)
+        if ub:
+            selected.remove(ub)
+        await _update_broadcast_setup_message(callback, admin_id)
+        await callback.answer("🗑️ دکمهٔ لینک حذف شد" if lang == "fa" else "🗑️ URL button removed")
+        return
+
+    if action.startswith("broadcast_url_style:"):
+        u_id = action.split(":", 1)[1]
+        ub = next((b for b in selected if isinstance(b, dict) and b.get("url_id") == u_id), None)
+        if ub:
+            styles = [None, "primary", "success", "danger"]
+            current = ub.get("style")
+            next_style = styles[(styles.index(current) + 1) % len(styles)] if current in styles else None
+            ub["style"] = next_style
+            await _update_broadcast_setup_message(callback, admin_id)
+            await callback.answer()
+        return
+
     if action == "broadcast_button_add_url":
-        buttons = broadcast_data.get("buttons", []) if isinstance(broadcast_data, dict) else []
-        has_url_button = any(
-            isinstance(button, dict) and button.get("action") == "url"
-            for button in buttons
-        )
-        if len(buttons) >= 10 and not has_url_button:
+        if len(selected) >= 10:
             return await callback.answer(
                 "حداکثر ۱۰ دکمه مجاز است" if lang == "fa" else "Maximum 10 buttons allowed",
                 show_alert=True,
             )
-        if not state.get("awaiting_broadcast_button_setup") or not isinstance(broadcast_data, dict):
-            return await callback.answer("درخواست منقضی شده است" if lang == "fa" else "This request has expired", show_alert=True)
         state["awaiting_broadcast_button_setup"] = False
         state["awaiting_broadcast_url"] = True
         await callback.message.answer(
-            "عنوان و آدرس را در یک خط بفرست:\n<code>متن دکمه | https://example.com</code>\n"
-            "فقط آدرس HTTPS یا پیوند رسمی tg:// پذیرفته می‌شود. برای لغو /cancel را بفرست."
+            "عنوان و آدرس دکمه را در یک خط بفرستید:\n<code>متن دکمه | https://example.com</code>\n\n"
+            "فقط آدرس HTTPS یا پیوند معتبر tg:// پذیرفته می‌شود. برای انصراف /cancel را ارسال کنید."
             if lang == "fa"
-            else "Send the label and URL on one line:\n<code>Button text | https://example.com</code>\n"
-            "Only HTTPS or official tg:// links are accepted. Send /cancel to cancel.",
+            else "Send the label and URL on one line:\n<code>Button text | https://example.com</code>\n\n"
+            "Only HTTPS or official tg:// links are accepted. Send /cancel to abort.",
             parse_mode=ParseMode.HTML,
         )
         await callback.answer()
         return
 
-    if not state.get("awaiting_broadcast_button_setup") or not isinstance(broadcast_data, dict):
-        return await callback.answer(
-            "درخواست منقضی شده است" if lang == "fa" else "This request has expired",
-            show_alert=True,
-        )
-
-    selected = broadcast_data.setdefault("buttons", [])
     if action.startswith("broadcast_button_toggle:"):
         button_name = action.split(":", 1)[1]
-        if button_name not in set(_BROADCAST_ACTIONS) | {"url"}:
+        if button_name not in _BROADCAST_ACTIONS:
             return await callback.answer("دکمه نامعتبر است" if lang == "fa" else "Invalid button", show_alert=True)
         item = next(
             (button for button in selected
@@ -21149,8 +21304,6 @@ async def configure_broadcast_buttons(callback: CallbackQuery):
         )
         if item:
             selected.remove(item)
-        elif button_name == "url":
-            return await callback.answer("ابتدا آدرس دکمه را ثبت کنید" if lang == "fa" else "Add the URL first", show_alert=True)
         elif len(selected) >= 10:
             return await callback.answer("حداکثر ۱۰ دکمه مجاز است" if lang == "fa" else "Maximum 10 buttons allowed", show_alert=True)
         else:
@@ -21158,17 +21311,13 @@ async def configure_broadcast_buttons(callback: CallbackQuery):
                 "action": button_name,
                 "style": broadcast_data.setdefault("button_styles", {}).get(button_name),
             })
-        await callback.message.edit_reply_markup(
-            reply_markup=_broadcast_button_setup_markup(
-                selected, lang, broadcast_data.get("button_styles", {})
-            )
-        )
+        await _update_broadcast_setup_message(callback, admin_id)
         await callback.answer()
         return
 
     if action.startswith("broadcast_button_style:"):
         button_name = action.split(":", 1)[1]
-        if button_name not in set(_BROADCAST_ACTIONS) | {"url"}:
+        if button_name not in _BROADCAST_ACTIONS:
             return await callback.answer("دکمه نامعتبر است" if lang == "fa" else "Invalid button", show_alert=True)
         styles = [None, "primary", "success", "danger"]
         style_map = broadcast_data.setdefault("button_styles", {})
@@ -21182,49 +21331,25 @@ async def configure_broadcast_buttons(callback: CallbackQuery):
         style_map[button_name] = next_style
         if item:
             item["style"] = next_style
-        await callback.message.edit_reply_markup(
-            reply_markup=_broadcast_button_setup_markup(
-                selected, lang, style_map
-            )
-        )
+        await _update_broadcast_setup_message(callback, admin_id)
         await callback.answer()
         return
 
-    if action != "broadcast_buttons_done":
-        return await callback.answer(
-            "درخواست دکمه نامعتبر است" if lang == "fa" else "Invalid button request",
-            show_alert=True,
-        )
+    if action == "broadcast_buttons_done":
+        state["awaiting_broadcast_button_setup"] = False
+        try:
+            await callback.message.delete()
+        except Exception:
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        return await preview_broadcast(callback)
 
-    state["awaiting_broadcast_button_setup"] = False
-    state["awaiting_broadcast_confirm"] = True
-    state["broadcast_preview_verified"] = False
-    confirmation = state.get("confirm_text", "")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="👁️ پیش‌نمایش" if lang == "fa" else "👁️ Preview",
-            callback_data="preview_broadcast",
-            style="primary",
-        )],
-        [
-            InlineKeyboardButton(
-                text="✅ بله، ارسال کن" if lang == "fa" else "✅ Yes, send",
-                callback_data="confirm_broadcast",
-                style="success",
-            ),
-            InlineKeyboardButton(
-                text="❌ انصراف" if lang == "fa" else "❌ Cancel",
-                callback_data="cancel_broadcast",
-                style="danger",
-            ),
-        ],
-    ])
-    await callback.message.edit_text(
-        confirmation,
-        reply_markup=keyboard,
-        parse_mode=ParseMode.HTML,
+    return await callback.answer(
+        "درخواست دکمه نامعتبر است" if lang == "fa" else "Invalid button request",
+        show_alert=True,
     )
-    await callback.answer()
     
 async def test_panel_connection() -> dict:
     """تست کامل اتصال به پنل با پینگ هوشمند"""
@@ -21367,39 +21492,7 @@ async def admin_broadcast_send(message: Message):
     else:
         await message.reply("❌ نوع پیام نامشخص است" if lang=="fa" else "❌ Unknown message type")
         return
-    preview_text = ""
-    if broadcast_type == 'text':
-        preview_text = caption[:200] + ("..." if len(caption) > 200 else "")
-    else:
-        preview_text = f"📎 {broadcast_type} + {caption[:100] + '...' if caption else 'بدون کپشن'}"
-    
-    clean_preview = html.escape(preview_text)
     recipient_count = len(_broadcast_recipient_ids())
-    
-    if lang == "fa":
-        confirm_text = f"""
-📢 <b>تأیید ارسال پیام همگانی</b>
-
-📊 تعداد کاربران: {recipient_count}
-📝 نوع: {broadcast_type}
-{f"📎 نام فایل: {file_name}" if file_name else ""}
-📝 محتوای پیام:
-{clean_preview}
-
-⚠️ آیا از ارسال این پیام به همه کاربران اطمینان دارید؟
-"""
-    else:
-        confirm_text = f"""
-📢 <b>Confirm Broadcast</b>
-
-📊 Users count: {recipient_count}
-📝 Type: {broadcast_type}
-{f"📎 File name: {file_name}" if file_name else ""}
-📝 Content:
-{clean_preview}
-
-⚠️ Are you sure you want to send this to all users?
-"""
     # ✅ تشخیص subtype برای voice
     audio_subtype_value = locals().get('audio_subtype', None)
 
@@ -21420,7 +21513,6 @@ async def admin_broadcast_send(message: Message):
         'awaiting_broadcast_button_setup': True,
         'broadcast_data': broadcast_data,
         'users_count': recipient_count,
-        'confirm_text': confirm_text,
     }
     await _show_broadcast_button_setup(message, admin_id)
 
@@ -21461,23 +21553,17 @@ async def admin_broadcast_add_url_button(message: Message):
         await message.reply("وضعیت برودکست منقضی شده است." if lang == "fa" else "Broadcast state expired.")
         return
     buttons = broadcast_data.setdefault("buttons", [])
-    url_button = next(
-        (button for button in buttons
-         if isinstance(button, dict) and button.get("action") == "url"),
-        None,
-    )
-    if not url_button and len(buttons) >= 10:
+    if len(buttons) >= 10:
         await message.reply("حداکثر ۱۰ دکمه مجاز است." if lang == "fa" else "Maximum 10 buttons allowed.")
         return
 
-    style = broadcast_data.setdefault("button_styles", {}).get("url")
-    url_data = {"action": "url", "label": label, "url": str(URL(raw_url)), "style": style}
-    if url_button:
-        buttons[buttons.index(url_button)] = url_data
-    else:
-        buttons.append(url_data)
+    import uuid
+    url_id = f"url_{uuid.uuid4().hex[:6]}"
+    url_data = {"action": "url", "url_id": url_id, "label": label, "url": str(URL(raw_url)), "style": None}
+    buttons.append(url_data)
     state["awaiting_broadcast_url"] = False
     state["awaiting_broadcast_button_setup"] = True
+    await message.reply("✅ دکمهٔ لینک با موفقیت اضافه شد." if lang == "fa" else "✅ URL button added successfully.")
     await _show_broadcast_button_setup(message, admin_id)
 
 
@@ -21530,7 +21616,7 @@ async def preview_broadcast(callback: CallbackQuery):
     )
     
     try:
-        await callback.message.answer(preview_header, parse_mode=ParseMode.HTML)
+        await bot.send_message(admin_id, preview_header, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"خطا در ارسال هدر پیش‌نمایش: {e}")
     
@@ -21542,7 +21628,8 @@ async def preview_broadcast(callback: CallbackQuery):
     
     except Exception as e:
         logger.error(f"❌ خطا در ارسال پیش‌نمایش: {e}", exc_info=True)
-        await callback.message.answer(
+        await bot.send_message(
+            admin_id,
             f"❌ خطا در پیش‌نمایش:\n<code>{str(e)[:200]}</code>" if lang == "fa"
             else f"❌ Preview error:\n<code>{str(e)[:200]}</code>",
             parse_mode=ParseMode.HTML
@@ -21581,7 +21668,8 @@ async def preview_broadcast(callback: CallbackQuery):
         )
         
         try:
-            await callback.message.answer(
+            await bot.send_message(
+                admin_id,
                 footer,
                 reply_markup=action_keyboard,
                 parse_mode=ParseMode.HTML
