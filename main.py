@@ -1534,8 +1534,10 @@ async def go_back_to_category_edit(callback: CallbackQuery, category_id: int):
         )
     except Exception as e:
         logger.error(f"خطا در ارسال پیام برگشت: {e}")
-        callback.data = f"admin_category_edit_{category_id}"
-        await admin_category_edit(callback)
+        try:
+            await admin_category_edit(callback.model_copy(update={"data": f"admin_category_edit_{category_id}"}))
+        except Exception:
+            pass
 
 
 async def go_back_to_test_service(callback: CallbackQuery):
@@ -1564,8 +1566,10 @@ async def go_back_to_test_service(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(f"خطا در ارسال پیام برگشت: {e}")
-        callback.data = "admin_test_service"
-        await admin_test_service_settings(callback)
+        try:
+            await admin_test_service_settings(callback.model_copy(update={"data": "admin_test_service"}))
+        except Exception:
+            pass
 
 
 async def go_back_to_admin_panel(callback: CallbackQuery):
@@ -1594,8 +1598,10 @@ async def go_back_to_admin_panel(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(f"خطا در ارسال پیام برگشت: {e}")
-        callback.data = "admin_panel"
-        await admin_panel(callback)
+        try:
+            await admin_panel(callback.model_copy(update={"data": "admin_panel"}))
+        except Exception:
+            pass
     
     
 @dp.callback_query(F.data == "admin_test_toggle")
@@ -16791,32 +16797,34 @@ async def show_ready_categories(callback: CallbackQuery):
         # ───── حالت تمدید ─────
         config_emoji = premium_emoji('config', '📦')
         warning_emoji = premium_emoji('danger', '⚠️')
-        light_emoji = premium_emoji('light', '💡')
         
-        cat_info_line = ""
-        if restrict_extend and target_category:
-            cat_display = target_category.get('name') if lang == "fa" else target_category.get('name_en', target_category.get('name'))
-            cat_info_line = f"🏷️ <b>دسته سرویس شما:</b> {cat_display}\n<i>(تمدید فقط در این دسته مجاز است)</i>\n\n" if lang == "fa" else f"🏷️ <b>Your Service Category:</b> {cat_display}\n<i>(Extension restricted to this category)</i>\n\n"
+        warning_section_fa = ""
+        warning_section_en = ""
+        if not restrict_extend:
+            warning_section_fa = (
+                f"{warning_emoji} <b>توجه مهم:</b>\n"
+                f"اگه بسته‌ی فعلی سرویس شما با بسته‌ای که انتخاب می‌کنید <b>متفاوت</b> باشه،\n"
+                f"احتمال <b>قطع شدن لینک‌های فعلی</b> شما وجود داره و باید <b>لینک جدید</b> رو از ساب‌لینک بردارید.\n\n"
+            )
+            warning_section_en = (
+                f"{warning_emoji} <b>Important Notice:</b>\n"
+                f"If your current service package differs from the one you select,\n"
+                f"there's a chance your <b>current links will be disconnected</b>,\n"
+                f"and you'll need to get a <b>new link</b> from the subscription.\n\n"
+            )
 
         if lang == "fa":
             text = (
                 f"{config_emoji} <b>انتخاب بسته برای تمدید</b>\n\n"
                 f"{coupon_line}"
-                f"{cat_info_line}"
-                f"{warning_emoji} <b>توجه مهم:</b>\n"
-                f"اگه بسته‌ی فعلی سرویس شما با بسته‌ای که انتخاب می‌کنید <b>متفاوت</b> باشه،\n"
-                f"احتمال <b>قطع شدن لینک‌های فعلی</b> شما وجود داره و باید <b>لینک جدید</b> رو از ساب‌لینک بردارید.\n\n"
+                f"{warning_section_fa}"
                 f"بسته‌ی مورد نظرت رو انتخاب کن 👇"
             )
         else:
             text = (
                 f"{config_emoji} <b>Select Package to Extend</b>\n\n"
                 f"{coupon_line}"
-                f"{cat_info_line}"
-                f"{warning_emoji} <b>Important Notice:</b>\n"
-                f"If your current service package differs from the one you select,\n"
-                f"there's a chance your <b>current links will be disconnected</b>,\n"
-                f"and you'll need to get a <b>new link</b> from the subscription.\n\n"
+                f"{warning_section_en}"
                 f"select your desired package 👇"
             )
     else:
@@ -19907,8 +19915,10 @@ async def inbound_save_category(callback: CallbackQuery):
         del TEMP_INBOUND_SELECTION[temp_key]
     
     await callback.answer(f"✅ {len(current_list)} اینباند ذخیره شد", show_alert=True)
-    callback.data = f"admin_category_edit_{category_id}"
-    await admin_category_edit(callback)
+    try:
+        await admin_category_edit(callback.model_copy(update={"data": f"admin_category_edit_{category_id}"}))
+    except Exception as e:
+        logger.error(f"خطا در بازگشت به ویرایش دسته: {e}")
     
 
 @dp.message(Command("check_storage"))
@@ -41793,8 +41803,11 @@ async def admin_apply_order_category(callback: CallbackQuery):
     alert_msg = f"✅ دسته‌بندی با موفقیت روی «{cat_name}» تنظیم شد!" if lang == "fa" else f"✅ Category set to '{cat_name_en}' successfully!"
     await callback.answer(alert_msg, show_alert=True)
     
-    callback.data = f"view_order_{order_id}"
-    await view_order(callback)
+    try:
+        updated_callback = callback.model_copy(update={"data": f"view_order_{order_id}"})
+        await view_order(updated_callback)
+    except Exception as e:
+        logger.error(f"خطا در رندر مجدد سفارش #{order_id}: {e}")
     
 @dp.callback_query(F.data.startswith("admin_add_blacklist_"))
 async def admin_add_user_to_blacklist(callback: CallbackQuery):
@@ -41949,6 +41962,9 @@ async def admin_user_detail(callback: CallbackQuery):
     target = get_user(target_id)
     user_name_raw = target.get('name', f'کاربر_{target_id}')
     user_name_escaped = html.escape(user_name_raw)  # ✅ این خط مهم است
+    
+    # دریافت یوزرنیم از دیتابیس یا سفارشات
+    username = target.get('username') or target.get('telegram_username') or ''
     user_state = user_states.get(target_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_applied = user_state.get('coupon_applied', False)
@@ -41961,6 +41977,35 @@ async def admin_user_detail(callback: CallbackQuery):
     ref_count = len([r for r in referrals.values() if r.get('referrer') == target_id])
     valid_orders = get_valid_orders()
     user_orders = [o for o in valid_orders.values() if o.get('user_id') == target_id]
+    
+    if not username:
+        for o in user_orders:
+            if o.get('username'):
+                username = o.get('username')
+                break
+
+    # استعلام زنده از تلگرام در صورت خالی بودن یوزرنیم
+    if not username:
+        try:
+            tg_info = await get_user_info_from_telegram(target_id)
+            if tg_info and tg_info.get('username'):
+                username = tg_info.get('username')
+                target['username'] = username
+                target['telegram_username'] = username
+                if str(target_id) in users:
+                    users[str(target_id)]['username'] = username
+                    users[str(target_id)]['telegram_username'] = username
+            if tg_info and tg_info.get('first_name') and tg_info.get('first_name') != 'نامشخص' and user_name_raw.startswith('کاربر_'):
+                user_name_escaped = tg_info.get('first_name')
+                target['name'] = user_name_escaped
+                if str(target_id) in users:
+                    users[str(target_id)]['name'] = user_name_escaped
+        except Exception:
+            pass
+
+    username_clean = str(username).lstrip('@').strip() if username else ""
+    username_line = f"\n🔹 <b>یوزرنیم:</b> @{username_clean}" if username_clean else ""
+
     approved = [o for o in user_orders if o.get('status') == 'approved']
     pending = [o for o in user_orders if o.get('status') in ['pending', 'pending_balance_charge']]
     awaiting_payment = [o for o in user_orders if o.get('status') == 'awaiting_payment']
@@ -41986,10 +42031,18 @@ async def admin_user_detail(callback: CallbackQuery):
     join_date_escaped = html.escape(target.get('join_date', 'نامشخص'))
     
     if lang == "fa":
-        text = f"👤 <b>{user_name_escaped}</b>\n🆔 <code>{target_id}</code>\n💰 {target.get('balance', 0):,} تومان\n👥 {ref_count} | 📦 {len(user_orders)} | ✅ {len(approved)}\n📅 {join_date_escaped}"
+        text = f"👤 <b>{user_name_escaped}</b>{username_line}\n🆔 <code>{target_id}</code>\n💰 {target.get('balance', 0):,} تومان\n👥 {ref_count} | 📦 {len(user_orders)} | ✅ {len(approved)}\n📅 {join_date_escaped}"
     else:
-        text = f"👤 <b>{user_name_escaped}</b>\n🆔 <code>{target_id}</code>\n💰 {target.get('balance', 0):,} T\n👥 {ref_count} | 📦 {len(user_orders)} | ✅ {len(approved)}\n📅 {join_date_escaped}"
+        text = f"👤 <b>{user_name_escaped}</b>{username_line}\n🆔 <code>{target_id}</code>\n💰 {target.get('balance', 0):,} T\n👥 {ref_count} | 📦 {len(user_orders)} | ✅ {len(approved)}\n📅 {join_date_escaped}"
     buttons = []
+    
+    if username_clean:
+        buttons.append([
+            InlineKeyboardButton(
+                text="💬 پیام به کاربر (پیوی)" if lang == "fa" else "💬 Message User (PV)",
+                url=f"https://t.me/{username_clean}"
+            )
+        ])
     
     if all_orders:
         if lang == "fa":
