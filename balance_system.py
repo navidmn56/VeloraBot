@@ -560,12 +560,16 @@ async def custom_amount_input(callback: CallbackQuery):
     if lang == "fa":
         text = (
             f"{_main.premium_emoji('wallet', '💰')} <b>مبلغ دلخواه</b>\n\n"
+            f"<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> "
+            f"حداقل: {min_charge:,} | حداکثر: {max_charge:,}\n\n"
             f"<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> "
             f"لطفاً مبلغ را به تومان وارد کنید:"
         )
     else:
         text = (
             f"{_main.premium_emoji('wallet', '💰')} <b>Custom Amount</b>\n\n"
+            f"<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> "
+            f"Min: {min_charge:,} | Max: {max_charge:,}\n\n"
             f"<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> "
             f"Please enter amount in Toman:"
         )
