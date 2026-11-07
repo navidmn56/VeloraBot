@@ -276,16 +276,82 @@ SHOP_STATUS = {
 }
 USER_INBOUND_SELECTION = {}
 PREMIUM_EMOJI_IDS = {
-    'success': 5048892927288280410, 'primary': None, 'danger': 5420323339723881652, 'wallet': 5215420556089776398,
-    'config': 5431736674147114227, 'invite': 5251601734253421368, 'language': 4974345716802519903, 'admin': None, 'anime':5382310787505221582,
-    'star': 5451636889717062286, 'rocket': 5445284980978621387, 'gift': 5199749070830197566, 'time': 5451646226975955576,
-    'calendar': 5834822129425584578, 'link': 5271604874419647061, 'qr': 5443021125191739647, 'card': 5974575468974705730,
-    'receipt': 5444856076954520455, 'cancel': 5974083768233760323, 'back': None, 'plus': None, 'time':5451732530048802485,'fail': 5974083768233760323,
-    'minus': None, 'next': None, 'previous': None, 'user': 5440764424820377609,'admin': None,'id': 5965485570124681987, 'money':5375296873982604963,
-    'info': 6203791465471022369,'check': 6269163801178804220,'hourglass': 6071317996704370355, 'cubes': 5226513232549664618, 'amar':5231200819986047254,
-    'note': 5334882760735598374,'globe': 5447410659077661506, 'test': 5411512278740640309, 'robot': 5310170944843579391, 'light':5328175963144466763, 'user1':5262690351969215936, 'access_denied':5445350865776941647,
-    'reload': 5408891085969700325,'box':5472335930549347896, 'label': 5296348778012361146,'discount': 6098435638527266289, 'count': 5226702984204797593,'shopping_cart':5431499171045581032,'download':5443127283898405358,
-    'upload': 5783105032350076195, 'email': 5253742260054409879, 'loading':5334675996714999970,
+    # ─── وضعیت‌ها و هشدارها (Status & Alerts) ───
+    'warning': 5447644880824181073,        # ⚠️ هشدار
+    'danger': 5420323339723881652,         # ❌ اخطار / خطا
+    'success': 5048892927288280410,        # ✅ عملیات موفق
+    'fail': 5974083768233760323,           # ❌ ناموفق / رد شده
+    'cancel': 5974083768233760323,         # ❌ لغو / انصراف
+    'check': 6269163801178804220,          # ✔️ تایید شده
+    'access_denied': 5445350865776941647,  # 🚫 عدم دسترسی
+    'info': 6203791465471022369,           # ℹ️ اطلاعات
+
+    # ─── مالی و پرداخت (Financial & Payments) ───
+    'wallet': 5215420556089776398,         # 💰 کیف پول
+    'money': 5375296873982604963,          # 💵 پول / موجودی
+    'card': 5974575468974705730,           # 💳 کارت به کارت
+    'receipt': 5444856076954520455,        # 🧾 رسید پرداخت
+    'shopping_cart': 5431499171045581032,  # 🛒 سبد خرید
+    'discount': 6098435638527266289,       # 🏷️ تخفیف
+    'label': 5296348778012361146,          # 🏷️ برچسب
+
+    # ─── کانفیگ و سرویس‌ها (Config & Services) ───
+    'config': 5431736674147114227,         # 📁 کانفیگ
+    'box': 5472335930549347896,            # 📦 پکیج / حجم
+    'link': 5271604874419647061,           # 🔗 لینک اتصال
+    'qr': 5443021125191739647,             # 📱 بارکد QR
+
+    # ─── کاربران و حساب‌ها (Users & Identity) ───
+    'user': 5440764424820377609,           # 👤 کاربر
+    'user1': 5262690351969215936,          # 👤 کاربر ۲
+    'users': 5453957997418004470,          # 👥 گروه کاربران / رفرال
+    'invite': 5251601734253421368,         # 👥 دعوت دوستان
+    'id': 5965485570124681987,             # 🆔 شناسه کاربری
+    'order_id': 6323600780783781848,       # 🆔 شناسه سفارش
+
+    # ─── زمان و تاریخ (Time & Date) ───
+    'time': 5451732530048802485,           # ⏱ زمان / ساعت
+    'timer': 5413704112220949842,          # ⏱ تایمر / روز / آپ‌تایم
+    'calendar': 5834822129425584578,       # 📅 تقویم / تاریخ
+    'hourglass': 6071317996704370355,      # ⏳ انتظار
+    'loading': 5334675996714999970,        # 🔄 لودینگ
+    'reload': 5408891085969700325,         # 🔄 بارگذاری مجدد
+
+    # ─── سخت‌افزار و سرور (Hardware & System Status) ───
+    'cpu': 5431376038628171216,            # 💻 پردازنده
+    'ram': 5237799019329105246,            # 🧠 رم
+    'disk': 5462956611033117422,           # 💾 دیسک
+    'net_up': 5449683594425410231,         # ⬆️ آپلود شبکه
+    'net_down': 5451675802120764617,       # ⬇️ دانلود شبکه
+    'upload': 5783105032350076195,         # ⬆️ آپلود
+    'download': 5443127283898405358,       # ⬇️ دانلود
+
+    # ─── تعامل و قابلیت‌ها (Interaction & Features) ───
+    'note': 5334882760735598374,           # 📝 یادداشت / فرم
+    'chat': 5440889232275036277,           # 💬 چت / دیدگاه
+    'hint': 5472146462362048818,           # 💡 راهنما / نکته
+    'light': 5328175963144466763,          # 💡 ایده / روشن
+    'star': 5451636889717062286,           # ⭐ امتیاز / ستاره
+    'rocket': 5445284980978621387,         # 🚀 موشک / شروع
+    'gift': 5199749070830197566,           # 🎁 هدیه / پاداش
+    'globe': 5447410659077661506,          # 🌐 اینترنت / جهان
+    'language': 4974345716802519903,       # 🌐 تغییر زبان
+    'robot': 5310170944843579391,          # 🤖 ربات / AI
+    'test': 5411512278740640309,           # 🧪 تست
+    'amar': 5231200819986047254,           # 📊 آمار
+    'cubes': 5226513232549664618,          # 🎲 مکعب / شمارش
+    'count': 5226702984204797593,          # 🔢 شمارش
+    'email': 5253742260054409879,          # 📧 ایمیل
+    'anime': 5382310787505221582,          # ✨ انیمه
+
+    # ─── کلیدهای اختیاری / رزرو (Placeholders) ───
+    'primary': None,
+    'admin': None,
+    'back': None,
+    'plus': None,
+    'minus': None,
+    'next': None,
+    'previous': None,
 }
 
 STICKER_IDS = {
@@ -7005,7 +7071,7 @@ async def admin_price_settings(callback: CallbackQuery):
 ━━━━━━━━━━━━━━━━━━━━━━
 📦 قیمت پایه (1GB/30 روز): <code>{settings.get('base_price', 20000):,}</code> تومان
 📈 قیمت هر گیگ اضافی: <code>{settings.get('per_gb_price', 20000):,}</code> تومان
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> قیمت هر 15 روز اضافی: <code>{settings.get('per_15days_price', 5000):,}</code> تومان
+{premium_emoji('timer', '⏱')} قیمت هر 15 روز اضافی: <code>{settings.get('per_15days_price', 5000):,}</code> تومان
 🎁 پاداش هر دعوت: <code>{settings.get('referral_bonus', 5000):,}</code> تومان
 ━━━━━━━━━━━━━━━━━━━━━━
 💳 حداقل شارژ: <code>{settings.get('min_charge', 10000):,}</code> تومان
@@ -7022,7 +7088,7 @@ async def admin_price_settings(callback: CallbackQuery):
 ━━━━━━━━━━━━━━━━━━━━━━
 📦 Base price (1GB/30 days): <code>{settings.get('base_price', 20000):,}</code> Toman
 📈 Extra GB price: <code>{settings.get('per_gb_price', 20000):,}</code> Toman
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Extra 15 days price: <code>{settings.get('per_15days_price', 5000):,}</code> Toman
+{premium_emoji('timer', '⏱')} Extra 15 days price: <code>{settings.get('per_15days_price', 5000):,}</code> Toman
 🎁 Referral bonus: <code>{settings.get('referral_bonus', 5000):,}</code> Toman
 ━━━━━━━━━━━━━━━━━━━━━━
 💳 Min charge: <code>{settings.get('min_charge', 10000):,}</code> Toman
@@ -7204,7 +7270,7 @@ async def save_price_edit(message: Message):
 ━━━━━━━━━━━━━━━━━━━━━━
 📦 قیمت پایه (1GB/30 روز): <code>{settings.get('base_price', 20000):,}</code> تومان
 📈 قیمت هر گیگ اضافی: <code>{settings.get('per_gb_price', 20000):,}</code> تومان
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> قیمت هر 15 روز اضافی: <code>{settings.get('per_15days_price', 5000):,}</code> تومان
+{premium_emoji('timer', '⏱')} قیمت هر 15 روز اضافی: <code>{settings.get('per_15days_price', 5000):,}</code> تومان
 🎁 پاداش هر دعوت: <code>{settings.get('referral_bonus', 5000):,}</code> تومان
 ━━━━━━━━━━━━━━━━━━━━━━
 💳 حداقل شارژ: <code>{settings.get('min_charge', 10000):,}</code> تومان
@@ -7221,7 +7287,7 @@ async def save_price_edit(message: Message):
 ━━━━━━━━━━━━━━━━━━━━━━
 📦 Base price (1GB/30 days): <code>{settings.get('base_price', 20000):,}</code> Toman
 📈 Extra GB price: <code>{settings.get('per_gb_price', 20000):,}</code> Toman
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Extra 15 days price: <code>{settings.get('per_15days_price', 5000):,}</code> Toman
+{premium_emoji('timer', '⏱')} Extra 15 days price: <code>{settings.get('per_15days_price', 5000):,}</code> Toman
 🎁 Referral bonus: <code>{settings.get('referral_bonus', 5000):,}</code> Toman
 ━━━━━━━━━━━━━━━━━━━━━━
 💳 Min charge: <code>{settings.get('min_charge', 10000):,}</code> Toman
@@ -12085,13 +12151,13 @@ async def save_feedback(user_id: int, order_id: int, rating: str, comment: str =
     save_all()
     user = get_user(user_id)
     text = f"""
-<tg-emoji emoji-id="5334882760735598374">📝</tg-emoji> <b>بازخورد جدید</b>
+{premium_emoji('note', '📝')} <b>بازخورد جدید</b>
 
-<tg-emoji emoji-id="5974048815789903111">👤</tg-emoji> کاربر: {user.get('name')} (ID: {user_id})
-<tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> سفارش: #{order_id}
-<tg-emoji emoji-id="5435957248314579621">⭐</tg-emoji> امتیاز: {rating}
-<tg-emoji emoji-id="5440889232275036277">💬</tg-emoji> نظر: {comment if comment else 'بدون نظر'}
-<tg-emoji emoji-id="5314665117017718786">📅</tg-emoji> تاریخ: {feedbacks[str(fid)]['date']}
+{premium_emoji('user', '👤')} کاربر: {user.get('name')} (ID: {user_id})
+{premium_emoji('order_id', '🆔')} سفارش: #{order_id}
+{premium_emoji('star', '⭐')} امتیاز: {rating}
+{premium_emoji('chat', '💬')} نظر: {comment if comment else 'بدون نظر'}
+{premium_emoji('calendar', '📅')} تاریخ: {feedbacks[str(fid)]['date']}
 """
     try:
         await bot.send_message(ADMIN_ID_INT, text)
@@ -14017,9 +14083,9 @@ async def start_ai_support_chat(callback: CallbackQuery):
 • پرسیدن سوال در رابطه با سرعت و پایداری
 • گرفتن ایدی پشتیبانی
 
-<b>{premium_emoji('danger','⚠️')} محدودیت:</b> {GEMINI_DAILY_LIMIT} سوال در روز
+<b>{premium_emoji('warning','⚠️')} محدودیت:</b> {GEMINI_DAILY_LIMIT} سوال در روز
 
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> سوال خود را بپرسید...
+{premium_emoji('hint', '💡')} سوال خود را بپرسید...
 """
         else:
             await send_sticker(user_id, 'robot', '🤖')
@@ -14037,9 +14103,9 @@ Welcome to AI Support!
 • Questions about speed and stability
 • Support ID retrieval
 
-<b>{premium_emoji('danger','⚠️')} Limit:</b> {GEMINI_DAILY_LIMIT} questions per day
+<b>{premium_emoji('warning','⚠️')} Limit:</b> {GEMINI_DAILY_LIMIT} questions per day
 
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> Ask your question...
+{premium_emoji('hint', '💡')} Ask your question...
 """
     
     await callback.message.answer(
@@ -16661,13 +16727,13 @@ async def show_ready_categories(callback: CallbackQuery):
             text = f"""
 {premium_emoji('fail', '❌')} <b>هیچ دسته‌بندی فعالی موجود نیست.</b>
 
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> برای خرید سرویس سفارشی، از منوی اصلی استفاده کنید.
+{premium_emoji('hint', '💡')} برای خرید سرویس سفارشی، از منوی اصلی استفاده کنید.
 """
         else:
             text = f"""
 {premium_emoji('fail', '❌')} <b>No active categories available.</b>
 
-<tg-emoji emoji-id="5472146462362048818">💡</tg-emoji> For custom service purchase, use the main menu.
+{premium_emoji('hint', '💡')} For custom service purchase, use the main menu.
 """
         
         buttons = [[InlineKeyboardButton(
@@ -32193,21 +32259,21 @@ async def invite_friends(callback: CallbackQuery):
         text = f"""
 {premium_emoji('invite', '👥')} <b>دعوت از دوستان</b>
 
-<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> لینک دعوت شما:
+{premium_emoji('link', '🔗')} لینک دعوت شما:
 <code>{link}</code>
 
-<tg-emoji emoji-id="5199749070830197566">🎁</tg-emoji> پاداش: {referral_bonus:,} تومان به ازای اولین خرید دوستان شما
-<tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> دعوت موفق: {ref_count}
+{premium_emoji('gift', '🎁')} پاداش: {referral_bonus:,} تومان به ازای اولین خرید دوستان شما
+{premium_emoji('users', '👥')} دعوت موفق: {ref_count}
 """
     else:
         text = f"""
 {premium_emoji('invite', '👥')} <b>Invite Friends</b>
 
-<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> Your invite link:
+{premium_emoji('link', '🔗')} Your invite link:
 <code>{link}</code>
 
-<tg-emoji emoji-id="5199749070830197566">🎁</tg-emoji> Bonus: {referral_bonus:,} Toman on your friends' first purchase
-<tg-emoji emoji-id="5453957997418004470">👥</tg-emoji> Successful referrals: {ref_count}
+{premium_emoji('gift', '🎁')} Bonus: {referral_bonus:,} Toman on your friends' first purchase
+{premium_emoji('users', '👥')} Successful referrals: {ref_count}
 """
     try:
         await callback.message.delete()
@@ -32226,7 +32292,7 @@ async def change_language(callback: CallbackQuery):
     
     # ✅ پاس دادن user_id برای تشخیص زبان فعال
     await callback.message.edit_text(
-        "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> زبان خود را انتخاب کنید / Select your language:",
+        f"{premium_emoji('globe', '🌐')} زبان خود را انتخاب کنید / Select your language:",
         reply_markup=get_language_keyboard(user_id)  # ← user_id
     )
     
@@ -32246,7 +32312,7 @@ async def set_lang_fa(callback: CallbackQuery):
     # ✅ به‌روزرسانی کیبورد با زبان جدید
     try:
         await callback.message.edit_text(
-            "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> زبان خود را انتخاب کنید / Select your language:",
+            f"{premium_emoji('globe', '🌐')} زبان خود را انتخاب کنید / Select your language:",
             reply_markup=get_language_keyboard(user_id)  # ← نمایش فارسی فعال
         )
     except:
@@ -32266,7 +32332,7 @@ async def set_lang_en(callback: CallbackQuery):
     # ✅ به‌روزرسانی کیبورد با زبان جدید
     try:
         await callback.message.edit_text(
-            "<tg-emoji emoji-id=\"5447410659077661506\">🌐</tg-emoji> زبان خود را انتخاب کنید / Select your language:",
+            f"{premium_emoji('globe', '🌐')} زبان خود را انتخاب کنید / Select your language:",
             reply_markup=get_language_keyboard(user_id)  # ← نمایش انگلیسی فعال
         )
     except:
@@ -40822,9 +40888,9 @@ async def view_order(callback: CallbackQuery):
     # ✅ متن اصلی
     if lang == "fa":
         text = f"""
-<tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> <b>سفارش #{order_id}</b>
+{premium_emoji('order_id', '🆔')} <b>سفارش #{order_id}</b>
 
-<tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> <b>کاربر:</b> {uname}
+{premium_emoji('user', '👤')} <b>کاربر:</b> {uname}
 """
         if username:
             text += f"🔹 <b>یوزرنیم:</b> @{username}\n"
@@ -40947,9 +41013,9 @@ async def view_order(callback: CallbackQuery):
     
     else:
         text = f"""
-<tg-emoji emoji-id="6323600780783781848">🆔</tg-emoji> <b>Order #{order_id}</b>
+{premium_emoji('order_id', '🆔')} <b>Order #{order_id}</b>
 
-<tg-emoji emoji-id="5373012449597335010">👤</tg-emoji> <b>User:</b> {uname}
+{premium_emoji('user', '👤')} <b>User:</b> {uname}
 """
         if username:
             text += f"🔹 <b>Username:</b> @{username}\n"
@@ -41741,21 +41807,21 @@ async def config_detail(callback: CallbackQuery):
     
     if lang == "fa":
         text = f"""
-<tg-emoji emoji-id="5431736674147114227">📁</tg-emoji> کانفیگ #{config_id}
+{premium_emoji('config', '📁')} کانفیگ #{config_id}
 
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> حجم: {config['volume']} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> مدت: {config['days']} روز
-<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> لینک: <code>{config['link']}</code>
+{premium_emoji('box', '📦')} حجم: {config['volume']} GB
+{premium_emoji('timer', '⏱')} مدت: {config['days']} روز
+{premium_emoji('link', '🔗')} لینک: <code>{config['link']}</code>
 
 وضعیت: {'✅ موجود' if not config.get('used') else '❌ استفاده شده'}
 """
     else:
         text = f"""
-<tg-emoji emoji-id="5431736674147114227">📁</tg-emoji> Config #{config_id}
+{premium_emoji('config', '📁')} Config #{config_id}
 
-<tg-emoji emoji-id="5472335930549347896">📦</tg-emoji> Volume: {config['volume']} GB
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Duration: {config['days']} days
-<tg-emoji emoji-id="5271604874419647061">🔗</tg-emoji> Link: <code>{config['link']}</code>
+{premium_emoji('box', '📦')} Volume: {config['volume']} GB
+{premium_emoji('timer', '⏱')} Duration: {config['days']} days
+{premium_emoji('link', '🔗')} Link: <code>{config['link']}</code>
 
 Status: {'✅ Available' if not config.get('used') else '❌ Used'}
 """
@@ -43707,21 +43773,21 @@ async def admin_panel_status(callback: CallbackQuery):
             text = f"""
 🖥 <b>وضعیت سرور</b>
 
-<tg-emoji emoji-id="5431376038628171216">💻</tg-emoji> CPU: {cpu:.1f}%
-<tg-emoji emoji-id="5237799019329105246">🧠</tg-emoji> RAM: {mem_current_gb:.2f}GB / {mem_total_gb:.2f}GB ({mem_percent:.1f}%)
-<tg-emoji emoji-id="5462956611033117422">💾</tg-emoji> Disk: {disk_current_gb:.2f}GB / {disk_total_gb:.2f}GB ({disk_percent:.1f}%)
-{premium_emoji('globe', '🌐')} Net: <tg-emoji emoji-id="5449683594425410231">⬆️</tg-emoji> {net_up / 1024:.1f}KB/s <tg-emoji emoji-id="5451675802120764617">⬇️</tg-emoji> {net_down / 1024:.1f}KB/s
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Uptime: {uptime // 3600}h {(uptime % 3600) // 60}m
+{premium_emoji('cpu', '💻')} CPU: {cpu:.1f}%
+{premium_emoji('ram', '🧠')} RAM: {mem_current_gb:.2f}GB / {mem_total_gb:.2f}GB ({mem_percent:.1f}%)
+{premium_emoji('disk', '💾')} Disk: {disk_current_gb:.2f}GB / {disk_total_gb:.2f}GB ({disk_percent:.1f}%)
+{premium_emoji('globe', '🌐')} Net: {premium_emoji('net_up', '⬆️')} {net_up / 1024:.1f}KB/s {premium_emoji('net_down', '⬇️')} {net_down / 1024:.1f}KB/s
+{premium_emoji('timer', '⏱')} Uptime: {uptime // 3600}h {(uptime % 3600) // 60}m
 """
         else:
             text = f"""
 🖥 <b>Server Status</b>
 
-<tg-emoji emoji-id="5431376038628171216">💻</tg-emoji> CPU: {cpu:.1f}%
-<tg-emoji emoji-id="5237799019329105246">🧠</tg-emoji> RAM: {mem_current_gb:.2f}GB / {mem_total_gb:.2f}GB ({mem_percent:.1f}%)
-<tg-emoji emoji-id="5462956611033117422">💾</tg-emoji> Disk: {disk_current_gb:.2f}GB / {disk_total_gb:.2f}GB ({disk_percent:.1f}%)
-{premium_emoji('globe', '🌐')} Net: <tg-emoji emoji-id="5449683594425410231">⬆️</tg-emoji> {net_up / 1024:.1f}KB/s <tg-emoji emoji-id="5451675802120764617">⬇️</tg-emoji> {net_down / 1024:.1f}KB/s
-<tg-emoji emoji-id="5413704112220949842">⏱</tg-emoji> Uptime: {uptime // 3600}h {(uptime % 3600) // 60}m
+{premium_emoji('cpu', '💻')} CPU: {cpu:.1f}%
+{premium_emoji('ram', '🧠')} RAM: {mem_current_gb:.2f}GB / {mem_total_gb:.2f}GB ({mem_percent:.1f}%)
+{premium_emoji('disk', '💾')} Disk: {disk_current_gb:.2f}GB / {disk_total_gb:.2f}GB ({disk_percent:.1f}%)
+{premium_emoji('globe', '🌐')} Net: {premium_emoji('net_up', '⬆️')} {net_up / 1024:.1f}KB/s {premium_emoji('net_down', '⬇️')} {net_down / 1024:.1f}KB/s
+{premium_emoji('timer', '⏱')} Uptime: {uptime // 3600}h {(uptime % 3600) // 60}m
 """
     else:
         text = "❌ خطا در دریافت وضعیت سرور"
