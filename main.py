@@ -7753,10 +7753,52 @@ def calculate_price(volume: int, days: int, user_id: int = None) -> int:
     logger.debug(f"💰 محاسبه قیمت: {volume}GB/{days}روز = {total}تومان")
     return total
 
+def get_next_order_id(exclude_ids: Optional[set] = None) -> int:
+    """
+    یافتن هوشمند کمترین شناسه یکتا و خالی برای ثبت سفارش (الگوریتم پر کردن فاصله‌ها / Gap Filling)
+    اگر شماره‌های کوچک‌تری به دلیل حذف یا پاکسازی سفارشات قبلی آزاد شده باشند،
+    آن‌ها را در اولویت قرار داده و یونیک بودن را در کل دیتابیس تضمین می‌کند.
+    """
+    used_ids = set()
+    if exclude_ids:
+        used_ids.update(exclude_ids)
+
+    # ۱. جمع‌آوری تمام شناسه‌های عددی موجود در دیتابیس سفارشات (کلیدها و مقادیر)
+    for k, v in orders.items():
+        try:
+            used_ids.add(int(k))
+        except (ValueError, TypeError):
+            pass
+        if isinstance(v, dict):
+            oid = v.get('order_id')
+            if oid is not None:
+                try:
+                    used_ids.add(int(oid))
+                except (ValueError, TypeError):
+                    pass
+
+    # ۲. بررسی مضاعف در استخر کانفیگ‌ها (در صورتی که کانفیگی دارای order_id باشد)
+    if isinstance(configs_pool, dict):
+        for cfg in configs_pool.get('configs', []):
+            if isinstance(cfg, dict):
+                cfg_oid = cfg.get('order_id')
+                if cfg_oid is not None:
+                    try:
+                        used_ids.add(int(cfg_oid))
+                    except (ValueError, TypeError):
+                        pass
+
+    # ۳. شروع از شماره ۱ و انتخاب اولین عدد صحیح مثبت آزاد
+    candidate_id = 1
+    while candidate_id in used_ids or str(candidate_id) in orders:
+        candidate_id += 1
+
+    logger.debug(f"🔢 شناسه سفارش جدید اختصاص داده شد: #{candidate_id} (کوچک‌ترین شناسه خالی و یونیک)")
+    return candidate_id
+
 def create_order(user_id: int, volume: int, days: int, price: int, order_type: str = "purchase", ip_limit: int = 0) -> int:
-    """ایجاد سفارش جدید با پشتیبانی از حجم 0 (نامحدود)"""
-    max_id = max([o.get('order_id', 0) for o in orders.values() if isinstance(o, dict)], default=0)
-    order_id = max_id + 1
+    """ایجاد سفارش جدید با پشتیبانی از حجم 0 (نامحدود) و اولویت‌بندی هوشمند کمترین شناسه آزاد"""
+    order_id = get_next_order_id()
     volume_display = "نامحدود" if volume == 0 else f"{volume}GB"
     
     orders[str(order_id)] = {
@@ -16535,7 +16577,7 @@ def get_user_last_purchased_package(user_id: int, target_order_id: Optional[int]
         if not user_orders:
             return None
 
-        # مرتب‌سازی از جدیدترین به قدیمی‌ترین بر اساس شناسه و تاریخ سفارش
+        # مرتب‌سازی از جدیدترین به قدیمی‌ترین بر اساس تاریخ و شناسه سفارش
         def _order_sort_key(ord_item):
             oid = 0
             try:
@@ -16543,7 +16585,7 @@ def get_user_last_purchased_package(user_id: int, target_order_id: Optional[int]
             except (ValueError, TypeError):
                 pass
             date_str = str(ord_item.get('approved_date') or ord_item.get('date') or ord_item.get('created_at') or '')
-            return (oid, date_str)
+            return (date_str, oid)
 
         user_orders.sort(key=_order_sort_key, reverse=True)
 
@@ -34719,15 +34761,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 logger.debug(f"🔄 به‌روزرسانی اوردر #{order_id} - {email} - وضعیت: {status}")
                 
             else:
-                max_order_id = 0
-                for oid in old_order_info.values():
-                    if oid.get('order_id', 0) > max_order_id:
-                        max_order_id = oid['order_id']
-                for oid in orders.keys():
-                    if int(oid) > max_order_id:
-                        max_order_id = int(oid)
-                
-                order_id = max_order_id + 1
+                order_id = get_next_order_id()
                 original_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 days = 30
                 price = 0
@@ -35001,15 +35035,6 @@ async def sync_user_configs(user_id: int) -> dict:
     # ─── 7. آپدیت / ساخت سفارش ───
     stats = {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': len(clients)}
 
-    max_order_id = 0
-    for oid_s in orders.keys():
-        try:
-            v = int(oid_s)
-            if v > max_order_id:
-                max_order_id = v
-        except Exception:
-            pass
-
     for client in clients:
         email = client.get('email', '')
         order_type = client.get('order_type', 'purchase')
@@ -35039,8 +35064,7 @@ async def sync_user_configs(user_id: int) -> dict:
             stats[status] += 1
         else:
             # ✅ سفارش جدید از کلاینت یتیم پنل
-            max_order_id += 1
-            order_id = max_order_id
+            order_id = get_next_order_id()
             days = 30
             price = 0
             volume_gb = total_gb
