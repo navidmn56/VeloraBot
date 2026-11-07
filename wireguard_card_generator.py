@@ -10,12 +10,7 @@ import os
 import sys
 import glob
 
-# ۱. افزودن پوشه vendor برای دسترسی تضمینی و آفلاین به arabic_reshaper و bidi در هر سیستم‌عامل
-_vendor_dir = os.path.join(os.path.dirname(__file__), 'vendor')
-if os.path.exists(_vendor_dir) and _vendor_dir not in sys.path:
-    sys.path.insert(0, _vendor_dir)
-
-# ۲. اطمینان از دسترسی به پکیج‌های مجازی‌ساز در لینوکس و ویندوز
+# اطمینان از دسترسی به پکیج‌های مجازی‌ساز در لینوکس و ویندوز
 for _pattern in [
     os.path.join(os.path.dirname(__file__), '.venv', 'lib', 'python*', 'site-packages'),
     os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages'),
@@ -35,12 +30,65 @@ from aiogram.types import BufferedInputFile
 
 try:
     from qrcode.image.styledpil import StyledPilImage
-    from qrcode.image.styles.moduledrawers import RoundedModuleDrawer
+    from qrcode.image.styles.moduledrawers.pil import CircleModuleDrawer
     from qrcode.image.styles.colormasks import SolidFillColorMask
 except ImportError:
     StyledPilImage = None
-    RoundedModuleDrawer = None
+    CircleModuleDrawer = None
     SolidFillColorMask = None
+
+if CircleModuleDrawer:
+    class DottedHighContrastDrawer(CircleModuleDrawer):
+        """
+        رندر ماژول‌ها به صورت نقطه‌ای (دایره‌ای فوق‌شارپ با کنتراست حداکثری)
+        به همراه حفظ چشم‌های گوشه (Finder Patterns) به شکل استاندارد شارپ
+        برای شناسایی و اسکن فوق‌سریع در تمام گوشی‌ها و اپلیکیشن WireGuard.
+        """
+        def initialize(self, *args, **kwargs):
+            super().initialize(*args, **kwargs)
+            box_size = self.img.box_size
+            
+            # الگوی استاندارد چشم‌های گوشه برای قفل فوری فوکوس دوربین
+            self.square = Image.new(
+                self.img.mode,
+                (box_size, box_size),
+                self.img.paint_color
+            )
+            
+            # نقطه دایره‌ای شارپ با کنتراست کامل
+            antialias = 4
+            fake_sz = box_size * antialias
+            high_res = Image.new(self.img.mode, (fake_sz, fake_sz), self.img.color_mask.back_color)
+            d = ImageDraw.Draw(high_res)
+            d.ellipse((0, 0, fake_sz - 1, fake_sz - 1), fill=self.img.paint_color)
+            self.circle = high_res.resize((box_size, box_size), Image.Resampling.LANCZOS)
+
+        def drawrect(self, box, is_active: bool):
+            if not is_active:
+                return
+            box_size = self.img.box_size
+            x_mod = box[0][0] // box_size
+            y_mod = box[0][1] // box_size
+            dim = self.img.width // box_size
+            border = self.img.border
+            
+            mx = x_mod - border
+            my = y_mod - border
+            matrix_size = dim - 2 * border
+            
+            # الگوهای یابنده گوشه (Finder Patterns) در ابعاد 7x7
+            is_finder = (
+                (0 <= mx < 7 and 0 <= my < 7) or
+                (matrix_size - 7 <= mx < matrix_size and 0 <= my < 7) or
+                (0 <= mx < 7 and matrix_size - 7 <= my < matrix_size)
+            )
+            
+            if is_finder:
+                self.img._img.paste(self.square, (box[0][0], box[0][1]))
+            else:
+                self.img._img.paste(self.circle, (box[0][0], box[0][1]))
+else:
+    DottedHighContrastDrawer = None
 
 try:
     import arabic_reshaper
@@ -107,15 +155,15 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
 
 def generate_wireguard_qr(
     config: str, 
-    box_size: int = 10, 
-    border: int = 1, 
+    box_size: int = 12, 
+    border: int = 2, 
     add_logo: bool = True
 ) -> Image.Image:
     """
-    تولید کیو‌آر‌کد مستقیم از کانفیگ واقعی وایرگارد با ماژول‌های کاملاً مشکی، شارپ و حاشیه فشرده.
-    - ضریب تصحیح خطای H برای خوانایی ۱۰۰٪ در حضور لوگوی میانی.
-    - مشکی خالص (#000000) بر روی سفید خالص (#FFFFFF) با حداکثر کنتراست و شارپنس.
-    - حاشیه فشرده (border=1) برای بزرگ‌تر شدن ماژول‌ها و حذف فاصله‌های اضافی سفید.
+    تولید کیو‌آر‌کد نقطه‌ای فوق‌شارپ با کنتراست حداکثری و لوگوی دقیق و بدون بیرون‌زدگی وایرگارد.
+    - ماژول‌های نقطه‌ای دایره‌ای با بالاترین کنتراست (سیاه و سفید خالص)
+    - حفظ الگوی مربعی استاندارد چشم‌های گوشه (Finder Patterns) برای قفل فوری فوکوس دوربین
+    - لوگوی وایرگارد در مرکز، برش خورده با دقت صدم پیکسل بدون کوچک‌ترین بیرون‌زدگی رنگی از کادر سفید
     """
     qr = qrcode.QRCode(
         version=None,
@@ -126,24 +174,74 @@ def generate_wireguard_qr(
     qr.add_data(config)
     qr.make(fit=True)
 
-    # مشکی خالص و سفید خالص با بالاترین کنتراست و شارپنس
-    qr_img = qr.make_image(fill_color='#000000', back_color='#ffffff').convert('RGBA')
+    if StyledPilImage and DottedHighContrastDrawer and SolidFillColorMask:
+        try:
+            qr_img = qr.make_image(
+                image_factory=StyledPilImage,
+                module_drawer=DottedHighContrastDrawer(),
+                color_mask=SolidFillColorMask(front_color=(0, 0, 0), back_color=(255, 255, 255))
+            ).convert('RGBA')
+        except Exception as e:
+            logger.warning("Error generating styled dotted QR: %s - using standard", e)
+            qr_img = qr.make_image(fill_color='#000000', back_color='#ffffff').convert('RGBA')
+    else:
+        qr_img = qr.make_image(fill_color='#000000', back_color='#ffffff').convert('RGBA')
 
     if add_logo:
-        badge_sz = int(qr_img.width * 0.16)
-        badge = Image.new('RGBA', (badge_sz, badge_sz), (0, 0, 0, 0))
-        bdraw = ImageDraw.Draw(badge)
+        badge_sz = int(qr_img.width * 0.17)
+        badge = None
+        logo_path = os.path.join(os.path.dirname(__file__), 'assets', 'wireguard_logo.png')
         
-        # نشان زرشکی وایرگارد با کادر سفید
-        bdraw.rounded_rectangle(
-            (0, 0, badge_sz, badge_sz),
-            radius=max(6, badge_sz // 3),
-            fill='#991b1b',
-            outline='#ffffff',
-            width=max(2, int(badge_sz * 0.04))
-        )
-        wg_font = _load_font(int(badge_sz * 0.44), bold=True)
-        bdraw.text((badge_sz // 2, badge_sz // 2 - 2), 'WG', fill='#ffffff', font=wg_font, anchor='mm')
+        if os.path.exists(logo_path):
+            try:
+                # رندر ۴ برابری (4x Supersampling) برای جلوگیری قطعی از هرگونه بیرون‌زدگی رنگی
+                scale = 4
+                big_sz = badge_sz * scale
+                pad = max(int(big_sz * 0.055), 8)
+                inner_sz = big_sz - 2 * pad
+                radius_outer = int(big_sz * 0.22)
+                radius_inner = max(4, radius_outer - pad)
+                
+                # ۱. پایه سفید یکدست و کامل
+                big_badge = Image.new('RGBA', (big_sz, big_sz), (0, 0, 0, 0))
+                bdraw = ImageDraw.Draw(big_badge)
+                bdraw.rounded_rectangle(
+                    (0, 0, big_sz - 1, big_sz - 1),
+                    radius=radius_outer,
+                    fill=(255, 255, 255, 255)
+                )
+                
+                # ۲. لود لوگو و قرار دادن داخل حاشیه سفید بدون تماس با لبه بیرونی
+                raw_logo = Image.open(logo_path).convert('RGBA')
+                inner_logo = raw_logo.resize((inner_sz, inner_sz), Image.Resampling.LANCZOS)
+                
+                inner_mask = Image.new('L', (inner_sz, inner_sz), 0)
+                mdraw = ImageDraw.Draw(inner_mask)
+                mdraw.rounded_rectangle(
+                    (0, 0, inner_sz - 1, inner_sz - 1),
+                    radius=radius_inner,
+                    fill=255
+                )
+                
+                big_badge.paste(inner_logo, (pad, pad), inner_mask)
+                badge = big_badge.resize((badge_sz, badge_sz), Image.Resampling.LANCZOS)
+            except Exception as e:
+                logger.warning("Error loading wireguard logo: %s", e)
+                badge = None
+
+        if badge is None:
+            # فال‌بک متنی در صورت عدم وجود فایل لوگو
+            badge = Image.new('RGBA', (badge_sz, badge_sz), (0, 0, 0, 0))
+            bdraw = ImageDraw.Draw(badge)
+            bdraw.rounded_rectangle(
+                (0, 0, badge_sz - 1, badge_sz - 1),
+                radius=max(6, badge_sz // 3),
+                fill='#991b1b',
+                outline='#ffffff',
+                width=max(2, int(badge_sz * 0.05))
+            )
+            wg_font = _load_font(int(badge_sz * 0.44), bold=True)
+            bdraw.text((badge_sz // 2, badge_sz // 2 - 2), 'WG', fill='#ffffff', font=wg_font, anchor='mm')
         
         paste_pos = ((qr_img.width - badge_sz) // 2, (qr_img.height - badge_sz) // 2)
         qr_img.paste(badge, paste_pos, badge)
@@ -253,9 +351,12 @@ def compose_qr_card(
     # ۱. زیرنویس پویا با پشتیبانی کامل زبان فارسی و انگلیسی
     if lang == 'fa':
         cat_display = (category or 'سرویس UDP و استریمینگ').strip()
-        cat_shaped = reshape_persian(cat_display)
-        order_shaped = reshape_persian(f"سفارش شماره \u200e#{to_persian_digits(order_id)}")
-        order_text = f"{cat_shaped}  •  {order_shaped}"
+        order_text = (
+            f"{cat_display}  •  "
+            f"سفارش شماره \u200e#{to_persian_digits(order_id)}"
+        )
+        # اصلاح جهت و اتصال حروف روی کل متن به صورت یکجا
+        order_text = reshape_persian(order_text)
         mid_y = 190
         box_x1, box_y1 = 154, 220
         box_x2, box_y2 = 696, 772
