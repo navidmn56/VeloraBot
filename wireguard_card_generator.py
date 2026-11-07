@@ -10,12 +10,7 @@ import os
 import sys
 import glob
 
-# ۱. افزودن پوشه vendor برای دسترسی تضمینی و آفلاین به arabic_reshaper و bidi
-_vendor_dir = os.path.join(os.path.dirname(__file__), 'vendor')
-if os.path.isdir(_vendor_dir) and _vendor_dir not in sys.path:
-    sys.path.insert(0, _vendor_dir)
-
-# ۲. اطمینان از دسترسی به پکیج‌های مجازی‌ساز در لینوکس و ویندوز
+# اطمینان از دسترسی به پکیج‌های مجازی‌ساز در لینوکس و ویندوز
 for _pattern in [
     os.path.join(os.path.dirname(__file__), '.venv', 'lib', 'python*', 'site-packages'),
     os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages'),
@@ -129,9 +124,6 @@ def reshape_persian(text: str) -> str:
     global arabic_reshaper, get_display, _reshaper
     if arabic_reshaper is None or get_display is None:
         try:
-            _vendor_dir = os.path.join(os.path.dirname(__file__), 'vendor')
-            if os.path.isdir(_vendor_dir) and _vendor_dir not in sys.path:
-                sys.path.insert(0, _vendor_dir)
             import arabic_reshaper as _ar
             from bidi.algorithm import get_display as _gd
             arabic_reshaper = _ar
@@ -142,7 +134,7 @@ def reshape_persian(text: str) -> str:
                 'language': 'Persian',
             })
         except ImportError as err:
-            logger.error("Persian reshaping libraries missing (arabic_reshaper / python-bidi): %s", err)
+            logger.debug("arabic_reshaper or python-bidi not installed: %s", err)
 
     if arabic_reshaper and get_display:
         try:
