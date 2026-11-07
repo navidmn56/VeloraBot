@@ -331,6 +331,21 @@ def create_premium_background(
     title_text = reshape_persian('تونل پرسرعت') if lang == 'fa' else 'HIGH SPEED TUNNEL'
     draw.text((width // 2, pill_y + pill_h + 38), title_text, fill='#ffffff', font=title_font, anchor='mm')
 
+    # برچسب ثابت سفارش در پس‌زمینه (در صورت عدم وجود فایل تمپلیت)
+    lbl_font = _load_font(17, bold=True)
+    if lang == 'fa':
+        lbl_text = reshape_persian('سفارش')
+        draw.text((428, 190), lbl_text, fill='#e2e8f0', font=lbl_font, anchor='lm')
+        bbox_l = draw.textbbox((428, 190), lbl_text, font=lbl_font, anchor='lm')
+        lw = bbox_l[2] - bbox_l[0]
+        draw.line([(428 + lw + 14, 190), (428 + lw + 14 + 80, 190)], fill='#475569', width=1)
+    else:
+        lbl_text = 'Order'
+        draw.text((418, 187), lbl_text, fill='#e2e8f0', font=lbl_font, anchor='rm')
+        bbox_l = draw.textbbox((418, 187), lbl_text, font=lbl_font, anchor='rm')
+        ow = bbox_l[2] - bbox_l[0]
+        draw.line([(418 - ow - 14 - 80, 187), (418 - ow - 14, 187)], fill='#475569', width=1)
+
     # فوتر
     foot_w, foot_h = 620, 75
     foot_x = (width - foot_w) // 2
@@ -368,37 +383,28 @@ def compose_qr_card(
 
     bdraw = ImageDraw.Draw(card)
     order_id = order_info.get('order_id', 0)
-    category = order_info.get('category')
+    order_str = f"#{order_id}"
+    order_font = _load_font(17, bold=True)
 
-    # ۱. زیرنویس پویا با پشتیبانی کامل زبان فارسی و انگلیسی
+    # ۱. زیرنویس شماره سفارش (عددی و پایدار در هر پلتفرم بدون نیاز به پردازش RTL متنی)
     if lang == 'fa':
-        cat_display = (category or 'سرویس UDP و استریمینگ').strip()
-        order_text = (
-            f"{cat_display}  •  "
-            f"سفارش شماره \u200e#{to_persian_digits(order_id)}"
-        )
-        # اصلاح جهت و اتصال حروف روی کل متن به صورت یکجا
-        order_text = reshape_persian(order_text)
         mid_y = 190
         box_x1, box_y1 = 154, 220
         box_x2, box_y2 = 696, 772
+
+        bbox = bdraw.textbbox((416, mid_y), order_str, font=order_font, anchor='rm')
+        nw = bbox[2] - bbox[0]
+        bdraw.text((416, mid_y), order_str, fill='#e2e8f0', font=order_font, anchor='rm')
+        bdraw.line([(416 - nw - 14 - 80, mid_y), (416 - nw - 14, mid_y)], fill='#475569', width=1)
     else:
-        cat_display = (category or 'UDP Gaming & Streaming').strip()
-        order_text = f"Order #{order_id}  •  {cat_display}"
         mid_y = 187
         box_x1, box_y1 = 155, 220
         box_x2, box_y2 = 695, 772
 
-    order_font = _load_font(17, bold=True)
-    bbox = bdraw.textbbox((0, 0), order_text, font=order_font)
-    tw = bbox[2] - bbox[0]
-    mid_x = width // 2
-
-    bdraw.text((mid_x, mid_y), order_text, fill='#e2e8f0', font=order_font, anchor='mm')
-    line_len = 80
-    line_gap = 14
-    bdraw.line([(mid_x - tw // 2 - line_gap - line_len, mid_y), (mid_x - tw // 2 - line_gap, mid_y)], fill='#475569', width=1)
-    bdraw.line([(mid_x + tw // 2 + line_gap, mid_y), (mid_x + tw // 2 + line_gap + line_len, mid_y)], fill='#475569', width=1)
+        bbox = bdraw.textbbox((425, mid_y), order_str, font=order_font, anchor='lm')
+        nw = bbox[2] - bbox[0]
+        bdraw.text((425, mid_y), order_str, fill='#e2e8f0', font=order_font, anchor='lm')
+        bdraw.line([(425 + nw + 14, mid_y), (425 + nw + 14 + 80, mid_y)], fill='#475569', width=1)
 
     # ۲. محفظه سفید QR با هاله نئونی قرمز
     box_w = box_x2 - box_x1
