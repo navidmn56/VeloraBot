@@ -10,10 +10,17 @@ import os
 import sys
 import glob
 
-# اطمینان از دسترسی به پکیج‌های مجازی‌ساز در لینوکس و ویندوز
+# ۱. افزودن پوشه vendor برای دسترسی تضمینی و آفلاین به arabic_reshaper و bidi
+_vendor_dir = os.path.join(os.path.dirname(__file__), 'vendor')
+if os.path.isdir(_vendor_dir) and _vendor_dir not in sys.path:
+    sys.path.insert(0, _vendor_dir)
+
+# ۲. اطمینان از دسترسی به پکیج‌های مجازی‌ساز در لینوکس و ویندوز
 for _pattern in [
     os.path.join(os.path.dirname(__file__), '.venv', 'lib', 'python*', 'site-packages'),
     os.path.join(os.path.dirname(__file__), '.venv', 'Lib', 'site-packages'),
+    os.path.join(os.path.dirname(__file__), 'venv', 'lib', 'python*', 'site-packages'),
+    os.path.join(os.path.dirname(__file__), 'venv', 'Lib', 'site-packages'),
     os.path.join(os.path.dirname(__file__), '.venv', 'local', 'lib', 'python*', 'site-packages'),
     '/opt/VeloraBot/.venv/lib/python*/site-packages',
 ]:
@@ -93,9 +100,15 @@ else:
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
+    _reshaper = arabic_reshaper.ArabicReshaper(configuration={
+        'delete_harakat': True,
+        'support_ligatures': True,
+        'language': 'Persian',
+    })
 except ImportError:
     arabic_reshaper = None
     get_display = None
+    _reshaper = None
 
 logger = logging.getLogger(__name__)
 
@@ -113,19 +126,28 @@ def to_persian_digits(text: Union[int, str]) -> str:
 
 def reshape_persian(text: str) -> str:
     """اصلاح اتصال حروف و جهت متن فارسی برای رندر صحیح در Pillow"""
-    global arabic_reshaper, get_display
+    global arabic_reshaper, get_display, _reshaper
     if arabic_reshaper is None or get_display is None:
         try:
+            _vendor_dir = os.path.join(os.path.dirname(__file__), 'vendor')
+            if os.path.isdir(_vendor_dir) and _vendor_dir not in sys.path:
+                sys.path.insert(0, _vendor_dir)
             import arabic_reshaper as _ar
             from bidi.algorithm import get_display as _gd
             arabic_reshaper = _ar
             get_display = _gd
-        except ImportError:
-            pass
+            _reshaper = _ar.ArabicReshaper(configuration={
+                'delete_harakat': True,
+                'support_ligatures': True,
+                'language': 'Persian',
+            })
+        except ImportError as err:
+            logger.error("Persian reshaping libraries missing (arabic_reshaper / python-bidi): %s", err)
 
     if arabic_reshaper and get_display:
         try:
-            return get_display(arabic_reshaper.reshape(text))
+            reshaped = _reshaper.reshape(text) if _reshaper else arabic_reshaper.reshape(text)
+            return get_display(reshaped)
         except Exception as err:
             logger.warning("Persian reshaping error: %s", err)
             return text
