@@ -408,17 +408,13 @@ async def increase_balance(callback: CallbackQuery):
         text = (
             f"{_main.premium_emoji('wallet', '💰')} <b>افزایش موجودی</b>\n\n"
             f"<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> "
-            f"یکی از مبالغ زیر را انتخاب کنید یا مبلغ دلخواه وارد نمایید:\n\n"
-            f"<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> "
-            f"حداقل: {min_charge:,} | حداکثر: {max_charge:,} تومان"
+            f"یکی از مبالغ زیر را انتخاب کنید یا مبلغ دلخواه وارد نمایید:"
         )
     else:
         text = (
             f"{_main.premium_emoji('wallet', '💰')} <b>Increase Balance</b>\n\n"
             f"<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> "
-            f"Choose an amount or enter custom:\n\n"
-            f"<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> "
-            f"Min: {min_charge:,} | Max: {max_charge:,} Toman"
+            f"Choose an amount or enter custom:"
         )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -565,17 +561,13 @@ async def custom_amount_input(callback: CallbackQuery):
         text = (
             f"{_main.premium_emoji('wallet', '💰')} <b>مبلغ دلخواه</b>\n\n"
             f"<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> "
-            f"لطفاً مبلغ را به تومان وارد کنید:\n\n"
-            f"<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> "
-            f"حداقل: {min_charge:,} | حداکثر: {max_charge:,}"
+            f"لطفاً مبلغ را به تومان وارد کنید:"
         )
     else:
         text = (
             f"{_main.premium_emoji('wallet', '💰')} <b>Custom Amount</b>\n\n"
             f"<tg-emoji emoji-id=\"5334882760735598374\">📝</tg-emoji> "
-            f"Please enter amount in Toman:\n\n"
-            f"<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji> "
-            f"Min: {min_charge:,} | Max: {max_charge:,}"
+            f"Please enter amount in Toman:"
         )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
