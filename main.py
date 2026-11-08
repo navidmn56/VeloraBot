@@ -36876,6 +36876,31 @@ def choose_ai_recommended_package(
     )
 
 
+def clean_ai_purchase_advisor_reason(text: Any, max_chars: int = 250) -> str:
+    """پاکسازی و اطمینان از کامل بودن جمله دلیل بدون قطع شدن وسط کلمه یا کلام"""
+    raw = str(text or "").replace("\r", " ").replace("\n", " ")
+    cleaned = re.sub(r"\s+", " ", raw).strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_chars:
+        cleaned = re.sub(r"\s+(با|به|از|در|برای|که|و|with|to|for|and|in)\s*$", "", cleaned).strip()
+        if cleaned and cleaned[-1] not in ".!?؛؟":
+            cleaned += "."
+        return cleaned
+
+    trimmed = cleaned[:max_chars]
+    for punct in ('.', '!', '؟', ';', '؛'):
+        pos = trimmed.rfind(punct)
+        if pos >= 50:
+            return trimmed[:pos + 1].strip()
+    last_space = trimmed.rfind(' ')
+    if last_space >= 50:
+        trimmed = trimmed[:last_space].strip()
+        trimmed = re.sub(r"\s+(با|به|از|در|برای|که|و|with|to|for|and|in)\s*$", "", trimmed).strip()
+        return trimmed + "."
+    return trimmed
+
+
 def build_ai_purchase_advisor_fallback_reason(
     answers: list,
     category: dict,
@@ -37000,9 +37025,10 @@ def build_ai_purchase_advisor_request(
             "حتماً سرویس‌های تونل/تانل اختصاصی که کیفیت و پایداری بالاتری دارند را پیشنهاد بده (حتی اگر کاربر اتصال معمولی زده باشد، چون ترید کار حساسی است و نباید قطع شود).\n"
             "۲. استفاده‌های روزمره، وب‌گردی و کاربرانی که پایداری معمولی می‌خواهند: سرویس‌های مستقیم (ارزان‌تر با تاخیر پایین) مناسب‌ترند.\n"
             "۳. برای بازی و گیمینگ آنلاین: سرویس‌های دارای وایرگارد (WireGuard) یا پینگ پایین را اولویت بده.\n"
-            "۴. فقط در صورتی که can_ask_question برابر true باشد و واقعاً برای تفکیک بین بسته‌ها نیاز به سؤال تکمیلی داشتی، می‌توانی یک سؤال کوتاه با ۲ تا ۴ گزینه بپرسی؛ در غیر این صورت فوراً بسته را پیشنهاد بده.\n\n"
+            "۴. فقط در صورتی که can_ask_question برابر true باشد و واقعاً برای تفکیک بین بسته‌ها نیاز به سؤال تکمیلی داشتی، می‌توانی یک سؤال کوتاه با ۲ تا ۴ گزینه بپرسی؛ در غیر این صورت فوراً بسته را پیشنهاد بده.\n"
+            "۵. فیلد reason باید حتماً «یک جملهٔ کوتاه، دقیق و کامل» باشد (حداکثر ۱ تا ۲ خط و کمتر از ۲۵ کلمه) که مفهوم آن به طور کامل تمام شود، وسط کلام قطع نشود و به نقطه ختم گردد (مثال: «با توجه به نیاز به پایداری بالا، سرویس تانل با کمترین قطعی برای شما بهترین گزینه است.»).\n\n"
             "فرمت خروجی (فقط یک شیء JSON بدون هیچ متن اضافه یا مارک‌داون):\n"
-            '{"action": "recommend", "selected_package_id": "category_id:package_id", "reason": "دلیل انتخاب در یک جمله کوتاه"}\n'
+            '{"action": "recommend", "selected_package_id": "category_id:package_id", "reason": "دلیل انتخاب در یک جمله کوتاه و کامل (حداکثر ۲۰ تا ۲۵ کلمه)"}\n'
             "یا\n"
             '{"action": "ask", "question": "متن سؤال", "choices": [{"label": "متن دکمه", "answer": "پاسخ"}]}'
         )
@@ -37016,9 +37042,10 @@ def build_ai_purchase_advisor_request(
             "recommend Dedicated Tunnel packages with higher quality and stability (even if regular stability was clicked, trading is sensitive).\n"
             "2. Everyday casual browsing with regular stability: Direct packages are suitable.\n"
             "3. Gaming: prefer WireGuard or low latency packages.\n"
-            "4. Only ask a short question with 2-4 buttons if can_ask_question is true and essential; otherwise recommend immediately.\n\n"
+            "4. Only ask a short question with 2-4 buttons if can_ask_question is true and essential; otherwise recommend immediately.\n"
+            "5. The 'reason' field must be a single concise, fluent and complete sentence (under 25 words) that finishes its thought cleanly and ends with a period.\n\n"
             "Output format (ONLY valid JSON, no extra text):\n"
-            '{"action": "recommend", "selected_package_id": "category_id:package_id", "reason": "concise one-line reason"}\n'
+            '{"action": "recommend", "selected_package_id": "category_id:package_id", "reason": "concise one-line complete reason (under 25 words)"}\n'
             "or\n"
             '{"action": "ask", "question": "Question text", "choices": [{"label": "button text", "answer": "answer text"}]}'
         )
@@ -37158,19 +37185,23 @@ def build_ai_purchase_advisor_result_text(
     ):
         recommendation_name = f"{category_name} / {package_name_core}"
     recommendation_name = html.escape(re.sub(r"\s+", " ", recommendation_name).strip()[:40])
-    reason_value = str(result.get('reason') or "").replace("\r", " ").replace("\n", " ")
-    reason_value = re.sub(r"\s+", " ", reason_value).strip()
+    reason_value = clean_ai_purchase_advisor_reason(result.get('reason'), max_chars=250)
     legacy_reasons = {
         "این پیشنهاد بر اساس پاسخ‌های تو و بسته‌های فعال انتخاب شده است.",
         "این بسته بر اساس پاسخ‌ها و قیمت گزینه‌های فعال انتخاب شد.",
         "This recommendation was selected from your answers and active packages.",
         "This package was selected based on your answers and active package prices.",
     }
-    if not reason_value or reason_value in legacy_reasons:
+    # بررسی ناقص بودن یا قطع شدن جمله ناشی از باگ‌های قبلی
+    is_dangling = any(
+        reason_value.rstrip('. ').endswith(f" {w}")
+        for w in ('با', 'به', 'در', 'از', 'برای', 'که', 'و', 'with', 'to', 'for', 'and', 'in')
+    )
+    if not reason_value or reason_value in legacy_reasons or is_dangling:
         reason_value = build_ai_purchase_advisor_fallback_reason(
             result.get('answers', []), category, package, lang
         )
-    reason = html.escape(reason_value[:80])
+    reason = html.escape(clean_ai_purchase_advisor_reason(reason_value, max_chars=250))
     volume = format_package_volume(package.get('volume', 0), lang)
     days = package.get('days', 30)
     price = int(package.get('price', 0) or 0)
@@ -37389,8 +37420,7 @@ async def run_ai_purchase_advisor_turn(
 
     category, package = recommendation
     final_package_id = f"{category.get('id')}:{package.get('id')}"
-    model_reason = str(parsed.get('reason') or "").replace("\r", " ").replace("\n", " ")
-    model_reason = re.sub(r"\s+", " ", model_reason).strip()[:100]
+    model_reason = clean_ai_purchase_advisor_reason(parsed.get('reason'), max_chars=250)
     reason = (
         model_reason
         if selected_package_id == final_package_id and model_reason
