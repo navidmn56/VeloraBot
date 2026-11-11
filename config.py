@@ -25,7 +25,8 @@ BANK_NAME = "Blue Bank"  # e.g., "Blue Bank", "Melli", "Mellat"
 SENAI_PANEL_URL = "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
 SENAI_PANEL_USERNAME = "Panel_username"
 SENAI_PANEL_PASSWORD = "Panel_password"
-SENAI_SUB_URL = "https://sub.Domain.com:2083"
+# Optional: Set to "auto" to automatically fetch subscription link from Sanaei panel, or set a custom URL (e.g. "https://sub.Domain.com:2083/sub")
+SENAI_SUB_URL = "auto"
 SUPPORT_USERNAME = "@your_username_here"
 
 # =============== 🟡 OPTIONAL: REACTION SETTINGS ===============
