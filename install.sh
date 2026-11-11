@@ -413,6 +413,9 @@ read_tty() {
         return 1
     fi
 
+    # Strip carriage return if present (fixes terminal/SSH CRLF issues)
+    _rt_value="${_rt_value%$'\r'}"
+
     printf -v "${_rt_target}" '%s' "${_rt_value}"
 }
 
@@ -440,6 +443,9 @@ read_secret_tty() {
     printf '\n' > /dev/tty
 
     (( _rs_rc == 0 )) || return 1
+
+    # Strip carriage return if present
+    _rs_value="${_rs_value%$'\r'}"
 
     printf -v "${_rs_target}" '%s' "${_rs_value}"
 }
@@ -1806,11 +1812,15 @@ prompt_admin_id() {
 
 prompt_log_channel_id() {
     local value=""
-    describe "شناسه عددی گروه یا کانال ثبت لاگ (شناسه کانال‌ها منفی است؛ خالی برای غیرفعال‌سازی) / Numeric Log Channel ID" "-1001234567890 (or empty)"
+    describe "Numeric group/channel ID for event logs (channels start with -100; leave empty to disable)" "-1001234567890 (or empty)"
 
     if ! read_tty "LOG_CHANNEL_ID: " value; then
         die "Could not read input from the terminal."
     fi
+
+    value="${value%$'\r'}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
 
     if [[ -z "${value}" ]]; then
         LOG_CHANNEL_ID="None"
@@ -1826,6 +1836,9 @@ prompt_log_channel_id() {
         if ! read_tty "LOG_CHANNEL_ID: " value; then
             die "Could not read input from the terminal."
         fi
+        value="${value%$'\r'}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
         if [[ -z "${value}" ]]; then
             LOG_CHANNEL_ID="None"
             return
@@ -1839,6 +1852,9 @@ prompt_card_number() {
         if ! read_tty "BANK_CARD_NUMBER: " value; then
             die "Could not read input from the terminal."
         fi
+        value="${value%$'\r'}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
         if [[ "${value}" =~ ^[0-9]{16}$ ]]; then
             BANK_CARD_NUMBER="${value}"
             return
@@ -1855,6 +1871,9 @@ prompt_http_url() {
         if ! read_tty "${label}: " value; then
             die "Could not read input from the terminal."
         fi
+        value="${value%$'\r'}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
         if [[ "${value}" =~ ^https?:// ]]; then
             printf -v "${result_var}" '%s' "${value}"
             return
@@ -1868,16 +1887,29 @@ prompt_sub_url() {
     local result_var="$2"
     local default_val="${!result_var:-auto}"
     [[ -z "${default_val}" || "${default_val}" == "https://sub.Domain.com"* ]] && default_val="auto"
-    local value=""
+    local raw_val=""
     while true; do
-        if ! read_tty "${label} [${default_val}]: " value; then
+        if ! read_tty "${label} [${default_val}]: " raw_val; then
             die "Could not read input from the terminal."
         fi
-        [[ -z "${value}" ]] && value="${default_val}"
-        if [[ "${value}" == "auto" || "${value}" == "none" || "${value}" =~ ^https?:// ]]; then
-            [[ -z "${value}" ]] && value="auto"
+        # Strip carriage returns, leading/trailing whitespace, and enclosing quotes
+        local value="${raw_val%$'\r'}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        value="${value#[\'\"]}"
+        value="${value%[\'\"]}"
+
+        if [[ -z "${value}" ]]; then
+            value="${default_val}"
+        fi
+
+        local val_lower="${value,,}"
+        if [[ "${val_lower}" == "auto" || "${val_lower}" == "none" ]]; then
+            printf -v "${result_var}" '%s' "auto"
+            return 0
+        elif [[ "${value}" =~ ^https?:// ]]; then
             printf -v "${result_var}" '%s' "${value}"
-            return
+            return 0
         fi
         log_warning "${label} must be 'auto' or start with http:// or https://."
     done
@@ -1975,15 +2007,15 @@ edit_all_config_keys() {
         fi
 
         case "${choice}" in
-            1) describe "توکن ربات تلگرام اصلی (از BotFather@) / Main Telegram Bot Token" "1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ_1234567"
+            1) describe "Main Telegram Bot Token (obtained from @BotFather)" "1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ_1234567"
                prompt_for_secret "BOT_TOKEN" BOT_TOKEN
                set_config_value "BOT_TOKEN" "${BOT_TOKEN}"
                log_success "BOT_TOKEN updated." ;;
-            2) describe "شناسه عددی اکانت تلگرام ادمین (از myidbot@ یا userinfobot@) / Admin Telegram Numeric ID" "123456789"
+            2) describe "Admin numeric Telegram User ID (obtained from @myidbot or @userinfobot)" "123456789"
                prompt_admin_id
                set_config_integer "ADMIN_ID" "${ADMIN_ID}"
                log_success "ADMIN_ID updated." ;;
-            3) describe "توکن ربات لاگر جهت ارسال وقایع به کانال لاگ (از BotFather@) / Secondary Log Bot Token" "9876543210:ZYXwvutsrqPOnmlkjIHGfedcba_7654321"
+            3) describe "Secondary Log Bot Token for posting logs to channel (from @BotFather)" "9876543210:ZYXwvutsrqPOnmlkjIHGfedcba_7654321"
                prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
                set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
                log_success "LOG_BOT_TOKEN updated." ;;
@@ -1994,39 +2026,39 @@ edit_all_config_keys() {
                    set_config_integer "LOG_CHANNEL_ID" "${LOG_CHANNEL_ID}"
                fi
                log_success "LOG_CHANNEL_ID updated." ;;
-            5) describe "شماره کارت بانکی ۱۶ رقمی بدون فاصله جهت واریز وجه کاربران / 16-digit Bank Card Number" "6037997112345678"
+            5) describe "16-digit bank card number for user payments (digits only, no spaces)" "6037997112345678"
                prompt_card_number
                set_config_value "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"
                log_success "BANK_CARD_NUMBER updated." ;;
-            6) describe "نام و نام خانوادگی صاحب حساب و کارت بانکی / Card Holder Full Name" "نوید محمدی (Navid Mohammadi)"
+            6) describe "Full name of the bank card holder" "Navid Mohammadi"
                prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
                set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
                log_success "BANK_CARD_HOLDER updated." ;;
-            7) describe "نام بانک صادرکننده کارت بانکی / Bank Name" "بلو بانک (Blue Bank) یا بانک ملت (Mellat)"
+            7) describe "Name of the issuing bank" "Blue Bank (or Mellat)"
                prompt_for_value "BANK_NAME" BANK_NAME
                set_config_value "BANK_NAME" "${BANK_NAME}"
                log_success "BANK_NAME updated." ;;
-            8) describe "آدرس کامل پنل سنایی (3X-UI) با پورت و وب‌پث ادمین / Full Sanaei 3X-UI Panel URL" "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
+            8) describe "Full Sanaei 3X-UI panel URL with port and admin web base path" "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
                prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
                set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
                log_success "SENAI_PANEL_URL updated." ;;
-            9) describe "نام کاربری ادمین جهت ورود به پنل سنایی / Sanaei Panel Admin Username" "admin"
+            9) describe "Admin username for Sanaei panel login" "admin"
                prompt_for_value "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
                set_config_value "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
                log_success "SENAI_PANEL_USERNAME updated." ;;
-            10) describe "رمز عبور ادمین پنل سنایی / Sanaei Panel Admin Password" "MySecretPassword@123"
+            10) describe "Admin password for Sanaei panel login" "MySecretPassword@123"
                 prompt_for_secret "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
                 set_config_value "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"
                 log_success "SENAI_PANEL_PASSWORD updated." ;;
-            11) describe "آدرس سابسکریپشن کاربران (اختیاری: برای دریافت خودکار از پنل 'auto' بگذارید) / Client Subscription URL" "auto  (یا دستی: https://sub.Domain.com:2083/sub)"
+            11) describe "Client subscription URL (optional: press Enter for 'auto' to fetch from panel)" "auto (or custom: https://sub.Domain.com:2083/sub)"
                 prompt_sub_url "SENAI_SUB_URL" SENAI_SUB_URL
                 set_config_value "SENAI_SUB_URL" "${SENAI_SUB_URL}"
                 log_success "SENAI_SUB_URL updated." ;;
-            12) describe "آیدی تلگرام پشتیبانی ربات با علامت @ / Support Telegram Username" "@my_support"
+            12) describe "Telegram support username for user inquiries (must start with @)" "@my_support"
                 prompt_for_value "SUPPORT_USERNAME" SUPPORT_USERNAME
                 set_config_value "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"
                 log_success "SUPPORT_USERNAME updated." ;;
-            13) describe "فعال‌سازی هوش مصنوعی گوگل جیمینای در ربات / Enable Google Gemini AI" "true یا false"
+            13) describe "Enable Google Gemini AI assistant feature (true or false)" "true or false"
                 local gem=""
                 printf 'Enable Gemini? [true/false/none]: ' > /dev/tty
                 if ! IFS= read -r gem <&3; then
@@ -2042,23 +2074,23 @@ edit_all_config_keys() {
                 [[ "${gem}" == "false" ]] && GEMINI_ENABLED="False"
                 [[ "${gem}" == "none"  ]] && GEMINI_ENABLED="None"
                 log_success "GEMINI_ENABLED updated." ;;
-            14) describe "کلید API هوش مصنوعی گوگل جیمینای / Google Gemini API Key (from https://aistudio.google.com/)" "AIzaSyD-1234567890abcdefghijklmnopqrstuv"
+            14) describe "Google Gemini API Key (obtained from https://aistudio.google.com/)" "AIzaSyD-1234567890abcdefghijklmnopqrstuv"
                 prompt_for_secret "GEMINI_API_KEY" GEMINI_API_KEY
                 set_config_value "GEMINI_API_KEY" "${GEMINI_API_KEY}"
                 log_success "GEMINI_API_KEY updated." ;;
-            15) describe "نام مدل هوش مصنوعی گوگل جیمینای / Gemini Model Name" "gemini-2.5-flash (یا gemini-1.5-flash)"
+            15) describe "Google Gemini model name to use" "gemini-2.5-flash (or gemini-1.5-flash)"
                 prompt_with_default "GEMINI_MODEL" "${GEMINI_MODEL:-gemini-2.5-flash}" GEMINI_MODEL
                 set_config_value "GEMINI_MODEL" "${GEMINI_MODEL}"
                 log_success "GEMINI_MODEL updated." ;;
-            16) describe "میزان خلاقیت پاسخ‌های هوش مصنوعی بین 0.0 تا 1.0 / Temperature (Creativity)" "0.7"
+            16) describe "AI response randomness/creativity (float between 0.0 and 1.0)" "0.7"
                 prompt_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE:-0.7}" GEMINI_TEMPERATURE
                 set_config_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE}"
                 log_success "GEMINI_TEMPERATURE updated." ;;
-            17) describe "حداکثر تعداد توکن در پاسخ هوش مصنوعی / Maximum Response Token Length" "90 (یا 150)"
+            17) describe "Maximum response token length for AI generation" "90 (or 150)"
                 prompt_positive_int "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS:-90}" GEMINI_MAX_TOKENS
                 set_config_integer "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS}"
                 log_success "GEMINI_MAX_TOKENS updated." ;;
-            18) describe "سقف تعداد درخواست‌های رایگان AI برای هر کاربر در روز / Daily AI Limit Per User" "3 (یا 5)"
+            18) describe "Daily free AI questions limit per user" "3 (or 5)"
                 prompt_positive_int "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT:-3}" GEMINI_DAILY_LIMIT
                 set_config_integer "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT}"
                 log_success "GEMINI_DAILY_LIMIT updated." ;;
@@ -2891,7 +2923,7 @@ configure_config_in_place() {
     draw_step "Required Settings"
 
     if is_placeholder "BOT_TOKEN" "${BOT_TOKEN}"; then
-        describe "توکن ربات تلگرام اصلی (از BotFather@) / Main Telegram Bot Token" "1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ_1234567"
+        describe "Main Telegram Bot Token (obtained from @BotFather)" "1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ_1234567"
         prompt_for_secret "BOT_TOKEN" BOT_TOKEN
         set_config_value "BOT_TOKEN" "${BOT_TOKEN}"
         changed=1
@@ -2901,7 +2933,7 @@ configure_config_in_place() {
 
     if [[ ! "${ADMIN_ID}" =~ ^[0-9]+$ || "${ADMIN_ID}" == "0" ]] || \
        is_placeholder "ADMIN_ID" "${ADMIN_ID}"; then
-        describe "شناسه عددی اکانت تلگرام ادمین (از myidbot@ یا userinfobot@) / Admin Telegram Numeric ID" "123456789"
+        describe "Admin numeric Telegram User ID (obtained from @myidbot or @userinfobot)" "123456789"
         prompt_admin_id
         set_config_integer "ADMIN_ID" "${ADMIN_ID}"
         changed=1
@@ -2911,7 +2943,7 @@ configure_config_in_place() {
 
     if ! [[ "${BANK_CARD_NUMBER}" =~ ^[0-9]{16}$ ]] || \
        is_placeholder "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"; then
-        describe "شماره کارت بانکی ۱۶ رقمی بدون فاصله جهت واریز وجه کاربران / 16-digit Bank Card Number" "6037997112345678"
+        describe "16-digit bank card number for user payments (digits only, no spaces)" "6037997112345678"
         prompt_card_number
         set_config_value "BANK_CARD_NUMBER" "${BANK_CARD_NUMBER}"
         changed=1
@@ -2920,7 +2952,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"; then
-        describe "نام و نام خانوادگی صاحب حساب و کارت بانکی / Card Holder Full Name" "نوید محمدی (Navid Mohammadi)"
+        describe "Full name of the bank card holder" "Navid Mohammadi"
         prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
         set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
         changed=1
@@ -2929,7 +2961,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "BANK_NAME" "${BANK_NAME}"; then
-        describe "نام بانک صادرکننده کارت بانکی / Bank Name" "بلو بانک (Blue Bank) یا بانک ملت (Mellat)"
+        describe "Name of the issuing bank" "Blue Bank (or Mellat)"
         prompt_for_value "BANK_NAME" BANK_NAME
         set_config_value "BANK_NAME" "${BANK_NAME}"
         changed=1
@@ -2939,7 +2971,7 @@ configure_config_in_place() {
 
     if ! [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]] || \
        is_placeholder "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"; then
-        describe "آدرس کامل پنل سنایی (3X-UI) با پورت و وب‌پث ادمین / Full Sanaei 3X-UI Panel URL" "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
+        describe "Full Sanaei 3X-UI panel URL with port and admin web base path" "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
         prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
         set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
         changed=1
@@ -2948,7 +2980,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"; then
-        describe "نام کاربری ادمین جهت ورود به پنل سنایی / Sanaei Panel Admin Username" "admin"
+        describe "Admin username for Sanaei panel login" "admin"
         prompt_for_value "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
         set_config_value "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
         changed=1
@@ -2957,7 +2989,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"; then
-        describe "رمز عبور ادمین پنل سنایی / Sanaei Panel Admin Password" "MySecretPassword@123"
+        describe "Admin password for Sanaei panel login" "MySecretPassword@123"
         prompt_for_secret "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
         set_config_value "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"
         changed=1
@@ -2968,7 +3000,7 @@ configure_config_in_place() {
     if [[ -z "${SENAI_SUB_URL}" ]] || \
        is_placeholder "SENAI_SUB_URL" "${SENAI_SUB_URL}" || \
        [[ "${SENAI_SUB_URL}" == "https://sub.Domain.com"* ]]; then
-        describe "آدرس سابسکریپشن کاربران (اختیاری: برای دریافت خودکار از پنل Enter بزنید) / Client Subscription URL" "auto  (یا دستی: https://sub.Domain.com:2083/sub)"
+        describe "Client subscription URL (optional: press Enter for 'auto' to fetch from panel)" "auto (or custom: https://sub.Domain.com:2083/sub)"
         prompt_sub_url "SENAI_SUB_URL" SENAI_SUB_URL
         set_config_value "SENAI_SUB_URL" "${SENAI_SUB_URL}"
         changed=1
@@ -2977,7 +3009,7 @@ configure_config_in_place() {
     fi
 
     if is_placeholder "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"; then
-        describe "آیدی تلگرام پشتیبانی ربات با علامت @ / Support Telegram Username" "@my_support"
+        describe "Telegram support username for user inquiries (must start with @)" "@my_support"
         prompt_for_value "SUPPORT_USERNAME" SUPPORT_USERNAME
         set_config_value "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"
         changed=1
@@ -3022,7 +3054,7 @@ configure_config_in_place() {
                 printf 'LOG_BOT_TOKEN            : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
             fi
         else
-            describe "توکن ربات لاگر جهت ارسال وقایع به کانال لاگ (از BotFather@) / Secondary Log Bot Token" "9876543210:ZYXwvutsrqPOnmlkjIHGfedcba_7654321"
+            describe "Secondary Log Bot Token for posting logs to channel (from @BotFather)" "9876543210:ZYXwvutsrqPOnmlkjIHGfedcba_7654321"
             prompt_for_secret "LOG_BOT_TOKEN" LOG_BOT_TOKEN
             set_config_value "LOG_BOT_TOKEN" "${LOG_BOT_TOKEN}"
             changed=1
@@ -3089,7 +3121,7 @@ configure_config_in_place() {
         changed=1
 
         if (( configure_ai == 1 )) || is_placeholder "GEMINI_API_KEY" "${GEMINI_API_KEY}"; then
-            describe "کلید API هوش مصنوعی گوگل جیمینای / Google Gemini API Key (from https://aistudio.google.com/)" "AIzaSyD-1234567890abcdefghijklmnopqrstuv"
+            describe "Google Gemini API Key (obtained from https://aistudio.google.com/)" "AIzaSyD-1234567890abcdefghijklmnopqrstuv"
             prompt_for_secret "GEMINI_API_KEY" GEMINI_API_KEY
             set_config_value "GEMINI_API_KEY" "${GEMINI_API_KEY}"
             changed=1
@@ -3097,22 +3129,22 @@ configure_config_in_place() {
             printf 'GEMINI_API_KEY           : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
         fi
 
-        describe "نام مدل هوش مصنوعی گوگل جیمینای / Gemini Model Name" "gemini-2.5-flash (یا gemini-1.5-flash)"
+        describe "Google Gemini model name to use" "gemini-2.5-flash (or gemini-1.5-flash)"
         prompt_with_default "GEMINI_MODEL" "${GEMINI_MODEL:-gemini-2.5-flash}" GEMINI_MODEL
         set_config_value "GEMINI_MODEL" "${GEMINI_MODEL}"
         changed=1
 
-        describe "میزان خلاقیت پاسخ‌های هوش مصنوعی بین 0.0 تا 1.0 / Temperature (Creativity)" "0.7"
+        describe "AI response randomness/creativity (float between 0.0 and 1.0)" "0.7"
         prompt_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE:-0.7}" GEMINI_TEMPERATURE
         set_config_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE}"
         changed=1
 
-        describe "حداکثر تعداد توکن در پاسخ هوش مصنوعی / Maximum Response Token Length" "90 (یا 150)"
+        describe "Maximum response token length for AI generation" "90 (or 150)"
         prompt_positive_int "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS:-90}" GEMINI_MAX_TOKENS
         set_config_integer "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS}"
         changed=1
 
-        describe "سقف تعداد درخواست‌های رایگان AI برای هر کاربر در روز / Daily AI Limit Per User" "3 (یا 5)"
+        describe "Daily free AI questions limit per user" "3 (or 5)"
         prompt_positive_int "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT:-3}" GEMINI_DAILY_LIMIT
         set_config_integer "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT}"
         changed=1
