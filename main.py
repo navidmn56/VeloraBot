@@ -10179,6 +10179,14 @@ def get_sub_base_url() -> str:
         return ""
 
 
+async def ensure_sub_base_url() -> str:
+    """اطمینان از دریافت و همگام‌سازی آدرس سابسکریپشن از پنل در صورت قرار داشتن روی حالت auto"""
+    global PANEL_COMPUTED_SUB_BASE_URL
+    if _is_auto_sub_url(SENAI_SUB_URL) and not PANEL_COMPUTED_SUB_BASE_URL:
+        await xui_sync_sub_settings()
+    return get_sub_base_url()
+
+
 def _get_base_url() -> URL:
     """دریافت Base URL بدون path"""
     panel_url = URL(SENAI_PANEL_URL)
@@ -10383,9 +10391,12 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
         return None
     
     headers = kwargs.pop("headers", {})
-    if method.upper() != "GET" and SENAI_CSRF:
-        headers["X-CSRF-Token"] = SENAI_CSRF
-    
+    if method.upper() != "GET":
+        if not SENAI_CSRF or (time.time() - CSRF_TIME) >= CSRF_TTL:
+            await xui_get_csrf_token()
+        if SENAI_CSRF:
+            headers["X-CSRF-Token"] = SENAI_CSRF
+
     url = f"{SENAI_PANEL_URL}{path}"
     
     try:
@@ -10417,8 +10428,11 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
                 if not SENAI_COOKIE:
                     return None
                 headers_retry = {}
-                if method.upper() != "GET" and SENAI_CSRF:
-                    headers_retry["X-CSRF-Token"] = SENAI_CSRF
+                if method.upper() != "GET":
+                    if not SENAI_CSRF:
+                        await xui_get_csrf_token()
+                    if SENAI_CSRF:
+                        headers_retry["X-CSRF-Token"] = SENAI_CSRF
                 
                 async with HTTP_SESSION.request(
                     method, url,
@@ -10445,78 +10459,162 @@ async def xui_sync_sub_settings() -> bool:
     if not SENAI_PANEL_ENABLED:
         return False
     try:
+        await xui_get_csrf_token()
+
         result = await _api_request("POST", "/panel/setting/all")
         if not result or not result.get("success"):
+            result = await _api_request("POST", "/panel/api/setting/all")
+        if not result or not result.get("success"):
             result = await _api_request("GET", "/panel/setting/all")
+        if not result or not result.get("success"):
+            result = await _api_request("GET", "/panel/api/setting/all")
+
+        logger.info(f"📡 نتیجه درخواست تنظیمات از پنل سنایی: success={bool(result and result.get('success'))}")
 
         if result and result.get("success"):
-            obj = result.get("obj") or {}
-            sub_path = (obj.get("subPath") or "sub").strip().strip('/')
-            sub_uri = (obj.get("subURI") or "").strip()
-            sub_cert = (obj.get("subCertFile") or "").strip()
-            sub_port_raw = obj.get("subPort")
+            raw_obj = result.get("obj")
+            if isinstance(raw_obj, list):
+                settings_map = {item.get("key"): item.get("value") for item in raw_obj if isinstance(item, dict)}
+            elif isinstance(raw_obj, dict):
+                settings_map = raw_obj
+            else:
+                settings_map = {}
+
+            logger.info(f"📋 کلیدهای دریافتی از تنظیمات پنل سنایی: {list(settings_map.keys())}")
+
+            # 1. استخراج دامنه سابسکریپشن (بررسی همه کلیدهای ممکن در نسخه‌های مختلف 3X-UI)
+            sub_domain = (
+                settings_map.get("subDomain") or
+                settings_map.get("subURI") or
+                settings_map.get("subUrl") or
+                settings_map.get("subURL") or
+                settings_map.get("sub_domain") or
+                settings_map.get("sub_uri") or
+                settings_map.get("subscriptionUrl") or
+                settings_map.get("domain") or
+                ""
+            ).strip()
+
+            # 2. استخراج پورت سابسکریپشن
+            sub_port_raw = (
+                settings_map.get("subPort") or
+                settings_map.get("sub_port") or
+                settings_map.get("subscriptionPort") or
+                ""
+            )
             try:
-                sub_port = int(sub_port_raw) if sub_port_raw is not None and str(sub_port_raw).strip() else 0
+                sub_port = int(str(sub_port_raw).strip()) if str(sub_port_raw).strip() else 0
             except (ValueError, TypeError):
                 sub_port = 0
 
+            # 3. استخراج وب‌پث سابسکریپشن
+            sub_path = (
+                settings_map.get("subPath") or
+                settings_map.get("sub_path") or
+                settings_map.get("subscriptionPath") or
+                "sub"
+            ).strip().strip('/')
+            if not sub_path:
+                sub_path = "sub"
+
+            # 4. استخراج گواهی SSL ساب
+            sub_cert = (
+                settings_map.get("subCertFile") or
+                settings_map.get("sub_cert_file") or
+                ""
+            ).strip()
+
             PANEL_SUB_PATH = sub_path
-            PANEL_SUB_URI = sub_uri
+            PANEL_SUB_URI = sub_domain
 
             panel_parsed = urlparse(SENAI_PANEL_URL)
             panel_host = panel_parsed.hostname or "localhost"
 
-            # محاسبه دقیق شمای ارتباطی (http یا https) و آدرس پایه ساب
-            if sub_uri:
-                if sub_uri.startswith("http://") or sub_uri.startswith("https://"):
-                    parsed_sub = urlparse(sub_uri)
-                    scheme = parsed_sub.scheme
-                    netloc = parsed_sub.netloc
-                    uri_path = (parsed_sub.path or "").strip('/')
-                    final_path = uri_path if uri_path else sub_path
-                    PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{netloc}/{final_path}".rstrip('/')
+            # اگر sub_domain خالی بود و آدرس پنل 127.0.0.1 یا localhost بود، تلاش برای استخراج دامنه از اینباندها
+            if not sub_domain and panel_host in ("127.0.0.1", "localhost", "::1"):
+                try:
+                    inbounds = await xui_get_inbounds()
+                    for ib in inbounds:
+                        stream = ib.get("streamSettings") or {}
+                        if isinstance(stream, str):
+                            try:
+                                stream = json.loads(stream)
+                            except Exception:
+                                stream = {}
+                        reality_names = stream.get("realitySettings", {}).get("serverNames") or []
+                        for name in reality_names:
+                            if name and "." in name and not name.startswith("127."):
+                                sub_domain = name.strip()
+                                logger.info(f"🔍 دامنه جایگزین از Reality اینباند استخراج شد: {sub_domain}")
+                                break
+                        if sub_domain:
+                            break
+                        tls_name = stream.get("tlsSettings", {}).get("serverName") or ""
+                        if tls_name and "." in tls_name and not tls_name.startswith("127."):
+                            sub_domain = tls_name.strip()
+                            logger.info(f"🔍 دامنه جایگزین از TLS اینباند استخراج شد: {sub_domain}")
+                            break
+                        ws_host = stream.get("wsSettings", {}).get("headers", {}).get("Host") or ""
+                        if ws_host and "." in ws_host and not ws_host.startswith("127."):
+                            sub_domain = ws_host.strip()
+                            logger.info(f"🔍 دامنه جایگزین از WebSocket اینباند استخراج شد: {sub_domain}")
+                            break
+                except Exception as e:
+                    logger.debug(f"عدم امکان استخراج دامنه از اینباندها: {e}")
+
+            # تعیین پروتکل (http یا https)
+            scheme = "https"
+            if sub_domain.startswith("http://"):
+                scheme = "http"
+            elif sub_domain.startswith("https://"):
+                scheme = "https"
+            elif sub_cert:
+                scheme = "https"
+            elif sub_port in (443, 8443, 2053, 2083, 2087, 2096):
+                scheme = "https"
+            elif sub_port in (80, 8080, 8880, 2052, 2082, 2086, 2095):
+                scheme = "http"
+            elif panel_parsed.scheme:
+                scheme = panel_parsed.scheme
+
+            # ساخت آدرس نهایی با پورت و وب‌پث
+            if sub_domain:
+                clean_domain = re.sub(r"^https?://", "", sub_domain).strip().strip('/')
+                if '/' in clean_domain:
+                    parts = clean_domain.split('/', 1)
+                    host_part = parts[0]
+                    path_part = parts[1].strip('/')
+                    if path_part:
+                        sub_path = path_part
                 else:
-                    if sub_cert:
-                        scheme = "https"
-                    elif sub_port in (443, 8443, 2053, 2083, 2087, 2096):
-                        scheme = "https"
-                    elif sub_port in (80, 8080, 8880, 2052, 2082, 2086, 2095):
-                        scheme = "http"
-                    elif panel_parsed.scheme:
-                        scheme = panel_parsed.scheme
+                    host_part = clean_domain
+
+                if ':' in host_part:
+                    netloc = host_part
+                else:
+                    if sub_port and sub_port not in (80, 443):
+                        netloc = f"{host_part}:{sub_port}"
                     else:
-                        scheme = "http"
+                        netloc = host_part
 
-                    netloc = sub_uri.rstrip('/')
-                    if ':' not in netloc and sub_port and sub_port not in (80, 443):
-                        netloc = f"{netloc}:{sub_port}"
-
-                    PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{netloc}/{sub_path}".rstrip('/')
+                PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{netloc}/{sub_path}".rstrip('/')
             else:
-                if sub_cert:
-                    scheme = "https"
-                elif sub_port in (443, 8443, 2053, 2083, 2087, 2096):
-                    scheme = "https"
-                elif sub_port in (80, 8080, 8880, 2052, 2082, 2086, 2095):
-                    scheme = "http"
-                elif panel_parsed.scheme:
-                    scheme = panel_parsed.scheme
+                host_part = panel_host
+                if sub_port and sub_port not in (80, 443):
+                    netloc = f"{host_part}:{sub_port}"
+                elif not sub_port and panel_parsed.port and panel_parsed.port not in (80, 443):
+                    netloc = f"{host_part}:{panel_parsed.port}"
                 else:
-                    scheme = "http"
+                    netloc = host_part
 
-                if sub_port and sub_port > 0 and sub_port not in (80, 443):
-                    port_str = f":{sub_port}"
-                elif not sub_port and panel_parsed.port:
-                    port_str = f":{panel_parsed.port}"
-                else:
-                    port_str = ""
+                PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{netloc}/{sub_path}".rstrip('/')
 
-                PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{panel_host}{port_str}/{sub_path}".rstrip('/')
-
-            logger.info(f"🌐 آدرس سابسکریپشن پنل سنایی همگام شد: {PANEL_COMPUTED_SUB_BASE_URL}")
+            logger.info(f"🌐 آدرس سابسکریپشن نهایی استخراج‌شده از پنل سنایی: {PANEL_COMPUTED_SUB_BASE_URL}")
             return True
+        else:
+            logger.warning(f"⚠️ پاسخ ناموفق یا خالی از تنظیمات پنل سنایی: {result}")
     except Exception as e:
-        logger.warning(f"⚠️ عدم موفقیت در دریافت تنظیمات ساب از پنل: {e}")
+        logger.warning(f"⚠️ عدم موفقیت در دریافت تنظیمات ساب از پنل: {e}", exc_info=True)
     return False
 
 
@@ -10841,12 +10939,12 @@ async def xui_create_client_with_inbound(
                                         if actual_client:
                                             actual_sub_id = actual_client.get('subId', '') or email
                                             logger.info(f"   🔗 subId واقعی از پنل: {actual_sub_id}")
-                                            base_sub = get_sub_base_url()
+                                            base_sub = await ensure_sub_base_url()
                                             return f"{base_sub}/{actual_sub_id}"
                                     except Exception as e:
                                         logger.warning(f"⚠️ خطا در دریافت subId واقعی: {e}")
 
-                                    base_sub = get_sub_base_url()
+                                    base_sub = await ensure_sub_base_url()
                                     return f"{base_sub}/{email}"
                                 else:
                                     error_msg = data.get('msg', 'Unknown error')
@@ -35588,7 +35686,7 @@ async def rebuild_sub_links_in_database():
     Returns:
         dict: شامل آمار و لیست سفارشات بروزرسانی شده
     """
-    current_sub_base = get_sub_base_url()
+    current_sub_base = await ensure_sub_base_url()
     if not current_sub_base:
         logger.error("❌ آدرس سابسکریپشن مشخص نیست (نه در config.py و نه در پنل)!")
         return {
@@ -35802,7 +35900,8 @@ async def rebuild_single_order_sub_link(order_id: int):
             'success': False,
             'error': f'Order #{order_id} not found'
         }
-    
+
+    await ensure_sub_base_url()
     config_link = order.get('config_link')
     sub_link = order.get('sub_link')
     def is_valid_link(link: str) -> bool:
