@@ -10131,6 +10131,54 @@ LOGIN_TIMEOUT = ClientTimeout(total=10, connect=3)
 API_TIMEOUT = ClientTimeout(total=5, connect=3)
 
 
+PANEL_SUB_PATH: Optional[str] = None
+PANEL_SUB_URI: Optional[str] = None
+PANEL_COMPUTED_SUB_BASE_URL: Optional[str] = None
+
+
+def _is_auto_sub_url(url: Optional[str]) -> bool:
+    """بررسی اینکه آیا آدرس ساب روی حالت خودکار یا خالی است"""
+    if not url:
+        return True
+    cleaned = str(url).strip().lower()
+    return cleaned in ("auto", "none", "") or "sub.domain.com" in cleaned
+
+
+def get_sub_base_url() -> str:
+    """
+    محاسبه آدرس پایه سابسکریپشن همراه با وب‌پث
+    - در صورت تنظیم دستی SENAI_SUB_URL (غیر از auto یا خالی)، همان استفاده می‌شود
+    - در صورت تنظیم روی auto یا خالی، مقدار به صورت خودکار و دقیق از تنظیمات پنل سنایی (subURI، subPort، subPath، SSL) استخراج می‌شود
+    """
+    raw_sub = (SENAI_SUB_URL or "").strip()
+    if not _is_auto_sub_url(raw_sub):
+        try:
+            parsed = urlparse(raw_sub)
+            path = (parsed.path or "").strip('/')
+            if path:
+                return raw_sub.rstrip('/')
+
+            sub_path = (PANEL_SUB_PATH or "sub").strip('/')
+            return f"{raw_sub.rstrip('/')}/{sub_path}"
+        except Exception:
+            return raw_sub.rstrip('/')
+
+    # حالت خودکار (auto) با آدرس استخراج شده از پنل سنایی
+    if PANEL_COMPUTED_SUB_BASE_URL:
+        return PANEL_COMPUTED_SUB_BASE_URL.rstrip('/')
+
+    # در صورت عدم اجرای همگام‌سازی، بازگشت به فال‌بک پنل با /sub
+    try:
+        panel_parsed = urlparse(SENAI_PANEL_URL)
+        scheme = panel_parsed.scheme or "https"
+        host = panel_parsed.hostname or "localhost"
+        port_str = f":{panel_parsed.port}" if panel_parsed.port else ""
+        sub_path = (PANEL_SUB_PATH or "sub").strip('/')
+        return f"{scheme}://{host}{port_str}/{sub_path}"
+    except Exception:
+        return ""
+
+
 def _get_base_url() -> URL:
     """دریافت Base URL بدون path"""
     panel_url = URL(SENAI_PANEL_URL)
@@ -10143,7 +10191,7 @@ def _get_base_url() -> URL:
 async def _ensure_session():
     """اطمینان از وجود Session فعال"""
     global HTTP_SESSION, CONNECTOR
-    
+
     if HTTP_SESSION is None or HTTP_SESSION.closed:
         CONNECTOR = aiohttp.TCPConnector(
             ssl=False,
@@ -10153,7 +10201,7 @@ async def _ensure_session():
             keepalive_timeout=300,
             force_close=False
         )
-        
+
         HTTP_SESSION = aiohttp.ClientSession(
             connector=CONNECTOR,
             cookie_jar=CookieJar(unsafe=True)
@@ -10163,6 +10211,10 @@ async def _ensure_session():
 async def init_http_session():
     """فقط یک بار در startup ربات صدا زده شود"""
     await _ensure_session()
+    try:
+        await xui_sync_sub_settings()
+    except Exception as e:
+        logger.warning(f"خطا در همگام‌سازی تنظیمات ساب: {e}")
 
 
 async def close_http_session():
@@ -10170,6 +10222,7 @@ async def close_http_session():
     global SENAI_COOKIE, COOKIE_TIME
     global SENAI_CSRF, CSRF_TIME
     global INBOUND_CACHE
+    global PANEL_SUB_PATH, PANEL_SUB_URI, PANEL_COMPUTED_SUB_BASE_URL
 
     if HTTP_SESSION and not HTTP_SESSION.closed:
         await HTTP_SESSION.close()
@@ -10182,6 +10235,10 @@ async def close_http_session():
 
     SENAI_CSRF = None
     CSRF_TIME = 0
+
+    PANEL_SUB_PATH = None
+    PANEL_SUB_URI = None
+    PANEL_COMPUTED_SUB_BASE_URL = None
 
     INBOUND_CACHE = {
         "data": [],
@@ -10380,6 +10437,87 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
     except Exception as e:
         logger.error(f"API request error: {e}")
         return None
+
+
+async def xui_sync_sub_settings() -> bool:
+    """دریافت و استخراج دقیق تنظیمات سابسکریپشن از پنل سنایی (پشتیبانی از http، https، پورت، دامنه‌های مختلف و پث‌های سفارشی)"""
+    global PANEL_SUB_PATH, PANEL_SUB_URI, PANEL_COMPUTED_SUB_BASE_URL
+    if not SENAI_PANEL_ENABLED:
+        return False
+    try:
+        result = await _api_request("POST", "/panel/setting/all")
+        if not result or not result.get("success"):
+            result = await _api_request("GET", "/panel/setting/all")
+
+        if result and result.get("success"):
+            obj = result.get("obj") or {}
+            sub_path = (obj.get("subPath") or "sub").strip().strip('/')
+            sub_uri = (obj.get("subURI") or "").strip()
+            sub_cert = (obj.get("subCertFile") or "").strip()
+            sub_port_raw = obj.get("subPort")
+            try:
+                sub_port = int(sub_port_raw) if sub_port_raw is not None and str(sub_port_raw).strip() else 0
+            except (ValueError, TypeError):
+                sub_port = 0
+
+            PANEL_SUB_PATH = sub_path
+            PANEL_SUB_URI = sub_uri
+
+            panel_parsed = urlparse(SENAI_PANEL_URL)
+            panel_host = panel_parsed.hostname or "localhost"
+
+            # محاسبه دقیق شمای ارتباطی (http یا https) و آدرس پایه ساب
+            if sub_uri:
+                if sub_uri.startswith("http://") or sub_uri.startswith("https://"):
+                    parsed_sub = urlparse(sub_uri)
+                    scheme = parsed_sub.scheme
+                    netloc = parsed_sub.netloc
+                    uri_path = (parsed_sub.path or "").strip('/')
+                    final_path = uri_path if uri_path else sub_path
+                    PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{netloc}/{final_path}".rstrip('/')
+                else:
+                    if sub_cert:
+                        scheme = "https"
+                    elif sub_port in (443, 8443, 2053, 2083, 2087, 2096):
+                        scheme = "https"
+                    elif sub_port in (80, 8080, 8880, 2052, 2082, 2086, 2095):
+                        scheme = "http"
+                    elif panel_parsed.scheme:
+                        scheme = panel_parsed.scheme
+                    else:
+                        scheme = "http"
+
+                    netloc = sub_uri.rstrip('/')
+                    if ':' not in netloc and sub_port and sub_port not in (80, 443):
+                        netloc = f"{netloc}:{sub_port}"
+
+                    PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{netloc}/{sub_path}".rstrip('/')
+            else:
+                if sub_cert:
+                    scheme = "https"
+                elif sub_port in (443, 8443, 2053, 2083, 2087, 2096):
+                    scheme = "https"
+                elif sub_port in (80, 8080, 8880, 2052, 2082, 2086, 2095):
+                    scheme = "http"
+                elif panel_parsed.scheme:
+                    scheme = panel_parsed.scheme
+                else:
+                    scheme = "http"
+
+                if sub_port and sub_port > 0 and sub_port not in (80, 443):
+                    port_str = f":{sub_port}"
+                elif not sub_port and panel_parsed.port:
+                    port_str = f":{panel_parsed.port}"
+                else:
+                    port_str = ""
+
+                PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{panel_host}{port_str}/{sub_path}".rstrip('/')
+
+            logger.info(f"🌐 آدرس سابسکریپشن پنل سنایی همگام شد: {PANEL_COMPUTED_SUB_BASE_URL}")
+            return True
+    except Exception as e:
+        logger.warning(f"⚠️ عدم موفقیت در دریافت تنظیمات ساب از پنل: {e}")
+    return False
 
 
 async def xui_get_inbounds(
@@ -10703,11 +10841,13 @@ async def xui_create_client_with_inbound(
                                         if actual_client:
                                             actual_sub_id = actual_client.get('subId', '') or email
                                             logger.info(f"   🔗 subId واقعی از پنل: {actual_sub_id}")
-                                            return f"{SENAI_SUB_URL}/sub/{actual_sub_id}"
+                                            base_sub = get_sub_base_url()
+                                            return f"{base_sub}/{actual_sub_id}"
                                     except Exception as e:
                                         logger.warning(f"⚠️ خطا در دریافت subId واقعی: {e}")
-                                    
-                                    return f"{SENAI_SUB_URL}/sub/{email}"
+
+                                    base_sub = get_sub_base_url()
+                                    return f"{base_sub}/{email}"
                                 else:
                                     error_msg = data.get('msg', 'Unknown error')
                                     logger.error(f"❌ خطا در ساخت کلاینت: {error_msg}")
@@ -11651,17 +11791,21 @@ def extract_email_from_sub_link(sub_link: str) -> Optional[str]:
     return None
 def build_sub_link_from_client(email: str, client_data: dict = None) -> str:
     """
-    ساخت لینک ساب با اولویت subId (نه email)
+    ساخت لینک ساب با اولویت subId (نه email) و وب‌پث هوشمند
     """
+    base_sub = get_sub_base_url()
+    if not base_sub:
+        base_sub = f"{(SENAI_SUB_URL or '').rstrip('/')}/sub"
+
     if client_data and isinstance(client_data, dict):
         sub_id = client_data.get('subId', '') or ''
         if sub_id.strip():
-            return f"{SENAI_SUB_URL}/sub/{sub_id}"
-    
+            return f"{base_sub}/{sub_id.strip()}"
+
     # fallback به email
     if email:
-        return f"{SENAI_SUB_URL}/sub/{email}"
-    
+        return f"{base_sub}/{email.strip()}"
+
     return ""
 def get_order_client_email(order: dict) -> Optional[str]:
     """
@@ -23083,11 +23227,12 @@ def _subscription_id_from_link(link: Optional[str]) -> Optional[str]:
         return None
     try:
         parsed = URL(link)
-        configured = URL(SENAI_SUB_URL)
+        base_sub = get_sub_base_url()
+        configured = URL(base_sub) if base_sub else URL(SENAI_SUB_URL)
         if parsed.origin() != configured.origin():
             return None
         parts = parsed.path.rstrip("/").split("/")
-        if len(parts) >= 2 and parts[-2] == "sub" and parts[-1]:
+        if parts and parts[-1]:
             return parts[-1]
     except (TypeError, ValueError):
         return None
@@ -35443,16 +35588,17 @@ async def rebuild_sub_links_in_database():
     Returns:
         dict: شامل آمار و لیست سفارشات بروزرسانی شده
     """
-    if not SENAI_SUB_URL:
-        logger.error("❌ SENAI_SUB_URL در config.py تنظیم نشده است!")
+    current_sub_base = get_sub_base_url()
+    if not current_sub_base:
+        logger.error("❌ آدرس سابسکریپشن مشخص نیست (نه در config.py و نه در پنل)!")
         return {
             'success': False,
             'error': 'SENAI_SUB_URL not configured',
             'updated_count': 0,
             'updated_orders': []
         }
-    
-    logger.info(f"🔄 شروع بازسازی لینک‌های ساب با آدرس جدید: {SENAI_SUB_URL}")
+
+    logger.info(f"🔄 شروع بازسازی لینک‌های ساب با آدرس جدید: {current_sub_base}")
     
     updated_orders = []
     failed_orders = []
@@ -35499,10 +35645,11 @@ async def rebuild_sub_links_in_database():
                     return None
                 if not is_valid_link(link):
                     return None
+                base_sub = get_sub_base_url()
                 if '/sub/' in link:
                     sub_path = link.split('/sub/')[-1]
                     if sub_path:
-                        return f"{SENAI_SUB_URL}/sub/{sub_path}"
+                        return f"{base_sub}/{sub_path}"
                 if link.startswith('//'):
                     link_with_protocol = f"https:{link}"
                     return rebuild_link(link_with_protocol)
@@ -35510,49 +35657,29 @@ async def rebuild_sub_links_in_database():
                     parts = link.split('/')
                     if len(parts) >= 2:
                         path = '/' + '/'.join(parts[1:])
-                        return f"{SENAI_SUB_URL}{path}"
-                    return f"{SENAI_SUB_URL}/{link}"
+                        return f"{base_sub}{path}"
+                    return f"{base_sub}/{link}"
                 try:
                     parsed = urlparse(link)
                     if parsed.scheme and parsed.netloc:
-                        path = parsed.path or '/sub/'
-                        query = parsed.query or ''
-                        new_link = f"{SENAI_SUB_URL}{path}"
-                        if query:
-                            new_link += f"?{query}"
-                        if parsed.port and ':' not in SENAI_SUB_URL:
-                            base_url_no_port = SENAI_SUB_URL.replace('https://', '').replace('http://', '')
-                            protocol = 'https://' if SENAI_SUB_URL.startswith('https://') else 'http://'
-                            new_link = f"{protocol}{base_url_no_port}:{parsed.port}{path}"
+                        parts = parsed.path.rstrip('/').split('/')
+                        sub_id = parts[-1] if parts else ''
+                        if sub_id:
+                            new_link = f"{base_sub}/{sub_id}"
+                            query = parsed.query or ''
                             if query:
                                 new_link += f"?{query}"
-                        
-                        return new_link
+                            return new_link
                 except Exception as e:
                     logger.warning(f"⚠️ خطا در parsing لینک: {e}")
                 if is_valid_link(link):
                     try:
-                        protocol = 'https://'
-                        if link.startswith('http://'):
-                            protocol = 'http://'
-                        elif link.startswith('https://'):
-                            protocol = 'https://'
-                        elif link.startswith('//'):
-                            protocol = 'https://'
-                        path = '/sub/'
-                        if '/sub/' in link:
-                            path = link.split('/sub/')[0] + '/sub/'
-                            remaining = link.split('/sub/')[1]
-                            if remaining:
-                                path += remaining
-                        else:
-                            path = link.split(protocol)[-1].split('/', 1)[-1] if '/' in link else ''
-                            path = f"/{path}" if path else "/sub/"
-                        
-                        return f"{SENAI_SUB_URL}{path}"
+                        parts = link.rstrip('/').split('/')
+                        if parts and parts[-1]:
+                            return f"{base_sub}/{parts[-1]}"
                     except:
                         return None
-                
+
                 return None
             new_config_link = None
             new_sub_link = None
@@ -35642,10 +35769,10 @@ async def rebuild_sub_links_in_database():
         'updated_orders': updated_orders,
         'failed_orders': failed_orders,
         'invalid_links': invalid_links_skipped,
-        'new_base_url': SENAI_SUB_URL,
+        'new_base_url': get_sub_base_url(),
         'timestamp': datetime.now().isoformat()
     }
-    
+
     logger.info("=" * 60)
     logger.info(f"✅ بازسازی لینک‌های ساب کامل شد!")
     logger.info(f"📊 کل سفارشات: {result['total_orders']}")
@@ -35653,7 +35780,7 @@ async def rebuild_sub_links_in_database():
     logger.info(f"❌ خطا: {result['failed_count']}")
     logger.info(f"⏭️ بدون تغییر: {result['skipped_count']}")
     logger.info(f"⏭️ لینک‌های نامعتبر دست نخورده: {result['invalid_links_skipped']}")
-    logger.info(f"🌐 آدرس جدید: {SENAI_SUB_URL}")
+    logger.info(f"🌐 آدرس جدید: {get_sub_base_url()}")
     logger.info("=" * 60)
     
     return result
@@ -35706,24 +35833,27 @@ async def rebuild_single_order_sub_link(order_id: int):
     def rebuild_link(link: str) -> str:
         if not link:
             return None
-        
+
+        base_sub = get_sub_base_url()
         if '/sub/' in link:
             sub_path = link.split('/sub/')[-1]
             if sub_path:
-                return f"{SENAI_SUB_URL}/sub/{sub_path}"
-        
+                return f"{base_sub}/{sub_path}"
+
         try:
             parsed = urlparse(link)
             if parsed.scheme and parsed.netloc:
-                path = parsed.path or '/sub/'
-                query = parsed.query or ''
-                new_link = f"{SENAI_SUB_URL}{path}"
-                if query:
-                    new_link += f"?{query}"
-                return new_link
+                parts = parsed.path.rstrip('/').split('/')
+                sub_id = parts[-1] if parts else ''
+                if sub_id:
+                    new_link = f"{base_sub}/{sub_id}"
+                    query = parsed.query or ''
+                    if query:
+                        new_link += f"?{query}"
+                    return new_link
         except:
             pass
-        
+
         return None
     
     new_config_link = rebuild_link(config_link) if config_link else None
@@ -35864,7 +35994,7 @@ async def show_rebuild_results(callback: CallbackQuery):
         "📋 گزارش بازسازی لینک‌های ساب",
         "=" * 60,
         f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"🌐 آدرس جدید: {SENAI_SUB_URL}",
+        f"🌐 آدرس جدید: {get_sub_base_url()}",
         "=" * 60,
         f"📊 کل سفارشات: {result['total_orders']}",
         f"✅ بروزرسانی شده: {result['updated_count']}",
