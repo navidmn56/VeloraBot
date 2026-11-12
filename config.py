@@ -61,13 +61,21 @@ def load_configs_from_json():
         return {}
 
 
-def get_price_settings_text(configs_data: dict) -> str:
+def get_price_settings_text(configs_data: dict, lang: str = "fa") -> str:
     """دریافت اطلاعات قیمت‌ها"""
     price_settings = configs_data.get('price_settings', {})
 
     referral_bonus = price_settings.get('referral_bonus', 5000) or 0
     min_charge = price_settings.get('min_charge', 10000) or 0
     max_charge = price_settings.get('max_charge', 5000000) or 0
+
+    if lang == "en":
+        return f"""
+💰 Pricing:
+- Referral Bonus: {referral_bonus:,} Toman
+- Minimum Top-up: {min_charge:,} Toman
+- Maximum Top-up: {max_charge:,} Toman
+"""
 
     return f"""
 💰 قیمت‌ها:
@@ -77,49 +85,45 @@ def get_price_settings_text(configs_data: dict) -> str:
 """
 
 
-def format_volume_for_prompt(volume_gb) -> str:
+def format_volume_for_prompt(volume_gb, lang: str = "fa") -> str:
     """نمایش حجم در پرامپت با واحد قابل‌فهم برای کاربر."""
     try:
         volume = float(volume_gb)
     except (TypeError, ValueError):
-        return f"{volume_gb} گیگ"
+        return f"{volume_gb} GB" if lang == "en" else f"{volume_gb} گیگ"
 
     if volume == 0:
-        return "نامحدود"
+        return "Unlimited" if lang == "en" else "نامحدود"
     if volume < 1:
         megabytes = int(round(volume * 1024))
-        return f"{megabytes} مگابایت"
+        return f"{megabytes} MB" if lang == "en" else f"{megabytes} مگابایت"
     volume_text = str(int(volume)) if volume.is_integer() else f"{volume:g}"
-    return f"{volume_text} گیگابایت"
+    return f"{volume_text} GB" if lang == "en" else f"{volume_text} گیگابایت"
 
 
-def get_ready_packages_text(configs_data: dict) -> str:
+def get_ready_packages_text(configs_data: dict, lang: str = "fa") -> str:
     """دریافت اطلاعات بسته‌های آماده"""
     ready_packages = configs_data.get('ready_packages', {})
 
     if not ready_packages.get('enabled', False):
-        return "📦 بسته‌های آماده غیرفعال است"
+        return "📦 Ready packages are disabled" if lang == "en" else "📦 بسته‌های آماده غیرفعال است"
 
     categories = ready_packages.get('categories', [])
 
     if not categories:
-        return "📦 هیچ بسته آماده‌ای موجود نیست"
+        return "📦 No ready packages available" if lang == "en" else "📦 هیچ بسته آماده‌ای موجود نیست"
 
-    text = "📦 بسته‌های آماده:\n"
+    text = "📦 Ready Packages:\n" if lang == "en" else "📦 بسته‌های آماده:\n"
 
     for cat in categories:
         if not cat.get('is_active', True):
             continue
 
-        cat_name = cat.get('name', '') or ''
-        cat_name_en = cat.get('name_en', '') or ''
+        cat_name = (cat.get('name_en') if lang == "en" else cat.get('name')) or cat.get('name', '') or ''
         cat_icon = cat.get('icon', '📦') or '📦'
-        cat_desc = cat.get('description', '') or ''
+        cat_desc = (cat.get('description_en') if lang == "en" else cat.get('description')) or cat.get('description', '') or ''
 
-        text += f"\n{cat_icon} {cat_name}"
-        if cat_name_en:
-            text += f" ({cat_name_en})"
-        text += "\n"
+        text += f"\n{cat_icon} {cat_name}\n"
 
         if cat_desc:
             text += f"   {cat_desc}\n"
@@ -134,20 +138,23 @@ def get_ready_packages_text(configs_data: dict) -> str:
             pkg_price = pkg.get('price', 0) or 0
             pkg_ip = pkg.get('ip_limit', 0) or 0
 
-            volume_display = format_volume_for_prompt(pkg_volume)
-            ip_display = "نامحدود" if pkg_ip == 0 else str(pkg_ip)
-
-            text += f"   • {volume_display} / {pkg_days} روز / {pkg_price:,} تومان / {ip_display} IP\n"
+            volume_display = format_volume_for_prompt(pkg_volume, lang=lang)
+            if lang == "en":
+                ip_display = "Unlimited" if pkg_ip == 0 else str(pkg_ip)
+                text += f"   • {volume_display} / {pkg_days} days / {pkg_price:,} Toman / {ip_display} IP\n"
+            else:
+                ip_display = "نامحدود" if pkg_ip == 0 else str(pkg_ip)
+                text += f"   • {volume_display} / {pkg_days} روز / {pkg_price:,} تومان / {ip_display} IP\n"
 
     return text
 
 
-def get_test_service_text(configs_data: dict) -> str:
+def get_test_service_text(configs_data: dict, lang: str = "fa") -> str:
     """دریافت اطلاعات تست رایگان"""
     test_service = configs_data.get('test_service', {})
 
     if not test_service.get('enabled', False):
-        return "🧪 تست رایگان غیرفعال است"
+        return "🧪 Free trial is disabled" if lang == "en" else "🧪 تست رایگان غیرفعال است"
 
     test_volume_mb = test_service.get('volume_mb')
     if test_volume_mb is not None:
@@ -161,9 +168,18 @@ def get_test_service_text(configs_data: dict) -> str:
     max_tests = test_service.get('max_tests', 0) or 0
     ip_limit = test_service.get('ip_limit', 0) or 0
 
-    volume_display = format_volume_for_prompt(test_volume)
-    ip_display = "نامحدود" if ip_limit == 0 else str(ip_limit)
+    volume_display = format_volume_for_prompt(test_volume, lang=lang)
+    if lang == "en":
+        ip_display = "Unlimited" if ip_limit == 0 else str(ip_limit)
+        return f"""
+🧪 Free Trial:
+- Volume: {volume_display}
+- Duration: {test_days} days
+- Max Tests: {max_tests} times
+- IP Limit: {ip_display}
+"""
 
+    ip_display = "نامحدود" if ip_limit == 0 else str(ip_limit)
     return f"""
 🧪 تست رایگان:
 - حجم: {volume_display}
@@ -173,23 +189,23 @@ def get_test_service_text(configs_data: dict) -> str:
 """
 
 
-def get_shop_status_text(configs_data: dict) -> str:
+def get_shop_status_text(configs_data: dict, lang: str = "fa") -> str:
     """دریافت وضعیت فروشگاه"""
     shop_status = configs_data.get('shop_status', {})
 
     if not shop_status:
-        return "🛍 فروشگاه باز است"
+        return "🛍 Shop is open" if lang == "en" else "🛍 فروشگاه باز است"
 
     is_open = shop_status.get('is_open', True)
     message = shop_status.get('message', '') or ''
 
     if is_open:
-        return "🛍 فروشگاه باز است"
+        return "🛍 Shop is open" if lang == "en" else "🛍 فروشگاه باز است"
     else:
-        return f"🚫 فروشگاه بسته است\n{message}"
+        return f"🚫 Shop is closed\n{message}" if lang == "en" else f"🚫 فروشگاه بسته است\n{message}"
 
 
-def get_force_join_text(configs_data: dict) -> str:
+def get_force_join_text(configs_data: dict, lang: str = "fa") -> str:
     """دریافت اطلاعات عضویت اجباری"""
     force_join = configs_data.get('force_join_settings', {})
 
@@ -201,7 +217,7 @@ def get_force_join_text(configs_data: dict) -> str:
     if not channels:
         return ""
 
-    text = "📢 کانال‌های ما:\n"
+    text = "📢 Our Channels:\n" if lang == "en" else "📢 کانال‌های ما:\n"
     for ch in channels:
         ch_name = ch.get('name', '') or ''
         ch_username = ch.get('username', '') or ''
@@ -211,10 +227,18 @@ def get_force_join_text(configs_data: dict) -> str:
     return text
 
 
-def get_bank_card_text() -> str:
+def get_bank_card_text(lang: str = "fa") -> str:
     """دریافت اطلاعات کارت بانکی"""
     clean_card = ''.join(filter(str.isdigit, BANK_CARD_NUMBER))
     card_formatted = ' '.join([clean_card[i:i + 4] for i in range(0, len(clean_card), 4)])
+    if lang == "en":
+        return f"""
+💳 Payment Info:
+- Card Number: {card_formatted}
+- Card Holder: {BANK_CARD_HOLDER}
+- Bank: {BANK_NAME}
+"""
+
     return f"""
 💳 اطلاعات پرداخت:
 - شماره کارت: {card_formatted}
@@ -223,22 +247,34 @@ def get_bank_card_text() -> str:
 """
 
 
-def get_support_text() -> str:
+def get_support_text(lang: str = "fa") -> str:
     """دریافت اطلاعات پشتیبانی"""
     return f"""
+💬 Support: {SUPPORT_USERNAME}
+""" if lang == "en" else f"""
 💬 پشتیبانی: {SUPPORT_USERNAME}
 """
 
 
-def generate_dynamic_system_prompt() -> str:
-    """تولید پرامپت داینامیک با اطلاعات دیتابیس"""
+def generate_dynamic_system_prompt(lang: str = "fa") -> str:
+    """تولید پرامپت داینامیک با اطلاعات دیتابیس (پشتیبانی از فارسی و انگلیسی)"""
     configs_data = load_configs_from_json()
 
-    price_text = get_price_settings_text(configs_data)
-    packages_text = get_ready_packages_text(configs_data)
-    test_text = get_test_service_text(configs_data)
-    shop_text = get_shop_status_text(configs_data)
-    support_text = get_support_text()
+    price_text = get_price_settings_text(configs_data, lang=lang)
+    packages_text = get_ready_packages_text(configs_data, lang=lang)
+    test_text = get_test_service_text(configs_data, lang=lang)
+    shop_text = get_shop_status_text(configs_data, lang=lang)
+    support_text = get_support_text(lang=lang)
+
+    if lang == "en":
+        prompt = f"""You are a professional and friendly VPN sales and technical support assistant. Answer in natural, concise, and helpful English; rely strictly on the provided data below and the current user's context without inventing facts. The user snapshot is read-only and belongs to this user. Do not claim payment or service delivery unless it actually happened. Recommend volumes only; buttons are created by the bot so do not output button command instructions. Show volumes under 1 GB in megabytes (MB).
+
+{shop_text}
+{price_text}
+{packages_text}
+{test_text}
+{support_text}"""
+        return prompt
 
     prompt = f"""دستیار فروش و پشتیبانی VPN هستی. فارسی طبیعی، خلاق و موجز پاسخ بده؛ فقط از داده‌های زیر و context همین کاربر استفاده کن و چیزی را حدس نزن. snapshot فقط خواندنی و متعلق به همان کاربر است. ادعای پرداخت، تغییر داده یا تحویل کانفیگ نکن مگر واقعاً انجام شده باشد. برای بسته‌ها فقط حجم درخواستی را پیشنهاد بده؛ دکمه را ربات می‌سازد و دستور دکمه در متن ننویس. فاکتور/رسید کارت و پرداخت موجودی از مسیرهای واقعی ربات انجام می‌شوند. حجم کمتر از ۱ گیگ را به مگابایت نمایش بده.
 

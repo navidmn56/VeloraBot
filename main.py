@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 import unicodedata
 import qrcode
 try:
@@ -38,6 +38,7 @@ except ImportError:
 from yarl import URL
 from wireguard_system import build_wireguard_config
 from dynamic_phrases import format_start_greeting
+from sms_payment_system import sms_payment_manager, register_sms_payment_handlers
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -14666,14 +14667,14 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💰 تنظیمات قیمت", callback_data="admin_price_settings")
             ],
             [
+                InlineKeyboardButton(text="💳 تایید خودکار پیامک", callback_data="admin_sms_payment"),
                 InlineKeyboardButton(text="🔌 تست پنل", callback_data="panel_test"),
-                InlineKeyboardButton(text="🚫 لیست سیاه", callback_data="admin_blacklist"),
-                InlineKeyboardButton(text="🤖 AI", callback_data="admin_ai_settings")
+                InlineKeyboardButton(text="🚫 لیست سیاه", callback_data="admin_blacklist")
             ],
             [
+                InlineKeyboardButton(text="🤖 AI", callback_data="admin_ai_settings"),
                 InlineKeyboardButton(text="📢 پیام همگانی", callback_data="admin_broadcast"),
-                InlineKeyboardButton(text="🔄 همگام‌سازی", callback_data="admin_sync_configs"),
-                InlineKeyboardButton(text="🗑 مدیریت بکاپ", callback_data="admin_manage_backups")
+                InlineKeyboardButton(text="🔄 همگام‌سازی", callback_data="admin_sync_configs")
             ],
             [
                 InlineKeyboardButton(text="🛒 مدیریت فروش", callback_data="admin_shop_settings"),
@@ -14726,14 +14727,14 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💰 Price Settings", callback_data="admin_price_settings")
             ],
             [
+                InlineKeyboardButton(text="💳 SMS Auto-Pay", callback_data="admin_sms_payment"),
                 InlineKeyboardButton(text="🔌 Test Panel", callback_data="panel_test"),
-                InlineKeyboardButton(text="🚫 Blacklist", callback_data="admin_blacklist"),
-                InlineKeyboardButton(text="🤖 AI", callback_data="admin_ai_settings")
+                InlineKeyboardButton(text="🚫 Blacklist", callback_data="admin_blacklist")
             ],
             [
+                InlineKeyboardButton(text="🤖 AI", callback_data="admin_ai_settings"),
                 InlineKeyboardButton(text="📢 Broadcast", callback_data="admin_broadcast"),
-                InlineKeyboardButton(text="🔄 Sync", callback_data="admin_sync_configs"),
-                InlineKeyboardButton(text="🗑 Manage Backups", callback_data="admin_manage_backups")
+                InlineKeyboardButton(text="🔄 Sync", callback_data="admin_sync_configs")
             ],
             [
                 InlineKeyboardButton(text="🛒 Shop Management", callback_data="admin_shop_settings"),
@@ -25195,18 +25196,57 @@ async def pay_card(callback: CallbackQuery):
             f"قیمت: {final_price:,} تومان | حجم: {vol}GB | مدت: {days} روز"
         )
     order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
+
+    base_order_price = final_price
+    payable_amount = final_price
+    discount_offset = 0
+
+    if sms_payment_manager.is_enabled():
+        try:
+            window_min = sms_payment_manager.get_window_minutes()
+            payable_amount, discount_offset = sms_payment_manager.db.reserve_unique_payable_amount(
+                order_id=order_id,
+                order_type=order_type if not is_extend else "extend",
+                user_id=user_id,
+                base_price=base_order_price,
+                window_minutes=window_min
+            )
+            final_price = payable_amount
+        except Exception as e:
+            logger.error(f"❌ خطا در رزرو مبلغ اختصاصی برای کارت: {e}")
+            update_order(order_id, status='cancelled')
+            err_msg = (
+                "⚠️ در حال حاضر امکان صدور فاکتور با شناسه پرداخت مقدور نیست. لطفاً دقایقی دیگر تلاش کنید."
+                if lang == "fa"
+                else "⚠️ Unable to reserve a unique payment amount right now. Please try again in a few minutes."
+            )
+            await callback.answer(err_msg, show_alert=True)
+            return
+
+    final_price = payable_amount
+
     if is_ready_package:
-        update_order(order_id, 
+        update_order(order_id,
                     category_id=category_id,
                     category_name=category_name,
                     category_name_en=category_name_en,
                     package_id=package_id,
                     inbound_id=inbound_ids,
+                    base_price=base_order_price,
+                    payable_amount=payable_amount,
+                    discount_offset=discount_offset,
+                    price=payable_amount,
+                    amount=payable_amount,
                     status='awaiting_payment',
                     payment_method='card',  # ✅ تنظیم روش پرداخت
                     payment_label='💳 کارت به کارت')  # ✅ برچسب نمایشی
     else:
-        update_order(order_id, 
+        update_order(order_id,
+                    base_price=base_order_price,
+                    payable_amount=payable_amount,
+                    discount_offset=discount_offset,
+                    price=payable_amount,
+                    amount=payable_amount,
                     status='awaiting_payment',
                     payment_method='card',  # ✅ تنظیم روش پرداخت
                     payment_label='💳 کارت به کارت')  # ✅ برچسب نمایشی
@@ -25408,6 +25448,10 @@ async def cancel_order_direct(callback: CallbackQuery):
         
         if order.get('status') == 'awaiting_payment':
             update_order(order_id, status='cancelled')
+            try:
+                sms_payment_manager.db.cancel_reservation(order_id, order.get('type', 'purchase'))
+            except Exception:
+                pass
             logger.info(f"سفارش #{order_id} توسط کاربر لغو شد")
             
             if log_system:
@@ -37848,6 +37892,13 @@ def build_ai_reply_keyboard(
 ):
     buttons = []
     seen_callbacks = set()
+    # اگر پیام کاربر فارسی باشد، خروجی دکمه‌ها و پیام‌های واسط فارسی و اگر انگلیسی باشد، انگلیسی می‌شود
+    has_persian_chars = bool(re.search(r"[؀-ۿ]", user_message or ""))
+    if has_persian_chars:
+        lang = "fa"
+    elif user_message and re.search(r"[a-zA-Z]{3,}", user_message):
+        lang = "en"
+
     query = normalize_ai_user_text(user_message or "")
     allowed_actions = set(re.findall(
         r"- ([A-Z_]+(?::\d+){0,2}):",
@@ -38199,7 +38250,45 @@ def build_ai_reply_keyboard(
                 response_recommendation_ambiguous = True
                 response_recommendation_candidates = response_candidates[:8]
         else:
-            response_recommendation_ambiguous = True
+            response_words = set(re.findall(
+                r"[a-z0-9]+|[؀-ۿ]+",
+                response_text,
+                re.IGNORECASE,
+            ))
+            candidate_scores = {}
+            for action, details in package_actions.items():
+                names = (
+                    details.get("package_name"),
+                    details.get("category_name"),
+                )
+                name_words = {
+                    word
+                    for name in names
+                    for word in re.findall(
+                        r"[a-z0-9]+|[؀-ۿ]+",
+                        normalize_ai_user_text(str(name or "")),
+                        re.IGNORECASE,
+                    )
+                    if len(word) >= 3 and not word.isdigit()
+                }
+                match_count = len(name_words & response_words)
+                if match_count > 0:
+                    candidate_scores[action] = match_count
+
+            if candidate_scores:
+                highest_score = max(candidate_scores.values())
+                best_candidates = [
+                    action for action, score in candidate_scores.items()
+                    if score == highest_score
+                ]
+                if len(best_candidates) == 1:
+                    response_recommendation_action = best_candidates[0]
+                else:
+                    response_recommendation_ambiguous = True
+                    response_recommendation_candidates = best_candidates[:8]
+            else:
+                response_recommendation_ambiguous = True
+                response_recommendation_candidates = list(package_actions.keys())[:4]
 
     matching_package_actions = list(package_actions)
     if requested_volume:
@@ -38249,12 +38338,20 @@ def build_ai_reply_keyboard(
                     details["balance_label"]
                 )
 
-    first_package = re.search(r"اول(?:ی|یو|و|ین|یش|شو)?|first|1st", query, re.IGNORECASE)
+    first_package = re.search(
+        r"اول(?:ی|یو|و|ین|یش|شو)?|یک(?:دوم|دومو|ی|یش|یشو|یو)?|یکی|first|1st|one(?: of them)?|either",
+        query,
+        re.IGNORECASE,
+    )
     balance_payment = payment_request and re.search(
         r"موجودی|کیف.?پول|wallet|balance",
         query,
         re.IGNORECASE,
     )
+    if first_package and response_recommendation_candidates and not response_recommendation_action:
+        response_recommendation_action = response_recommendation_candidates[0]
+        response_recommendation_ambiguous = False
+        response_recommendation_candidates = []
     if first_package:
         matching_package_actions = matching_package_actions[:1]
     elif all_packages_requested:
@@ -38475,20 +38572,11 @@ def build_ai_reply_keyboard(
             "Please submit that invoice’s receipt to avoid creating a duplicate."
         )
     elif identify_invoice_package and response_recommendation_ambiguous:
-        if response_recommendation_candidates:
-            display_answer = (
-                "چند بسته با توضیحات قبلی مطابقت دارند؛ برای صدور فاکتور، گزینهٔ دقیق را از دکمه‌های زیر انتخاب کن."
-                if lang == "fa"
-                else "Several packages match the previous recommendation. Choose the exact option below to create its invoice."
-            )
-        else:
-            display_answer = (
-                "برای اینکه فاکتور اشتباه یا چند فاکتور صادر نشود، بستهٔ موردنظر از پاسخ مشخص نشد. "
-                "لطفاً حجم یا نام دقیق بسته را بفرست."
-                if lang == "fa"
-                else "To avoid creating the wrong or multiple invoices, I could not identify one exact package. "
-                "Please specify the package name or volume."
-            )
+        display_answer = (
+            "چند بسته با توضیحات مطابقت دارند؛ برای صدور فاکتور، گزینهٔ دقیق را از دکمه‌های زیر انتخاب کن."
+            if lang == "fa"
+            else "Several packages match your request. Choose the exact option below to create its invoice."
+        )
     else:
         display_answer = strip_ai_button_directives(answer)
     if not display_answer:
@@ -38729,6 +38817,7 @@ async def get_ai_response(
     response_mime_type: Optional[str] = None,
     max_output_tokens: Optional[int] = None,
     remember_conversation: bool = True,
+    lang: Optional[str] = None,
 ) -> str:
     """دریافت پاسخ کامل از AI؛ پاسخ‌های قطع‌شده به کاربر تحویل داده نمی‌شوند."""
     if gemini_client:
@@ -38741,6 +38830,9 @@ async def get_ai_response(
             )
             full_message = ""
             has_prior_assistant_response = False
+            user_info = get_user(user_id) if (user_id and 'get_user' in globals()) else {}
+            effective_lang = lang or user_info.get('lang', 'fa') if user_info else (lang or 'fa')
+
             if (
                 user_id
                 and remember_conversation
@@ -38755,11 +38847,10 @@ async def get_ai_response(
                 history = conversation_memory.get_context(user_id)
                 full_message += f"{history}\n\n"
             if user_id:
-                user_info = get_user(user_id) if 'get_user' in globals() else {}
-                user_name = user_info.get('name', 'کاربر') if user_info else username or f"کاربر_{user_id}"
-                full_message += f"کاربر {user_name}: {message_text}"
+                user_name = user_info.get('name', 'User' if effective_lang == 'en' else 'کاربر') if user_info else username or (f"User_{user_id}" if effective_lang == 'en' else f"کاربر_{user_id}")
+                full_message += f"{'User' if effective_lang == 'en' else 'کاربر'} {user_name}: {message_text}"
             else:
-                full_message += f"کاربر: {message_text}"
+                full_message += f"{'User' if effective_lang == 'en' else 'کاربر'}: {message_text}"
             if has_prior_assistant_response:
                 full_message += (
                     "\n\n[CONVERSATION CONTINUATION: You have already greeted this user. "
@@ -38768,7 +38859,7 @@ async def get_ai_response(
                 )
             system_instruction = (
                 system_instruction_override
-                or app_config.generate_dynamic_system_prompt()
+                or app_config.generate_dynamic_system_prompt(lang=effective_lang)
             )
             request_context = []
             if button_context:
@@ -39126,6 +39217,7 @@ async def process_ai_chat_message(message: Message):
                     if should_include_ai_user_context(message_text, user_id)
                     else ""
                 ),
+                lang=lang,
             ),
             timeout=90
         )
@@ -39191,8 +39283,18 @@ async def process_ai_chat_message(message: Message):
         formatted_answer = formatted_answer.replace('**', '')
         
         remaining_display = max(0, remaining - 1)
-        
-        response_text = f"""🤖 <b>پاسخ هوش مصنوعی:</b>
+
+        if lang == "en":
+            response_text = f"""🤖 <b>AI Response:</b>
+
+{formatted_answer}
+
+━━━━━━━━━━━━━━━━━━━
+📊 Remaining questions today: {remaining_display}/{daily_limit}
+💡 Ask your next question...
+❌ Send /cancel to exit."""
+        else:
+            response_text = f"""🤖 <b>پاسخ هوش مصنوعی:</b>
 
 {formatted_answer}
 
@@ -39589,6 +39691,7 @@ async def auto_ai_response(message: Message):
                 if should_include_ai_user_context(message.text or "", user_id)
                 else ""
             ),
+            lang=lang,
         )
         error_keywords = ["❌", "⚠️", "خطا", "متأسفانه", "Error", "متاسفانه"]
         is_error = any(kw in answer for kw in error_keywords)
@@ -39614,14 +39717,24 @@ async def auto_ai_response(message: Message):
         # ✅ پاکسازی پاسخ
         answer = re.sub(r'<[^>]+>', '', answer)
         answer = answer.replace('*', '').replace('`', '')
-        
-        response_text = f"""🤖 <b>پاسخ خودکار:</b>
+
+        remaining_display = max(0, remaining - 1)
+        if lang == "en":
+            response_text = f"""🤖 <b>Auto Response:</b>
+
+{answer}
+
+━━━━━━━━━━━━━━━━━━━━━━
+💡 For dedicated chat, use the «🤖 Chat with AI» button.
+📊 Remaining questions today: {remaining_display}/{daily_limit}"""
+        else:
+            response_text = f"""🤖 <b>پاسخ خودکار:</b>
 
 {answer}
 
 ━━━━━━━━━━━━━━━━━━━━━━
 💡 برای چت اختصاصی، از دکمه «🤖 چت با AI» استفاده کنید.
-📊 سوالات باقیمانده امروز: {remaining - 1}/{daily_limit}"""
+📊 سوالات باقیمانده امروز: {remaining_display}/{daily_limit}"""
         
         await processing_msg.edit_text(
             response_text,
@@ -41791,19 +41904,91 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
     
     await callback.answer("✅ سفارش لغو شد" if lang == "fa" else "✅ Order cancelled", show_alert=True)
            
+async def fulfill_vpn_order(
+    order_id: int,
+    approved_by: str = "admin",
+    payment_method: str = "card"
+) -> Tuple[str, str]:
+    """
+    سرویس مرکزی تایید پرداخت و تحویل کانفیگ VPN (مستقل از CallbackQuery)
+    Returns: ('fulfilled' | 'failed_pending_retry' | 'manual_fulfillment_required', error_message)
+    """
+    order = orders.get(str(order_id))
+    if not order:
+        return "failed_pending_retry", f"Order #{order_id} not found"
+
+    # جلوگیری قطعی از تایید مجدد
+    if order.get("status") == "approved":
+        logger.warning(f"⚠️ سفارش #{order_id} قبلاً تایید شده است؛ عملیات تکراری نادیده گرفته شد.")
+        return "fulfilled", "Already approved"
+
+    user_id = order.get("user_id")
+    volume = order.get("volume", 0)
+    days = order.get("days", 0)
+    price = order.get("price", 0)
+    user_info = get_user(user_id)
+    user_name = user_info.get("name", f"کاربر_{user_id}")
+    lang = user_info.get("lang", "fa")
+
+    # ۱. ثبت قطعی تایید پرداخت
+    update_order(
+        order_id,
+        status="approved",
+        approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        payment_method=payment_method,
+        payment_verified=True,
+    )
+    await check_referral_bonus(user_id)
+
+    # ۲. بررسی وضعیت پنل سنایی
+    if not SENAI_PANEL_ENABLED:
+        logger.info(f"ℹ️ پنل سنایی غیرفعال است؛ سفارش #{order_id} نیازمند تحویل دستی است.")
+        return "manual_fulfillment_required", "Sanaei panel is disabled; manual fulfillment required"
+
+    # ۳. ساخت کلاینت در پنل سنایی به صورت ایدم‌پوتنت
+    email = order.get("email")
+    if not email:
+        timestamp = int(datetime.now().timestamp())
+        email = f"user{user_id}_{timestamp}"
+
+    sub_link = order.get("config_link") or order.get("sub_link")
+    if not sub_link:
+        sub_link = await create_client_in_panel(user_id, email, volume, days, user_name)
+
+    if sub_link:
+        update_order(order_id, config_link=sub_link, sub_link=sub_link, email=email)
+        await send_config_with_qr_option(user_id, order_id, volume, days, price, sub_link, lang)
+        try:
+            await bot.send_message(
+                user_id,
+                f"{premium_emoji('star', '⭐')} {'لطفا به سرویس ما امتیاز دهید:' if lang=='fa' else 'Please rate our service:'}",
+                reply_markup=get_feedback_keyboard(order_id, lang)
+            )
+        except Exception:
+            pass
+        return "fulfilled", ""
+    else:
+        logger.error(f"❌ خطا در ساخت کلاینت در پنل برای سفارش #{order_id}؛ پرداخت تایید شده و آماده retry است.")
+        return "failed_pending_retry", "Failed to create client in Sanaei panel"
+
+
 @dp.callback_query(F.data.startswith("approve_order_"))
 async def approve_order(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID_INT:
         return
-    
+
     order_id = int(callback.data.split("_")[2])
     order = orders.get(str(order_id))
-    
+
     if not order:
         logger.error(f"سفارش #{order_id} برای تایید یافت نشد")
         await callback.answer("سفارش یافت نشد", show_alert=True)
         return
-    
+
+    if order.get("status") == "approved":
+        await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
+        return
+
     user_id = order['user_id']
     volume = order['volume']
     days = order['days']
@@ -41811,43 +41996,21 @@ async def approve_order(callback: CallbackQuery):
     user_info = get_user(user_id)
     user_name = user_info.get('name', f'کاربر_{user_id}')
     lang = user_info.get('lang', 'fa')
-    
+
     logger.info(f"ادمین تایید سفارش #{order_id} را شروع کرد")
-    if SENAI_PANEL_ENABLED:
-        await callback.message.edit_text(f"⏳ در حال ساخت کلاینت برای سفارش #{order_id}...")
-        update_order(order_id, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        await check_referral_bonus(user_id)
-        timestamp = int(datetime.now().timestamp())
-        email = f"user{user_id}_{timestamp}"
-        
-        sub_link = await create_client_in_panel(user_id, email, volume, days, user_name)
-        
-        if sub_link:
-            update_order(order_id, config_link=sub_link, email=email)
-            await send_config_with_qr_option(user_id, order_id, volume, days, price, sub_link, lang)
-            try:
-                await bot.send_message(
-                    user_id,
-                    f"{premium_emoji('star', '⭐')} {'لطفا به سرویس ما امتیاز دهید:' if lang=='fa' else 'Please rate our service:'}",
-                    reply_markup=get_feedback_keyboard(order_id, lang)
-                )
-            except:
-                pass
-            await callback.message.edit_text(
-                f"✅ سفارش #{order_id} تایید و کلاینت ساخته شد!\n"
-                f"👤 کاربر: {user_name} ({user_id})\n"
-                f"📦 {volume}GB / {days} روز\n"
-                f"🔗 لینک: {sub_link[:40]}..."
-            )
-        else:
-            user = get_user(user_id)
-            update_user(user_id, 'balance', user['balance'] + price)
-            
-            await callback.message.edit_text(
-                f"❌ خطا در ساخت کلاینت برای سفارش #{order_id}\n"
-                f"💰 موجودی کاربر برگشت داده شد."
-            )
-    else:
+    await callback.message.edit_text(f"⏳ در حال پردازش سفارش #{order_id}...")
+
+    status_result, err_msg = await fulfill_vpn_order(order_id, approved_by="admin", payment_method="card")
+
+    if status_result == "fulfilled":
+        sub_link = orders[str(order_id)].get("config_link", "")
+        await callback.message.edit_text(
+            f"✅ سفارش #{order_id} تایید و کلاینت ساخته شد!\n"
+            f"👤 کاربر: {user_name} ({user_id})\n"
+            f"📦 {volume}GB / {days} روز\n"
+            f"🔗 لینک: {sub_link[:40]}..."
+        )
+    elif status_result == "manual_fulfillment_required":
         user_states[callback.from_user.id] = {
             'awaiting_config': True,
             'order_id': order_id,
@@ -41856,12 +42019,21 @@ async def approve_order(callback: CallbackQuery):
             'days': days,
             'price': price
         }
-        
         if lang == "fa":
-            await callback.message.answer("📝 لطفا لینک کانفیگ را برای این سفارش ارسال کنید:")
+            await callback.message.answer("📝 لطفاً لینک کانفیگ را برای این سفارش ارسال کنید:")
         else:
             await callback.message.answer("📝 Please send the config link for this order:")
-    
+    else:
+        # خطای پنل سنایی؛ دکمه تلاش مجدد نمایش داده می‌شود
+        await callback.message.edit_text(
+            f"⚠️ پرداخت تایید شد اما ساخت کلاینت در پنل با خطا مواجه شد:\n<code>{err_msg}</code>\n\n"
+            "سفارش در وضعیت نیاز به تلاش مجدد ذخیره شد.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🔄 تلاش مجدد تحویل", callback_data=f"sms_retry_{order_id}_0")
+            ]]),
+            parse_mode=ParseMode.HTML
+        )
+
     try:
         await callback.answer()
     except Exception as e:
@@ -44271,6 +44443,8 @@ async def main():
     logger.info("✅ Balance handlers registered successfully")
     register_transaction_handlers(dp, __import__('sys').modules[__name__])
     logger.info("✅ Transaction handlers registered successfully")
+    register_sms_payment_handlers(dp, __import__('sys').modules[__name__])
+    logger.info("✅ SMS Payment handlers registered successfully")
     await init_ai()
     logger.info("=" * 60)
     logger.info("در حال راه‌اندازی ربات...")
@@ -44862,6 +45036,15 @@ async def main():
         )
         logger.info("✅ shared connector برای aiohttp ایجاد شد (limit=20, limit_per_host=10, ttl_dns_cache=300)")
         
+        if sms_payment_manager.is_enabled():
+            try:
+                await sms_payment_manager.server.start(
+                    host=sms_payment_manager.get_webhook_host(),
+                    port=sms_payment_manager.get_webhook_port()
+                )
+            except Exception as e:
+                logger.error(f"❌ خطا در راه‌اندازی سرور وب‌هوک پیامک: {e}")
+
         logger.info("🚀 شروع polling...")
         logger.info("=" * 60)
         await dp.start_polling(bot, close_bot_session=False)
@@ -44969,7 +45152,12 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         cleaned = cleanup_expired_states()
         if cleaned > 0:
             logger.info(f"🧹 {cleaned} وضعیت منقضی پاک شد")
-        
+
+        try:
+            await sms_payment_manager.server.stop()
+        except Exception as e:
+            logger.warning(f"⚠️ خطا در توقف وب‌سرور پیامک: {e}")
+
         if log_system:
             try:
                 await log_system.log_bot_stop(ADMIN_ID_INT)
