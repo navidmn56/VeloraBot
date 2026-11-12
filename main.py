@@ -9797,11 +9797,18 @@ def get_config_view_keyboard(
             style="primary"
         )])
     else:
-        buttons.append([InlineKeyboardButton(
-            text="📱 تبدیل به QR Code" if lang == "fa" else "📱 Convert to QR Code",
-            callback_data=f"show_qr_{order_id}",
-            style="primary"
-        )])
+        buttons.append([
+            InlineKeyboardButton(
+                text="📝 متن کانفیگ" if lang == "fa" else "📝 Config Text",
+                callback_data=f"show_text_{order_id}",
+                style="primary"
+            ),
+            InlineKeyboardButton(
+                text="📱 QR Code اشتراک" if lang == "fa" else "📱 Subscription QR",
+                callback_data=f"sub_qr_{order_id}",
+                style="primary"
+            )
+        ])
 
     buttons.append([
         InlineKeyboardButton(
@@ -14355,7 +14362,7 @@ Welcome to AI Support!
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="🛍 خرید هوشمندانه" if lang == "fa" else "🛍 Smart purchase",
+                text="🛍 انتخاب هوشمند" if lang == "fa" else "🛍 Smart Choice",
                 callback_data="ai_purchase_advisor_start",
                 style="success",
             )],
@@ -17208,7 +17215,13 @@ async def show_ready_categories(callback: CallbackQuery):
                 style="success"
             )])
 
-    
+    if not is_extend:
+        buttons.append([InlineKeyboardButton(
+            text="🛍 انتخاب هوشمند" if lang == "fa" else "🛍 Smart Choice",
+            callback_data="ai_purchase_advisor_start",
+            style="primary"
+        )])
+
     for cat in categories:
         icon = cat.get('icon', '📦')
         name = cat.get('name') if lang == "fa" else cat.get('name_en', cat.get('name'))
@@ -21700,7 +21713,7 @@ _BROADCAST_ACTIONS = {
     "order_status": ("📊 وضعیت سفارش‌ها", "📊 Order Status", "order_status"),
     "coupon_status": ("🏷️ وضعیت کوپن", "🏷️ Coupon Status", "coupon_status"),
     "support": ("🎫 ارتباط با پشتیبانی", "🎫 Contact Support", "support_create_ticket"),
-    "ai_advisor": ("🛍 خرید هوشمندانه", "🛍 Smart purchase", "ai_purchase_advisor_start"),
+    "ai_advisor": ("🛍 انتخاب هوشمند", "🛍 Smart Choice", "ai_purchase_advisor_start"),
 }
 
 
@@ -23117,134 +23130,60 @@ async def vol_down(callback: CallbackQuery):
             await callback.answer("❌ حداقل حجم 1 گیگ است!", show_alert=True)
         else:
             await callback.answer("❌ Minimum volume is 1 GB!", show_alert=True)
-@dp.callback_query(F.data.startswith("show_qr_"))
-async def show_qr_code(callback: CallbackQuery):
+@dp.callback_query(F.data.startswith("sub_qr_") | F.data.startswith("show_qr_"))
+async def show_subscription_qr(callback: CallbackQuery):
+    """تولید و ارسال فقط تصویر QR Code اشتراک بدون هیچ متن زیر آن"""
     user_id = callback.from_user.id
-    order_id = int(callback.data.split("_")[2])
+    try:
+        parts = callback.data.split("_")
+        order_id = int(parts[-1])
+    except (IndexError, ValueError):
+        await callback.answer("❌ خطا در پردازش سفارش", show_alert=True)
+        return
+
     lang = get_user(user_id).get('lang', 'fa')
-    
-    if log_system:
-        await log_system.log_config_view(user_id, order_id, "QR Code")
-    
-    logger.info(f"=== کاربر {user_id} درخواست QR Code برای سفارش #{order_id} ===")
     order = orders.get(str(order_id))
-    if not order or not order.get('config_link'):
-        logger.error(f"سفارش #{order_id} در دیتابیس یافت نشد")
+    if not order or order.get('user_id') != user_id or not order.get('config_link'):
         await callback.answer("❌ کانفیگ یافت نشد" if lang == 'fa' else "❌ Config not found", show_alert=True)
         return
-    
-    logger.info(
-        "اطلاعات سفارش #%s: volume=%s, days=%s",
-        order_id,
-        order.get("volume"),
-        order.get("days"),
-    )
-    wireguard_available = await _order_has_wireguard(order_id)
-    
+
+    if log_system:
+        asyncio.create_task(log_system.log_config_view(user_id, order_id, "Subscription QR"))
+
     try:
-        email = get_order_client_email(order)
-        
-        if email and SENAI_PANEL_ENABLED:
-            links = await xui_get_client_links(email)
-            if links:
-                all_links = []
-                for link in links:
-                    if isinstance(link, str) and (link.startswith('vless://') or link.startswith('vmess://') or link.startswith('trojan://') or link.startswith('ss://')):
-                        all_links.append(link)
-                
-                if len(all_links) > 1:
-                    await callback.message.delete()
-                    
-                    if lang == "fa":
-                        caption = f"📱 <b>{len(all_links)} کد QR برای کانفیگ شما</b>\n\n"
-                        caption += "هر کد QR مربوط به یک اینباند است:\n"
-                    else:
-                        caption = f"📱 <b>{len(all_links)} QR codes for your configs</b>\n\n"
-                        caption += "Each QR code corresponds to one inbound:\n"
-                    for idx, link in enumerate(all_links[:5], 1):
-                        qr_img = generate_qr_code(link, order_id)
-                        qr_caption = f"📱 <b>QR Code #{idx}</b>"
-                        
-                        await bot.send_photo(
-                            callback.message.chat.id,
-                            qr_img,
-                            caption=qr_caption,
-                            parse_mode=ParseMode.HTML
-                        )
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text="📝 مشاهده متن کانفیگ" if lang == "fa" else "📝 View Config Text",
-                            callback_data=f"show_text_{order_id}"
-                        )],
-                        [InlineKeyboardButton(
-                            text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
-                            callback_data="back_to_main"
-                        )]
-                    ])
-                    
-                    if len(all_links) > 5:
-                        caption += f"\n⚠️ فقط ۵ کد QR اول نمایش داده شد. برای بقیه از متن کانفیگ استفاده کنید."
-                    
-                    await bot.send_message(
-                        callback.message.chat.id,
-                        caption,
-                        reply_markup=keyboard,
-                        parse_mode=ParseMode.HTML
-                    )
-                    
-                    await callback.answer("✅ ارسال QR Code ها انجام شد" if lang == 'fa' else "✅ QR Codes sent")
-                    return
-                else:
-                    qr_link = all_links[0] if all_links else order['config_link']
-            else:
-                qr_link = order['config_link']
-        else:
-            qr_link = order['config_link']
-        qr_img = generate_qr_code(qr_link, order_id)
-        logger.info("QR Code تولید شد")
+        sub_link = order.get('sub_link') or order.get('config_link')
+        qr_img = generate_qr_code(sub_link, order_id)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔙 بازگشت به کانفیگ" if lang == "fa" else "🔙 Back to Config",
+                    callback_data=f"view_config_{order_id}",
+                    style="primary"
+                ),
+                InlineKeyboardButton(
+                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                    callback_data="back_to_main",
+                    style="danger"
+                )
+            ]
+        ])
+
         try:
-            await bot.delete_message(callback.message.chat.id, callback.message.message_id)
-            logger.info("پیام قبلی حذف شد")
-        except Exception as del_err:
-            logger.warning(f"نتوانست پیام قبلی را حذف کند: {del_err}")
-        if lang == "fa":
-            caption = f"📱 <b>QR Code سفارش #{order_id}</b>\n\nبرای مشاهده متن کانفیگ از دکمه زیر استفاده کنید:"
-        else:
-            caption = f"📱 <b>QR Code for Order #{order_id}</b>\n\nUse the button below to view config text:"
-        
-        sent_msg = await bot.send_photo(
+            await callback.message.delete()
+        except Exception:
+            pass
+
+        await bot.send_photo(
             callback.message.chat.id,
             qr_img,
-            caption=caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(
-                order_id, show_qr=True, lang=lang,
-                wireguard_available=wireguard_available,
-            )
+            caption=None,
+            reply_markup=keyboard
         )
-        
-        logger.info(f"✅ QR Code با message_id={sent_msg.message_id} ارسال شد")
-        await callback.answer("✅ تبدیل به QR Code انجام شد" if lang == 'fa' else "✅ Converted to QR Code")
-        
+        await callback.answer()
     except Exception as e:
-        logger.error(f"خطا در show_qr_code: {e}", exc_info=True)
-        try:
-            if lang == "fa":
-                await bot.send_message(
-                    user_id,
-                    "❌ خطا در تولید QR Code. لطفاً دوباره تلاش کنید.",
-                    reply_markup=get_back_only_keyboard(lang)
-                )
-            else:
-                await bot.send_message(
-                    user_id,
-                    "❌ Error generating QR Code. Please try again.",
-                    reply_markup=get_back_only_keyboard(lang)
-                )
-        except:
-            pass
-        
-        await callback.answer("❌ خطا در تولید QR Code" if lang == 'fa' else "❌ Error", show_alert=True)        
+        logger.error(f"خطا در show_subscription_qr: {e}", exc_info=True)
+        await callback.answer("❌ خطا در تولید QR Code" if lang == 'fa' else "❌ Error generating QR Code", show_alert=True)        
         
         
         
@@ -24624,14 +24563,7 @@ async def show_wireguard_config(callback: CallbackQuery):
         await bot.send_photo(
             user_id,
             generate_wireguard_qr_code(config_text, order_id, order_info),
-            caption=(
-                f"🔴 <b>QR Code وایرگارد سفارش #{order_id}</b>\n"
-                "برای وارد کردن در برنامه WireGuard اسکن کنید."
-                if lang == "fa"
-                else f"🔴 <b>WireGuard QR Code for order #{order_id}</b>\n"
-                "Scan it in the WireGuard app."
-            ),
-            parse_mode=ParseMode.HTML,
+            caption=None,
             reply_markup=markup,
         )
     except Exception as error:
@@ -31642,7 +31574,7 @@ async def show_all_my_configs(callback: CallbackQuery):
         
 @dp.callback_query(F.data.startswith("view_config_"))
 async def view_single_config(callback: CallbackQuery):
-    """نمایش یک کانفیگ خاص"""
+    """نمایش یک کانفیگ خاص بدون ساخت مجدد QR و با ویرایش درجا"""
     user_id = callback.from_user.id
     order_id = int(callback.data.split("_")[2])
     lang = get_user(user_id).get('lang', 'fa')
@@ -31655,11 +31587,6 @@ async def view_single_config(callback: CallbackQuery):
             show_alert=True
         )
         return
-
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
 
     email = get_order_client_email(order)
 
@@ -31687,32 +31614,33 @@ async def view_single_config(callback: CallbackQuery):
         telegram_proxy_url=telegram_proxy_url,
     )
     wireguard_available = await _order_has_wireguard(order_id)
+    keyboard = get_config_view_keyboard(
+        order_id,
+        show_qr=False,
+        lang=lang,
+        wireguard_available=wireguard_available,
+        telegram_proxy_url=telegram_proxy_url,
+    )
 
-    # ─── ارسال عکس یا پیام ───
+    # ─── ویرایش پیام درجا بدون حذف و بدون تولید QR ───
     try:
-        qr_img = generate_qr_code(order['config_link'], order_id)
-        await bot.send_photo(
-            user_id,
-            qr_img,
-            caption=caption,
+        await callback.message.edit_text(
+            caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(
-                order_id, show_qr=True, lang=lang,
-                wireguard_available=wireguard_available,
-                telegram_proxy_url=telegram_proxy_url,
-            )
+            reply_markup=keyboard,
+            disable_web_page_preview=True
         )
-    except Exception as e:
-        logger.error(f"خطا در ارسال عکس: {e}")
+    except Exception:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         await bot.send_message(
             user_id,
             caption,
             parse_mode=ParseMode.HTML,
-            reply_markup=get_config_view_keyboard(
-                order_id, show_qr=False, lang=lang,
-                wireguard_available=wireguard_available,
-                telegram_proxy_url=telegram_proxy_url,
-            )
+            reply_markup=keyboard,
+            disable_web_page_preview=True
         )
 
     try:
@@ -37310,7 +37238,7 @@ def save_ai_purchase_advisor_result(
     user['ai_purchase_advisor_result'] = result
     saved = save_json(DB_FILES['users'], users)
     if not saved:
-        logger.error("❌ خرید هوشمند کاربر %s ذخیره نشد", user_id)
+        logger.error("❌ انتخاب هوشمند کاربر %s ذخیره نشد", user_id)
     return saved
 
 
