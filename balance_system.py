@@ -7,7 +7,7 @@ balance_system.py
 
 import html as html_module
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from aiogram import F
 from aiogram.types import (
@@ -269,13 +269,37 @@ def create_balance_order(user_id: int, amount: int) -> int:
     )
     order_id = max_id + 1
 
+    base_price = amount
+    payable_amount = amount
+    discount_offset = 0
+
+    sms_manager = getattr(_main, 'sms_payment_manager', None)
+    if sms_manager and sms_manager.is_enabled():
+        try:
+            window_min = sms_manager.get_window_minutes()
+            payable_amount, discount_offset = sms_manager.db.reserve_unique_payable_amount(
+                order_id=order_id,
+                order_type='balance_charge',
+                user_id=user_id,
+                base_price=base_price,
+                window_minutes=window_min
+            )
+        except Exception as e:
+            logger_inst = getattr(_main, 'logger', None)
+            if logger_inst:
+                logger_inst.error(f"❌ خطا در رزرو مبلغ اختصاصی شارژ: {e}")
+            raise RuntimeError(f"Could not reserve unique amount: {e}") from e
+
     orders[str(order_id)] = {
         'order_id': order_id,
         'user_id': user_id,
-        'amount': amount,
+        'amount': payable_amount,
+        'base_price': base_price,
+        'payable_amount': payable_amount,
+        'discount_offset': discount_offset,
         'volume': 0,
         'days': 0,
-        'price': amount,
+        'price': payable_amount,
         'type': 'balance_charge',
         'status': 'awaiting_payment',
         'date': now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -484,11 +508,20 @@ async def quick_amount_selected(callback: CallbackQuery):
     coupon_applied = user_state.get('coupon_applied', False)
 
     # ─── ساخت سفارش ───
-    order_id = create_balance_order(user_id, amount)
+    try:
+        order_id = create_balance_order(user_id, amount)
+    except Exception as e:
+        err_msg = (
+            "⚠️ در حال حاضر امکان صدور فاکتور با شناسه پرداخت مقدور نیست. لطفاً دقایقی دیگر تلاش کنید."
+            if lang == "fa"
+            else "⚠️ Unable to issue payment invoice right now. Please try again in a few minutes."
+        )
+        await callback.answer(err_msg, show_alert=True)
+        return
 
     order = _main.orders.get(str(order_id))
     text = _build_balance_receipt_text(order, lang, mode="card")
-    
+    payable_num = order.get('payable_amount') or order.get('price') or amount
 
     # ✅ شماره کارت بدون فاصله برای کپی
     bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
@@ -496,8 +529,8 @@ async def quick_amount_selected(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({amount * 10:,})",
-            copy_text=CopyTextButton(text=str(amount * 10))
+            text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({payable_num * 10:,})",
+            copy_text=CopyTextButton(text=str(payable_num * 10))
         )],
         [InlineKeyboardButton(
             text=f"💳 {'کپی شماره کارت' if lang=='fa' else 'Copy Card Number'}",
@@ -719,10 +752,20 @@ async def process_balance_amount(message: Message):
                     'coupon_applied': True
                 }
 
-            order_id = create_balance_order(user_id, amount)
+            try:
+                order_id = create_balance_order(user_id, amount)
+            except Exception as e:
+                err_msg = (
+                    "⚠️ در حال حاضر امکان صدور فاکتور با شناسه پرداخت مقدور نیست. لطفاً دقایقی دیگر تلاش کنید."
+                    if lang == "fa"
+                    else "⚠️ Unable to issue payment invoice right now. Please try again in a few minutes."
+                )
+                await message.reply(err_msg)
+                return
 
             order = _main.orders.get(str(order_id))
             text = _build_balance_receipt_text(order, lang, mode="card")
+            payable_num = order.get('payable_amount') or order.get('price') or amount
 
             # ✅ شماره کارت بدون فاصله برای کپی
             bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
@@ -730,8 +773,8 @@ async def process_balance_amount(message: Message):
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({amount * 10:,})",
-                    copy_text=CopyTextButton(text=str(amount * 10))
+                    text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({payable_num * 10:,})",
+                    copy_text=CopyTextButton(text=str(payable_num * 10))
                 )],
                 [InlineKeyboardButton(
                     text=f"💳 {'کپی شماره کارت' if lang=='fa' else 'Copy Card Number'}",
@@ -956,8 +999,142 @@ async def view_balance(callback: CallbackQuery):
         pass
 
 
+async def fulfill_balance_order(
+    order_id: int,
+    approved_by: str = "admin",
+    payment_method: str = "card"
+) -> Tuple[bool, str]:
+    """
+    سرویس مستقل تایید و افزایش موجودی کاربر (مستقل از CallbackQuery)
+    با جلوگیری قطعی از شارژ مضاعف
+    """
+    if _main is None:
+        return False, "Main module not initialized"
+
+    order = _main.orders.get(str(order_id))
+    if not order:
+        return False, f"Order #{order_id} not found"
+
+    if order.get('status') == 'approved':
+        logger_inst = getattr(_main, "logger", None)
+        if logger_inst:
+            logger_inst.warning(f"⚠️ سفارش شارژ #{order_id} قبلاً تایید شده است؛ عملیات تکراری رد شد.")
+        return True, "Already approved"
+
+    user_id = order.get('user_id')
+    amount = order.get('base_price') or order.get('amount', 0)
+    lang = _main.get_user(user_id).get('lang', 'fa')
+
+    # ─── مدیریت کوپن ───
+    user_state = _main.user_states.get(user_id, {})
+    coupon_code = user_state.get('coupon_code')
+    coupon_discount = user_state.get('coupon_discount')
+    coupon_applied = user_state.get('coupon_applied', False)
+
+    if not coupon_applied or not coupon_code:
+        coupon_data = _main.load_coupon_from_user_db(user_id)
+        if coupon_data.get('coupon_applied'):
+            coupon_code = coupon_data.get('coupon_code')
+            coupon_discount = coupon_data.get('coupon_discount')
+            coupon_applied = True
+            _main.user_states[user_id] = {
+                'coupon_code': coupon_code,
+                'coupon_discount': coupon_discount,
+                'coupon_applied': True
+            }
+
+    try:
+        _main.update_order(
+            order_id,
+            status='approved',
+            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            payment_method=payment_method,
+            payment_verified=True,
+        )
+
+        new_balance = _main.add_balance(user_id, amount)
+
+        if coupon_applied and coupon_code:
+            is_valid, reason = _main.is_coupon_valid_for_user(coupon_code, user_id)
+            if is_valid:
+                _main.save_coupon_to_user_db(user_id)
+            else:
+                _main.clear_coupon_from_user_db(user_id)
+                if user_id in _main.user_states:
+                    _main.user_states[user_id].pop('coupon_code', None)
+                    _main.user_states[user_id].pop('coupon_discount', None)
+                    _main.user_states[user_id].pop('coupon_applied', None)
+        else:
+            _main.clear_coupon_from_user_db(user_id)
+
+        log_sys = _get_log_system()
+        if log_sys:
+            try:
+                await log_sys.log_balance_charge_approved(order_id, user_id, amount)
+            except Exception:
+                pass
+
+        try:
+            _main.CustomLogger.log_event(
+                'BALANCE_CHARGE_APPROVED',
+                f'شارژ #{order_id} تایید شد ({approved_by}) - کاربر: {user_id} - {amount:,} تومان',
+                user_id
+            )
+        except Exception:
+            pass
+
+        try:
+            await _main.send_sticker(user_id, 'balance_added', '💰')
+        except Exception:
+            pass
+
+        # ─── پیام به کاربر ───
+        user_lang = _main.get_user(user_id).get('lang', 'fa')
+        try:
+            coupon_msg = ""
+            await _main.bot.send_message(
+                user_id,
+                f"{_main.premium_emoji('success', '✅')} "
+                f"{'درخواست شارژ شما تایید شد!' if user_lang == 'fa' else 'Balance request approved!'}\n"
+                f"{_main.premium_emoji('wallet', '💰')} {amount:,} "
+                f"{'تومان اضافه شد' if user_lang == 'fa' else 'Toman added'}\n"
+                f"{_main.premium_emoji('wallet', '💰')} "
+                f"{'موجودی جدید' if user_lang == 'fa' else 'New balance'}: "
+                f"{new_balance:,} {'تومان' if user_lang == 'fa' else 'Toman'}"
+                f"{coupon_msg}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="🏠 منوی اصلی" if user_lang == 'fa' else "🏠 Main Menu",
+                        callback_data="back_to_main",
+                    )
+                ]]),
+            )
+        except Exception as e:
+            logger_inst = getattr(_main, 'logger', None)
+            if logger_inst:
+                logger_inst.error(f"خطا در ارسال پیام تایید شارژ: {e}")
+
+        if log_sys:
+            try:
+                await log_sys.log_balance_change(
+                    user_id, amount, new_balance, "add",
+                    admin_id=_main.ADMIN_ID_INT if approved_by == "admin" else None,
+                    details=f"شارژ حساب (سفارش #{order_id}) توسط {approved_by}"
+                )
+            except Exception:
+                pass
+
+        return True, ""
+    except Exception as e:
+        logger_inst = getattr(_main, 'logger', None)
+        if logger_inst:
+            logger_inst.error(f"❌ خطا در تایید شارژ #{order_id}: {e}", exc_info=True)
+        return False, str(e)
+
+
 async def approve_balance(callback: CallbackQuery, order_id: int = None):
-    """تایید شارژ حساب (قابل import از فایل اصلی)"""
+    """تایید شارژ حساب (قابل فراخوانی از ادمین در تلگرام)"""
     if _main is None:
         return
     if callback.from_user.id != _main.ADMIN_ID_INT:
@@ -994,164 +1171,57 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
         return
 
     user_id = order['user_id']
-    amount = order.get('amount', 0)
+    amount = order.get('base_price') or order.get('amount', 0)
 
-    # ─── مدیریت کوپن ───
-    user_state = _main.user_states.get(user_id, {})
-    coupon_code = user_state.get('coupon_code')
-    coupon_discount = user_state.get('coupon_discount')
-    coupon_applied = user_state.get('coupon_applied', False)
+    success, msg = await fulfill_balance_order(order_id, approved_by="admin", payment_method="card")
 
-    if not coupon_applied or not coupon_code:
-        coupon_data = _main.load_coupon_from_user_db(user_id)
-        if coupon_data.get('coupon_applied'):
-            coupon_code = coupon_data.get('coupon_code')
-            coupon_discount = coupon_data.get('coupon_discount')
-            coupon_applied = True
-            _main.user_states[user_id] = {
-                'coupon_code': coupon_code,
-                'coupon_discount': coupon_discount,
-                'coupon_applied': True
-            }
+    if not success:
+        await callback.answer(f"❌ خطا در تایید شارژ: {msg[:40]}", show_alert=True)
+        return
 
+    # ─── ویرایش پیام ادمین ───
+    user_info = _main.get_user(user_id)
+    new_balance = user_info.get('balance', 0)
     try:
-        _main.update_order(
-            order_id, status='approved',
-            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            payment_method='card'
+        success_text = (
+            f"✅ <b>شارژ حساب #{order_id} تایید شد!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 مبلغ: {amount:,} تومان\n"
+            f"👤 کاربر: {user_id}\n"
+            f"💰 موجودی جدید: {new_balance:,} تومان\n"
+            f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
-        new_balance = _main.add_balance(user_id, amount)
-
-        if coupon_applied and coupon_code:
-            is_valid, reason = _main.is_coupon_valid_for_user(coupon_code, user_id)
-            if is_valid:
-                _main.save_coupon_to_user_db(user_id)
-            else:
-                _main.clear_coupon_from_user_db(user_id)
-                if user_id in _main.user_states:
-                    _main.user_states[user_id].pop('coupon_code', None)
-                    _main.user_states[user_id].pop('coupon_discount', None)
-                    _main.user_states[user_id].pop('coupon_applied', None)
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=success_text, parse_mode=ParseMode.HTML, reply_markup=None
+            )
+        elif callback.message.document:
+            await callback.message.edit_caption(
+                caption=success_text, parse_mode=ParseMode.HTML, reply_markup=None
+            )
+        elif callback.message.text:
+            await callback.message.edit_text(
+                success_text, parse_mode=ParseMode.HTML, reply_markup=None
+            )
         else:
-            _main.clear_coupon_from_user_db(user_id)
-
-        log_sys = _get_log_system()
-        if log_sys:
-            try:
-                await log_sys.log_balance_charge_approved(order_id, user_id, amount)
-            except Exception as e:
-                logger = getattr(_main, 'logger', None)
-                if logger:
-                    logger.warning(f"خطا در لاگ: {e}")
-
-        try:
-            _main.CustomLogger.log_event(
-                'BALANCE_CHARGE_APPROVED',
-                f'شارژ #{order_id} تایید شد - کاربر: {user_id} - {amount:,} تومان',
-                user_id
-            )
-        except Exception:
-            pass
-
-        await _main.send_sticker(user_id, 'balance_added', '💰')
-
-        # ─── پیام به کاربر ───
-        user_lang = _main.get_user(user_id).get('lang', 'fa')
-        try:
-            coupon_msg = ""
-
+            await callback.message.delete()
             await _main.bot.send_message(
-                user_id,
-                f"{_main.premium_emoji('success', '✅')} "
-                f"{'درخواست شارژ شما تایید شد!' if user_lang == 'fa' else 'Balance request approved!'}\n"
-                f"{_main.premium_emoji('wallet', '💰')} {amount:,} "
-                f"{'تومان اضافه شد' if user_lang == 'fa' else 'Toman added'}\n"
-                f"{_main.premium_emoji('wallet', '💰')} "
-                f"{'موجودی جدید' if user_lang == 'fa' else 'New balance'}: "
-                f"{new_balance:,} {'تومان' if user_lang == 'fa' else 'Toman'}"
-                f"{coupon_msg}",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text="🏠 منوی اصلی" if user_lang == 'fa' else "🏠 Main Menu",
-                        callback_data="back_to_main",
-                    )
-                ]]),
+                callback.message.chat.id, success_text, parse_mode=ParseMode.HTML
             )
-        except Exception as e:
-            logger = getattr(_main, 'logger', None)
-            if logger:
-                logger.error(f"خطا در ارسال پیام: {e}")
-
-        if log_sys:
-            try:
-                await log_sys.log_balance_change(
-                    user_id, amount, new_balance, "add",
-                    admin_id=callback.from_user.id,
-                    details=f"شارژ حساب (سفارش #{order_id})"
-                )
-            except Exception:
-                pass
-
-        # ─── ویرایش پیام ادمین ───
-        try:
-            success_text = (
-                f"✅ <b>شارژ حساب #{order_id} تایید شد!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 مبلغ: {amount:,} تومان\n"
-                f"👤 کاربر: {user_id}\n"
-                f"💰 موجودی جدید: {new_balance:,} تومان\n"
-                f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            if callback.message.photo:
-                await callback.message.edit_caption(
-                    caption=success_text, parse_mode=ParseMode.HTML, reply_markup=None
-                )
-            elif callback.message.document:
-                await callback.message.edit_caption(
-                    caption=success_text, parse_mode=ParseMode.HTML, reply_markup=None
-                )
-            elif callback.message.text:
-                await callback.message.edit_text(
-                    success_text, parse_mode=ParseMode.HTML, reply_markup=None
-                )
-            else:
-                await callback.message.delete()
-                await _main.bot.send_message(
-                    callback.message.chat.id, success_text, parse_mode=ParseMode.HTML
-                )
-        except Exception as e:
-            logger = getattr(_main, 'logger', None)
-            if logger:
-                logger.warning(f"⚠️ خطا در ویرایش پیام ادمین: {e}")
-            try:
-                await callback.message.delete()
-            except Exception:
-                pass
-
-        await callback.answer(
-            "✅ شارژ انجام شد" if lang == 'fa' else "✅ Balance added",
-            show_alert=True
-        )
-
     except Exception as e:
         logger = getattr(_main, 'logger', None)
         if logger:
-            logger.error(f"❌ خطا در تایید شارژ: {e}", exc_info=True)
+            logger.warning(f"⚠️ خطا در ویرایش پیام ادمین: {e}")
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
 
-        if order.get('status') == 'approved':
-            _main.update_order(order_id, status='pending_balance_charge', payment_method='card')
-
-        log_sys = _get_log_system()
-        if log_sys:
-            try:
-                await log_sys.log_error(e, "approve_balance", user_id)
-            except Exception:
-                pass
-
-        await callback.answer("❌ خطا در تایید شارژ", show_alert=True)
+    await callback.answer(
+        "✅ شارژ انجام شد" if lang == 'fa' else "✅ Balance added",
+        show_alert=True
+    )
 
 
 async def reject_balance(callback: CallbackQuery):
@@ -1235,6 +1305,7 @@ async def reject_balance(callback: CallbackQuery):
 __all__ = [
     'register_balance_handlers',
     'approve_balance',
+    'fulfill_balance_order',
     'process_balance_amount',
     'create_balance_order',
     'get_balance_quick_amounts',
