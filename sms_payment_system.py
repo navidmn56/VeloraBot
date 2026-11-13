@@ -1,36 +1,25 @@
 """
 ====================================================================
-VeloraBot - SMS Payment Verification System (Hardened & Audited)
+VeloraBot - SMS Payment Verification System (Hardened & Audited v2)
 ====================================================================
 Architecture & Security Guarantee:
 1. Exclusively binds to 127.0.0.1:8088 (Localhost only)
    - Zero exposure to public ports.
    - Zero conflict with Port 443 / Xray Reality / Caddy.
    - Exposed securely to Android SMS Forwarder via Cloudflare Tunnel (sms.zyvora.ir).
-2. Strict Temporal Validation:
+2. Full Raw & Structured Logging:
+   - Logs EVERY incoming request from phone (Headers, IP, Raw Body) before filtering.
+   - Writes dedicated rotating/append log to data/sms_webhook_raw.log + console.
+   - Records ALL SMS statuses ('unparsed', 'duplicate', 'unmatched', 'approved', 'test_matched') in DB.
+3. Strict Temporal Validation:
    - Bank SMS transaction time MUST fall strictly between order creation and reservation expiry.
    - Rejects any transaction timestamped prior to order creation (clock skew margin: max 60s).
-   - Separates bank transaction time from device forwarder delayed delivery.
-3. Strict Currency & Digit Validation:
+4. Strict Currency & Digit Validation:
    - Rejects Rial amounts not divisible by 10 (never silently truncates).
-   - Validates all numeric grouping and separators.
-4. Concurrency & Database-Level Uniqueness:
+   - Supports both 2-digit (05/08/22) and 4-digit (1405/08/22) Jalali years.
+5. Concurrency & Database-Level Uniqueness:
    - Atomic SQLite reservations with Partial Unique Indexes.
-   - One active reservation per order (idx_active_order).
-   - Unique active payable amounts (idx_active_payable).
-   - Atomic reservation claim: conditional UPDATE with rowcount verification.
-   - Dedicated connection handling, WAL mode, non-blocking via asyncio.to_thread.
-5. Idempotency & Replay Defense:
-   - Identity hash: SHA-256 of normalized sender + normalized message body.
-   - Retries with differing forwarder delivery timestamps are detected and rejected.
-   - Limitation documented: Blubank deposit SMS lacks unique bank RRN.
-6. Bank-Specific SMS Parsing (Blubank):
-   - Strict sender whitelist.
-   - Mandatory validated time (00-23 : 00-59). Never defaults to 00:00:00.
-   - Validated Jalali month/day combinations with leap year verification.
-7. Decoupled Payment and Fulfillment:
-   - Verified payment is never lost if Sanaei panel is temporarily unavailable.
-   - Status: 'failed_pending_retry' with idempotent admin retry controls.
+   - Full IntegrityError handling on duplicate webhook retries (Zero HTTP 500 crashes).
 ====================================================================
 """
 
@@ -39,30 +28,52 @@ import re
 import hmac
 import json
 import time
+import random
 import hashlib
 import logging
 import sqlite3
 import secrets
 import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any, List, Tuple, Union
+from typing import Optional, Dict, Any, List, Tuple
 
 from aiohttp import web
 from aiogram import F
 from aiogram.types import (
     CallbackQuery,
-    Message,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
 from aiogram.enums import ParseMode
 
+# ─── تنظیمات لاگر اختصاصی پیامک (هم در کنسول و هم در فایل مجزا) ───
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DATA_DIR, "sms_payments.db")
+RAW_LOG_PATH = os.path.join(DATA_DIR, "sms_webhook_raw.log")
+
 logger = logging.getLogger("sms_payment")
+logger.setLevel(logging.INFO)
+
+if not logger.handlers:
+    formatter = logging.Formatter(
+        fmt="%(asctime)s | [%(levelname)s] | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    # ۱. هندلر فایل اختصاصی برای دیدن تمام پیامک‌های دریافتی از گوشی
+    file_handler = logging.FileHandler(RAW_LOG_PATH, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # ۲. هندلر کنسول (ترمینال)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
 
 # Iran Timezone (UTC +03:30 permanently)
 TEHRAN_TZ = timezone(timedelta(hours=3, minutes=30))
-
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sms_payments.db")
 
 # Default exact sender whitelist for Blubank
 DEFAULT_ALLOWED_SENDERS = [
@@ -82,8 +93,7 @@ DEFAULT_ALLOWED_SENDERS = [
 # ══════════════════════════════════════════════════════════════════════
 
 def is_jalali_leap_year(jy: int) -> bool:
-    """بررسی کبیسه بودن سال جلالی بر اساس چرخه استاندارد ۳۳ ساله بیرشک"""
-    # در چرخه ۳۳ ساله، سال‌های ۱، ۵، ۹، ۱۳، ۱۷، ۲۲، ۲۶ و ۳۰ کبیسه هستند
+    """بررسی کبیسه بودن سال جلالی بر اساس چرخه استاندارد ۳۳ ساله"""
     remainder = (jy + 38) % 33
     return remainder in (1, 5, 9, 13, 17, 22, 26, 30)
 
@@ -143,12 +153,15 @@ def jalali_to_gregorian(jy: int, jm: int, jd: int) -> Tuple[int, int, int]:
 
 
 def normalize_digits(text: str) -> str:
-    """تبدیل تمام ارقام فارسی و عربی به ارقام استاندارد انگلیسی"""
+    """تبدیل تمام ارقام فارسی و عربی و کاراکترهای مخفی به استاندارد انگلیسی"""
     if not text:
         return ""
     persian_arabic = "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩"
     english = "01234567890123456789"
-    return str(text).translate(str.maketrans(persian_arabic, english))
+    res = str(text).translate(str.maketrans(persian_arabic, english))
+    # حذف کاراکترهای نیم‌فاصله و جهت‌دهی مخفی یونیکد و تبدیل کامای فارسی
+    res = res.replace("٬", ",").replace("،", ",").replace("\u200c", " ").replace("\u200f", "").replace("\u200e", "")
+    return res
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -157,75 +170,64 @@ def normalize_digits(text: str) -> str:
 
 class BlubankSMSParser:
     """
-    پارسر دقیق و سخت‌گیرانه پیامک واریز بلوبانک:
-    - اعتبارسنجی قطعی فرستنده از لیست مجاز
-    - اجباری بودن ساعت و تاریخ
-    - بررسی بخش‌پذیری ریال بر ۱۰ (عدم برش بی‌صدا)
-    - رد هرگونه پیامک برداشت یا خرید
+    پارسر دقیق و سخت‌گیرانه پیامک واریز بلوبانک با لاگ کامل علت رد شدن هر پیامک
     """
 
     @classmethod
-    def can_parse(cls, sender: str, raw_text: str, allowed_senders: List[str]) -> bool:
+    def parse(cls, sender: str, raw_text: str, allowed_senders: List[str]) -> Tuple[Optional[Dict[str, Any]], str]:
+        """
+        خروجی: (parsed_dict_or_None, reason_message)
+        """
         norm_sender = normalize_digits(sender or "").strip().lower()
-        norm_text = normalize_digits(raw_text or "").strip()
+        clean_text = normalize_digits(raw_text or "").strip()
 
-        # بررسی سرشماره معتبر
+        # ۱. بررسی فرستنده مجاز
         allowed_normalized = [normalize_digits(s).strip().lower() for s in allowed_senders]
         sender_valid = (
             norm_sender in allowed_normalized
             or any(norm_sender.endswith(s) for s in allowed_normalized if s.isdigit())
-            or (norm_sender == "بلو" or "blubank" in norm_sender)
+            or ("بلو" in norm_sender or "blubank" in norm_sender)
         )
         if not sender_valid:
-            return False
+            return None, f"فرستنده نامعتبر است: '{sender}'"
 
-        # بررسی عنوان بلوبانک در متن
-        if "بلو" not in norm_text and "blubank" not in norm_text.lower():
-            return False
+        # ۲. بررسی عنوان بلوبانک در متن
+        if "بلو" not in clean_text and "blubank" not in clean_text.lower():
+            return None, "کلمه 'بلو' یا 'blubank' در متن پیامک یافت نشد"
 
-        # رد کامل هرگونه تراکنش برداشتی
-        is_withdrawal = bool(re.search(r"برداشت|خرید|انتقال\s*از\s*حساب|کسر|کارمزد", norm_text))
-        if is_withdrawal:
-            return False
+        # ۳. رد کامل هرگونه تراکنش برداشتی
+        if re.search(r"برداشت|خرید|انتقال\s*از\s*حساب|کسر|کارمزد", clean_text):
+            return None, "پیامک مربوط به برداشت/کسر از حساب است (واریز نیست)"
 
-        # وجود کلیدواژه قطعی واریز
-        is_deposit = bool(re.search(r"واریز\s*پول|به\s*حساب\s*شما\s*نشست", norm_text))
-        return is_deposit
+        # ۴. وجود کلیدواژه قطعی واریز
+        if not re.search(r"واریز\s*پول|به\s*حساب\s*شما\s*نشست|واریز\s*به\s*حساب|واریز\s*شد", clean_text):
+            return None, "کلیدواژه واریز وجه در متن پیامک یافت نشد"
 
-    @classmethod
-    def parse(cls, sender: str, raw_text: str, allowed_senders: List[str]) -> Optional[Dict[str, Any]]:
-        if not cls.can_parse(sender, raw_text, allowed_senders):
-            return None
-
-        clean_text = normalize_digits(raw_text or "")
-
-        # ۱. استخراج و اعتبارسنجی ساعت (کاملاً اجباری؛ عدم جایگزینی با 00:00)
-        time_match = re.search(r"\b([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?\b", clean_text)
+        # ۵. استخراج و اعتبارسنجی ساعت (کاملاً اجباری)
+        time_match = re.search(r"(?<![0-9])([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?(?![0-9])", clean_text)
         if not time_match:
-            logger.warning("پیامک بلوبانک فاقد فیلد اجباری ساعت است.")
-            return None
+            return None, "فیلد ساعت در پیامک یافت نشد"
 
         hour = int(time_match.group(1))
         minute = int(time_match.group(2))
         second = int(time_match.group(3)) if time_match.group(3) else 0
 
         if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
-            logger.warning(f"ساعت پیامک نامعتبر است: {hour}:{minute}:{second}")
-            return None
+            return None, f"ساعت استخراج‌شده نامعتبر است: {hour}:{minute}:{second}"
 
-        # ۲. استخراج و اعتبارسنجی تاریخ جلالی (کاملاً اجباری)
-        date_match = re.search(r"\b(13[0-9]{2}|14[0-9]{2})[./-]([0-9]{1,2})[./-]([0-9]{1,2})\b", clean_text)
+        # ۶. استخراج و اعتبارسنجی تاریخ جلالی (پشتیبانی از سال ۴ رقمی ۱۴0۵ و ۲ رقمی ۰۵)
+        date_match = re.search(r"(?<![0-9])(13[0-9]{2}|14[0-9]{2}|0[0-9])[./-]([0-9]{1,2})[./-]([0-9]{1,2})(?![0-9])", clean_text)
         if not date_match:
-            logger.warning("پیامک بلوبانک فاقد فیلد اجباری تاریخ شمسی است.")
-            return None
+            return None, "فیلد تاریخ شمسی در پیامک یافت نشد"
 
         jy = int(date_match.group(1))
+        if jy < 100:
+            jy += 1400  # تبدیل سال دو رقمی مثل 05 به 1405
         jm = int(date_match.group(2))
         jd = int(date_match.group(3))
 
         if not validate_jalali_date(jy, jm, jd):
-            logger.warning(f"تاریخ شمسی در پیامک معتبر نیست: {jy}/{jm}/{jd}")
-            return None
+            return None, f"تاریخ شمسی نامعتبر است: {jy}/{jm}/{jd}"
 
         # تبدیل تاریخ و زمان به شیء زمانی استاندارد در مبنای UTC
         try:
@@ -233,43 +235,39 @@ class BlubankSMSParser:
             tehran_dt = datetime(gy, gm, gd, hour, minute, second, tzinfo=TEHRAN_TZ)
             bank_tx_utc = tehran_dt.astimezone(timezone.utc)
         except Exception as e:
-            logger.error(f"خطا در تبدیل زمان پیامک به UTC: {e}")
-            return None
+            return None, f"خطا در تبدیل تاریخ به UTC: {e}"
 
-        # ۳. استخراج و اعتبارسنجی سخت‌گیرانه مبلغ
-        amount_match = re.search(r"\b([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)\s*(ریال|تومان|تومن)\b", clean_text)
+        # ۷. استخراج و اعتبارسنجی سخت‌گیرانه مبلغ
+        amount_match = re.search(r"([0-9]{1,3}(?:[,.\s][0-9]{3})+|[0-9]+)\s*(ریال|تومان|تومن)", clean_text)
         if not amount_match:
-            logger.warning("مبلغ معتبر در پیامک بلوبانک یافت نشد.")
-            return None
+            return None, "مبلغ و واحد پول (ریال/تومان) در پیامک یافت نشد"
 
-        raw_num = amount_match.group(1).replace(",", "")
+        raw_num = re.sub(r"[,.\s]", "", amount_match.group(1))
         unit = amount_match.group(2)
 
         try:
             parsed_raw = int(raw_num)
         except ValueError:
-            return None
+            return None, f"مبلغ عددی نامعتبر است: {raw_num}"
 
         if parsed_raw <= 0:
-            return None
+            return None, "مبلغ پیامک صفر یا منفی است"
 
         if unit == "ریال":
-            # مبلغ ریالی بلوبانک حتماً باید بر ۱۰ بخش‌پذیر باشد
             if parsed_raw % 10 != 0:
-                logger.error(f"خطای عدم بخش‌پذیری ریال بر ۱۰: {parsed_raw} ریال")
-                return None
+                return None, f"مبلغ ریالی ({parsed_raw}) بر ۱۰ بخش‌پذیر نیست"
             amount_toman = parsed_raw // 10
             amount_rial = parsed_raw
         else:
             amount_toman = parsed_raw
             amount_rial = amount_toman * 10
 
-        # استخراج موجودی باقی‌مانده در صورت وجود
+        # ۸. استخراج موجودی باقی‌مانده در صورت وجود
         balance_rial = None
-        bal_match = re.search(r"موجودی\s*:\s*([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)\s*(?:ریال)?", clean_text)
+        bal_match = re.search(r"موجودی\s*[:؛]?\s*([0-9]{1,3}(?:[,.\s][0-9]{3})+|[0-9]+)", clean_text)
         if bal_match:
             try:
-                balance_rial = int(bal_match.group(1).replace(",", ""))
+                balance_rial = int(re.sub(r"[,.\s]", "", bal_match.group(1)))
             except ValueError:
                 pass
 
@@ -278,12 +276,12 @@ class BlubankSMSParser:
             "amount_toman": amount_toman,
             "amount_rial": amount_rial,
             "balance_rial": balance_rial,
-            "tracking_ref": None,  # توجه: طبق نمونه واقعی بلوبانک، پیامک واریز کد پیگیری ندارد
+            "tracking_ref": None,
             "bank_time_str": f"{hour:02d}:{minute:02d}:{second:02d}",
             "bank_date_shamsi_str": f"{jy}/{jm:02d}/{jd:02d}",
             "bank_tx_utc": bank_tx_utc,
             "bank_tx_utc_iso": bank_tx_utc.isoformat(),
-        }
+        }, "OK"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -312,7 +310,6 @@ class SMSPaymentDatabase:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            # جدول رزرو مبالغ
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS amount_reservations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -330,21 +327,18 @@ class SMSPaymentDatabase:
                 );
             """)
 
-            # ۱. قید یکتایی مبلغ فعال در کل سیستم
             cursor.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_active_payable_amount
                 ON amount_reservations(payable_amount)
                 WHERE status = 'active';
             """)
 
-            # ۲. قید یکتایی: هر سفارش فقط می‌تواند یک رزرو فعال داشته باشد
             cursor.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_active_order_reservation
                 ON amount_reservations(order_id, order_type)
                 WHERE status = 'active';
             """)
 
-            # جدول ثبت رویدادها و تراکنش‌های پیامک دریافتی
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS sms_transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -363,7 +357,7 @@ class SMSPaymentDatabase:
                     matched_order_type TEXT,
                     matched_user_id INTEGER,
                     confidence_notes TEXT,
-                    fulfillment_status TEXT NOT NULL DEFAULT 'none', -- 'none', 'fulfilled', 'failed_pending_retry', 'manual_fulfillment_required'
+                    fulfillment_status TEXT NOT NULL DEFAULT 'none',
                     error_message TEXT,
                     created_at_utc TEXT NOT NULL
                 );
@@ -397,12 +391,6 @@ class SMSPaymentDatabase:
         base_price: int,
         window_minutes: int = 30
     ) -> Tuple[int, int]:
-        """
-        رزرو اتمیک یک مبلغ اختصاصی یونیک به صورت کاملاً قطعی.
-        در صورت عدم امکان رزرو، استثنا صادر می‌شود تا فاکتور اشتباه ایجاد نشود.
-        """
-        self.expire_stale_reservations()
-
         if base_price < 1000:
             raise ValueError(f"Base price must be at least 1,000 Toman, got {base_price}")
 
@@ -411,25 +399,29 @@ class SMSPaymentDatabase:
         now_str = now_utc.isoformat()
         exp_str = expires_utc.isoformat()
 
-        # گام‌های ۱۰ تومانی بین ۱۰ تا ۹۹۰ تومان کسر رو به پایین
         possible_offsets = list(range(10, 1000, 10))
-        import random
         random.shuffle(possible_offsets)
 
         conn = self._get_connection()
         try:
-            # شروع تراکنش اتمیک فوری
             conn.execute("BEGIN IMMEDIATE;")
             cursor = conn.cursor()
 
-            # ۱. لغو هرگونه رزرو قبلی برای این سفارش
+            # ۱. منقضی کردن رزروهای قدیمی در داخل همان تراکنش اتمیک
+            cursor.execute("""
+                UPDATE amount_reservations
+                SET status = 'expired'
+                WHERE status = 'active' AND expires_at_utc < ?;
+            """, (now_str,))
+
+            # ۲. لغو هرگونه رزرو قبلی برای این سفارش
             cursor.execute("""
                 UPDATE amount_reservations
                 SET status = 'cancelled'
                 WHERE order_id = ? AND order_type = ? AND status = 'active';
             """, (order_id, order_type))
 
-            # ۲. پیدا کردن مبلغی که در ایندکس یکتا قفل نباشد
+            # ۳. پیدا کردن مبلغی که در ایندکس یکتا قفل نباشد
             for offset in possible_offsets:
                 candidate_payable = base_price - offset
                 try:
@@ -445,12 +437,11 @@ class SMSPaymentDatabase:
                     ))
                     conn.commit()
                     logger.info(
-                        "💰 رزرو اتمیک مبلغ یکتا برای سفارش #%s: اصلی=%d، پرداختی=%d (تخفیف: %d)",
-                        order_id, base_price, candidate_payable, offset
+                        "💰 RESERVE AMOUNT | order_id=#%s | user_id=%s | base=%d | payable=%d | discount=%d",
+                        order_id, user_id, base_price, candidate_payable, offset
                     )
                     return candidate_payable, offset
                 except sqlite3.IntegrityError:
-                    # تداخل یکتایی در دیتابیس؛ تست آفست بعدی
                     continue
 
             conn.rollback()
@@ -471,34 +462,15 @@ class SMSPaymentDatabase:
         finally:
             conn.close()
 
-    def is_duplicate_sms(self, sms_hash: str) -> bool:
-        """بررسی سریع وجود هش پیامک در دیتابیس جهت جلوگیری از تکرار"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1 FROM sms_transactions WHERE sms_hash = ? LIMIT 1;", (sms_hash,))
-            return cursor.fetchone() is not None
-        finally:
-            conn.close()
-
-    def record_sms_transaction(
+    def record_unparsed_sms(
         self,
         sms_hash: str,
         sender: str,
         raw_text: str,
-        parsed_bank: str,
-        amount_toman: int,
-        amount_rial: int,
-        balance_rial: Optional[int],
-        bank_tx_utc: Optional[str],
-        device_received_at_utc: Optional[str],
-        status: str,
-        matched_order_id: Optional[int] = None,
-        matched_order_type: Optional[str] = None,
-        matched_user_id: Optional[int] = None,
-        confidence_notes: str = ""
+        device_received_at_utc: str,
+        reason: str
     ) -> Tuple[int, bool]:
-        """ثبت مستقیم رکورد پیامک با بررسی قید یکتایی هش"""
+        """ثبت پیامک‌های غیربانکی یا ردشده در دیتابیس تا ادمین در لاگ و پنل ببیند"""
         now_utc = datetime.now(timezone.utc).isoformat()
         conn = self._get_connection()
         try:
@@ -509,23 +481,15 @@ class SMSPaymentDatabase:
                         sms_hash, sender, raw_text, parsed_bank,
                         amount_toman, amount_rial, balance_rial, bank_tx_utc,
                         device_received_at_utc, server_received_at_utc, status,
-                        matched_order_id, matched_order_type, matched_user_id,
                         confidence_notes, created_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """, (
-                    sms_hash, sender, raw_text, parsed_bank,
-                    amount_toman, amount_rial, balance_rial, bank_tx_utc,
-                    device_received_at_utc, now_utc, status,
-                    matched_order_id, matched_order_type, matched_user_id,
-                    confidence_notes, now_utc
-                ))
+                    ) VALUES (?, ?, ?, NULL, 0, 0, NULL, NULL, ?, ?, 'unparsed', ?, ?);
+                """, (sms_hash, sender, raw_text, device_received_at_utc, now_utc, reason, now_utc))
                 conn.commit()
                 return cursor.lastrowid, False
             except sqlite3.IntegrityError:
                 cursor.execute("SELECT id FROM sms_transactions WHERE sms_hash = ?;", (sms_hash,))
                 row = cursor.fetchone()
-                existing_id = row["id"] if row else 0
-                return existing_id, True
+                return (row["id"] if row else 0), True
         finally:
             conn.close()
 
@@ -543,9 +507,8 @@ class SMSPaymentDatabase:
         test_mode: bool = False
     ) -> Dict[str, Any]:
         """
-        یافتن، اعتبارسنجی زمانی سخت‌گیرانه و قفل اتمیک رزرو در یک تراکنش واحد دیتابیس
+        یافتن، بررسی تکراری نبودن، اعتبارسنجی زمانی و قفل اتمیک رزرو در یک تراکنش واحد
         """
-        self.expire_stale_reservations()
         now_utc_str = datetime.now(timezone.utc).isoformat()
         bank_tx_iso = bank_tx_utc.isoformat()
 
@@ -554,7 +517,30 @@ class SMSPaymentDatabase:
             conn.execute("BEGIN IMMEDIATE;")
             cursor = conn.cursor()
 
-            # ۱. جستجوی تمام رزروهای این مبلغ با قفل اتمیک
+            # ۰. بررسی تکراری بودن پیامک در ابتدای تراکنش اتمیک (جلوگیری از کرش IntegrityError)
+            cursor.execute("SELECT id, status, matched_order_id FROM sms_transactions WHERE sms_hash = ? LIMIT 1;", (sms_hash,))
+            existing_tx = cursor.fetchone()
+            if existing_tx:
+                conn.rollback()
+                logger.warning(
+                    "♻️ SMS DUPLICATE IGNORED | tx_id=#%s | prev_status='%s' | sender='%s' | amount=%d | text='%s'",
+                    existing_tx["id"], existing_tx["status"], sender, amount_toman, raw_text
+                )
+                return {
+                    "status": "duplicate",
+                    "tx_id": existing_tx["id"],
+                    "previous_status": existing_tx["status"],
+                    "matched_order_id": existing_tx["matched_order_id"]
+                }
+
+            # ۱. منقضی کردن رزروهای قدیمی در همان تراکنش اتمیک
+            cursor.execute("""
+                UPDATE amount_reservations
+                SET status = 'expired'
+                WHERE status = 'active' AND expires_at_utc < ?;
+            """, (now_utc_str,))
+
+            # ۲. جستجوی تمام رزروهای فعال با این مبلغ
             cursor.execute("""
                 SELECT * FROM amount_reservations
                 WHERE payable_amount = ? AND status = 'active';
@@ -562,7 +548,10 @@ class SMSPaymentDatabase:
             rows = [dict(r) for r in cursor.fetchall()]
 
             if not rows:
-                # هیچ سفارشی با این مبلغ در انتظار نیست
+                logger.info(
+                    "📭 SMS UNMATCHED (No Active Reservation) | sender='%s' | amount=%d Toman | bank_tx=%s | text='%s'",
+                    sender, amount_toman, bank_tx_iso, raw_text
+                )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
                         sms_hash, sender, raw_text, parsed_bank,
@@ -577,25 +566,26 @@ class SMSPaymentDatabase:
                     "هیچ رزرو فعالی با این مبلغ یافت نشد", now_utc_str
                 ))
                 conn.commit()
-                return {"status": "unmatched", "tx_id": cursor.lastrowid}
+                return {"status": "unmatched", "tx_id": cursor.lastrowid, "reason": "no_active_reservation"}
 
-            # ۲. فیلتر زمانی سخت‌گیرانه:
-            # زمان تراکنش بانکی حتماً باید بعد از ایجاد سفارش (با مارجین خطای ساعت ۶۰ ثانیه) و قبل از انقضا باشد
+            # ۳. فیلتر زمانی سخت‌گیرانه
             valid_candidates = []
             for r in rows:
                 created_utc = datetime.fromisoformat(r["created_at_utc"])
                 expires_utc = datetime.fromisoformat(r["expires_at_utc"])
 
-                # رد تراکنش قبل از ثبت سفارش
                 if bank_tx_utc < (created_utc - timedelta(seconds=60)):
                     continue
-                # رد تراکنش بعد از انقضای رزرو
                 if bank_tx_utc > expires_utc:
                     continue
 
                 valid_candidates.append(r)
 
             if len(valid_candidates) == 0:
+                logger.info(
+                    "⏰ SMS TIME OUT OF BOUNDS | sender='%s' | amount=%d Toman | bank_tx=%s | text='%s'",
+                    sender, amount_toman, bank_tx_iso, raw_text
+                )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
                         sms_hash, sender, raw_text, parsed_bank,
@@ -607,13 +597,17 @@ class SMSPaymentDatabase:
                     sms_hash, sender, raw_text, parsed_bank,
                     amount_toman, amount_rial, balance_rial, bank_tx_iso,
                     device_received_at_utc, now_utc_str,
-                    "مبلغ با رزرو ثبت شده تطبیق داشت اما زمان تراکنش خارج از بازه مجاز بود", now_utc_str
+                    "مبلغ با رزرو تطبیق داشت اما زمان تراکنش بانکی خارج از بازه مجاز سفارش بود", now_utc_str
                 ))
                 conn.commit()
                 return {"status": "unmatched", "tx_id": cursor.lastrowid, "reason": "time_out_of_bounds"}
 
             elif len(valid_candidates) > 1:
-                # ابهام: چند سفارش با این مشخصات وجود دارد؛ هرگز خودکار تایید نشود
+                oids = [c["order_id"] for c in valid_candidates]
+                logger.warning(
+                    "⚠️ SMS AMBIGUOUS | sender='%s' | amount=%d Toman | candidates=%s | text='%s'",
+                    sender, amount_toman, oids, raw_text
+                )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
                         sms_hash, sender, raw_text, parsed_bank,
@@ -634,11 +628,13 @@ class SMSPaymentDatabase:
                     "candidates": valid_candidates
                 }
 
-            # دقیقا ۱ کاندید معتبر و یکتا وجود دارد
             chosen = valid_candidates[0]
 
             if test_mode:
-                # در حالت تست، رزرو در دیتابیس قفل نمی‌شود و فقط پیامک ثبت می‌گردد
+                logger.info(
+                    "🧪 SMS TEST_MATCHED | sender='%s' | amount=%d Toman | order_id=#%s | text='%s'",
+                    sender, amount_toman, chosen["order_id"], raw_text
+                )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
                         sms_hash, sender, raw_text, parsed_bank,
@@ -661,7 +657,7 @@ class SMSPaymentDatabase:
                     "reservation": chosen
                 }
 
-            # حالت زنده: ادعای اتمیک رزرو با شرط status = 'active'
+            # حالت زنده: ادعای اتمیک رزرو
             cursor.execute("""
                 UPDATE amount_reservations
                 SET status = 'claimed', matched_at_utc = ?
@@ -669,9 +665,17 @@ class SMSPaymentDatabase:
             """, (now_utc_str, chosen["id"]))
 
             if cursor.rowcount != 1:
-                # یک تسک موازی دیگر در همین لحظه رزرو را ادعا کرده است
+                logger.warning(
+                    "🔄 SMS CLAIMED BY CONCURRENT TASK | sender='%s' | amount=%d Toman | order_id=#%s",
+                    sender, amount_toman, chosen["order_id"]
+                )
                 conn.rollback()
                 return {"status": "claimed_by_concurrent_task"}
+
+            logger.info(
+                "✅ SMS APPROVED | sender='%s' | amount=%d Toman | order_id=#%s | user_id=%s | text='%s'",
+                sender, amount_toman, chosen["order_id"], chosen["user_id"], raw_text
+            )
 
             cursor.execute("""
                 INSERT INTO sms_transactions (
@@ -747,12 +751,12 @@ class SMSPaymentDatabase:
 
 class SMSWebhookServer:
     """
-    وب‌سرور ناهمگام متصل به 127.0.0.1:8088 (فقط لوکال‌هاست، بدون تداخل با پورت ۴۴۳)
+    وب‌سرور ناهمگام متصل به 127.0.0.1:8088 با لاگ کامل تمام درخواست‌های ورودی از گوشی
     """
 
     def __init__(self, manager: "SMSPaymentManager"):
         self.manager = manager
-        self.app = web.Application(client_max_size=64 * 1024)  # حداکثر ۶۴ کیلوبایت
+        self.app = web.Application(client_max_size=64 * 1024)
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
         self._rate_limits: Dict[str, List[float]] = {}
@@ -762,7 +766,7 @@ class SMSWebhookServer:
         self.app.router.add_post("/api/sms-webhook", self.handle_sms_webhook)
         self.app.router.add_get("/api/sms-webhook/health", self.handle_health)
 
-    def _check_rate_limit(self, client_ip: str, max_per_minute: int = 25) -> bool:
+    def _check_rate_limit(self, client_ip: str, max_per_minute: int = 40) -> bool:
         now = time.time()
         timestamps = self._rate_limits.setdefault(client_ip, [])
         self._rate_limits[client_ip] = [t for t in timestamps if now - t < 60]
@@ -779,12 +783,31 @@ class SMSWebhookServer:
         })
 
     async def handle_sms_webhook(self, request: web.Request) -> web.Response:
-        client_ip = request.remote or "127.0.0.1"
+        # تشخیص IP واقعی در پشت Cloudflare Tunnel
+        client_ip = (
+            request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote
+            or "127.0.0.1"
+        )
+
+        # خواندن بدنه خام درخواست در اولین قدم تا حتی اگر JSON خراب بود یا توکن غلط بود در لاگ دیده شود
+        try:
+            raw_body_bytes = await request.read()
+            raw_body_text = raw_body_bytes.decode("utf-8", errors="replace").strip()
+        except Exception as e:
+            raw_body_text = f"<Error reading body: {e}>"
+
+        # 🔥 لاگ جامع هرگونه پیامی که از گوشی به سرور می‌رسد (قبل از هر فیلتری)
+        raw_log_preview = raw_body_text.replace("\n", "\\n")
+        logger.info(f"📲 [RAW INCOMING WEBHOOK] IP={client_ip} | Payload={raw_log_preview}")
+
         if not self._check_rate_limit(client_ip):
-            logger.warning(f"⛔ نرخ درخواست وب‌هوک پیامک مسدود شد: {client_ip}")
+            logger.warning(f"⛔ Rate limit exceeded for IP: {client_ip}")
             return web.json_response({"error": "Rate limit exceeded"}, status=429)
 
         if not self.manager.is_enabled():
+            logger.warning("⛔ Webhook received but SMS system is disabled in admin settings.")
             return web.json_response({"error": "SMS webhook is disabled by admin"}, status=503)
 
         # اعتبارسنجی هدر احراز هویت با مقایسه زمان‌ثابت
@@ -793,30 +816,55 @@ class SMSWebhookServer:
         expected_token = self.manager.get_secret_token()
 
         if not expected_token or not hmac.compare_digest(token, expected_token):
-            logger.warning("⛔ تلاش غیرمجاز برای احراز هویت وب‌هوک پیامک")
+            logger.warning(f"⛔ UNAUTHORIZED WEBHOOK | IP={client_ip} | Provided-Token='{token[:6]}***'")
             return web.json_response({"error": "Unauthorized"}, status=401)
 
         try:
-            payload = await request.json()
-        except Exception:
+            payload = json.loads(raw_body_text)
+        except Exception as e:
+            logger.error(f"❌ MALFORMED JSON | IP={client_ip} | Error={e} | Raw={raw_log_preview}")
             return web.json_response({"error": "Malformed JSON payload"}, status=400)
 
         if not isinstance(payload, dict):
+            logger.error(f"❌ PAYLOAD NOT OBJECT | IP={client_ip} | Raw={raw_log_preview}")
             return web.json_response({"error": "Payload must be a JSON object"}, status=400)
 
-        # اعتبارسنجی نوع و طول فیلدها
-        raw_sender = payload.get("sender") or payload.get("from") or payload.get("phone")
-        raw_message = payload.get("message") or payload.get("content") or payload.get("text") or payload.get("body")
-        raw_rx = payload.get("received_at") or payload.get("timestamp") or payload.get("date")
+        # استخراج انعطاف‌پذیر فیلدهای ارسالی از اپلیکیشن‌های مختلف SMS Forwarder
+        raw_sender = (
+            payload.get("sender")
+            or payload.get("from")
+            or payload.get("phone")
+            or payload.get("address")
+            or "UNKNOWN_SENDER"
+        )
+        raw_message = (
+            payload.get("message")
+            or payload.get("content")
+            or payload.get("text")
+            or payload.get("body")
+            or payload.get("msg")
+        )
+        raw_rx = (
+            payload.get("received_at")
+            or payload.get("timestamp")
+            or payload.get("date")
+            or payload.get("time")
+            or ""
+        )
 
-        if not isinstance(raw_sender, str) or not (1 <= len(raw_sender.strip()) <= 50):
-            return web.json_response({"error": "Invalid or missing 'sender'"}, status=400)
-        if not isinstance(raw_message, str) or not (5 <= len(raw_message.strip()) <= 2000):
-            return web.json_response({"error": "Invalid or missing 'message'"}, status=400)
+        sender = str(raw_sender).strip()[:50]
+        raw_text = str(raw_message).strip() if raw_message is not None else ""
+        device_received_at = str(raw_rx).strip()
 
-        sender = raw_sender.strip()
-        raw_text = raw_message.strip()
-        device_received_at = str(raw_rx).strip() if raw_rx else ""
+        # لاگ تفکیک‌شده پیامک دریافتی
+        logger.info(
+            "📩 [PARSED SMS FIELDS] Sender='%s' | ReceivedAt='%s' | Text='%s'",
+            sender, device_received_at, raw_text.replace("\n", " | ")
+        )
+
+        if not raw_text:
+            logger.warning(f"❌ Empty message field in webhook from sender='{sender}'")
+            return web.json_response({"error": "Missing or empty 'message'"}, status=400)
 
         result = await self.manager.process_incoming_sms(
             sender=sender,
@@ -827,7 +875,9 @@ class SMSWebhookServer:
         return web.json_response(result)
 
     async def start(self, host: str = "127.0.0.1", port: int = 8088):
-        """راه‌اندازی سرور به صورت لوکال‌هاست امن"""
+        """راه‌اندازی ایمن سرور (در صورت فعال بودن قبلی، ابتدا متوقف و سپس بازگشایی می‌شود)"""
+        if self.runner is not None:
+            await self.stop()
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, host, port)
@@ -836,7 +886,13 @@ class SMSWebhookServer:
 
     async def stop(self):
         if self.runner:
-            await self.runner.cleanup()
+            try:
+                await self.runner.cleanup()
+            except Exception as e:
+                logger.warning(f"خطا در پاکسازی وب‌هوک: {e}")
+            finally:
+                self.runner = None
+                self.site = None
             logger.info("🛑 سرور وب‌هوک پیامک متوقف شد.")
 
 
@@ -864,10 +920,10 @@ class SMSPaymentManager:
             cfg = {}
 
         cfg.setdefault("enabled", False)
-        cfg.setdefault("test_mode", True)  # پیش‌فرض: حالت تست فعال است
+        cfg.setdefault("test_mode", True)
         cfg.setdefault("window_minutes", 30)
         cfg.setdefault("webhook_port", 8088)
-        cfg.setdefault("webhook_host", "127.0.0.1")  # فقط 127.0.0.1
+        cfg.setdefault("webhook_host", "127.0.0.1")
         cfg.setdefault("public_url", "https://sms.zyvora.ir/api/sms-webhook")
         cfg.setdefault("allowed_senders", DEFAULT_ALLOWED_SENDERS)
         if not cfg.get("secret_token"):
@@ -909,28 +965,46 @@ class SMSPaymentManager:
         device_received_at: str = ""
     ) -> Dict[str, Any]:
         """
-        پردازش پیامک ورودی با هش هویت مستقل از زمان فورواردر
+        پردازش پیامک ورودی با ثبت کامل تمامی پیامک‌ها (حتی غیربانکی) در لاگ و دیتابیس
         """
-        # ۵. هش هویت بر اساس فرستنده و متن نرمال‌شده (مستقل از زمان رسیدن پیام به گوشی یا سرور)
         norm_sender = normalize_digits(sender).strip().lower()
         norm_text = normalize_digits(raw_text).strip()
         sms_hash = hashlib.sha256(f"{norm_sender}:{norm_text}".encode("utf-8")).hexdigest()
 
-        # ۶. پارس سخت‌گیرانه پیامک بلوبانک
         allowed_senders = self.get_allowed_senders()
-        parsed = BlubankSMSParser.parse(sender, raw_text, allowed_senders)
+        parsed, parse_reason = BlubankSMSParser.parse(sender, raw_text, allowed_senders)
 
         if not parsed:
-            # پیامک نامعتبر یا واریز غیربلوبانک
-            return {"status": "unparsed", "message": "SMS rejected: not a valid Blubank deposit format"}
+            logger.warning(
+                "🚫 [SMS REJECTED BY PARSER] Reason='%s' | Sender='%s' | Text='%s'",
+                parse_reason, sender, raw_text.replace("\n", " | ")
+            )
+            # ثبت در دیتابیس تا در بخش تاریخچه پیامک‌های ربات هم دیده شود
+            tx_id, is_dup = await asyncio.to_thread(
+                self.db.record_unparsed_sms,
+                sms_hash=sms_hash,
+                sender=sender,
+                raw_text=raw_text,
+                device_received_at_utc=device_received_at,
+                reason=parse_reason
+            )
+            return {
+                "status": "duplicate_unparsed" if is_dup else "unparsed",
+                "tx_id": tx_id,
+                "reason": parse_reason
+            }
 
         amount_toman = parsed["amount_toman"]
         amount_rial = parsed["amount_rial"]
         bank_tx_utc = parsed["bank_tx_utc"]
 
+        logger.info(
+            "🏦 [BLUBANK DEPOSIT PARSED] Amount=%d Toman (%d Rial) | BankTime=%s %s | Balance=%s",
+            amount_toman, amount_rial, parsed["bank_date_shamsi_str"], parsed["bank_time_str"], parsed.get("balance_rial")
+        )
+
         test_mode = self.is_test_mode()
 
-        # اجرای عملیات تطبیق و ادعای اتمیک در ترد جداگانه دیتابیس
         match_result = await asyncio.to_thread(
             self.db.find_and_claim_reservation,
             amount_toman=amount_toman,
@@ -947,8 +1021,14 @@ class SMSPaymentManager:
 
         status = match_result.get("status")
 
-        if status == "test_matched":
-            # حالت تست: فقط گزارش به ادمین بدون تایید سفارش
+        if status == "duplicate":
+            return {
+                "status": "duplicate",
+                "tx_id": match_result.get("tx_id"),
+                "previous_status": match_result.get("previous_status")
+            }
+
+        elif status == "test_matched":
             reservation = match_result["reservation"]
             await self._notify_admin_test_match(parsed, reservation)
             return {
@@ -959,7 +1039,6 @@ class SMSPaymentManager:
             }
 
         elif status == "approved":
-            # حالت زنده: پرداخت قطعی شد و رزرو ادعا شد؛ اکنون اقدام به تحویل سرویس
             reservation = match_result["reservation"]
             tx_id = match_result["tx_id"]
             order_id = reservation["order_id"]
@@ -970,7 +1049,6 @@ class SMSPaymentManager:
                 order_type=order_type
             )
 
-            # ثبت وضعیت تحویل در دیتابیس
             await asyncio.to_thread(
                 self.db.update_fulfillment_status,
                 tx_id=tx_id,
@@ -1000,20 +1078,16 @@ class SMSPaymentManager:
             return {"status": "duplicate_claimed"}
 
         else:
-            await self._notify_admin_unmatched(parsed)
-            return {"status": "unmatched"}
+            reason = match_result.get("reason", "no_active_reservation")
+            await self._notify_admin_unmatched(parsed, reason)
+            return {"status": "unmatched", "reason": reason}
 
     async def _execute_fulfillment(self, order_id: int, order_type: str) -> Tuple[str, str]:
-        """
-        اجرای عملیات تحویل سرویس به صورت کاملاً تفکیک‌شده از وضعیت تایید پرداخت
-        Returns: ('fulfilled' | 'failed_pending_retry' | 'manual_fulfillment_required', error_message)
-        """
         if not self._main:
             return "failed_pending_retry", "Main bot module not loaded"
 
         try:
             if order_type == "balance_charge":
-                # شارژ موجودی کیف پول
                 from balance_system import fulfill_balance_order
                 success, msg = await fulfill_balance_order(
                     order_id=order_id,
@@ -1025,7 +1099,6 @@ class SMSPaymentManager:
                 return "failed_pending_retry", msg
 
             else:
-                # تایید سفارش VPN
                 fulfill_vpn = getattr(self._main, "fulfill_vpn_order", None)
                 if not fulfill_vpn:
                     return "failed_pending_retry", "fulfill_vpn_order function not found"
@@ -1137,17 +1210,22 @@ class SMSPaymentManager:
         except Exception as e:
             logger.warning(f"خطا در ارسال نوتیفیکیشن ابهام: {e}")
 
-    async def _notify_admin_unmatched(self, parsed: dict):
+    async def _notify_admin_unmatched(self, parsed: dict, reason: str = ""):
         if not self._main or not hasattr(self._main, "bot"):
             return
         admin_id = self._main.ADMIN_ID_INT
+        reason_fa = (
+            "مبلغ تطبیق داشت اما زمان واریز خارج از بازه سفارش بود"
+            if reason == "time_out_of_bounds"
+            else "هیچ سفارش فعالی با این مبلغ در انتظار پرداخت نیست"
+        )
         text = f"""ℹ️ <b>پیامک واریز بدون سفارش متناظر دریافت شد</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 💰 <b>مبلغ:</b> <code>{parsed['amount_toman']:,}</code> تومان (<code>{parsed['amount_rial']:,}</code> ریال)
 ⏰ <b>زمان:</b> <code>{parsed['bank_time_str']}</code>
 📅 <b>تاریخ:</b> <code>{parsed['bank_date_shamsi_str']}</code>
-━━━━━━━━━━━━━━━━━━━━━━
-💡 ممکن است واریزی مستقیم، خارج از ربات یا مربوط به سفارش منقضی‌شده باشد."""
+📌 <b>علت:</b> {reason_fa}
+━━━━━━━━━━━━━━━━━━━━━━"""
         try:
             await self._main.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML)
         except Exception as e:
@@ -1178,7 +1256,7 @@ def get_admin_sms_settings_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🔑 توکن وب‌هوک", callback_data="sms_view_token")
         ],
         [
-            InlineKeyboardButton(text="📋 تاریخچه پیامک‌ها", callback_data="sms_view_logs"),
+            InlineKeyboardButton(text="📋 تاریخچه تمام پیامک‌ها", callback_data="sms_view_logs"),
             InlineKeyboardButton(text="📱 راهنمای تنظیم اپلیکیشن", callback_data="sms_view_guide")
         ],
         [InlineKeyboardButton(text="🔙 بازگشت به پنل ادمین", callback_data="admin_panel")]
@@ -1203,13 +1281,13 @@ def register_sms_payment_handlers(dp, main_module):
 🔹 <b>آدرس وب‌هوک امن:</b>
 <code>{public_url}</code>
 
-🔹 <b>پورت لوکال سرور:</b> <code>127.0.0.1:8088</code> (بدون تداخل با پورت ۴۴۳)
+🔹 <b>پورت لوکال سرور:</b> <code>127.0.0.1:8088</code>
+🔹 <b>فایل لاگ خام:</b> <code>data/sms_webhook_raw.log</code>
 🔹 <b>وضعیت سیستم:</b> {'🟢 فعال' if sms_payment_manager.is_enabled() else '🔴 غیرفعال'}
 🔹 <b>حالت کاری:</b> {'🧪 تست (شبیه‌سازی و گزارش بدون تایید)' if sms_payment_manager.is_test_mode() else '⚡ تایید خودکار و تحویل آنی'}
 🔹 <b>پنجره مجاز واریز:</b> {sms_payment_manager.get_window_minutes()} دقیقه
 🔹 <b>توکن جاری:</b> <code>{masked_token}</code>
-━━━━━━━━━━━━━━━━━━━━━━
-🔒 <i>سیستم به صورت پیش‌فرض در حالت تست است تا پیامک‌ها بدون تایید سفارش آزمایش شوند.</i>"""
+━━━━━━━━━━━━━━━━━━━━━━"""
 
         try:
             await callback.message.edit_text(
@@ -1233,7 +1311,6 @@ def register_sms_payment_handlers(dp, main_module):
         cfg["enabled"] = not cfg.get("enabled", False)
         sms_payment_manager._save_settings()
 
-        # استارت یا استاپ سرور وب‌هوک لوکال بر اساس وضعیت جدید
         if cfg["enabled"]:
             try:
                 await sms_payment_manager.server.start(
@@ -1313,30 +1390,23 @@ def register_sms_payment_handlers(dp, main_module):
         text = f"""📱 <b>راهنمای جامع راه‌اندازی کارت‌به‌کارت خودکار (بلوبانک)</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>۱. زیرساخت سرور (Cloudflare Tunnel):</b>
-برای اتصال امن گوشی بدون تداخل با پورت ۴۴۳ ریلینی، تانل کلودفلر را روی لوکال سرور قرار دهید:
 <code>ingress:</code>
 <code>  - hostname: sms.zyvora.ir</code>
 <code>    service: http://127.0.0.1:8088</code>
 <code>  - service: http_status:404</code>
 
 <b>۲. تنظیمات اپلیکیشن SMS Forwarder در گوشی:</b>
-• وارد برنامه شده و یک Rule از نوع <b>Webhook / HTTP POST</b> بسازید.
-• <b>URL مقصد:</b>
+- <b>URL مقصد:</b>
 <code>{public_url}</code>
-• <b>Headers:</b>
+- <b>Headers:</b>
 <code>X-Secret-Token: {token}</code>
 <code>Content-Type: application/json</code>
-• <b>Payload / Body Template:</b>
+- <b>Payload / Body Template:</b>
 <code>{{"sender":"[from]","message":"[msg]","received_at":"[receive_time]"}}</code>
-• <b>Sender Filter:</b> نام فرستنده یا سرشماره را روی <code>بلو</code> یا <code>20008080</code> قرار دهید.
 
-<b>۳. نکات حیاتی گوشی:</b>
-• در تنظیمات گوشی، بهینه‌سازی باتری (Battery Optimization) را برای اپ SMS Forwarder خاموش کنید تا در پس‌زمینه متوقف نشود.
-• دسترسی Auto-start و اجرای در پس‌زمینه را به برنامه بدهید.
-
-<b>۴. نحوه آزمایش و فعال‌سازی:</b>
-• سیستم به صورت پیش‌فرض در <b>حالت تست</b> است؛ با اولین واریز، تطبیق آزمایش شده و گزارش بدون کسر/تحویل به تلگرام شما ارسال می‌شود.
-• پس از اطمینان، با دکمه <b>«⚡ حالت کاری»</b> تایید خودکار را فعال کنید.
+<b>۳. مشاهده زنده تمام پیامک‌های دریافتی در سرور:</b>
+برای دیدن لحظه‌ای تمام پیامک‌هایی که از گوشی به سرور می‌رسند، این دستور را در ترمینال سرور بزنید:
+<code>tail -f data/sms_webhook_raw.log</code>
 ━━━━━━━━━━━━━━━━━━━━━━"""
 
         markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -1349,28 +1419,43 @@ def register_sms_payment_handlers(dp, main_module):
     async def view_sms_logs(callback: CallbackQuery):
         if callback.from_user.id != main_module.ADMIN_ID_INT:
             return
-        recent = await asyncio.to_thread(sms_payment_manager.db.get_recent_transactions, limit=6)
+        recent = await asyncio.to_thread(sms_payment_manager.db.get_recent_transactions, limit=8)
         if not recent:
             msg = "📭 تاکنون هیچ پیامکی ثبت نشده است."
         else:
-            lines = ["📋 <b>آخرین پیامک‌های دریافتی:</b>\n━━━━━━━━━━━━━━━━━━━━━━"]
+            lines = ["📋 <b>آخرین پیامک‌های دریافتی از گوشی:</b>\n━━━━━━━━━━━━━━━━━━━━━━"]
             for r in recent:
-                status_emoji = "✅" if r["status"] == "approved" else ("🧪" if "test" in r["status"] else "⚠️")
-                amt = f"{r.get('amount_toman', 0):,} تومان"
-                lines.append(f"{status_emoji} <b>#{r['id']}</b> | {amt} | وضعیت: <code>{r['status']}</code>")
+                st = r["status"]
+                status_emoji = (
+                    "✅" if st == "approved"
+                    else "🧪" if "test" in st
+                    else "🚫" if st == "unparsed"
+                    else "⚠️"
+                )
+                amt = f"{r.get('amount_toman', 0):,} ت" if r.get("amount_toman") else "غیربانکی/ردشده"
+                sender_str = r.get("sender", "N/A")
+                raw_preview = (r.get("raw_text") or "").replace("\n", " ")[:45]
+                notes = r.get("confidence_notes") or ""
+
+                lines.append(f"{status_emoji} <b>#{r['id']}</b> | از: <code>{sender_str}</code> | {amt} | <code>{st}</code>")
+                lines.append(f"   💬 متن: <i>{raw_preview}...</i>")
+                if notes:
+                    lines.append(f"   📌 نتیجه: {notes}")
                 if r.get("matched_order_id"):
-                    lines.append(f"   ↳ متصل به سفارش #{r['matched_order_id']}")
-                lines.append(f"   ↳ زمان: <code>{r.get('bank_tx_utc', 'N/A')[:19]}</code>\n")
+                    lines.append(f"   ↳ سفارش #{r['matched_order_id']}")
+                lines.append("")
             msg = "\n".join(lines)
 
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="sms_view_logs")],
+            [InlineKeyboardButton(text="🔄 بروزرسانی لیست", callback_data="sms_view_logs")],
             [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin_sms_payment")]
         ])
-        await callback.message.edit_text(msg, reply_markup=markup, parse_mode=ParseMode.HTML)
+        try:
+            await callback.message.edit_text(msg, reply_markup=markup, parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
         await callback.answer()
 
-    # ─── هندلر دکمه تلاش مجدد تحویل توسط ادمین ───
     @dp.callback_query(F.data.startswith("sms_retry_"))
     async def retry_sms_fulfillment(callback: CallbackQuery):
         if callback.from_user.id != main_module.ADMIN_ID_INT:
@@ -1389,7 +1474,6 @@ def register_sms_payment_handlers(dp, main_module):
             return
 
         order_type = order.get("type", "purchase")
-
         await callback.answer("⏳ در حال تلاش مجدد برای تحویل...", show_alert=False)
 
         status_res, err_msg = await sms_payment_manager._execute_fulfillment(order_id, order_type)
