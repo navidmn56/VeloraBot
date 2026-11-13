@@ -17204,18 +17204,36 @@ async def show_ready_categories(callback: CallbackQuery):
             cat_name = last_cat.get('name') if lang == "fa" else last_cat.get('name_en', last_cat.get('name'))
             pkg_vol = last_pkg.get('volume', 0)
             vol_str = format_package_volume(pkg_vol, lang)
-            
+
             if lang == "fa":
                 usual_button_text = f"🟢 همون همیشگی ({cat_name} - {vol_str})"
             else:
                 usual_button_text = f"🟢 The Usual ({cat_name} - {vol_str})"
-            
+
             buttons.append([InlineKeyboardButton(
                 text=usual_button_text,
                 callback_data=f"buy_package_{last_cat.get('id')}_{last_pkg.get('id')}",
                 style="success"
             )])
 
+    for cat in categories:
+        icon = cat.get('icon', '📦')
+        name = cat.get('name') if lang == "fa" else cat.get('name_en', cat.get('name'))
+        active_packages = [p for p in cat.get('packages', []) if p.get('is_active', True)]
+        package_count = len(active_packages)
+
+        if lang == "fa":
+            button_text = f"{icon} {name} ({package_count} بسته)"
+        else:
+            button_text = f"{icon} {name} ({package_count} packages)"
+
+        buttons.append([InlineKeyboardButton(
+            text=button_text,
+            callback_data=f"show_category_packages_{cat.get('id')}",
+            style="primary"
+        )])
+
+    # ✅ دکمه انتخاب هوشمند (فقط در حالت خرید، نه تمدید) - پایین دسته‌ها، بالای منوی اصلی
     if not is_extend:
         buttons.append([InlineKeyboardButton(
             text="🛍 انتخاب هوشمند" if lang == "fa" else "🛍 Smart Choice",
@@ -17223,23 +17241,6 @@ async def show_ready_categories(callback: CallbackQuery):
             style="primary"
         )])
 
-    for cat in categories:
-        icon = cat.get('icon', '📦')
-        name = cat.get('name') if lang == "fa" else cat.get('name_en', cat.get('name'))
-        active_packages = [p for p in cat.get('packages', []) if p.get('is_active', True)]
-        package_count = len(active_packages)
-        
-        if lang == "fa":
-            button_text = f"{icon} {name} ({package_count} بسته)"
-        else:
-            button_text = f"{icon} {name} ({package_count} packages)"
-        
-        buttons.append([InlineKeyboardButton(
-            text=button_text,
-            callback_data=f"show_category_packages_{cat.get('id')}",
-            style="primary"
-        )])
-    
     # ✅ دکمه بازگشت (اگه تمدید بود، انصراف از تمدید)
     if is_extend and extend_order_id:
         back_text = "❌ انصراف از تمدید" if lang == "fa" else "❌ Cancel Extension"
@@ -17247,7 +17248,7 @@ async def show_ready_categories(callback: CallbackQuery):
     else:
         back_text = "🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu"
         back_callback = "back_to_main"
-    
+
     buttons.append([InlineKeyboardButton(
         text=back_text,
         callback_data=back_callback,
