@@ -85,6 +85,9 @@ DEFAULT_ALLOWED_SENDERS = [
     "20008080",
     "+98200008080",
     "200008080",
+    "+989999987641",
+    "989999987641",
+    "09999987641",
 ]
 
 
@@ -956,8 +959,8 @@ class SMSPaymentManager:
         return str(self._get_settings().get("public_url", "https://sms.zyvora.ir/api/sms-webhook"))
 
     def get_allowed_senders(self) -> List[str]:
-        return list(self._get_settings().get("allowed_senders", DEFAULT_ALLOWED_SENDERS))
-
+        saved = self._get_settings().get("allowed_senders", [])
+        return list(set( saved + DEFAULT_ALLOWED_SENDERS ))
     async def process_incoming_sms(
         self,
         sender: str,
