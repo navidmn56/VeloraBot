@@ -116,7 +116,7 @@ def format_jalali_date(dt: Optional[datetime] = None, lang: str = "fa") -> str:
             return f"{jd} {month_name} {jy}"
 
     except Exception as e:
-        logger.error(f"خطا در تبدیل تاریخ: {e}")
+        logger.error(f"Error converting date: {e}")
         return _to_persian_digits(dt.strftime("%Y-%m-%d"))
 
 
@@ -582,7 +582,7 @@ async def download_transactions(callback: CallbackQuery):
             ])
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال فایل تراکنش: {e}")
+        logger.error(f"Error sending transaction file: {e}")
         await callback.answer(
             "❌ خطا در ارسال فایل" if lang == "fa" else "❌ Error sending file",
             show_alert=True
@@ -610,7 +610,7 @@ def register_transaction_handlers(dp, main_module):
     dp.callback_query.register(download_transactions, F.data == "tx_download_all")
     dp.callback_query.register(noop, F.data == "noop")
 
-    logger.info("✅ Transaction handlers registered successfully")
+    logger.info("Transaction handlers registered successfully")
     return True
 
 

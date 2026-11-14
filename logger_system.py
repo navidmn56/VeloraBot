@@ -27,6 +27,20 @@ class LogSystem:
         if text is None:
             return ""
         return html.escape(str(text))
+
+    @staticmethod
+    def _sanitize_log_text(text: str) -> str:
+        """Remove Arabic/Persian-script content before sending logs to the channel."""
+        persian_digits = "۰۱۲۳۴۵۶۷۸۹"
+        arabic_digits = "٠١٢٣٤٥٦٧٨٩"
+        ascii_digits = "0123456789"
+        digit_map = str.maketrans(persian_digits + arabic_digits, ascii_digits * 2)
+        text = str(text).translate(digit_map)
+        return re.sub(
+            r"[؀-ۿݐ-ݿࡰ-࢟ࢠ-ࣿﭐ-﷿ﹰ-﻿\U00010EC0-\U00010EFF\U0001EE00-\U0001EEFF]+",
+            "[non-English text omitted]",
+            text,
+        )
     
     async def _send_with_retry(self, message: str, parse_mode: str = "HTML", retry_count: int = 3):
         """ارسال پیام با قابلیت تلاش مجدد و مدیریت flood control"""
@@ -53,13 +67,12 @@ class LogSystem:
                     match = re.search(r'retry after (\d+)', error_msg)
                     if match:
                         wait_time = int(match.group(1))
-                        logger.warning(f"⏳ Flood control: waiting {wait_time} seconds")
+                        logger.warning(f"Flood control: waiting {wait_time} seconds")
                         await asyncio.sleep(wait_time + 1)
                     else:
                         await asyncio.sleep(5 * (attempt + 1))
                 elif "can't parse entities" in error_msg.lower():
-                    # اگر خطای HTML بود، بدون parse_mode تلاش کن
-                    logger.warning(f"⚠️ خطای HTML در لاگ، تلاش بدون parse_mode")
+                    logger.warning("HTML entity parsing error in log message, retrying without parse_mode")
                     try:
                         await self.bot.send_message(
                             self.log_channel_id,
@@ -69,12 +82,12 @@ class LogSystem:
                         self.last_send_time = datetime.now().timestamp()
                         return True
                     except Exception as e2:
-                        logger.error(f"❌ خطا در ارسال بدون parse_mode: {e2}")
+                        logger.error(f"Failed to send log message without parse_mode: {e2}")
                 elif attempt < retry_count - 1:
-                    logger.warning(f"⚠️ خطا در ارسال لاگ (تلاش {attempt + 1}): {e}")
+                    logger.warning(f"Error sending log message (attempt {attempt + 1}): {e}")
                     await asyncio.sleep(2 * (attempt + 1))
                 else:
-                    logger.error(f"❌ خطا در ارسال لاگ پس از {retry_count} تلاش: {e}")
+                    logger.error(f"Failed to send log message after {retry_count} attempts: {e}")
                     return False
         return False
     
@@ -99,7 +112,7 @@ class LogSystem:
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    logger.error(f"خطا در پردازش صف لاگ: {e}")
+                    logger.error(f"Error processing log queue: {e}")
                     await asyncio.sleep(2)
                     
         finally:
@@ -107,8 +120,9 @@ class LogSystem:
     
     async def send_log(self, message: str, parse_mode: str = "HTML"):
         """ارسال پیام لاگ به کانال با استفاده از صف"""
-        # اضافه کردن timestamp به ابتدای پیام
+        # Add timestamp to the beginning of the message
         timestamp = datetime.now().strftime('%H:%M:%S')
+        message = self._sanitize_log_text(message)
         formatted_message = f"<code>[{timestamp}]</code>\n{message}"
         
         # اضافه کردن به صف
@@ -123,253 +137,253 @@ class LogSystem:
     async def log_bot_start(self, bot_info, admin_id: int):
         """ثبت استارت ربات"""
         text = f"""
-🚀 <b>ربات راه‌اندازی شد!</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-🤖 <b>نام:</b> {self._safe(bot_info.first_name)}
-📛 <b>یوزرنیم:</b> @{self._safe(bot_info.username)}
-🆔 <b>آیدی:</b> <code>{bot_info.id}</code>
-👑 <b>ادمین:</b> <code>{admin_id}</code>
+🚀 <b>Bot started</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🤖 <b>Name:</b> {self._safe(bot_info.first_name)}
+📛 <b>Username:</b> @{self._safe(bot_info.username)}
+🆔 <b>ID:</b> <code>{bot_info.id}</code>
+👑 <b>Admin:</b> <code>{admin_id}</code>
 """
         await self.send_log(text)
     
     async def log_bot_stop(self, admin_id: int):
         """ثبت توقف ربات"""
         text = f"""
-🛑 <b>ربات متوقف شد!</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👑 <b>ادمین:</b> <code>{admin_id}</code>
+🛑 <b>Bot stopped</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👑 <b>Admin:</b> <code>{admin_id}</code>
 """
         await self.send_log(text)
     
     async def log_admin_action(self, admin_id: int, action: str, target_user: int = None, details: str = ""):
         """ثبت اقدامات ادمین"""
-        target_text = f"\n🎯 <b>کاربر هدف:</b> <code>{target_user}</code>" if target_user else ""
+        target_text = f"\n🎯 <b>Target user:</b> <code>{target_user}</code>" if target_user else ""
         text = f"""
-👑 <b>اقدام ادمین</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>ادمین:</b> <code>{admin_id}</code>
-⚡ <b>اقدام:</b> {self._safe(action)}{target_text}
-📄 <b>جزئیات:</b> {self._safe(details)}
+👑 <b>Admin action</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>Admin:</b> <code>{admin_id}</code>
+⚡ <b>Action:</b> {self._safe(action)}{target_text}
+📄 <b>Details:</b> {self._safe(details)}
 """
         await self.send_log(text)
     
     async def log_user_action(self, user_id: int, action: str, details: str = ""):
         """ثبت اقدامات کاربران عادی"""
         text = f"""
-📝 <b>اقدام کاربر</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-⚡ <b>اقدام:</b> {self._safe(action)}
-📄 <b>جزئیات:</b> {self._safe(details)}
+📝 <b>User action</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+⚡ <b>Action:</b> {self._safe(action)}
+📄 <b>Details:</b> {self._safe(details)}
 """
         await self.send_log(text)
     
     async def log_user_register(self, user_id: int, user_name: str, username: str):
         """ثبت ثبت‌نام کاربر جدید"""
         text = f"""
-🆕 <b>کاربر جدید</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>نام:</b> {self._safe(user_name)}
-🆔 <b>آیدی:</b> <code>{user_id}</code>
-📛 <b>یوزرنیم:</b> @{self._safe(username) if username else 'ندارد'}
+🆕 <b>New user</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>Name:</b> {self._safe(user_name)}
+🆔 <b>ID:</b> <code>{user_id}</code>
+📛 <b>Username:</b> @{self._safe(username) if username else 'not provided'}
 """
         await self.send_log(text)
     
     async def log_purchase(self, user_id: int, order_id: int, volume: int, days: int, price: int, method: str):
         """ثبت خرید جدید"""
         text = f"""
-🛒 <b>خرید جدید</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-🆔 <b>سفارش:</b> #{order_id}
-📦 <b>حجم:</b> {volume} GB
-⏱ <b>مدت:</b> {days} روز
-💰 <b>مبلغ:</b> {price:,} تومان
-💳 <b>روش پرداخت:</b> {self._safe(method)}
+🛒 <b>New purchase</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+🆔 <b>Order:</b> #{order_id}
+📦 <b>Volume:</b> {volume} GB
+⏱ <b>Duration:</b> {days} days
+💰 <b>Amount:</b> {price:,} Toman
+💳 <b>Payment method:</b> {self._safe(method)}
 """
         await self.send_log(text)
     
     async def log_balance_charge(self, user_id: int, order_id: int, amount: int):
         """ثبت درخواست شارژ حساب"""
         text = f"""
-💰 <b>درخواست شارژ حساب</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-🆔 <b>سفارش:</b> #{order_id}
-💵 <b>مبلغ:</b> {amount:,} تومان
+💰 <b>Balance top-up request</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+🆔 <b>Order:</b> #{order_id}
+💵 <b>Amount:</b> {amount:,} Toman
 """
         await self.send_log(text)
     
     async def log_balance_charge_approved(self, order_id: int, user_id: int, amount: int):
         """ثبت تایید شارژ حساب"""
         text = f"""
-✅ <b>تایید شارژ حساب</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-🆔 <b>سفارش:</b> #{order_id}
-👤 <b>کاربر:</b> <code>{user_id}</code>
-💵 <b>مبلغ:</b> {amount:,} تومان
+✅ <b>Balance top-up approved</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🆔 <b>Order:</b> #{order_id}
+👤 <b>User:</b> <code>{user_id}</code>
+💵 <b>Amount:</b> {amount:,} Toman
 """
         await self.send_log(text)
     
     async def log_order_approved(self, order_id: int, user_id: int, volume: int, days: int, price: int):
         """ثبت تایید سفارش"""
         text = f"""
-✅ <b>تایید سفارش</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-🆔 <b>سفارش:</b> #{order_id}
-👤 <b>کاربر:</b> <code>{user_id}</code>
-📦 <b>حجم:</b> {volume} GB
-⏱ <b>مدت:</b> {days} روز
-💰 <b>مبلغ:</b> {price:,} تومان
+✅ <b>Order approved</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🆔 <b>Order:</b> #{order_id}
+👤 <b>User:</b> <code>{user_id}</code>
+📦 <b>Volume:</b> {volume} GB
+⏱ <b>Duration:</b> {days} days
+💰 <b>Amount:</b> {price:,} Toman
 """
         await self.send_log(text)
     
     async def log_order_rejected(self, order_id: int, user_id: int, reason: str = ""):
         """ثبت رد سفارش"""
         text = f"""
-❌ <b>رد سفارش</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-🆔 <b>سفارش:</b> #{order_id}
-👤 <b>کاربر:</b> <code>{user_id}</code>
-📄 <b>دلیل:</b> {self._safe(reason) if reason else 'نامشخص'}
+❌ <b>Order rejected</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🆔 <b>Order:</b> #{order_id}
+👤 <b>User:</b> <code>{user_id}</code>
+📄 <b>Reason:</b> {self._safe(reason) if reason else 'unspecified'}
 """
         await self.send_log(text)
     
     async def log_balance_change(self, user_id: int, amount: int, new_balance: int, action: str, admin_id: int = None, details: str = ""):
         """ثبت تغییر موجودی"""
-        action_text = "افزایش" if action == "add" else "کاهش"
+        action_text = "Increase" if action == "add" else "Decrease"
         emoji = "➕" if action == "add" else "➖"
-        admin_text = f"\n👑 <b>توسط ادمین:</b> <code>{admin_id}</code>" if admin_id else ""
-        details_text = f"\n📄 <b>توضیحات:</b> {self._safe(details)}" if details else ""
+        admin_text = f"\n👑 <b>By admin:</b> <code>{admin_id}</code>" if admin_id else ""
+        details_text = f"\n📄 <b>Details:</b> {self._safe(details)}" if details else ""
         amount_abs = abs(amount)
         
         text = f"""
-{emoji} <b>تغییر موجودی</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-⚡ <b>نوع:</b> {action_text}
-💰 <b>مبلغ:</b> {amount_abs:,} تومان
-💵 <b>موجودی جدید:</b> {new_balance:,} تومان{admin_text}{details_text}
+{emoji} <b>Balance changed</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+⚡ <b>Action:</b> {action_text}
+💰 <b>Amount:</b> {amount_abs:,} Toman
+💵 <b>New balance:</b> {new_balance:,} Toman{admin_text}{details_text}
 """
         await self.send_log(text)
     
     async def log_config_created(self, user_id: int, order_id: int, email: str, volume: int, days: int):
         """ثبت ساخت کانفیگ در پنل"""
         text = f"""
-📡 <b>ساخت کانفیگ در پنل</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-🆔 <b>سفارش:</b> #{order_id}
-📧 <b>ایمیل:</b> <code>{self._safe(email)}</code>
-📦 <b>حجم:</b> {volume} GB
-⏱ <b>مدت:</b> {days} روز
+📡 <b>Panel configuration created</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+🆔 <b>Order:</b> #{order_id}
+📧 <b>Email:</b> <code>{self._safe(email)}</code>
+📦 <b>Volume:</b> {volume} GB
+⏱ <b>Duration:</b> {days} days
 """
         await self.send_log(text)
     
     async def log_config_view(self, user_id: int, order_id: int, view_type: str):
         """ثبت مشاهده کانفیگ"""
         text = f"""
-👁️ <b>مشاهده کانفیگ</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-🆔 <b>سفارش:</b> #{order_id}
-📱 <b>نوع مشاهده:</b> {self._safe(view_type)}
+👁️ <b>Configuration viewed</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+🆔 <b>Order:</b> #{order_id}
+📱 <b>View type:</b> {self._safe(view_type)}
 """
         await self.send_log(text)
     
     async def log_feedback(self, user_id: int, order_id: int, rating: str, comment: str = ""):
         """ثبت بازخورد کاربر"""
         text = f"""
-⭐ <b>بازخورد جدید</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>کاربر:</b> <code>{user_id}</code>
-🆔 <b>سفارش:</b> #{order_id}
-🎯 <b>امتیاز:</b> {self._safe(rating)}
-💬 <b>نظر:</b> {self._safe(comment) if comment else 'بدون نظر'}
+⭐ <b>New feedback</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>User:</b> <code>{user_id}</code>
+🆔 <b>Order:</b> #{order_id}
+🎯 <b>Rating:</b> {self._safe(rating)}
+💬 <b>Comment:</b> {self._safe(comment) if comment else 'no comment'}
 """
         await self.send_log(text)
     
     async def log_chat_message(self, user_id: int, chat_id: int, message: str, sender: str = "user"):
         """ثبت پیام چت پشتیبانی"""
-        sender_text = "کاربر" if sender == "user" else "ادمین"
+        sender_text = "User" if sender == "user" else "Admin"
         emoji = "💬" if sender == "user" else "👑"
         text = f"""
-{emoji} <b>پیام چت پشتیبانی</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👤 <b>فرستنده:</b> {sender_text} (<code>{user_id}</code>)
-🆔 <b>چت:</b> #{chat_id}
-📝 <b>متن:</b> {self._safe(message[:200])}
+{emoji} <b>Support chat message</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👤 <b>Sender:</b> {sender_text} (<code>{user_id}</code>)
+🆔 <b>Chat:</b> #{chat_id}
+📝 <b>Message:</b> {self._safe(message[:200])}
 """
         await self.send_log(text)
     
     async def log_chat_closed(self, chat_id: int, user_id: int, closed_by: str = "user"):
         """ثبت بسته شدن چت"""
-        closer = "کاربر" if closed_by == "user" else "ادمین"
+        closer = "User" if closed_by == "user" else "Admin"
         text = f"""
-🔒 <b>پایان چت</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-🆔 <b>چت:</b> #{chat_id}
-👤 <b>کاربر:</b> <code>{user_id}</code>
-🔚 <b>پایان‌دهنده:</b> {closer}
+🔒 <b>Chat closed</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🆔 <b>Chat:</b> #{chat_id}
+👤 <b>User:</b> <code>{user_id}</code>
+🔚 <b>Closed by:</b> {closer}
 """
         await self.send_log(text)
     
     async def log_user_deleted(self, admin_id: int, user_id: int, user_name: str):
         """ثبت حذف کاربر"""
         text = f"""
-🗑️ <b>حذف کاربر</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👑 <b>ادمین:</b> <code>{admin_id}</code>
-👤 <b>کاربر حذف شده:</b> {self._safe(user_name)} (<code>{user_id}</code>)
+🗑️ <b>User deleted</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👑 <b>Admin:</b> <code>{admin_id}</code>
+👤 <b>Deleted user:</b> {self._safe(user_name)} (<code>{user_id}</code>)
 """
         await self.send_log(text)
     
     async def log_price_update(self, admin_id: int, setting_key: str, old_value: int, new_value: int):
         """ثبت تغییر تنظیمات قیمت"""
         text = f"""
-⚙️ <b>تغییر تنظیمات قیمت</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👑 <b>ادمین:</b> <code>{admin_id}</code>
-📊 <b>تنظیمات:</b> {self._safe(setting_key)}
-📉 <b>مقدار قدیم:</b> {old_value:,} تومان
-📈 <b>مقدار جدید:</b> {new_value:,} تومان
+⚙️ <b>Price settings updated</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👑 <b>Admin:</b> <code>{admin_id}</code>
+📊 <b>Setting:</b> {self._safe(setting_key)}
+📉 <b>Previous value:</b> {old_value:,} Toman
+📈 <b>New value:</b> {new_value:,} Toman
 """
         await self.send_log(text)
     
     async def log_error(self, error: Exception, function_name: str, user_id: int = None):
         """ثبت خطا"""
-        user_text = f"\n👤 <b>کاربر:</b> <code>{user_id}</code>" if user_id else ""
+        user_text = f"\n👤 <b>User:</b> <code>{user_id}</code>" if user_id else ""
         text = f"""
-⚠️ <b>خطا در سیستم</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-📁 <b>تابع:</b> {self._safe(function_name)}
-❌ <b>خطا:</b> {self._safe(str(error)[:200])}{user_text}
+⚠️ <b>System error</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+📁 <b>Function:</b> {self._safe(function_name)}
+❌ <b>Error:</b> {self._safe(str(error)[:200])}{user_text}
 """
         await self.send_log(text)
     
     async def log_force_join_channel(self, admin_id: int, channel_name: str, channel_id: int, action: str = "add"):
         """ثبت افزودن یا حذف کانال عضویت اجباری"""
-        action_text = "افزودن" if action == "add" else "حذف"
+        action_text = "Add" if action == "add" else "Remove"
         emoji = "➕" if action == "add" else "➖"
         text = f"""
-{emoji} <b>تغییر کانال عضویت اجباری</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👑 <b>ادمین:</b> <code>{admin_id}</code>
-⚡ <b>عملیات:</b> {action_text}
-📢 <b>کانال:</b> {self._safe(channel_name)}
-🆔 <b>آیدی:</b> <code>{channel_id}</code>
+{emoji} <b>Forced membership channel updated</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👑 <b>Admin:</b> <code>{admin_id}</code>
+⚡ <b>Action:</b> {action_text}
+📢 <b>Channel:</b> {self._safe(channel_name)}
+🆔 <b>ID:</b> <code>{channel_id}</code>
 """
         await self.send_log(text)
     
     async def log_force_join_toggle(self, admin_id: int, enabled: bool):
         """ثبت فعال/غیرفعال کردن عضویت اجباری"""
-        status = "فعال" if enabled else "غیرفعال"
+        status = "Enabled" if enabled else "Disabled"
         emoji = "🟢" if enabled else "🔴"
         text = f"""
-{emoji} <b>تغییر وضعیت عضویت اجباری</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👑 <b>ادمین:</b> <code>{admin_id}</code>
-⚙️ <b>وضعیت جدید:</b> {status}
+{emoji} <b>Forced membership status updated</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👑 <b>Admin:</b> <code>{admin_id}</code>
+⚙️ <b>New status:</b> {status}
 """
         await self.send_log(text)
     
@@ -393,15 +407,15 @@ async def init_logger():
         from config import LOG_BOT_TOKEN, LOG_CHANNEL_ID
         
         if not LOG_BOT_TOKEN or not LOG_CHANNEL_ID:
-            logger.warning("⚠️ تنظیمات لاگ کامل نیست")
+            logger.warning("Log channel settings are incomplete")
             return None
-        
+
         log_system = LogSystem(LOG_BOT_TOKEN, int(LOG_CHANNEL_ID))
-        await log_system.send_log("✅ <b>سیستم لاگ راه‌اندازی شد</b>")
+        await log_system.send_log("✅ <b>Logging system initialized</b>")
         return log_system
     except ImportError:
-        logger.warning("⚠️ ماژول config یافت نشد")
+        logger.warning("Config module not found")
         return None
     except Exception as e:
-        logger.error(f"❌ خطا در راه‌اندازی سیستم لاگ: {e}")
+        logger.error(f"Error initializing logging system: {e}")
         return None

@@ -63,6 +63,11 @@ from config import (
     AUTO_AI_RESPONSE,
     START_REACTION_EMOJI,
 )
+try:
+    from config import BANK_CARD_HOLDER_EN, BANK_NAME_EN
+except ImportError:
+    BANK_CARD_HOLDER_EN = ""
+    BANK_NAME_EN = ""
 import config as app_config
 from daily_usage_system import (
     gregorian_to_jalali,
@@ -232,12 +237,13 @@ log_system = None
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s] - %(message)s',
-    handlers=[
-        logging.FileHandler('bot_debug.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    handlers=[logging.StreamHandler()]
 )
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+for handler in root_logger.handlers:
+    handler.setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML), timeout=15)
@@ -249,26 +255,10 @@ class CustomLogger:
     
     @staticmethod
     def log_event(event_type: str, message: str, user_id: int = None):
-        
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        user_part = f" [User:{user_id}]" if user_id else ""
-        
-        log_line = f"[{timestamp}][{event_type}]{user_part} {message}"
-        
-        
-        try:
-            with open('events.log', 'a', encoding='utf-8') as f:
-                f.write(log_line + '\n')
-        except Exception as e:
-            logger.error(f"خطا در نوشتن events.log: {e}")
-        
-        
         if event_type == 'ERROR':
-            logger.error(message)
+            logger.error("An application operation failed.")
         elif event_type == 'WARNING':
-            logger.warning(message)
-        else:
-            logger.info(message)
+            logger.warning("An application warning occurred.")
 
 SHOP_STATUS = {
     'open': True,  
@@ -399,7 +389,7 @@ async def send_sticker(chat_id: int, sticker_key: str, fallback_emoji: str = "�
 DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
-    logger.info(f"پوشه {DATA_DIR} ایجاد شد")
+    logger.info(f"Created data folder {DATA_DIR}")
 
 
 
@@ -455,7 +445,7 @@ USER_TEST_SETTINGS = {}
 def ensure_data_directory():
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
-        logger.info(f"✅ پوشه {DATA_DIR} ایجاد شد")
+        logger.info(f"Data folder {DATA_DIR} created")
     
     backup_dir = os.path.join(DATA_DIR, "backups")
     if not os.path.exists(backup_dir):
@@ -473,22 +463,22 @@ def ensure_data_directory():
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(default_data, f, ensure_ascii=False, indent=2)
-            logger.info(f"✅ فایل {name}.json ایجاد شد (جدید)")
+            logger.info(f"File {name}.json created (new)")
         else:
             size = os.path.getsize(file_path)
-            logger.info(f"📁 فایل {name}.json وجود دارد (حجم: {size:,} bytes) - بدون تغییر")
+            logger.info(f"File {name}.json already exists (size: {size:,} bytes) - unchanged")
             
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read().strip()
                     if not content:
-                        logger.warning(f"⚠️ فایل {name}.json خالی است! اما بازنویسی نمی‌شود.")
+                        logger.warning(f"File {name}.json is empty! Skipping rewrite.")
                     else:
                         json.loads(content)
-                        logger.info(f"   ✅ محتوای فایل {name}.json معتبر است")
+                        logger.info(f"   File content for {name}.json is valid")
             except json.JSONDecodeError as e:
-                logger.error(f"❌ فایل {name}.json خراب است: {e}")
-                logger.info(f"   🔧 برای تعمیر، از بکاپ استفاده کنید یا دستی تعمیر نمایید")
+                logger.error(f"File {name}.json is corrupted: {e}")
+                logger.info("   Run a manual repair using the backup")
             
             
 async def get_config_from_pool_safe(volume: int, days: int):
@@ -499,7 +489,7 @@ def save_json(file_path: str, data) -> bool:
         filename = os.path.basename(file_path)
         file_dir = os.path.dirname(file_path)
         
-        logger.info(f"💾 ذخیره {filename} در مسیر: {os.path.abspath(file_path)}")
+        logger.info(f"Saving {filename} to path: {os.path.abspath(file_path)}")
         
         os.makedirs(file_dir, exist_ok=True)
         
@@ -519,18 +509,18 @@ def save_json(file_path: str, data) -> bool:
             else:
                 os.rename(temp_file, file_path)
         else:
-            logger.error(f"❌ فایل موقت {temp_file} ایجاد نشد یا خالی است")
+            logger.error(f"Temporary file {temp_file} was not created or is empty")
             return False
         
         if os.path.exists(file_path):
             file_size = os.path.getsize(file_path)
-            logger.info(f"✅ {filename} با موفقیت ذخیره شد ({file_size:,} bytes)")
+            logger.info(f"{filename} saved successfully ({file_size:,} bytes)")
             
             with open(file_path, 'r', encoding='utf-8') as f:
                 verify_data = json.load(f)
             logger.info(f"✅ تایید نهایی: {len(verify_data) if isinstance(verify_data, dict) else 'N/A'} رکورد در {filename}")
         else:
-            logger.error(f"❌ {filename} ذخیره نشد!")
+            logger.error(f"{filename} was not saved!")
             return False
         
         _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
@@ -538,16 +528,16 @@ def save_json(file_path: str, data) -> bool:
             try:
                 from config import refresh_gemini_prompt
                 refresh_gemini_prompt()
-                logger.info("🔄 GEMINI_SYSTEM_PROMPT بعد از ذخیره configs.json به‌روزرسانی شد")
+                logger.info("Gemini system prompt refreshed after saving configs.json")
             except ImportError:
-                logger.debug("⏭️ config.py در دسترس نیست - رد شدن از refresh")
+                logger.debug("Skipping refresh - config.py not available")
             except Exception as e:
                 logger.warning(f"⚠️ خطا در refresh پرامپت: {e}")
         
         return True
         
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره {os.path.basename(file_path)}: {e}", exc_info=True)
+        logger.error(f"Failed to save {os.path.basename(file_path)}: {e}", exc_info=True)
         return False
     
 
@@ -588,22 +578,22 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
                 _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
             
             logger.info(f"✅ {filename} بارگذاری شد - {len(data) if isinstance(data, dict) else 'N/A'} آیتم")
-            logger.info(f"   نمونه داده: {str(list(data.keys())[:3]) if isinstance(data, dict) and data else 'خالی'}")
+            logger.info(f"   Sample data: {str(list(data.keys())[:3]) if isinstance(data, dict) and data else 'empty'}")
             if filename == 'configs.json':
                 try:
                     from config import refresh_gemini_prompt
                     refresh_gemini_prompt()
                     logger.info("🔄 GEMINI_SYSTEM_PROMPT بعد از بارگذاری configs.json به‌روزرسانی شد")
                 except ImportError:
-                    logger.debug("⏭️ config.py در دسترس نیست - رد شدن از refresh")
+                    logger.debug("Skipping refresh - config.py not available")
                 except Exception as e:
-                    logger.warning(f"⚠️ خطا در refresh پرامپت: {e}")
+                    logger.warning(f"Refresh prompt failed: {e}")
             
             return data
             
     except json.JSONDecodeError as e:
         logger.error(f"❌ خطای JSON در {filename}: {e}")
-        logger.error(f"   محتوای فایل (اول 500 کاراکتر): {content[:500] if 'content' in locals() else 'N/A'}")
+        logger.error(f"   JSON file content omitted for security; filename: {filename}")
         return {}
         
     except Exception as e:
@@ -801,7 +791,7 @@ async def admin_test_service_settings(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 async def show_inbound_manager(
@@ -1183,11 +1173,13 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                 f"{RLM}{info_emoji} پشتیبانی: {support_display}"
             )
         else:
+            holder_name = (BANK_CARD_HOLDER_EN or "").strip() or BANK_CARD_HOLDER
+            bank_display = (BANK_NAME_EN or "").strip() or BANK_NAME
             card_block = (
                 f"{card_emoji} <b>Card Number</b>\n"
                 f"<code>{card_num}</code>\n"
-                f"{user_emoji} Holder: {BANK_CARD_HOLDER}\n"
-                f"{star_emoji} Bank: {BANK_NAME}\n"
+                f"{user_emoji} Holder: {holder_name}\n"
+                f"{star_emoji} Bank: {bank_display}\n"
                 f"{info_emoji} Support: {support_display}"
             )
         if is_extend:
@@ -1770,7 +1762,7 @@ async def admin_test_edit_start(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_test_edit'))
@@ -2126,7 +2118,7 @@ async def admin_test_users(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data == "admin_test_all_users_settings")
 async def admin_test_all_users_settings(callback: CallbackQuery):
@@ -2191,7 +2183,7 @@ async def admin_test_all_users_settings(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 
 @dp.callback_query(F.data == "admin_test_user_select")
@@ -2243,7 +2235,7 @@ Send /cancel to abort
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_test_user_select'))
@@ -2349,7 +2341,7 @@ Send /cancel to abort
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_default_test_setting'))
@@ -2514,7 +2506,7 @@ async def admin_test_users_with_settings(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 @dp.callback_query(F.data == "admin_test_clear_all_settings")
@@ -2577,7 +2569,7 @@ Are you sure?
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 
 
@@ -2650,7 +2642,7 @@ Send /cancel to abort
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_test_user_id'))
 async def admin_test_user_reset_execute(message: Message):
@@ -2829,7 +2821,7 @@ async def admin_test_users_list(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
         
@@ -2988,7 +2980,7 @@ Send /cancel to abort
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("admin_test_user_days_"))
@@ -3030,7 +3022,7 @@ async def admin_test_user_days(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("admin_test_user_max_"))
@@ -3072,7 +3064,7 @@ async def admin_test_user_max(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_test_user_setting'))
@@ -3387,7 +3379,7 @@ async def admin_test_user_settings(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 @dp.callback_query(F.data == "admin_test_users_reset_all")
 async def admin_test_users_reset_all_confirm(callback: CallbackQuery):
@@ -3452,7 +3444,7 @@ Are you sure?
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "admin_test_users_reset_all_execute")
@@ -3510,7 +3502,7 @@ async def admin_test_users_reset_all_execute(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
 @dp.callback_query(F.data == "admin_test_stats")
 async def admin_test_stats(callback: CallbackQuery):
@@ -3592,7 +3584,7 @@ async def admin_test_stats(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 
 
@@ -3728,7 +3720,7 @@ Click the buttons below to change settings:
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data == "admin_toggle_manual_approval")
 async def admin_toggle_manual_approval(callback: CallbackQuery):
@@ -3865,7 +3857,7 @@ Click on each user to approve or reject:
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("admin_approve_user_"))
@@ -3970,7 +3962,7 @@ Should this user be allowed to make purchases?
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("admin_reject_user_"))
@@ -4121,7 +4113,7 @@ Send /cancel to abort.
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_shop_message'))
@@ -4511,7 +4503,7 @@ async def admin_inbounds_list(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 def migrate_inbound_data():
     """مهاجرت داده‌های اینباند از تک به چندتایی"""
@@ -4643,7 +4635,7 @@ async def admin_inbound_detail(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data.startswith("admin_inbound_clients_"))
 async def admin_inbound_clients(callback: CallbackQuery):
@@ -4718,7 +4710,7 @@ async def admin_inbound_clients(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
         
@@ -4793,7 +4785,7 @@ async def admin_inbound_users(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 @dp.callback_query(F.data.startswith("admin_inbound_set_default_"))
@@ -4955,7 +4947,7 @@ async def admin_client_detail(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
         
@@ -5032,7 +5024,7 @@ async def admin_inbound_default_setting(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("admin_inbound_toggle_default_"))
@@ -7114,7 +7106,7 @@ Click the button below to change:
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
     
     
@@ -7180,7 +7172,7 @@ async def edit_price_start(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
     
     
@@ -7373,7 +7365,7 @@ async def admin_blacklist_menu(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data == "blacklist_add")
 async def blacklist_add_start(callback: CallbackQuery):
@@ -7419,7 +7411,7 @@ Send /cancel to abort
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_blacklist_add'))
@@ -7572,7 +7564,7 @@ async def blacklist_show(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("blacklist_user_"))
@@ -7623,7 +7615,7 @@ Click the button below to remove from blacklist:
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
 
 
@@ -7678,7 +7670,7 @@ async def blacklist_remove_user(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "blacklist_clear_all")
@@ -7719,7 +7711,7 @@ Are you sure?
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "blacklist_confirm_clear_all")
@@ -7762,7 +7754,7 @@ async def blacklist_confirm_clear_all(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 def update_user(user_id: int, key: str, value):
@@ -8124,8 +8116,8 @@ async def delete_old_before_restore(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")    
-        
+        logger.warning(f"callback.answer failed: {e}")
+
 def backup_database():
     """بکاپ گیری کامل از دیتابیس با تمام تنظیمات، IP Limit، alert_cache و alert_settings"""
     backup_dir = os.path.join(DATA_DIR, 'backups')
@@ -11589,7 +11581,7 @@ async def admin_ai_settings(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 @dp.callback_query(F.data == "admin_toggle_ai_button")
 async def admin_toggle_ai_button(callback: CallbackQuery):
@@ -11748,7 +11740,7 @@ Status: {gemini_test_result}
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "admin_ai_reset_limits")
@@ -11819,7 +11811,7 @@ async def admin_ai_reset_limits(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
     
     
@@ -12383,7 +12375,7 @@ async def check_referral_bonus(user_id: int):
             f"💰 موجودی جدید: {new_balance:,} تومان"
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام پاداش به {ref_id}: {e}")
+        logger.error(f"Failed to send reward notification to referrer {ref_id}: {e}")
     
     return True
 
@@ -12837,7 +12829,7 @@ async def get_test_service(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 
 
@@ -14375,7 +14367,7 @@ Welcome to AI Support!
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
        
 @dp.callback_query(F.data == "clear_ai_memory")
 async def clear_ai_memory(callback: CallbackQuery):
@@ -14437,7 +14429,7 @@ async def exit_ai_chat(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
     
 async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = ParseMode.HTML):
@@ -17477,7 +17469,7 @@ async def show_category_packages(callback: CallbackQuery):
         try:
             await callback.answer()
         except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+            logger.warning(f"callback.answer failed: {e}")
         return
     
     packages.sort(key=lambda x: x.get('volume', 0))
@@ -17766,7 +17758,7 @@ select the volume and days you want 👇
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 @dp.callback_query(F.data.startswith("buy_package_"))
 async def buy_specific_package(callback: CallbackQuery):
@@ -18103,7 +18095,7 @@ async def buy_specific_package(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 def fully_remove_coupon_from_user(user_id: int) -> bool:
     """حذف کامل کوپن از وضعیت کاربر و دیتابیس
@@ -18502,7 +18494,7 @@ async def pay_ready_package_balance(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 
@@ -20970,7 +20962,7 @@ async def admin_force_join_settings(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
     
     
@@ -21030,7 +21022,7 @@ async def force_join_add_start(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_channel_id'))
@@ -21136,7 +21128,7 @@ async def force_join_remove_start(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("force_join_remove_channel_"))
@@ -21587,7 +21579,7 @@ async def back_to_main(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")    
+        logger.warning(f"callback.answer failed: {e}")
         
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_start(callback: CallbackQuery):
@@ -21641,7 +21633,7 @@ async def admin_broadcast_start(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
 async def _is_admin_broadcasting(message: Message) -> bool:
     """چک می‌کنه که ادمین در حالت broadcast هست یا نه"""
@@ -21692,7 +21684,7 @@ async def broadcast_type_selected(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 _BROADCAST_ACTIONS = {
@@ -22718,7 +22710,7 @@ async def confirm_broadcast(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 @dp.callback_query(F.data == "admin_broadcast_test")
@@ -22757,7 +22749,7 @@ async def admin_broadcast_test(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
     
 def detect_safe_parse_mode(text: str) -> Optional[ParseMode]:
@@ -23006,7 +22998,7 @@ async def buy_service(callback: CallbackQuery):
         try:
             await callback.answer()
         except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+            logger.warning(f"callback.answer failed: {e}")
         return
     if ready_enabled and has_active_packages:
         logger.info(f"📦 بسته‌های آماده فعال هستند - کاربر {user_id} به صفحه دسته‌بندی هدایت شد")
@@ -23116,7 +23108,7 @@ async def buy_service(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 @dp.callback_query(F.data == "vol_down")
 async def vol_down(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -25349,7 +25341,7 @@ async def pay_card(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data.startswith("send_receipt_"))
 async def send_receipt_reminder(callback: CallbackQuery):
@@ -25516,7 +25508,7 @@ async def cancel_order_direct(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
    
 
     
@@ -26419,7 +26411,7 @@ async def pay_balance(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     return
 
 
@@ -26466,7 +26458,7 @@ async def send_config_to_user(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_config'))
@@ -26561,7 +26553,7 @@ async def cancel_payment(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 
@@ -27405,7 +27397,7 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
     try:
         await callback.answer("✅ شارژ موجودی با موفقیت انجام شد" if lang == "fa" else "✅ Balance charged successfully")
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 
@@ -27453,7 +27445,7 @@ async def custom_payment_receipt_manual(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 
@@ -27573,7 +27565,7 @@ Send /cancel to abort
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
        
     
 @dp.message(lambda m: m.from_user.id == ADMIN_ID_INT and user_states.get(m.from_user.id, {}).get('awaiting_custom_payment_receipt_manual_volume'))
@@ -30771,7 +30763,7 @@ async def admin_close_msg(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
     
 @dp.callback_query(F.data.startswith("approve_direct_"))
@@ -31435,7 +31427,7 @@ async def my_configs(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 
@@ -31615,7 +31607,7 @@ async def show_all_my_configs(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 @dp.callback_query(F.data.startswith("view_config_"))
 async def view_single_config(callback: CallbackQuery):
@@ -31691,7 +31683,7 @@ async def view_single_config(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "my_account")
@@ -31902,7 +31894,7 @@ async def my_account(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 
@@ -32450,7 +32442,7 @@ async def coupon_status(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 @dp.callback_query(F.data == "invite_friends")
 async def invite_friends(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -32500,7 +32492,7 @@ async def invite_friends(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 @dp.callback_query(F.data == "change_language")
 async def change_language(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -32515,7 +32507,7 @@ async def change_language(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data == "set_lang_fa")
 async def set_lang_fa(callback: CallbackQuery):
@@ -33539,7 +33531,7 @@ async def handle_feedback(callback: CallbackQuery):
         try:
             await callback.answer()
         except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+            logger.warning(f"callback.answer failed: {e}")
         return
     
     rating_map_fa = {"good": "😊 عالی", "medium": "😐 متوسط", "bad": "😞 بد"}
@@ -33601,7 +33593,7 @@ async def handle_feedback(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.message(lambda m: user_states.get(m.from_user.id, {}).get('awaiting_feedback_comment'))
 async def handle_feedback_comment(message: Message):
@@ -33683,7 +33675,7 @@ async def admin_reduce_balance_cmd(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("admin_reset_balance_"))
@@ -33750,7 +33742,7 @@ Are you sure you want to reset the balance?
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
 async def xui_delete_client(email: str) -> bool:
     """حذف کلاینت از پنل 3X-UI"""
@@ -33853,7 +33845,7 @@ async def admin_chats_list(callback: CallbackQuery):
         try:
             await callback.answer()
         except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+            logger.warning(f"callback.answer failed: {e}")
         return
     
     buttons = []
@@ -33875,7 +33867,7 @@ async def admin_chats_list(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("admin_chat_"))
@@ -33946,7 +33938,7 @@ async def admin_chat_view(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("close_chat_"))
@@ -33978,7 +33970,7 @@ async def admin_close_chat(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data == "admin_sync_configs")
 async def admin_sync_configs(callback: CallbackQuery):
@@ -34067,7 +34059,7 @@ async def admin_clear_logs_confirm(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "confirm_clear_logs")
@@ -34632,7 +34624,7 @@ async def admin_test_panel(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "admin_toggle_panel")
@@ -37887,18 +37879,14 @@ def _format_ai_package_button_label(prefix: str, name: str, suffix: str) -> str:
 def build_ai_reply_keyboard(
     answer: str,
     user_id: int,
-    lang: str,
+    lang: str = "",
     user_message: str = "",
     include_chat_controls: bool = True,
 ):
     buttons = []
     seen_callbacks = set()
-    # اگر پیام کاربر فارسی باشد، خروجی دکمه‌ها و پیام‌های واسط فارسی و اگر انگلیسی باشد، انگلیسی می‌شود
-    has_persian_chars = bool(re.search(r"[؀-ۿ]", user_message or ""))
-    if has_persian_chars:
-        lang = "fa"
-    elif user_message and re.search(r"[a-zA-Z]{3,}", user_message):
-        lang = "en"
+    if not lang:
+        lang = get_user(user_id).get('lang', 'fa')
 
     query = normalize_ai_user_text(user_message or "")
     allowed_actions = set(re.findall(
@@ -38604,6 +38592,7 @@ def build_ai_reply_keyboard(
 @dp.callback_query(F.data.startswith("ai_action_"))
 async def handle_ai_menu_action(callback: CallbackQuery):
     user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
     action = (callback.data or "").removeprefix("ai_action_")
     action_handlers = {
         "clear_memory": ("clear_ai_memory", clear_ai_memory),
@@ -38630,14 +38619,20 @@ async def handle_ai_menu_action(callback: CallbackQuery):
             and not str(order.get('email', '')).startswith('test_')
             for order in get_user_support_configs(user_id)
         ):
-            await callback.answer("❌ سفارش برای تمدید در دسترس نیست.", show_alert=True)
+            await callback.answer(
+                "❌ سفارش برای تمدید در دسترس نیست." if lang == "fa" else "❌ Order is not available for renewal.",
+                show_alert=True
+            )
             return
         callback_data = f"extend_service_{order_id}"
         handler = extend_service_start
     elif action.startswith("buy_package_"):
         package_match = re.fullmatch(r"buy_package_(\d+)_(\d+)", action)
         if not package_match:
-            await callback.answer("❌ بسته برای خرید معتبر نیست.", show_alert=True)
+            await callback.answer(
+                "❌ بسته برای خرید معتبر نیست." if lang == "fa" else "❌ Package is not valid for purchase.",
+                show_alert=True
+            )
             return
         category_id, package_id = package_match.groups()
         callback_data = f"buy_package_{category_id}_{package_id}"
@@ -38649,7 +38644,10 @@ async def handle_ai_menu_action(callback: CallbackQuery):
             action,
         )
         if not payment_match:
-            await callback.answer("❌ بسته برای پرداخت معتبر نیست.", show_alert=True)
+            await callback.answer(
+                "❌ بسته برای پرداخت معتبر نیست." if lang == "fa" else "❌ Package is not valid for payment.",
+                show_alert=True
+            )
             return
         method, category_id, package_id = payment_match.groups()
         callback_data = f"buy_package_{category_id}_{package_id}"
@@ -39793,7 +39791,7 @@ async def admin_panel(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 
@@ -39827,7 +39825,7 @@ async def admin_orders(callback: CallbackQuery):
         try:
             await callback.answer()
         except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+            logger.warning(f"callback.answer failed: {e}")
         return
     
     buttons = []
@@ -39876,7 +39874,7 @@ async def admin_orders(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 def get_backup_list() -> list:
     """دریافت لیست تمام فایل‌های بکاپ موجود"""
@@ -40245,7 +40243,7 @@ async def admin_restore_backup_menu(callback: CallbackQuery):
         try:
             await callback.answer()
         except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+            logger.warning(f"callback.answer failed: {e}")
         return
     if lang == "fa":
         text = f"🔄 <b>ریستور از بکاپ</b>\n\n📁 تعداد بکاپ‌ها: {len(backups)}\n\n"
@@ -40283,7 +40281,7 @@ async def admin_restore_backup_menu(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("restore_backup_"))
@@ -40406,7 +40404,7 @@ Are you sure you want to proceed?
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data.startswith("restore_details_"))
 async def restore_details(callback: CallbackQuery):
@@ -40559,7 +40557,7 @@ async def restore_details(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 
 @dp.callback_query(F.data.startswith("confirm_restore_"))
@@ -40671,7 +40669,7 @@ async def confirm_restore(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")  
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data == "admin_manage_backups")
 async def admin_manage_backups(callback: CallbackQuery):
@@ -40763,7 +40761,7 @@ async def admin_manage_backups(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "list_all_backups")
@@ -40821,7 +40819,7 @@ async def admin_list_all_backups(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "delete_all_backups_confirm")
@@ -40879,7 +40877,7 @@ Are you sure?
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "delete_all_backups_execute")
@@ -40948,7 +40946,7 @@ async def admin_delete_all_backups_execute(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("delete_single_backup_"))
@@ -41069,7 +41067,7 @@ async def admin_delete_old_backups(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
  
     
 @dp.callback_query(F.data.startswith("view_order_"))
@@ -41539,7 +41537,7 @@ async def view_order(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
 @dp.callback_query(F.data.startswith("request_receipt_"))
 async def request_receipt(callback: CallbackQuery):
@@ -42038,7 +42036,7 @@ async def approve_order(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data.startswith("reject_order_"))
 async def reject_order(callback: CallbackQuery):
@@ -42069,7 +42067,7 @@ async def admin_configs(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data == "admin_add_config")
 async def admin_add_config(callback: CallbackQuery):
@@ -42084,7 +42082,7 @@ async def admin_add_config(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 
@@ -42115,7 +42113,7 @@ async def admin_list_configs(callback: CallbackQuery):
         try:
             await callback.answer()
         except Exception as e:
-            logger.warning(f"خطا در callback.answer: {e}")
+            logger.warning(f"callback.answer failed: {e}")
         return
     
     buttons = []
@@ -42149,7 +42147,7 @@ async def admin_list_configs(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data.startswith("config_detail_"))
 async def config_detail(callback: CallbackQuery):
@@ -42193,7 +42191,7 @@ Status: {'✅ Available' if not config.get('used') else '❌ Used'}
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data.startswith("delete_config_"))
 async def delete_config_handler(callback: CallbackQuery):
@@ -42222,7 +42220,7 @@ async def admin_users(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 @dp.callback_query(F.data.startswith("admin_users_page_"))
 async def admin_users_page(callback: CallbackQuery):
@@ -42234,7 +42232,7 @@ async def admin_users_page(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
   
 @dp.callback_query(F.data.startswith("admin_view_config_"))
@@ -42795,7 +42793,7 @@ async def admin_user_detail(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data.startswith("delete_cancelled_orders_"))
@@ -42976,7 +42974,7 @@ async def admin_add_balance_cmd(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 
@@ -43192,7 +43190,7 @@ async def admin_stats(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
 
 @dp.callback_query(F.data == "admin_reset_db")
@@ -43263,7 +43261,7 @@ Please select reset type:
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
         
         
 
@@ -43900,7 +43898,7 @@ async def admin_delete_user_confirm(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
     
 @dp.callback_query(F.data.startswith("confirm_delete_user_keep_config_"))
 async def confirm_delete_user_keep_config(callback: CallbackQuery):
@@ -44159,7 +44157,7 @@ async def admin_panel_status(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
        
 @dp.callback_query(F.data == "admin_ping_test")
 async def admin_ping_test(callback: CallbackQuery):
@@ -44230,13 +44228,13 @@ async def admin_ping_test(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 @dp.callback_query(F.data == "noop")
 async def noop(callback: CallbackQuery):
     try:
         await callback.answer()
     except Exception as e:
-        logger.warning(f"خطا در callback.answer: {e}")
+        logger.warning(f"callback.answer failed: {e}")
 
     
 @dp.message(Command("aistatus"))

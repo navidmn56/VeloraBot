@@ -21,7 +21,9 @@ BOT_TOKEN = "Main_bot_token"  # Get from @BotFather
 ADMIN_ID = "YOUR_TELEGRAM_USER_ID"  # Your Telegram ID (get from @myidbot)
 BANK_CARD_NUMBER = "1234567812345678"  # Your bank card number (Only 16 digits)
 BANK_CARD_HOLDER = "Navid"  # Card holder's full name
+BANK_CARD_HOLDER_EN = ""  # (Optional) Card holder's full name in English (fallback to BANK_CARD_HOLDER if empty)
 BANK_NAME = "Blue Bank"  # e.g., "Blue Bank", "Melli", "Mellat"
+BANK_NAME_EN = ""  # (Optional) Bank name in English (fallback to BANK_NAME if empty)
 SENAI_PANEL_URL = "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
 SENAI_PANEL_USERNAME = "Panel_username"
 SENAI_PANEL_PASSWORD = "Panel_password"
@@ -48,16 +50,16 @@ GEMINI_DAILY_LIMIT = 3
 
 
 def load_configs_from_json():
-    """بارگذاری اطلاعات از configs.json"""
+    """Load configuration from configs.json"""
     if not os.path.exists(CONFIGS_FILE):
-        logger.warning(f"⚠️ فایل configs.json یافت نشد: {CONFIGS_FILE}")
+        logger.warning(f"File configs.json not found: {CONFIGS_FILE}")
         return {}
 
     try:
         with open(CONFIGS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        logger.error(f"❌ خطا در خواندن configs.json: {e}")
+        logger.error(f"Error reading configs.json: {e}")
         return {}
 
 
@@ -232,11 +234,13 @@ def get_bank_card_text(lang: str = "fa") -> str:
     clean_card = ''.join(filter(str.isdigit, BANK_CARD_NUMBER))
     card_formatted = ' '.join([clean_card[i:i + 4] for i in range(0, len(clean_card), 4)])
     if lang == "en":
+        card_holder = BANK_CARD_HOLDER_EN or BANK_CARD_HOLDER
+        bank = BANK_NAME_EN or BANK_NAME
         return f"""
 💳 Payment Info:
 - Card Number: {card_formatted}
-- Card Holder: {BANK_CARD_HOLDER}
-- Bank: {BANK_NAME}
+- Card Holder: {card_holder}
+- Bank: {bank}
 """
 
     return f"""
@@ -288,9 +292,9 @@ def generate_dynamic_system_prompt(lang: str = "fa") -> str:
 
 try:
     GEMINI_SYSTEM_PROMPT = generate_dynamic_system_prompt()
-    logger.info("✅ GEMINI_SYSTEM_PROMPT با اطلاعات داینامیک تولید شد")
+    logger.info("GEMINI_SYSTEM_PROMPT generated dynamically")
 except Exception as e:
-    logger.error(f"❌ خطا در تولید GEMINI_SYSTEM_PROMPT داینامیک: {e}")
+    logger.error(f"Error generating dynamic GEMINI_SYSTEM_PROMPT: {e}")
 
     GEMINI_SYSTEM_PROMPT = (
         "دستیار فروش و پشتیبانی VPN هستی؛ فارسی طبیعی، خلاق و موجز پاسخ بده. "
@@ -302,15 +306,15 @@ except Exception as e:
 
 
 def refresh_gemini_prompt():
-    """بازسازی GEMINI_SYSTEM_PROMPT با اطلاعات جدید"""
+    """Refresh GEMINI_SYSTEM_PROMPT with updated data"""
     global GEMINI_SYSTEM_PROMPT
 
     try:
         GEMINI_SYSTEM_PROMPT = generate_dynamic_system_prompt()
-        logger.info("🔄 GEMINI_SYSTEM_PROMPT با موفقیت به‌روزرسانی شد")
+        logger.info("GEMINI_SYSTEM_PROMPT refreshed successfully")
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در به‌روزرسانی GEMINI_SYSTEM_PROMPT: {e}")
+        logger.error(f"Error refreshing GEMINI_SYSTEM_PROMPT: {e}")
         return False
 
 

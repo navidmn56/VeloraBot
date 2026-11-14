@@ -86,14 +86,14 @@ class AlertSystem:
                     self.service_info_cache = data.get('service_info', {})
                     
                     logger.info(
-                        f"✅ Cache loaded: "
+                        f"Cache loaded: "
                         f"{len(self.volume_alert_cache)} volume, "
                         f"{len(self.expiry_alert_cache)} expiry"
                     )
             else:
-                logger.info("📝 Cache file not found, starting empty")
+                logger.info("Cache file not found, starting empty")
         except Exception as e:
-            logger.error(f"❌ Error loading cache: {e}")
+            logger.error(f"Error loading cache: {e}")
             self.volume_alert_cache = {}
             self.expiry_alert_cache = {}
             self.sent_alerts_history = {}
@@ -125,7 +125,7 @@ class AlertSystem:
             os.replace(temp_file, self.cache_file)
             
         except Exception as e:
-            logger.error(f"❌ Error saving cache: {e}")
+            logger.error(f"Error saving cache: {e}")
     
     # ═══════════════════════════════════════════
     # ✅ تابع کمکی جدید: دریافت email از سفارش
@@ -151,9 +151,9 @@ class AlertSystem:
         # ─── مرحله ۲: از subId ───
         sub_link = order.get('sub_link', '') or order.get('config_link', '')
         if not sub_link:
-            logger.debug(f"⏭️ Order #{order_id}: هیچ email یا link موجود نیست")
+            logger.debug(f"Order #{order_id}: No email or link available")
             return None
-        
+
         # استخراج subId از آخر لینک
         try:
             sub_id = sub_link.rstrip('/').split('/')[-1]
@@ -161,36 +161,36 @@ class AlertSystem:
                 return None
         except Exception:
             return None
-        
+
         # اگه تابع lookup موجود نباشه، برنگردون
         if not self.find_email_by_sub_id:
             logger.warning(
-                f"⚠️ Order #{order_id}: email نداره و "
-                f"find_email_by_sub_id_func تنظیم نشده"
+                f"Order #{order_id}: Missing email and "
+                f"find_email_by_sub_id function is not configured"
             )
             return None
-        
+
         # ─── تلاش برای پیدا کردن email ───
         try:
             found_email = await self.find_email_by_sub_id(sub_id)
             if found_email:
                 logger.info(
-                    f"✅ [resolve_email] Order #{order_id}: "
-                    f"{sub_id[:20]}... → {found_email}"
+                    f"[resolve_email] Order #{order_id}: "
+                    f"{sub_id[:20]}... -> {found_email}"
                 )
                 # ✅ ذخیره توی سفارش برای بارهای بعد
                 if self.update_order and order_id:
                     try:
                         self.update_order(order_id, email=found_email)
-                        logger.info(f"💾 email توی سفارش #{order_id} ذخیره شد")
+                        logger.info(f"Email saved for order #{order_id}")
                     except Exception as e:
-                        logger.warning(f"⚠️ خطا در ذخیره email: {e}")
+                        logger.warning(f"Error saving email for order #{order_id}: {e}")
                 return found_email
             else:
-                logger.debug(f"⏭️ Order #{order_id}: email برای subId {sub_id[:20]}... پیدا نشد")
+                logger.debug(f"Order #{order_id}: Email not found for subId {sub_id[:20]}...")
                 return None
         except Exception as e:
-            logger.error(f"❌ [resolve_email] خطا برای Order #{order_id}: {e}")
+            logger.error(f"[resolve_email] Error for order #{order_id}: {e}")
             return None
     
     # ═══════════════════════════════════════════
@@ -241,7 +241,7 @@ class AlertSystem:
     
     async def run_alert_worker(self):
         """کارگر پس‌زمینه"""
-        logger.info("🔔 Alert system started (one-time per threshold)")
+        logger.info("Alert system started (one-time per threshold)")
         
         self._save_cache_to_disk()
         
@@ -281,7 +281,7 @@ class AlertSystem:
                     and o.get('user_id')
                 ]
                 
-                logger.debug(f"🔍 Checking {len(approved_orders)} services")
+                logger.debug(f"Checking {len(approved_orders)} services")
                 
                 for order in approved_orders:
                     order_id = order.get('order_id')
@@ -296,20 +296,18 @@ class AlertSystem:
                         
                         if not email:
                             logger.debug(
-                                f"⏭️ Order #{order_id}: "
-                                f"email قابل resolve نیست، رد شد"
+                                f"Order #{order_id}: email could not be resolved, skipping"
                             )
                             continue
-                        
+
                         # ✅ import توی تابع (به خاطر circular import)
                         from main import xui_get_client_info, xui_get_client_traffic
-                        
+
                         client_info = await xui_get_client_info(email)
-                        
+
                         if not client_info or not isinstance(client_info, dict):
                             logger.debug(
-                                f"⏭️ Order #{order_id}: "
-                                f"client_info برای {email} یافت نشد"
+                                f"Order #{order_id}: client_info not found for {email}"
                             )
                             continue
                         
@@ -380,7 +378,7 @@ class AlertSystem:
             
             changes_text = "\n".join(changes)
             
-            logger.info(f"🔄 Service #{order_id} renewed:\n{changes_text}")
+            logger.info(f"Service #{order_id} renewed:\n{changes_text}")
             
             if self.log_system:
                 text = f"""
@@ -475,7 +473,7 @@ class AlertSystem:
                not k.startswith(f"exp_{order_id}_")
         }
         
-        logger.info(f"🔄 Cache cleared for order #{order_id}")
+        logger.info(f"Cache cleared for order #{order_id}")
     
     def _should_send_once(self, cache_key: str) -> bool:
         """بررسی ارسال"""
@@ -580,12 +578,12 @@ class AlertSystem:
             
             if sent_successfully:
                 self._record_alert(cache_key, self.expiry_alert_cache, alert_type, order_id)
-                logger.info(f"📨 Expiry alert ({label}) sent for order #{order_id}")
+                logger.info(f"Expiry alert ({label}) sent for order #{order_id}")
                 
                 details = "expired" if label == "expired" else f"{label} remaining"
                 await self._log_alert(alert_type, order, details)
             else:
-                logger.warning(f"⚠️ Expiry alert ({label}) not sent for order #{order_id}")
+                logger.warning(f"Expiry alert ({label}) not sent for order #{order_id}")
     
     # ═══════════════════════════════════════════
     # Volume Alert
@@ -657,7 +655,7 @@ class AlertSystem:
             
             if sent_successfully:
                 self._record_alert(cache_key, self.volume_alert_cache, alert_type, order_id)
-                logger.info(f"📨 Volume alert ({label}) sent for order #{order_id}")
+                logger.info(f"Volume alert ({label}) sent for order #{order_id}")
                 
                 if label == "exhausted":
                     details = f"Volume exhausted ({used_gb:.2f}GB of {total_gb:.2f}GB)"
@@ -666,7 +664,7 @@ class AlertSystem:
                 
                 await self._log_alert(alert_type, order, details)
             else:
-                logger.warning(f"⚠️ Volume alert ({label}) not sent for order #{order_id}")
+                logger.warning(f"Volume alert ({label}) not sent for order #{order_id}")
     
     # ═══════════════════════════════════════════
     # Notifications
@@ -804,10 +802,10 @@ class AlertSystem:
             await self.bot.send_message(
                 user_id, text, parse_mode="HTML", reply_markup=keyboard
             )
-            logger.info(f"📨 Volume alert {threshold_label} sent for order #{order_id}")
+            logger.info(f"Volume alert {threshold_label} sent for order #{order_id}")
             return True
         except Exception as e:
-            logger.error(f"❌ Error sending volume alert to user {user_id}: {e}")
+            logger.error(f"Error sending volume alert to user {user_id}: {e}")
             return False
     
     async def _notify_expiry(
@@ -910,10 +908,10 @@ class AlertSystem:
             await self.bot.send_message(
                 user_id, text, parse_mode="HTML", reply_markup=keyboard
             )
-            logger.info(f"📨 Expiry alert {notify_label} sent for order #{order_id}")
+            logger.info(f"Expiry alert {notify_label} sent for order #{order_id}")
             return True
         except Exception as e:
-            logger.error(f"❌ Error sending expiry alert to user {user_id}: {e}")
+            logger.error(f"Error sending expiry alert to user {user_id}: {e}")
             return False
     
     # ═══════════════════════════════════════════
@@ -924,13 +922,13 @@ class AlertSystem:
         """پاک کردن کش"""
         if order_id:
             self._clear_order_cache(order_id)
-            logger.info(f"🧹 Cache cleared for order #{order_id}")
+            logger.info(f"Cache cleared for order #{order_id}")
         else:
             self.volume_alert_cache.clear()
             self.expiry_alert_cache.clear()
             self.sent_alerts_history.clear()
             self.service_info_cache.clear()
-            logger.info("🧹 All alert cache cleared")
+            logger.info("All alert cache cleared")
         
         self._save_cache_to_disk()
     
@@ -948,7 +946,7 @@ class AlertSystem:
             logger.error(f"Error deleting cache file: {e}")
         
         self._save_cache_to_disk()
-        logger.info("🗑️ All alert history cleared")
+        logger.info("All alert history cleared")
     
     def update_settings(self, settings: dict):
         """به‌روزرسانی تنظیمات"""
