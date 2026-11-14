@@ -1122,7 +1122,7 @@ async def fulfill_balance_order(
                 await log_sys.log_balance_change(
                     user_id, amount, new_balance, "add",
                     admin_id=_main.ADMIN_ID_INT if approved_by == "admin" else None,
-                    details=f"Account top-up (order #{order_id}) by {approved_by}"
+                    details=f"Balance top-up (order #{order_id}) by {approved_by}"
                 )
             except Exception:
                 pass
@@ -1277,7 +1277,7 @@ async def reject_balance(callback: CallbackQuery):
         try:
             await log_sys.log_admin_action(
                 callback.from_user.id,
-                f"Top-up request #{order_id} rejected",
+                f"Rejected top-up request #{order_id}",
                 target_user=order['user_id'],
                 details=f"Amount: {order.get('amount', 0):,} Toman"
             )
