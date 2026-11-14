@@ -71,7 +71,7 @@ def register_balance_handlers(dp, main_module):
 
     logger = getattr(_main, 'logger', None)
     if logger:
-        logger.info("✅ Balance handlers registered successfully")
+        logger.info("Balance handlers registered successfully")
 
     return True
 
@@ -101,7 +101,7 @@ def _build_balance_receipt_text(order: dict, lang: str = "fa", mode: str = "card
             except Exception as e:
                 logger = getattr(_main, 'logger', None)
                 if logger:
-                    logger.warning(f"⚠️ خطا در build_receipt_text: {e} - fallback")
+                    logger.warning(f"Error in build_receipt_text: {e} - fallback")
     
     # ─── fallback: نسخه داخلی (در صورت نبود تابع اصلی) ───
     return _build_balance_receipt_text_fallback(order, lang, mode)
@@ -131,7 +131,9 @@ def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: st
     
     bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
     bank_card_holder = getattr(_main, 'BANK_CARD_HOLDER', '')
+    bank_card_holder_en = (getattr(_main, 'BANK_CARD_HOLDER_EN', '') or '').strip() or bank_card_holder
     bank_name = getattr(_main, 'BANK_NAME', '')
+    bank_name_en = (getattr(_main, 'BANK_NAME_EN', '') or '').strip() or bank_name
     
     card_num = ' '.join([bank_card_number[i:i+4] for i in range(0, 16, 4)])
     
@@ -178,8 +180,8 @@ def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: st
             f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
             f"{card_emoji} <b>Card Number</b>\n"
             f"<code>{card_num}</code>\n"
-            f"{user_emoji} Holder: {bank_card_holder}\n"
-            f"{star_emoji} Bank: {bank_name}\n"
+            f"{user_emoji} Holder: {bank_card_holder_en}\n"
+            f"{star_emoji} Bank: {bank_name_en}\n"
             f"{info_emoji} Support: {support_display}\n\n"
             f"{note_emoji} <b>Important Notes:</b>\n"
             f"1. Transfer the exact order amount.\n"
@@ -287,7 +289,7 @@ def create_balance_order(user_id: int, amount: int) -> int:
         except Exception as e:
             logger_inst = getattr(_main, 'logger', None)
             if logger_inst:
-                logger_inst.error(f"❌ خطا در رزرو مبلغ اختصاصی شارژ: {e}")
+                logger_inst.error(f"Error reserving unique top-up amount: {e}")
             raise RuntimeError(f"Could not reserve unique amount: {e}") from e
 
     orders[str(order_id)] = {
@@ -316,7 +318,7 @@ def create_balance_order(user_id: int, amount: int) -> int:
 
     logger = getattr(_main, 'logger', None)
     if logger:
-        logger.info(f"💰 درخواست شارژ #{order_id} - کاربر: {user_id}, مبلغ: {amount}")
+        logger.info(f"Top-up request #{order_id} created for user {user_id} with amount {amount}")
 
     return order_id
 
@@ -448,7 +450,7 @@ async def increase_balance(callback: CallbackQuery):
     except Exception as e:
         logger = getattr(_main, 'logger', None)
         if logger:
-            logger.debug(f"نتوانست پیام را حذف کند: {e}")
+            logger.debug(f"Could not delete message: {e}")
 
     await callback.message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
 
@@ -1018,7 +1020,7 @@ async def fulfill_balance_order(
     if order.get('status') == 'approved':
         logger_inst = getattr(_main, "logger", None)
         if logger_inst:
-            logger_inst.warning(f"⚠️ سفارش شارژ #{order_id} قبلاً تایید شده است؛ عملیات تکراری رد شد.")
+            logger_inst.warning(f"Top-up order #{order_id} was already approved; duplicate operation rejected.")
         return True, "Already approved"
 
     user_id = order.get('user_id')
@@ -1077,7 +1079,7 @@ async def fulfill_balance_order(
         try:
             _main.CustomLogger.log_event(
                 'BALANCE_CHARGE_APPROVED',
-                f'شارژ #{order_id} تایید شد ({approved_by}) - کاربر: {user_id} - {amount:,} تومان',
+                f'Top-up #{order_id} approved ({approved_by}) - user: {user_id} - {amount:,} Toman',
                 user_id
             )
         except Exception:
@@ -1113,14 +1115,14 @@ async def fulfill_balance_order(
         except Exception as e:
             logger_inst = getattr(_main, 'logger', None)
             if logger_inst:
-                logger_inst.error(f"خطا در ارسال پیام تایید شارژ: {e}")
+                logger_inst.error(f"Error sending top-up approval message: {e}")
 
         if log_sys:
             try:
                 await log_sys.log_balance_change(
                     user_id, amount, new_balance, "add",
                     admin_id=_main.ADMIN_ID_INT if approved_by == "admin" else None,
-                    details=f"شارژ حساب (سفارش #{order_id}) توسط {approved_by}"
+                    details=f"Account top-up (order #{order_id}) by {approved_by}"
                 )
             except Exception:
                 pass
@@ -1129,7 +1131,7 @@ async def fulfill_balance_order(
     except Exception as e:
         logger_inst = getattr(_main, 'logger', None)
         if logger_inst:
-            logger_inst.error(f"❌ خطا در تایید شارژ #{order_id}: {e}", exc_info=True)
+            logger_inst.error(f"Error approving top-up #{order_id}: {e}", exc_info=True)
         return False, str(e)
 
 
@@ -1212,7 +1214,7 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
     except Exception as e:
         logger = getattr(_main, 'logger', None)
         if logger:
-            logger.warning(f"⚠️ خطا در ویرایش پیام ادمین: {e}")
+            logger.warning(f"Error editing admin message: {e}")
         try:
             await callback.message.delete()
         except Exception:
@@ -1268,16 +1270,16 @@ async def reject_balance(callback: CallbackQuery):
     except Exception as e:
         logger = getattr(_main, 'logger', None)
         if logger:
-            logger.error(f"خطا در ارسال پیام رد: {e}")
+            logger.error(f"Error sending rejection message: {e}")
 
     log_sys = _get_log_system()
     if log_sys:
         try:
             await log_sys.log_admin_action(
                 callback.from_user.id,
-                f"رد درخواست شارژ #{order_id}",
+                f"Top-up request #{order_id} rejected",
                 target_user=order['user_id'],
-                details=f"مبلغ: {order.get('amount', 0):,} تومان"
+                details=f"Amount: {order.get('amount', 0):,} Toman"
             )
         except Exception:
             pass
@@ -1285,7 +1287,7 @@ async def reject_balance(callback: CallbackQuery):
     try:
         _main.CustomLogger.log_event(
             'BALANCE_REJECTED',
-            f'شارژ #{order_id} رد شد - کاربر: {order["user_id"]}',
+            f'Top-up #{order_id} rejected - user: {order["user_id"]}',
             order['user_id']
         )
     except Exception:

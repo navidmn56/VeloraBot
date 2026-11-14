@@ -253,7 +253,7 @@ def format_persian_text(text: str) -> str:
             reshaped = _get_reshaper().reshape(text)
             return get_display(reshaped)
         except Exception:
-            logger.exception("Persian text fallback formatting failed")
+            logger.exception("Fallback formatting for Persian text failed")
             return text
 
 
@@ -369,7 +369,7 @@ class DailyUsageStore:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_resets_service ON reset_events(service_id);")
 
             conn.commit()
-            logger.info("✅ دیتابیس مصرف روزانه SQLite با موفقیت آماده‌سازی شد: %s", self.db_path)
+            logger.info("Daily usage SQLite database initialized successfully: %s", self.db_path)
 
     def register_service(
         self,
@@ -455,7 +455,7 @@ class DailyUsageStore:
             last = cursor.fetchone()
             if last and now <= last["timestamp"]:
                 logger.warning(
-                    "اسنپ‌شات قدیمی یا هم‌زمان برای %s نادیده گرفته شد.",
+                    "Older or concurrent snapshot for %s was ignored.",
                     service_id,
                 )
                 return False
@@ -503,7 +503,7 @@ class DailyUsageStore:
                     baseline_total = baseline_up + baseline_down
                     baseline_repair = True
                     logger.warning(
-                        "عدم تطابق اسنپ‌شات و مجموع روزانه برای %s؛ مبنای شمارنده از داده روزانه بازیابی شد.",
+                        "Snapshot and daily total mismatch for %s; baseline recovered from daily data.",
                         service_id,
                     )
                 else:
@@ -513,8 +513,8 @@ class DailyUsageStore:
                     if baseline_total != last_total:
                         baseline_repair = True
                         logger.warning(
-                            "مجموع اسنپ‌شات ذخیره‌شده برای %s با شمارنده‌های آپلود/دانلود هم‌خوان نیست؛ "
-                            "مبنای شمارنده از آپلود و دانلود بازیابی شد.",
+                            "Stored snapshot total for %s does not match up/down counters; "
+                            "baseline recovered from upload and download counters.",
                             service_id,
                         )
 
@@ -539,7 +539,7 @@ class DailyUsageStore:
                         up_bytes, down_bytes, total_bytes, "Counter reset detected in Sanaei panel", now_str
                     ))
                     logger.warning(
-                        "⚠️ ریست شمارنده برای %s ثبت شد: قبلی=%d, جدید=%d",
+                        "Counter reset recorded for %s: previous=%d, new=%d",
                         service_id, baseline_total, total_bytes
                     )
                     delta_up = up_bytes if up_reset else up_bytes - baseline_up
@@ -1047,7 +1047,7 @@ class DailyUsageStore:
                         VALUES ({placeholders});
                     """, list(row.values()))
             conn.commit()
-            logger.info("✅ دیتابیس مصرف روزانه با موفقیت از فایل بکاپ بازگردانی شد.")
+            logger.info("Daily usage database restored successfully from backup.")
             return True
 
 
@@ -1271,9 +1271,9 @@ async def fetch_client_total_traffic(
                     down = int(live_traff["down"])
                     if up >= 0 and down >= 0:
                         return {'up': up, 'down': down, 'total': up + down}
-                logger.warning("پاسخ API مصرف کلاینت %s فاقد شمارنده معتبر آپلود/دانلود است.", email_str)
+                logger.warning("Client traffic API response for %s lacks valid upload/download counters.", email_str)
         except Exception as e:
-            logger.debug(f"خطا در استعلام ترافیک کلاینت {email}: {e}")
+            logger.debug(f"Error querying traffic for client {email}: {e}")
 
     # ۲. فال‌بک: در صورت عدم دسترسی به API تک کلاینت، استعلام از لیست اینباندها
     if get_inbounds_func:
@@ -1306,8 +1306,6 @@ async def fetch_client_total_traffic(
                                     down = int(stat['down'])
                                     if up < 0 or down < 0:
                                         continue
-                                    # در 3X-UI ترافیک کلاینت‌ها سراسری (Global per email) است
-                                    # و نباید در صورت عضویت کلاینت در چندین اینباند، با هم جمع شوند!
                                     max_up = max(max_up, up)
                                     max_down = max(max_down, down)
                                     found = True
@@ -1317,7 +1315,7 @@ async def fetch_client_total_traffic(
                 if found:
                     return {'up': max_up, 'down': max_down, 'total': max_up + max_down}
         except Exception as e:
-            logger.debug(f"خطا در دریافت ترافیک از اینباندها برای {email}: {e}")
+            logger.debug(f"Error fetching traffic from inbounds for {email}: {e}")
 
     return None
 
@@ -1343,7 +1341,7 @@ class DailyUsageCollector:
         اجرای تسک دوره‌ای در پس‌زمینه بدون بلاک کردن ربات
         """
         self._running = True
-        logger.info("🚀 تسک جمع‌آوری دوره‌ای مصرف روزانه آغاز شد (بازه: %d ثانیه)", interval_seconds)
+        logger.info("Daily usage periodic collection task started (interval: %d seconds)", interval_seconds)
 
         while self._running:
             try:
@@ -1354,10 +1352,10 @@ class DailyUsageCollector:
                     interval_seconds=interval_seconds,
                 )
             except asyncio.CancelledError:
-                logger.info("تسک جمع‌آوری مصرف روزانه لغو شد.")
+                logger.info("Daily usage collection task cancelled.")
                 break
             except Exception as e:
-                logger.error(f"❌ خطا در تسک جمع‌آوری دوره‌ای مصرف: {e}", exc_info=True)
+                logger.error(f"Error in daily usage periodic collection task: {e}", exc_info=True)
 
             try:
                 await asyncio.sleep(interval_seconds)
@@ -1381,16 +1379,16 @@ class DailyUsageCollector:
                 if email and str(email).strip()
             }
             if not approved_emails:
-                logger.debug("هیچ ایمیل معتبری برای جمع‌آوری مصرف وجود ندارد.")
+                logger.debug("No valid emails for usage collection.")
                 return 0
 
             try:
                 inbounds = await get_inbounds_func(include_disabled=True)
             except Exception:
-                logger.exception("دریافت inbounds برای جمع‌آوری مصرف ناموفق بود.")
+                logger.exception("Failed to retrieve inbounds for usage collection.")
                 inbounds = []
             if not isinstance(inbounds, list):
-                logger.warning("پاسخ inbounds برای جمع‌آوری مصرف معتبر نیست؛ از API کلاینت استفاده می‌شود.")
+                logger.warning("Inbounds response invalid for usage collection; using client API.")
                 inbounds = []
 
             # تجمیع مصرف بر اساس email در صورتی که کلاینت در چند اینباند باشد
@@ -1440,7 +1438,7 @@ class DailyUsageCollector:
             for email in missing_emails:
                 if not get_client_traffic_func:
                     logger.warning(
-                        "برای کلاینت %s در clientStats رکوردی نبود و API جایگزین تنظیم نشده است.",
+                        "No record in clientStats for client %s and fallback API is not configured.",
                         email,
                     )
                     continue
@@ -1455,7 +1453,7 @@ class DailyUsageCollector:
                     }
                 else:
                     logger.warning(
-                        "دریافت مصرف کلاینت %s از clientStats و API جایگزین ناموفق بود.",
+                        "Failed to retrieve usage for client %s from clientStats and fallback API.",
                         email,
                     )
 
@@ -1473,11 +1471,11 @@ class DailyUsageCollector:
                     updated_count += 1
 
             if updated_count > 0:
-                logger.info("📊 ثبت اسنپ‌شات دوره‌ای مصرف: %d کلاینت به‌روزرسانی شد.", updated_count)
+                logger.info("Periodic usage snapshot recorded: %d clients updated.", updated_count)
             return updated_count
 
         except Exception as e:
-            logger.error(f"خطا در collect_all مصرف روزانه: {e}", exc_info=True)
+            logger.error(f"Error in collect_all for daily usage: {e}", exc_info=True)
             return 0
 
 
@@ -1639,7 +1637,7 @@ async def handle_daily_usage_request(
             reply_markup=keyboard
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال نمودار مصرف روزانه: {e}")
+        logger.error(f"Error sending daily usage chart: {e}")
         await callback.message.answer(
             caption,
             parse_mode=ParseMode.HTML,

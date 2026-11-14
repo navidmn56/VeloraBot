@@ -134,14 +134,14 @@ def reshape_persian(text: str) -> str:
                 'language': 'Persian',
             })
         except ImportError as err:
-            logger.debug("arabic_reshaper or python-bidi not installed: %s", err)
+            logger.debug("Arabic reshaper or python-bidi is not installed: %s", err)
 
     if arabic_reshaper and get_display:
         try:
             reshaped = _reshaper.reshape(text) if _reshaper else arabic_reshaper.reshape(text)
             return get_display(reshaped)
         except Exception as err:
-            logger.warning("Persian reshaping error: %s", err)
+            logger.warning("Persian text reshaping failed: %s", err)
             return text
     return text
 

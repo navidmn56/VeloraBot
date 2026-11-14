@@ -102,7 +102,7 @@ SENSITIVE_PLACEHOLDER_KEYS=(
 
 CONFIG_EDITABLE_KEYS=(
     "BOT_TOKEN" "ADMIN_ID" "LOG_BOT_TOKEN" "LOG_CHANNEL_ID"
-    "BANK_CARD_NUMBER" "BANK_CARD_HOLDER" "BANK_NAME"
+    "BANK_CARD_NUMBER" "BANK_CARD_HOLDER" "BANK_CARD_HOLDER_EN" "BANK_NAME" "BANK_NAME_EN"
     "SENAI_PANEL_URL" "SENAI_PANEL_USERNAME" "SENAI_PANEL_PASSWORD"
     "SENAI_SUB_URL" "SUPPORT_USERNAME"
     "GEMINI_ENABLED" "GEMINI_API_KEY" "GEMINI_MODEL"
@@ -144,7 +144,9 @@ LOG_BOT_TOKEN=""
 LOG_CHANNEL_ID=""
 BANK_CARD_NUMBER=""
 BANK_CARD_HOLDER=""
+BANK_CARD_HOLDER_EN=""
 BANK_NAME=""
+BANK_NAME_EN=""
 SENAI_PANEL_URL=""
 SENAI_PANEL_USERNAME=""
 SENAI_PANEL_PASSWORD=""
@@ -1348,7 +1350,7 @@ import ast, json, sys
 path = sys.argv[1]
 allowed = {
     "BOT_TOKEN","ADMIN_ID","LOG_BOT_TOKEN","LOG_CHANNEL_ID",
-    "BANK_CARD_NUMBER","BANK_CARD_HOLDER","BANK_NAME",
+    "BANK_CARD_NUMBER","BANK_CARD_HOLDER","BANK_CARD_HOLDER_EN","BANK_NAME","BANK_NAME_EN",
     "SENAI_PANEL_URL","SENAI_PANEL_USERNAME","SENAI_PANEL_PASSWORD",
     "SENAI_SUB_URL","SUPPORT_USERNAME","GEMINI_ENABLED","GEMINI_API_KEY",
     "GEMINI_MODEL","GEMINI_TEMPERATURE","GEMINI_MAX_TOKENS","GEMINI_DAILY_LIMIT",
@@ -1409,7 +1411,9 @@ PY
     LOG_CHANNEL_ID="$(config_value "LOG_CHANNEL_ID")"
     BANK_CARD_NUMBER="$(config_value "BANK_CARD_NUMBER")"
     BANK_CARD_HOLDER="$(config_value "BANK_CARD_HOLDER")"
+    BANK_CARD_HOLDER_EN="$(config_value "BANK_CARD_HOLDER_EN")"
     BANK_NAME="$(config_value "BANK_NAME")"
+    BANK_NAME_EN="$(config_value "BANK_NAME_EN")"
     SENAI_PANEL_URL="$(config_value "SENAI_PANEL_URL")"
     SENAI_PANEL_USERNAME="$(config_value "SENAI_PANEL_USERNAME")"
     SENAI_PANEL_PASSWORD="$(config_value "SENAI_PANEL_PASSWORD")"
@@ -1436,7 +1440,7 @@ source_path, target_path = sys.argv[1], sys.argv[2]
 
 ALLOWED = {
     "BOT_TOKEN","ADMIN_ID","LOG_BOT_TOKEN","LOG_CHANNEL_ID",
-    "BANK_CARD_NUMBER","BANK_CARD_HOLDER","BANK_NAME",
+    "BANK_CARD_NUMBER","BANK_CARD_HOLDER","BANK_CARD_HOLDER_EN","BANK_NAME","BANK_NAME_EN",
     "SENAI_PANEL_URL","SENAI_PANEL_USERNAME","SENAI_PANEL_PASSWORD",
     "SENAI_SUB_URL","SUPPORT_USERNAME","GEMINI_ENABLED","GEMINI_API_KEY",
     "GEMINI_MODEL","GEMINI_TEMPERATURE","GEMINI_MAX_TOKENS","GEMINI_DAILY_LIMIT",
@@ -1779,6 +1783,35 @@ prompt_for_value() {
     done
 }
 
+prompt_optional_value() {
+    local label="$1"
+    local result_var="$2"
+    local default_val="${3:-}"
+    local _pov_value=""
+
+    if [[ -n "${default_val}" ]]; then
+        printf '%s [%s] (press Enter to keep, or type "none" to clear): ' "${label}" "${default_val}" > /dev/tty
+    else
+        printf '%s (optional, press Enter to skip): ' "${label}" > /dev/tty
+    fi
+
+    if ! IFS= read -r _pov_value <&3; then
+        die "Could not read input from the terminal."
+    fi
+
+    _pov_value="${_pov_value%$'\r'}"
+    _pov_value="${_pov_value#"${_pov_value%%[![:space:]]*}"}"
+    _pov_value="${_pov_value%"${_pov_value##*[![:space:]]}"}"
+
+    if [[ -z "${_pov_value}" ]]; then
+        _pov_value="${default_val}"
+    elif [[ "${_pov_value,,}" == "none" ]]; then
+        _pov_value=""
+    fi
+
+    printf -v "${result_var}" '%s' "${_pov_value}"
+}
+
 prompt_for_secret() {
     local label="$1"
     local result_var="$2"
@@ -1985,18 +2018,20 @@ edit_all_config_keys() {
         printf '  %2d) %-22s : %s\n'  4 "LOG_CHANNEL_ID"       "${LOG_CHANNEL_ID}"
         printf '  %2d) %-22s : %s\n'  5 "BANK_CARD_NUMBER"     "${BANK_CARD_NUMBER}"
         printf '  %2d) %-22s : %s\n'  6 "BANK_CARD_HOLDER"     "${BANK_CARD_HOLDER}"
-        printf '  %2d) %-22s : %s\n'  7 "BANK_NAME"            "${BANK_NAME}"
-        printf '  %2d) %-22s : %s\n'  8 "SENAI_PANEL_URL"      "${SENAI_PANEL_URL}"
-        printf '  %2d) %-22s : %s\n'  9 "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
-        printf '  %2d) %-22s : %s\n' 10 "SENAI_PANEL_PASSWORD" "$(mask_secret "${SENAI_PANEL_PASSWORD}")"
-        printf '  %2d) %-22s : %s\n' 11 "SENAI_SUB_URL"        "${SENAI_SUB_URL}"
-        printf '  %2d) %-22s : %s\n' 12 "SUPPORT_USERNAME"     "${SUPPORT_USERNAME}"
-        printf '  %2d) %-22s : %s\n' 13 "GEMINI_ENABLED"       "${GEMINI_ENABLED}"
-        printf '  %2d) %-22s : %s\n' 14 "GEMINI_API_KEY"       "$(mask_secret "${GEMINI_API_KEY}")"
-        printf '  %2d) %-22s : %s\n' 15 "GEMINI_MODEL"         "${GEMINI_MODEL}"
-        printf '  %2d) %-22s : %s\n' 16 "GEMINI_TEMPERATURE"   "${GEMINI_TEMPERATURE}"
-        printf '  %2d) %-22s : %s\n' 17 "GEMINI_MAX_TOKENS"    "${GEMINI_MAX_TOKENS}"
-        printf '  %2d) %-22s : %s\n' 18 "GEMINI_DAILY_LIMIT"   "${GEMINI_DAILY_LIMIT}"
+        printf '  %2d) %-22s : %s\n'  7 "BANK_CARD_HOLDER_EN"  "${BANK_CARD_HOLDER_EN:-<not set>}"
+        printf '  %2d) %-22s : %s\n'  8 "BANK_NAME"            "${BANK_NAME}"
+        printf '  %2d) %-22s : %s\n'  9 "BANK_NAME_EN"         "${BANK_NAME_EN:-<not set>}"
+        printf '  %2d) %-22s : %s\n' 10 "SENAI_PANEL_URL"      "${SENAI_PANEL_URL}"
+        printf '  %2d) %-22s : %s\n' 11 "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
+        printf '  %2d) %-22s : %s\n' 12 "SENAI_PANEL_PASSWORD" "$(mask_secret "${SENAI_PANEL_PASSWORD}")"
+        printf '  %2d) %-22s : %s\n' 13 "SENAI_SUB_URL"        "${SENAI_SUB_URL}"
+        printf '  %2d) %-22s : %s\n' 14 "SUPPORT_USERNAME"     "${SUPPORT_USERNAME}"
+        printf '  %2d) %-22s : %s\n' 15 "GEMINI_ENABLED"       "${GEMINI_ENABLED}"
+        printf '  %2d) %-22s : %s\n' 16 "GEMINI_API_KEY"       "$(mask_secret "${GEMINI_API_KEY}")"
+        printf '  %2d) %-22s : %s\n' 17 "GEMINI_MODEL"         "${GEMINI_MODEL}"
+        printf '  %2d) %-22s : %s\n' 18 "GEMINI_TEMPERATURE"   "${GEMINI_TEMPERATURE}"
+        printf '  %2d) %-22s : %s\n' 19 "GEMINI_MAX_TOKENS"    "${GEMINI_MAX_TOKENS}"
+        printf '  %2d) %-22s : %s\n' 20 "GEMINI_DAILY_LIMIT"   "${GEMINI_DAILY_LIMIT}"
         printf '\n'
         printf '  b) Back to main menu\n'
         printf '\n'
@@ -2034,31 +2069,39 @@ edit_all_config_keys() {
                prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
                set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
                log_success "BANK_CARD_HOLDER updated." ;;
-            7) describe "Name of the issuing bank" "Blue Bank (or Mellat)"
+            7) describe "Full name of the bank card holder in English (optional, for English users; press Enter to keep)" "Navid Mohammadi"
+               prompt_optional_value "BANK_CARD_HOLDER_EN" BANK_CARD_HOLDER_EN "${BANK_CARD_HOLDER_EN}"
+               set_config_value "BANK_CARD_HOLDER_EN" "${BANK_CARD_HOLDER_EN}"
+               log_success "BANK_CARD_HOLDER_EN updated." ;;
+            8) describe "Name of the issuing bank" "Blue Bank (or Mellat)"
                prompt_for_value "BANK_NAME" BANK_NAME
                set_config_value "BANK_NAME" "${BANK_NAME}"
                log_success "BANK_NAME updated." ;;
-            8) describe "Full Sanaei 3X-UI panel URL with port and admin web base path" "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
+            9) describe "Name of the issuing bank in English (optional, for English users; press Enter to keep)" "Blue Bank (or Mellat)"
+               prompt_optional_value "BANK_NAME_EN" BANK_NAME_EN "${BANK_NAME_EN}"
+               set_config_value "BANK_NAME_EN" "${BANK_NAME_EN}"
+               log_success "BANK_NAME_EN updated." ;;
+            10) describe "Full Sanaei 3X-UI panel URL with port and admin web base path" "https://panel.Domain.com:2053/c7UvLu2tMjFjP8BwiW"
                prompt_http_url "SENAI_PANEL_URL" SENAI_PANEL_URL
                set_config_value "SENAI_PANEL_URL" "${SENAI_PANEL_URL}"
                log_success "SENAI_PANEL_URL updated." ;;
-            9) describe "Admin username for Sanaei panel login" "admin"
+            11) describe "Admin username for Sanaei panel login" "admin"
                prompt_for_value "SENAI_PANEL_USERNAME" SENAI_PANEL_USERNAME
                set_config_value "SENAI_PANEL_USERNAME" "${SENAI_PANEL_USERNAME}"
                log_success "SENAI_PANEL_USERNAME updated." ;;
-            10) describe "Admin password for Sanaei panel login" "MySecretPassword@123"
+            12) describe "Admin password for Sanaei panel login" "MySecretPassword@123"
                 prompt_for_secret "SENAI_PANEL_PASSWORD" SENAI_PANEL_PASSWORD
                 set_config_value "SENAI_PANEL_PASSWORD" "${SENAI_PANEL_PASSWORD}"
                 log_success "SENAI_PANEL_PASSWORD updated." ;;
-            11) describe "Client subscription URL (optional: press Enter for 'auto' to fetch from panel)" "auto (or custom: https://sub.Domain.com:2083/sub)"
+            13) describe "Client subscription URL (optional: press Enter for 'auto' to fetch from panel)" "auto (or custom: https://sub.Domain.com:2083/sub)"
                 prompt_sub_url "SENAI_SUB_URL" SENAI_SUB_URL
                 set_config_value "SENAI_SUB_URL" "${SENAI_SUB_URL}"
                 log_success "SENAI_SUB_URL updated." ;;
-            12) describe "Telegram support username for user inquiries (must start with @)" "@my_support"
+            14) describe "Telegram support username for user inquiries (must start with @)" "@my_support"
                 prompt_for_value "SUPPORT_USERNAME" SUPPORT_USERNAME
                 set_config_value "SUPPORT_USERNAME" "${SUPPORT_USERNAME}"
                 log_success "SUPPORT_USERNAME updated." ;;
-            13) describe "Enable Google Gemini AI assistant feature (true or false)" "true or false"
+            15) describe "Enable Google Gemini AI assistant feature (true or false)" "true or false"
                 local gem=""
                 printf 'Enable Gemini? [true/false/none]: ' > /dev/tty
                 if ! IFS= read -r gem <&3; then
@@ -2074,23 +2117,23 @@ edit_all_config_keys() {
                 [[ "${gem}" == "false" ]] && GEMINI_ENABLED="False"
                 [[ "${gem}" == "none"  ]] && GEMINI_ENABLED="None"
                 log_success "GEMINI_ENABLED updated." ;;
-            14) describe "Google Gemini API Key (obtained from https://aistudio.google.com/)" "AIzaSyD-1234567890abcdefghijklmnopqrstuv"
+            16) describe "Google Gemini API Key (obtained from https://aistudio.google.com/)" "AIzaSyD-1234567890abcdefghijklmnopqrstuv"
                 prompt_for_secret "GEMINI_API_KEY" GEMINI_API_KEY
                 set_config_value "GEMINI_API_KEY" "${GEMINI_API_KEY}"
                 log_success "GEMINI_API_KEY updated." ;;
-            15) describe "Google Gemini model name to use" "gemini-2.5-flash (or gemini-1.5-flash)"
+            17) describe "Google Gemini model name to use" "gemini-2.5-flash (or gemini-1.5-flash)"
                 prompt_with_default "GEMINI_MODEL" "${GEMINI_MODEL:-gemini-2.5-flash}" GEMINI_MODEL
                 set_config_value "GEMINI_MODEL" "${GEMINI_MODEL}"
                 log_success "GEMINI_MODEL updated." ;;
-            16) describe "AI response randomness/creativity (float between 0.0 and 1.0)" "0.7"
+            18) describe "AI response randomness/creativity (float between 0.0 and 1.0)" "0.7"
                 prompt_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE:-0.7}" GEMINI_TEMPERATURE
                 set_config_float "GEMINI_TEMPERATURE" "${GEMINI_TEMPERATURE}"
                 log_success "GEMINI_TEMPERATURE updated." ;;
-            17) describe "Maximum response token length for AI generation" "90 (or 150)"
+            19) describe "Maximum response token length for AI generation" "90 (or 150)"
                 prompt_positive_int "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS:-90}" GEMINI_MAX_TOKENS
                 set_config_integer "GEMINI_MAX_TOKENS" "${GEMINI_MAX_TOKENS}"
                 log_success "GEMINI_MAX_TOKENS updated." ;;
-            18) describe "Daily free AI questions limit per user" "3 (or 5)"
+            20) describe "Daily free AI questions limit per user" "3 (or 5)"
                 prompt_positive_int "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT:-3}" GEMINI_DAILY_LIMIT
                 set_config_integer "GEMINI_DAILY_LIMIT" "${GEMINI_DAILY_LIMIT}"
                 log_success "GEMINI_DAILY_LIMIT updated." ;;
@@ -2956,8 +2999,15 @@ configure_config_in_place() {
         prompt_for_value "BANK_CARD_HOLDER" BANK_CARD_HOLDER
         set_config_value "BANK_CARD_HOLDER" "${BANK_CARD_HOLDER}"
         changed=1
+
+        describe "Full name of the bank card holder in English (optional, for English users; press Enter to skip)" "Navid Mohammadi"
+        prompt_optional_value "BANK_CARD_HOLDER_EN" BANK_CARD_HOLDER_EN "${BANK_CARD_HOLDER_EN}"
+        set_config_value "BANK_CARD_HOLDER_EN" "${BANK_CARD_HOLDER_EN}"
     else
         printf 'BANK_CARD_HOLDER         : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
+        if [[ -n "${BANK_CARD_HOLDER_EN}" ]]; then
+            printf 'BANK_CARD_HOLDER_EN      : %b(kept existing value: %s)%b\n' "${GREEN}" "${BANK_CARD_HOLDER_EN}" "${NC}"
+        fi
     fi
 
     if is_placeholder "BANK_NAME" "${BANK_NAME}"; then
@@ -2965,8 +3015,15 @@ configure_config_in_place() {
         prompt_for_value "BANK_NAME" BANK_NAME
         set_config_value "BANK_NAME" "${BANK_NAME}"
         changed=1
+
+        describe "Name of the issuing bank in English (optional, for English users; press Enter to skip)" "Blue Bank"
+        prompt_optional_value "BANK_NAME_EN" BANK_NAME_EN "${BANK_NAME_EN}"
+        set_config_value "BANK_NAME_EN" "${BANK_NAME_EN}"
     else
         printf 'BANK_NAME                : %b(kept existing value)%b\n' "${GREEN}" "${NC}"
+        if [[ -n "${BANK_NAME_EN}" ]]; then
+            printf 'BANK_NAME_EN             : %b(kept existing value: %s)%b\n' "${GREEN}" "${BANK_NAME_EN}" "${NC}"
+        fi
     fi
 
     if ! [[ "${SENAI_PANEL_URL}" =~ ^https?:// ]] || \

@@ -6,11 +6,8 @@ Architecture & Security Guarantee:
 1. Exclusively binds to 127.0.0.1:8088 (Localhost only)
    - Zero exposure to public ports.
    - Zero conflict with Port 443 / Xray Reality / Caddy.
-   - Exposed securely to Android SMS Forwarder via Cloudflare Tunnel (sms.example.com).
-2. Full Raw & Structured Logging:
-   - Logs EVERY incoming request from phone (Headers, IP, Raw Body) before filtering.
-   - Writes dedicated rotating/append log to data/sms_webhook_raw.log + console.
-   - Records ALL SMS statuses ('unparsed', 'duplicate', 'unmatched', 'approved', 'test_matched') in DB.
+   - Exposed securely to Android SMS Forwarder via Cloudflare Tunnel.
+2. Records SMS processing statuses in the database without logging request bodies or credentials.
 3. Strict Temporal Validation:
    - Bank SMS transaction time MUST fall strictly between order creation and reservation expiry.
    - Rejects any transaction timestamped prior to order creation (clock skew margin: max 60s).
@@ -46,31 +43,12 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-# ─── تنظیمات لاگر اختصاصی پیامک (هم در کنسول و هم در فایل مجزا) ───
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(DATA_DIR, "sms_payments.db")
-RAW_LOG_PATH = os.path.join(DATA_DIR, "sms_webhook_raw.log")
-
 logger = logging.getLogger("sms_payment")
-logger.setLevel(logging.INFO)
-
-if not logger.handlers:
-    formatter = logging.Formatter(
-        fmt="%(asctime)s | [%(levelname)s] | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    # ۱. هندلر فایل اختصاصی برای دیدن تمام پیامک‌های دریافتی از گوشی
-    file_handler = logging.FileHandler(RAW_LOG_PATH, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    # ۲. هندلر کنسول (ترمینال)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
 
 # Iran Timezone (UTC +03:30 permanently)
 TEHRAN_TZ = timezone(timedelta(hours=3, minutes=30))
@@ -440,7 +418,7 @@ class SMSPaymentDatabase:
                     ))
                     conn.commit()
                     logger.info(
-                        "💰 RESERVE AMOUNT | order_id=#%s | user_id=%s | base=%d | payable=%d | discount=%d",
+                        "RESERVE AMOUNT | order_id=#%s | user_id=%s | base=%d | payable=%d | discount=%d",
                         order_id, user_id, base_price, candidate_payable, offset
                     )
                     return candidate_payable, offset
@@ -526,8 +504,8 @@ class SMSPaymentDatabase:
             if existing_tx:
                 conn.rollback()
                 logger.warning(
-                    "♻️ SMS DUPLICATE IGNORED | tx_id=#%s | prev_status='%s' | sender='%s' | amount=%d | text='%s'",
-                    existing_tx["id"], existing_tx["status"], sender, amount_toman, raw_text
+                    "SMS DUPLICATE IGNORED | tx_id=#%s | prev_status='%s' | sender='%s' | amount=%d",
+                    existing_tx["id"], existing_tx["status"], sender, amount_toman
                 )
                 return {
                     "status": "duplicate",
@@ -552,8 +530,8 @@ class SMSPaymentDatabase:
 
             if not rows:
                 logger.info(
-                    "📭 SMS UNMATCHED (No Active Reservation) | sender='%s' | amount=%d Toman | bank_tx=%s | text='%s'",
-                    sender, amount_toman, bank_tx_iso, raw_text
+                    "SMS UNMATCHED (No Active Reservation) | sender='%s' | amount=%d Toman | bank_tx=%s",
+                    sender, amount_toman, bank_tx_iso
                 )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
@@ -586,8 +564,8 @@ class SMSPaymentDatabase:
 
             if len(valid_candidates) == 0:
                 logger.info(
-                    "⏰ SMS TIME OUT OF BOUNDS | sender='%s' | amount=%d Toman | bank_tx=%s | text='%s'",
-                    sender, amount_toman, bank_tx_iso, raw_text
+                    "SMS TIME OUT OF BOUNDS | sender='%s' | amount=%d Toman | bank_tx=%s",
+                    sender, amount_toman, bank_tx_iso
                 )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
@@ -608,8 +586,8 @@ class SMSPaymentDatabase:
             elif len(valid_candidates) > 1:
                 oids = [c["order_id"] for c in valid_candidates]
                 logger.warning(
-                    "⚠️ SMS AMBIGUOUS | sender='%s' | amount=%d Toman | candidates=%s | text='%s'",
-                    sender, amount_toman, oids, raw_text
+                    "SMS AMBIGUOUS | sender='%s' | amount=%d Toman | candidates=%s",
+                    sender, amount_toman, oids
                 )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
@@ -635,8 +613,8 @@ class SMSPaymentDatabase:
 
             if test_mode:
                 logger.info(
-                    "🧪 SMS TEST_MATCHED | sender='%s' | amount=%d Toman | order_id=#%s | text='%s'",
-                    sender, amount_toman, chosen["order_id"], raw_text
+                    "SMS TEST_MATCHED | sender='%s' | amount=%d Toman | order_id=#%s",
+                    sender, amount_toman, chosen["order_id"]
                 )
                 cursor.execute("""
                     INSERT INTO sms_transactions (
@@ -669,15 +647,15 @@ class SMSPaymentDatabase:
 
             if cursor.rowcount != 1:
                 logger.warning(
-                    "🔄 SMS CLAIMED BY CONCURRENT TASK | sender='%s' | amount=%d Toman | order_id=#%s",
+                    "SMS CLAIMED BY CONCURRENT TASK | sender='%s' | amount=%d Toman | order_id=#%s",
                     sender, amount_toman, chosen["order_id"]
                 )
                 conn.rollback()
                 return {"status": "claimed_by_concurrent_task"}
 
             logger.info(
-                "✅ SMS APPROVED | sender='%s' | amount=%d Toman | order_id=#%s | user_id=%s | text='%s'",
-                sender, amount_toman, chosen["order_id"], chosen["user_id"], raw_text
+                "SMS APPROVED | sender='%s' | amount=%d Toman | order_id=#%s | user_id=%s",
+                sender, amount_toman, chosen["order_id"], chosen["user_id"]
             )
 
             cursor.execute("""
@@ -786,7 +764,6 @@ class SMSWebhookServer:
         })
 
     async def handle_sms_webhook(self, request: web.Request) -> web.Response:
-        # تشخیص IP واقعی در پشت Cloudflare Tunnel
         client_ip = (
             request.headers.get("CF-Connecting-IP")
             or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
@@ -794,23 +771,18 @@ class SMSWebhookServer:
             or "127.0.0.1"
         )
 
-        # خواندن بدنه خام درخواست در اولین قدم تا حتی اگر JSON خراب بود یا توکن غلط بود در لاگ دیده شود
         try:
             raw_body_bytes = await request.read()
             raw_body_text = raw_body_bytes.decode("utf-8", errors="replace").strip()
-        except Exception as e:
-            raw_body_text = f"<Error reading body: {e}>"
-
-        # 🔥 لاگ جامع هرگونه پیامی که از گوشی به سرور می‌رسد (قبل از هر فیلتری)
-        raw_log_preview = raw_body_text.replace("\n", "\\n")
-        logger.info(f"📲 [RAW INCOMING WEBHOOK] IP={client_ip} | Payload={raw_log_preview}")
+        except Exception:
+            return web.json_response({"error": "Unable to read request"}, status=400)
 
         if not self._check_rate_limit(client_ip):
-            logger.warning(f"⛔ Rate limit exceeded for IP: {client_ip}")
+            logger.warning("Webhook rate limit exceeded.")
             return web.json_response({"error": "Rate limit exceeded"}, status=429)
 
         if not self.manager.is_enabled():
-            logger.warning("⛔ Webhook received but SMS system is disabled in admin settings.")
+            logger.warning("Webhook received but SMS system is disabled in admin settings.")
             return web.json_response({"error": "SMS webhook is disabled by admin"}, status=503)
 
         # اعتبارسنجی هدر احراز هویت با مقایسه زمان‌ثابت
@@ -819,17 +791,17 @@ class SMSWebhookServer:
         expected_token = self.manager.get_secret_token()
 
         if not expected_token or not hmac.compare_digest(token, expected_token):
-            logger.warning(f"⛔ UNAUTHORIZED WEBHOOK | IP={client_ip} | Provided-Token='{token[:6]}***'")
+            logger.warning("Webhook authentication failed.")
             return web.json_response({"error": "Unauthorized"}, status=401)
 
         try:
             payload = json.loads(raw_body_text)
-        except Exception as e:
-            logger.error(f"❌ MALFORMED JSON | IP={client_ip} | Error={e} | Raw={raw_log_preview}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            logger.warning("Webhook request contained invalid JSON.")
             return web.json_response({"error": "Malformed JSON payload"}, status=400)
 
         if not isinstance(payload, dict):
-            logger.error(f"❌ PAYLOAD NOT OBJECT | IP={client_ip} | Raw={raw_log_preview}")
+            logger.warning("Webhook request payload was not an object.")
             return web.json_response({"error": "Payload must be a JSON object"}, status=400)
 
         # استخراج انعطاف‌پذیر فیلدهای ارسالی از اپلیکیشن‌های مختلف SMS Forwarder
@@ -859,14 +831,8 @@ class SMSWebhookServer:
         raw_text = str(raw_message).strip() if raw_message is not None else ""
         device_received_at = str(raw_rx).strip()
 
-        # لاگ تفکیک‌شده پیامک دریافتی
-        logger.info(
-            "📩 [PARSED SMS FIELDS] Sender='%s' | ReceivedAt='%s' | Text='%s'",
-            sender, device_received_at, raw_text.replace("\n", " | ")
-        )
-
         if not raw_text:
-            logger.warning(f"❌ Empty message field in webhook from sender='{sender}'")
+            logger.warning("Webhook request did not contain an SMS message.")
             return web.json_response({"error": "Missing or empty 'message'"}, status=400)
 
         result = await self.manager.process_incoming_sms(
@@ -885,18 +851,18 @@ class SMSWebhookServer:
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, host, port)
         await self.site.start()
-        logger.info(f"🚀 سرور وب‌هوک پیامک روی {host}:{port} به صورت لوکال‌هاست آغاز به کار کرد.")
+        logger.info("SMS webhook server started on localhost.")
 
     async def stop(self):
         if self.runner:
             try:
                 await self.runner.cleanup()
-            except Exception as e:
-                logger.warning(f"خطا در پاکسازی وب‌هوک: {e}")
+            except Exception:
+                logger.warning("SMS webhook server cleanup failed.")
             finally:
                 self.runner = None
                 self.site = None
-            logger.info("🛑 سرور وب‌هوک پیامک متوقف شد.")
+            logger.info("SMS webhook server stopped.")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -978,10 +944,6 @@ class SMSPaymentManager:
         parsed, parse_reason = BlubankSMSParser.parse(sender, raw_text, allowed_senders)
 
         if not parsed:
-            logger.warning(
-                "🚫 [SMS REJECTED BY PARSER] Reason='%s' | Sender='%s' | Text='%s'",
-                parse_reason, sender, raw_text.replace("\n", " | ")
-            )
             # ثبت در دیتابیس تا در بخش تاریخچه پیامک‌های ربات هم دیده شود
             tx_id, is_dup = await asyncio.to_thread(
                 self.db.record_unparsed_sms,
@@ -1000,11 +962,6 @@ class SMSPaymentManager:
         amount_toman = parsed["amount_toman"]
         amount_rial = parsed["amount_rial"]
         bank_tx_utc = parsed["bank_tx_utc"]
-
-        logger.info(
-            "🏦 [BLUBANK DEPOSIT PARSED] Amount=%d Toman (%d Rial) | BankTime=%s %s | Balance=%s",
-            amount_toman, amount_rial, parsed["bank_date_shamsi_str"], parsed["bank_time_str"], parsed.get("balance_rial")
-        )
 
         test_mode = self.is_test_mode()
 
@@ -1114,7 +1071,7 @@ class SMSPaymentManager:
                 return status_result, msg
 
         except Exception as e:
-            logger.error(f"خطا در اجرای تحویل سفارش #{order_id}: {e}", exc_info=True)
+            logger.error("Order fulfillment execution error.")
             return "failed_pending_retry", str(e)
 
     # ─── نوتیفیکیشن‌های تلگرام برای ادمین ───
@@ -1136,7 +1093,7 @@ class SMSPaymentManager:
         try:
             await self._main.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.warning(f"عدم امکان ارسال نوتیفیکیشن تست به ادمین: {e}")
+            logger.warning(f"Failed to send test notification to admin: {e}")
 
     async def _notify_admin_approved(self, parsed: dict, reservation: dict):
         if not self._main or not hasattr(self._main, "bot"):
@@ -1153,7 +1110,7 @@ class SMSPaymentManager:
         try:
             await self._main.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.warning(f"خطا در ارسال نوتیفیکیشن تایید: {e}")
+            logger.warning(f"Failed to send approval notification to admin: {e}")
 
     async def _notify_admin_fulfillment_failed(self, parsed: dict, reservation: dict, tx_id: int, err_msg: str):
         if not self._main or not hasattr(self._main, "bot"):
@@ -1174,7 +1131,7 @@ class SMSPaymentManager:
             ]])
             await self._main.bot.send_message(admin_id, text, reply_markup=markup, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.warning(f"خطا در ارسال هشدار تحویل: {e}")
+            logger.warning(f"Failed to send fulfillment alert to admin: {e}")
 
     async def _notify_admin_manual_fulfillment(self, parsed: dict, reservation: dict, tx_id: int, msg: str):
         if not self._main or not hasattr(self._main, "bot"):
@@ -1194,7 +1151,7 @@ class SMSPaymentManager:
             ]])
             await self._main.bot.send_message(admin_id, text, reply_markup=markup, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.warning(f"خطا در ارسال هشدار تحویل دستی: {e}")
+            logger.warning(f"Failed to send manual fulfillment alert to admin: {e}")
 
     async def _notify_admin_ambiguous(self, parsed: dict, candidates: list):
         if not self._main or not hasattr(self._main, "bot"):
@@ -1211,7 +1168,7 @@ class SMSPaymentManager:
         try:
             await self._main.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.warning(f"خطا در ارسال نوتیفیکیشن ابهام: {e}")
+            logger.warning(f"Failed to send ambiguous alert to admin: {e}")
 
     async def _notify_admin_unmatched(self, parsed: dict, reason: str = ""):
         if not self._main or not hasattr(self._main, "bot"):
@@ -1232,7 +1189,7 @@ class SMSPaymentManager:
         try:
             await self._main.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML)
         except Exception as e:
-            logger.warning(f"خطا در ارسال نوتیفیکیشن تطبیق‌نیافته: {e}")
+            logger.warning(f"Failed to send unmatched notification to admin: {e}")
 
 
 # نمونه سراسری
@@ -1320,13 +1277,13 @@ def register_sms_payment_handlers(dp, main_module):
                     host=sms_payment_manager.get_webhook_host(),
                     port=sms_payment_manager.get_webhook_port()
                 )
-            except Exception as e:
-                logger.error(f"خطا در استارت وب‌هوک: {e}")
+            except Exception:
+                logger.error("Failed to start SMS webhook.")
         else:
             try:
                 await sms_payment_manager.server.stop()
-            except Exception as e:
-                logger.error(f"خطا در استاپ وب‌هوک: {e}")
+            except Exception:
+                logger.error("Failed to stop SMS webhook.")
 
         await admin_sms_payment_menu(callback)
 
