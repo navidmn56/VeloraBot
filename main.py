@@ -235,15 +235,30 @@ READY_PACKAGES = {
 log_system = None
 
 
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    format=LOG_FORMAT,
     handlers=[logging.StreamHandler()]
 )
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
 for handler in root_logger.handlers:
     handler.setLevel(logging.DEBUG)
+
+console_handler = next(
+    (
+        handler for handler in root_logger.handlers
+        if isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+    ),
+    None,
+)
+if console_handler is None:
+    console_handler = logging.StreamHandler()
+    root_logger.addHandler(console_handler)
+console_handler.setLevel(logging.DEBUG)
+console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML), timeout=15)
@@ -376,7 +391,7 @@ async def send_sticker(chat_id: int, sticker_key: str, fallback_emoji: str = "�
                 await bot.send_sticker(chat_id, sticker_id)
             return True
         except Exception as e:
-            logger.warning(f"خطا در ارسال استیکر {sticker_key}: {e}")
+            logger.warning(f"Error sending sticker {sticker_key}: {e}")
     
 
     if reply_markup is not None:
@@ -450,7 +465,7 @@ def ensure_data_directory():
     backup_dir = os.path.join(DATA_DIR, "backups")
     if not os.path.exists(backup_dir):
         os.makedirs(backup_dir)
-        logger.info(f"✅ پوشه {backup_dir} ایجاد شد")
+        logger.info(f"✅ folder {backup_dir} created")
     
     for name, file_path in DB_FILES.items():
         if not os.path.exists(file_path):
@@ -518,7 +533,7 @@ def save_json(file_path: str, data) -> bool:
             
             with open(file_path, 'r', encoding='utf-8') as f:
                 verify_data = json.load(f)
-            logger.info(f"✅ تایید نهایی: {len(verify_data) if isinstance(verify_data, dict) else 'N/A'} رکورد در {filename}")
+            logger.info(f"✅ Final confirmation: {len(verify_data) if isinstance(verify_data, dict) else 'N/A'} record(s) in {filename}")
         else:
             logger.error(f"{filename} was not saved!")
             return False
@@ -532,7 +547,7 @@ def save_json(file_path: str, data) -> bool:
             except ImportError:
                 logger.debug("Skipping refresh - config.py not available")
             except Exception as e:
-                logger.warning(f"⚠️ خطا در refresh پرامپت: {e}")
+                logger.warning(f"⚠️ Error refreshing prompt: {e}")
         
         return True
         
@@ -547,21 +562,21 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
     filename = os.path.basename(file_path)
     
     if use_cache and file_path in _db_cache and file_path not in _db_modified:
-        logger.debug(f"📂 {filename} از کش خوانده شد")
+        logger.debug(f"📂 {filename} loaded from cache")
         return _db_cache[file_path]
     
-    logger.info(f"📂 بارگذاری {filename} از دیسک... مسیر: {os.path.abspath(file_path)}")
+    logger.info(f"📂 loading {filename} from disk... path: {os.path.abspath(file_path)}")
     
     if not os.path.exists(file_path):
-        logger.error(f"❌ فایل {filename} وجود ندارد! مسیر: {file_path}")
+        logger.error(f"❌ file {filename} does not exist! Path: {file_path}")
         
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump({}, f)
-        logger.info(f"✅ فایل {filename} ایجاد شد (خالی)")
+        logger.info(f"✅ file {filename} created (empty)")
         return {}
     
     if os.path.getsize(file_path) == 0:
-        logger.warning(f"⚠️ فایل {filename} خالی است - حجم: 0 bytes")
+        logger.warning(f"⚠️ file {filename} is empty - size: 0 bytes")
         return {}
     
     try:
@@ -569,7 +584,7 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
             content = f.read()
             
             if not content or content.strip() == '':
-                logger.warning(f"⚠️ فایل {filename} محتوایی ندارد")
+                logger.warning(f"⚠️ file {filename} has no content")
                 return {}
             
             data = json.loads(content)
@@ -577,13 +592,13 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
             if use_cache:
                 _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
             
-            logger.info(f"✅ {filename} بارگذاری شد - {len(data) if isinstance(data, dict) else 'N/A'} آیتم")
+            logger.info(f"✅ {filename} loaded - {len(data) if isinstance(data, dict) else 'N/A'} items")
             logger.info(f"   Sample data: {str(list(data.keys())[:3]) if isinstance(data, dict) and data else 'empty'}")
             if filename == 'configs.json':
                 try:
                     from config import refresh_gemini_prompt
                     refresh_gemini_prompt()
-                    logger.info("🔄 GEMINI_SYSTEM_PROMPT بعد از بارگذاری configs.json به‌روزرسانی شد")
+                    logger.info('🔄 GEMINI_SYSTEM_PROMPT updated after loading configs.json')
                 except ImportError:
                     logger.debug("Skipping refresh - config.py not available")
                 except Exception as e:
@@ -592,12 +607,12 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
             return data
             
     except json.JSONDecodeError as e:
-        logger.error(f"❌ خطای JSON در {filename}: {e}")
+        logger.error(f"❌ JSON error in {filename}: {e}")
         logger.error(f"   JSON file content omitted for security; filename: {filename}")
         return {}
         
     except Exception as e:
-        logger.error(f"❌ خطا در بارگذاری {filename}: {e}", exc_info=True)
+        logger.error(f"❌ Error loading {filename}: {e}", exc_info=True)
         return {}
     
 
@@ -610,7 +625,7 @@ def load_coupons():
                 return json.load(f)
         return {}
     except Exception as e:
-        logger.error(f"خطا در بارگذاری کوپن‌ها: {e}")
+        logger.error(f"Error loading coupons: {e}")
         return {}
 
 def save_coupons(coupons: dict):
@@ -619,7 +634,7 @@ def save_coupons(coupons: dict):
             json.dump(coupons, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
-        logger.error(f"خطا در ذخیره کوپن‌ها: {e}")
+        logger.error(f"Error saving coupons: {e}")
         return False
 
 COUPONS = load_coupons()
@@ -829,7 +844,7 @@ async def show_inbound_manager(
         TEMP_INBOUND_SELECTION[temp_key] = current_list.copy()
     invalid_ids = [ib for ib in current_list if ib not in valid_ids]
     if invalid_ids:
-        logger.warning(f"⚠️ [show_inbound_manager] اینباندهای نامعتبر حذف شدند: {invalid_ids}")
+        logger.warning(f"⚠️ [show_inbound_manager] invalid inbounds removed: {invalid_ids}")
         current_list = [ib for ib in current_list if ib in valid_ids]
         TEMP_INBOUND_SELECTION[temp_key] = current_list
     
@@ -1363,7 +1378,7 @@ async def update_user_receipt_review_status(order: dict, status: str) -> bool:
     chat_id = receipt_chat_id or order.get('user_id')
     if not message_id or not receipt_chat_id:
         logger.warning(
-            "شناسه پیام پاسخ فیش برای سفارش #%s موجود نیست؛ اعلان وضعیت جدید ارسال می‌شود",
+            'payment receipt response message ID for order #%s not found; sending new status notification',
             order.get('order_id', '?'),
         )
 
@@ -1381,7 +1396,7 @@ async def update_user_receipt_review_status(order: dict, status: str) -> bool:
             return True
         except Exception as e:
             logger.warning(
-                "ویرایش پیام وضعیت فیش سفارش #%s ناموفق بود؛ اعلان پاسخ‌دار ارسال می‌شود: %s",
+                'Failed to edit receipt status message for order #%s; sending a reply notification: %s',
                 order.get('order_id', '?'),
                 e,
                 exc_info=True,
@@ -1397,7 +1412,7 @@ async def update_user_receipt_review_status(order: dict, status: str) -> bool:
         return True
     except Exception as e:
         logger.error(
-            "ارسال اعلان وضعیت فیش سفارش #%s ناموفق بود: %s",
+            'Failed to send receipt status notification for order #%s: %s',
             order.get('order_id', '?'),
             e,
             exc_info=True,
@@ -1456,7 +1471,7 @@ async def inbound_back(callback: CallbackQuery):
     try:
         await callback.answer("❌ انصراف", show_alert=True)
     except Exception as e:
-        logger.warning(f"خطا در ارسال پاسخ: {e}")
+        logger.warning(f"Error sending response: {e}")
     
     try:
         if "category" in prefix:
@@ -1473,7 +1488,7 @@ async def inbound_back(callback: CallbackQuery):
             await go_back_to_admin_panel(callback)
             
     except Exception as e:
-        logger.error(f"خطا در برگشت: {e}")
+        logger.error(f"Error refunding: {e}")
         try:
             await go_back_to_admin_panel(callback)
         except:
@@ -1509,7 +1524,7 @@ async def inbound_save(callback: CallbackQuery):
     try:
         await callback.answer(f"✅ {len(current_list)} اینباند ذخیره شد", show_alert=True)
     except Exception as e:
-        logger.warning(f"خطا در ارسال پاسخ: {e}")
+        logger.warning(f"Error sending response: {e}")
         
     
     try:
@@ -1541,7 +1556,7 @@ async def inbound_save(callback: CallbackQuery):
             await go_back_to_admin_panel(callback)
             
     except Exception as e:
-        logger.error(f"خطا در ذخیره یا برگشت: {e}")
+        logger.error(f"Error saving or refunding: {e}")
         try:
             await go_back_to_admin_panel(callback)
         except:
@@ -1581,7 +1596,7 @@ async def go_back_to_category_edit(callback: CallbackQuery, category_id: int):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.warning(f"خطا در حذف پیام: {e}")
+        logger.warning(f"Error deleting message: {e}")
         try:
             await callback.message.edit_text("⏳ در حال بازگشت...")
         except:
@@ -1601,7 +1616,7 @@ async def go_back_to_category_edit(callback: CallbackQuery, category_id: int):
             ])
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام برگشت: {e}")
+        logger.error(f"Error sending refund message: {e}")
         try:
             await admin_category_edit(callback.model_copy(update={"data": f"admin_category_edit_{category_id}"}))
         except Exception:
@@ -1613,7 +1628,7 @@ async def go_back_to_test_service(callback: CallbackQuery):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.warning(f"خطا در حذف پیام: {e}")
+        logger.warning(f"Error deleting message: {e}")
         try:
             await callback.message.edit_text("⏳ در حال بازگشت...")
         except:
@@ -1633,7 +1648,7 @@ async def go_back_to_test_service(callback: CallbackQuery):
             ])
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام برگشت: {e}")
+        logger.error(f"Error sending refund message: {e}")
         try:
             await admin_test_service_settings(callback.model_copy(update={"data": "admin_test_service"}))
         except Exception:
@@ -1645,7 +1660,7 @@ async def go_back_to_admin_panel(callback: CallbackQuery):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.warning(f"خطا در حذف پیام: {e}")
+        logger.warning(f"Error deleting message: {e}")
         try:
             await callback.message.edit_text("⏳ در حال بازگشت...")
         except:
@@ -1665,7 +1680,7 @@ async def go_back_to_admin_panel(callback: CallbackQuery):
             ])
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام برگشت: {e}")
+        logger.error(f"Error sending refund message: {e}")
         try:
             await admin_panel(callback.model_copy(update={"data": "admin_panel"}))
         except Exception:
@@ -1904,7 +1919,7 @@ async def admin_test_edit_save(message: Message):
     except ValueError:
         await message.reply("❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid number!")
     except Exception as e:
-        logger.error(f"خطا در save_test_edit: {e}", exc_info=True)
+        logger.error(f"Error in save_test_edit: {e}", exc_info=True)
         await message.reply(f"❌ خطا: {str(e)}")
         user_states.pop(admin_id, None)
 
@@ -2421,7 +2436,7 @@ async def admin_test_set_default_save(message: Message):
             "❌ لطفاً اعداد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter valid numbers!"
         )
     except Exception as e:
-        logger.error(f"خطا در ذخیره تنظیمات پیش‌فرض: {e}")
+        logger.error(f"Error saving default settings: {e}")
         await message.reply(f"❌ خطا: {str(e)}")
         user_states.pop(admin_id, None)
         
@@ -2684,14 +2699,14 @@ async def admin_test_user_reset_execute(message: Message):
     old_count = old_data.get('count', 0)
     del USER_TEST_USAGE[uid]
     save_test_usage()
-    logger.info(f"🗑 تست کاربر {target_id} ({user_info.get('full_name_raw', user_full_name)}) با {old_count} تست ریست شد")
+    logger.info(f"🗑 test reset for user {target_id} ({user_info.get('full_name_raw', user_full_name)}) with {old_count} test reset")
     
     if log_system:
         await log_system.log_admin_action(
             admin_id,
-            "ریست تست کاربر",
+            "Reset user test service",
             target_user=target_id,
-            details=f"تعداد تست‌های حذف شده: {old_count}"
+            details=f"Deleted test services: {old_count}"
         )
     
     if lang == "fa":
@@ -2835,11 +2850,11 @@ def load_user_test_settings():
         if os.path.exists(settings_file):
             with open(settings_file, 'r', encoding='utf-8') as f:
                 USER_TEST_SETTINGS = json.load(f)
-            logger.info(f"✅ تنظیمات اختصاصی تست {len(USER_TEST_SETTINGS)} کاربر بارگذاری شد")
+            logger.info(f"✅ Custom test settings for {len(USER_TEST_SETTINGS)} user loaded")
         else:
             USER_TEST_SETTINGS = {}
     except Exception as e:
-        logger.error(f"❌ خطا در بارگذاری تنظیمات تست کاربران: {e}")
+        logger.error(f"❌ Error loading user test settings: {e}")
         USER_TEST_SETTINGS = {}
 
 def save_user_test_settings():
@@ -2850,7 +2865,7 @@ def save_user_test_settings():
             json.dump(USER_TEST_SETTINGS, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره تنظیمات تست کاربران: {e}")
+        logger.error(f"❌ Error saving user test settings: {e}")
         return False
 
 def get_user_test_settings(user_id: int) -> dict:
@@ -3131,7 +3146,7 @@ async def admin_test_user_settings_save(message: Message):
         if setting_type == 'volume':
             USER_TEST_SETTINGS[uid]['volume_mb'] = int(round(new_value * 1024))
             logger.info(
-                f"✅ [test_settings_save] حجم تست کاربر {target_id} تنظیم شد: "
+                f"✅ [test_settings_save] Test volume for user {target_id} set to: "
                 f"{new_value}GB → {USER_TEST_SETTINGS[uid]['volume_mb']}MB"
             )
         
@@ -3248,7 +3263,7 @@ async def admin_test_user_settings_save(message: Message):
             else "❌ Please enter a valid number!"
         )
     except Exception as e:
-        logger.error(f"خطا در ذخیره تنظیم تست کاربر: {e}")
+        logger.error(f"Error saving user test setting: {e}")
         await message.reply(f"❌ خطا: {str(e)}")
         user_states.pop(admin_id, None)
 
@@ -3459,13 +3474,13 @@ async def admin_test_users_reset_all_execute(callback: CallbackQuery):
     total_tests = sum(data.get('count', 0) for data in USER_TEST_USAGE.values())
     USER_TEST_USAGE.clear()
     save_test_usage()
-    logger.info(f"🗑 تست همه {total_users} کاربر با {total_tests} تست ریست شد")
+    logger.info(f"🗑 reset all tests for user {total_users} user with {total_tests} test reset")
     
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            "ریست تست همه کاربران",
-            details=f"تعداد کاربران: {total_users} | تعداد تست‌ها: {total_tests}"
+            "Reset test services for all users",
+            details=f"Users: {total_users} | Test services: {total_tests}"
         )
     
     if lang == "fa":
@@ -3594,7 +3609,7 @@ LINK_ROTATION_CONFIRMATIONS = {}
 LINK_ROTATION_LOCKS = {}
 CONFIG_LINKS_CACHE_TTL = 300     # 5 دقیقه
 CONFIG_PAGE_SIZE = 3             # تعداد لینک در هر صفحه
-logger.info("دیکشنری user_states ایجاد شد") 
+logger.info('user_states dictionary created') 
 
 
 USER_INBOUND_SELECTION = {}  # user_id -> inbound_id
@@ -3606,9 +3621,9 @@ def save_user_inbound_selection(user_id: int, inbound: Union[int, List[int]]):
         inbound_file = os.path.join(DATA_DIR, "user_inbounds.json")
         with open(inbound_file, 'w', encoding='utf-8') as f:
             json.dump(USER_INBOUND_SELECTION, f, ensure_ascii=False, indent=2)
-        logger.info(f"✅ انتخاب اینباند برای کاربر {user_id} ذخیره شد: {inbound}")
+        logger.info(f"✅ selected inbound for user {user_id} saved: {inbound}")
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره انتخاب اینباند: {e}")
+        logger.error(f"❌ Error saving inbound selection: {e}")
 
 def load_user_inbound_selections():
     """بارگذاری انتخاب‌های اینباند کاربران"""
@@ -3618,9 +3633,9 @@ def load_user_inbound_selections():
         if os.path.exists(inbound_file):
             with open(inbound_file, 'r', encoding='utf-8') as f:
                 USER_INBOUND_SELECTION = json.load(f)
-            logger.info(f"✅ انتخاب‌های اینباند کاربران بارگذاری شد: {len(USER_INBOUND_SELECTION)} کاربر")
+            logger.info(f"✅ User inbound selections loaded: {len(USER_INBOUND_SELECTION)} user")
     except Exception as e:
-        logger.error(f"خطا در بارگذاری انتخاب‌های اینباند: {e}")
+        logger.error(f"Error loading inbound selections: {e}")
         USER_INBOUND_SELECTION = {}
 
 
@@ -3644,7 +3659,7 @@ def set_shop_status(open_status: bool, message: str = None):
     SHOP_STATUS['last_updated'] = datetime.now().isoformat()
     configs_pool['shop_status'] = SHOP_STATUS
     save_all()
-    logger.info(f"🛒 وضعیت فروش تغییر کرد: {'باز' if open_status else 'بسته'}")
+    logger.info(f"Sales status changed: {'open' if open_status else 'closed'}")
     
     
 @dp.callback_query(F.data == "admin_shop_settings")
@@ -4252,12 +4267,12 @@ async def confirm_approve_user(callback: CallbackQuery):
                     f"Use the main menu to get started."
                 )
         except Exception as e:
-            logger.error(f"خطا در ارسال پیام تایید به کاربر {target_id}: {e}")
+            logger.error(f"Error sending confirmation message to user {target_id}: {e}")
         if log_system:
             await log_system.log_admin_action(
                 callback.from_user.id,
-                f"تایید کاربر جدید {target_id}",
-                details=f"نام: {target.get('name')}"
+                f"Approved new user {target_id}",
+                details=f"Name: {target.get('name')}"
             )
         
         name_escaped = html.escape(target.get('name', f'کاربر_{target_id}'))
@@ -4341,13 +4356,13 @@ async def confirm_reject_user(callback: CallbackQuery):
                 f"Unfortunately, your request to use the bot was not approved.\n"
                 f"Use <b>/start</b> to try again."
             )
-        logger.info(f"📨 پیام رد به کاربر {target_id} ارسال شد")
+        logger.info(f"📨 rejection message to user {target_id} sent")
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال پیام رد به کاربر {target_id}: {e}")
+        logger.error(f"❌ Error sending rejection message to user {target_id}: {e}")
     uid = str(target_id)
     if uid in users:
         del users[uid]
-        logger.info(f"🗑 کاربر {target_id} از دیتابیس حذف شد")
+        logger.info(f"🗑 user {target_id} removed from database")
     deleted_orders = 0
     for oid in list(orders.keys()):
         if isinstance(orders[oid], dict) and orders[oid].get('user_id') == target_id:
@@ -4368,7 +4383,7 @@ async def confirm_reject_user(callback: CallbackQuery):
     if target_id in user_states:
         del user_states[target_id]
     config_cache.clear(target_id)
-    logger.info(f"🧹 کش کاربر {target_id} به دلیل حذف کاربر پاک شد")
+    logger.info(f"🧹 user cache {target_id} cleared because user deleted")
     if uid in USER_TEST_USAGE:
         del USER_TEST_USAGE[uid]
     if uid in USER_TEST_SETTINGS:
@@ -4377,13 +4392,13 @@ async def confirm_reject_user(callback: CallbackQuery):
     save_blacklist()
     save_test_usage()
     save_user_test_settings()
-    logger.info(f"🗑 کاربر {target_id} ({target_name_escaped}) با {deleted_orders} سفارش و {deleted_refs} رفرال حذف شد")
+    logger.info(f"🗑 user {target_id} ({target_name_escaped}) with {deleted_orders} order and {deleted_refs} referral reset")
     
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            f"رد و حذف کاربر {target_id}",
-            details=f"نام: {target_name_escaped} | سفارشات: {deleted_orders} | رفرال‌ها: {deleted_refs} | چت‌ها: {deleted_chats}"
+            f"Rejected and deleted user {target_id}",
+            details=f"Name: {target_name_escaped} | Orders: {deleted_orders} | Referrals: {deleted_refs} | Chats: {deleted_chats}"
         )
     if lang == "fa":
         text = f"""
@@ -4511,7 +4526,7 @@ def migrate_inbound_data():
         old_default = configs_pool.get('default_inbound_id')
         if old_default and 'default_inbound_ids' not in configs_pool:
             configs_pool['default_inbound_ids'] = [old_default]
-            logger.info(f"✅ مهاجرت اینباند پیش‌فرض: {old_default} -> {configs_pool['default_inbound_ids']}")
+            logger.info(f"✅ Default inbound migration: {old_default} -> {configs_pool['default_inbound_ids']}")
         del configs_pool['default_inbound_id']
         save_all()
 
@@ -5129,7 +5144,7 @@ async def admin_inbound_select_all_defaults(callback: CallbackQuery):
     configs_pool['default_inbound_ids'] = all_ids
     save_all()
     
-    logger.info(f"✅ {len(all_ids)} اینباند به عنوان پیش‌فرض انتخاب شد: {all_ids}")
+    logger.info(f"✅ {len(all_ids)} inbound selected as default: {all_ids}")
     
     await callback.answer(
         f"✅ {len(all_ids)} اینباند انتخاب شد" if lang == "fa" else f"✅ {len(all_ids)} inbounds selected",
@@ -5146,7 +5161,7 @@ async def cmd_save(message: Message):
     if message.from_user.id != ADMIN_ID_INT:
         return
     
-    logger.info(f"👑 ادمین درخواست ذخیره‌سازی دستی کرد")
+    logger.info(f"👑 admin requested manual save")
     status_msg = await message.reply("⏳ در حال ذخیره‌سازی و گرفتن بکاپ...")
     
     start = time.time()
@@ -5159,7 +5174,7 @@ async def cmd_save(message: Message):
         backup_database()
         backup_success = True
     except Exception as e:
-        logger.error(f"❌ خطا در گرفتن بکاپ: {e}")
+        logger.error(f"❌ Error creating backup: {e}")
         backup_success = False
     
     elapsed = time.time() - start
@@ -5214,7 +5229,7 @@ async def cmd_db_status(message: Message):
     if message.from_user.id != ADMIN_ID_INT:
         return
     
-    logger.info(f"👑 ادمین درخواست بررسی وضعیت دیتابیس کرد")
+    logger.info(f"👑 admin requested database status check")
     
     status_lines = ["📁 <b>وضعیت فایل‌های دیتابیس:</b>\n"]
     
@@ -5245,7 +5260,7 @@ async def cmd_cleanup_backups(message: Message):
     if message.from_user.id != ADMIN_ID_INT:
         return
     
-    logger.info("🧹 شروع پاکسازی بکاپ‌های قدیمی...")
+    logger.info('🧹 starting cleanup of old backups...')
     
     cleanup_report = []
     data_dir = DATA_DIR
@@ -5256,7 +5271,7 @@ async def cmd_cleanup_backups(message: Message):
                 try:
                     os.remove(file_path)
                     cleanup_report.append(f"🗑 حذف شد: {file}")
-                    logger.info(f"حذف فایل اضافی: {file}")
+                    logger.info(f"Removed extra file: {file}")
                 except Exception as e:
                     cleanup_report.append(f"❌ خطا در حذف {file}: {e}")
     backup_dir = os.path.join(data_dir, "backups")
@@ -5269,7 +5284,7 @@ async def cmd_cleanup_backups(message: Message):
             import shutil
             shutil.copy2(backup_file, main_file)
             cleanup_report.append(f"🔄 بازیابی شد: {name}.json از بکاپ")
-            logger.warning(f"فایل {name}.json از بکاپ بازیابی شد")
+            logger.warning(f"File {name}.json restored from backup")
     if cleanup_report:
         report_text = "🧹 <b>گزارش پاکسازی:</b>\n\n" + "\n".join(cleanup_report)
     else:
@@ -5308,26 +5323,26 @@ def load_ready_packages():
     
     try:
         packages_data = configs_pool.get('ready_packages', {})
-        logger.info(f"📦 داده‌های ذخیره شده در configs_pool: {bool(packages_data)}")
+        logger.info(f"📦 data saved in configs_pool: {bool(packages_data)}")
         if packages_data:
-            logger.info(f"📦 تعداد دسته‌ها در دیتابیس: {len(packages_data.get('categories', []))}")
+            logger.info(f"📦 Number of categories in the database: {len(packages_data.get('categories', []))}")
             for cat in packages_data.get('categories', []):
                 inbound_ids = cat.get('inbound_ids', [])
-                logger.info(f"  📡 دسته {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
+                logger.info(f"  📡 Category {cat.get('name')}: inbounds = {inbound_ids if inbound_ids else 'default'}")
         if packages_data and packages_data.get('categories') and len(packages_data.get('categories', [])) > 0:
             READY_PACKAGES.update(packages_data)
-            logger.info(f"📦 بسته‌های آماده از دیتابیس بارگذاری شد: {len(READY_PACKAGES.get('categories', []))} دسته")
+            logger.info(f"📦 Ready-made packages loaded from the database: {len(READY_PACKAGES.get('categories', []))} category")
             total_packages = 0
             for cat in READY_PACKAGES.get('categories', []):
                 total_packages += len(cat.get('packages', []))
                 inbound_ids = cat.get('inbound_ids', [])
-                logger.info(f"  📡 {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
+                logger.info(f"  📡 {cat.get('name')}: inbounds = {inbound_ids if inbound_ids else 'default'}")
             
-            logger.info(f"📦 تعداد کل بسته‌ها: {total_packages}")
-            logger.info(f"🕐 آخرین بروزرسانی: {READY_PACKAGES.get('last_updated', 'N/A')}")
+            logger.info(f"📦 Total number of packages: {total_packages}")
+            logger.info(f"🕐 Last updated: {READY_PACKAGES.get('last_updated', 'N/A')}")
             
         else:
-            logger.warning("⚠️ هیچ داده‌ای برای بسته‌های آماده در دیتابیس یافت نشد، از مقادیر پیش‌فرض استفاده می‌شود")
+            logger.warning('⚠️ No ready-made package data found in the database; using default values')
             default_categories = [
                 {
                     'id': 1,
@@ -5368,10 +5383,10 @@ def load_ready_packages():
             }
             configs_pool['ready_packages'] = READY_PACKAGES
             save_all()
-            logger.info("📦 تنظیمات پیش‌فرض بسته‌های آماده ایجاد و در دیتابیس ذخیره شد")
+            logger.info('📦 Default ready-made package settings created and saved to the database')
             
     except Exception as e:
-        logger.error(f"❌ خطا در بارگذاری بسته‌های آماده: {e}")
+        logger.error(f"❌ Error loading ready-made packages: {e}")
         import traceback
         traceback.print_exc()
         READY_PACKAGES = {
@@ -5390,11 +5405,11 @@ def load_all_data():
     global READY_PACKAGES, USER_TEST_SETTINGS
     
     logger.info("=" * 60)
-    logger.info("🔄 شروع بارگذاری دیتابیس...")
+    logger.info('🔄 starting database loading...')
     for name, path in DB_FILES.items():
         exists = os.path.exists(path)
         size = os.path.getsize(path) if exists else 0
-        logger.info(f"📂 {name}: {path} - {'✅ وجود دارد' if exists else '❌ وجود ندارد'} ({size:,} bytes)")
+        logger.info(f"{name}: {path} - {'exists' if exists else 'not found'} ({size:,} bytes)")
     
     try:
         users_data = load_json(DB_FILES['users'], use_cache=False)
@@ -5419,10 +5434,10 @@ def load_all_data():
             BLACKLIST = set()
         ai_settings = configs_pool.get('ai_settings', {})
         AI_FEATURE_ENABLED = ai_settings.get('button_enabled', True)
-        logger.info(f"🤖 وضعیت دکمه AI: {'فعال' if AI_FEATURE_ENABLED else 'غیرفعال'}")
+        logger.info(f"AI button status: {'enabled' if AI_FEATURE_ENABLED else 'disabled'}")
         if 'shop_status' in configs_pool:
             SHOP_STATUS = configs_pool['shop_status']
-            logger.info(f"🛒 وضعیت فروش: {'باز' if SHOP_STATUS.get('open', True) else 'بسته'}")
+            logger.info(f"🛒 Sales status: {'open' if SHOP_STATUS.get('open', True) else 'closed'}")
         else:
             SHOP_STATUS = {
                 'open': True, 
@@ -5432,8 +5447,8 @@ def load_all_data():
         test_settings = configs_pool.get('test_service', {})
         if test_settings:
             TEST_SERVICE_STATUS.update(test_settings)
-            logger.info(f"🧪 تنظیمات تست بارگذاری شد: {'فعال' if TEST_SERVICE_STATUS.get('enabled') else 'غیرفعال'}")
-            logger.info(f"🧪 اینباندهای تست: {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
+            logger.info(f"🧪 Test settings loaded: {'enabled' if TEST_SERVICE_STATUS.get('enabled') else 'disabled'}")
+            logger.info(f"🧪 Test inbounds: {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
         else:
             TEST_SERVICE_STATUS = {
                 'enabled': False,
@@ -5446,40 +5461,40 @@ def load_all_data():
                 'last_updated': datetime.now().isoformat()
             }
             configs_pool['test_service'] = TEST_SERVICE_STATUS
-            logger.info("🧪 تنظیمات پیش‌فرض تست ایجاد شد")
+            logger.info('🧪 Default test settings created')
         load_ready_packages()
         load_user_test_settings()# این تابع READY_PACKAGES را از configs_pool بارگذاری می‌کند
         for cat in READY_PACKAGES.get('categories', []):
             inbound_ids = cat.get('inbound_ids', [])
             if inbound_ids:
-                logger.info(f"📡 دسته {cat.get('name')} - اینباندها: {inbound_ids}")
+                logger.info(f"📡 Category {cat.get('name')} - inbounds: {inbound_ids}")
         load_test_usage()
         load_user_inbound_selections()
         logger.info("=" * 60)
-        logger.info(f"📊 نتایج بارگذاری:")
-        logger.info(f"  ✅ کاربران: {len(users)}")
-        logger.info(f"  ✅ سفارشات: {len(orders)}")
-        logger.info(f"  ✅ رفرال‌ها: {len(referrals)}")
-        logger.info(f"  ✅ کانفیگ‌ها: {len(configs_pool.get('configs', []))}")
-        logger.info(f"  ✅ بازخوردها: {len(feedbacks)}")
-        logger.info(f"  ✅ چت‌ها: {len(chats)}")
-        logger.info(f"  ✅ لیست سیاه: {len(BLACKLIST)}")
-        logger.info(f"  ✅ کاربران تست‌دهنده: {len(USER_TEST_USAGE)}")
-        logger.info(f"  ✅ وضعیت تست: {'فعال' if TEST_SERVICE_STATUS.get('enabled') else 'غیرفعال'}")
-        logger.info(f"  ✅ اینباندهای تست: {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
-        logger.info(f"  ✅ بسته‌های آماده: {len(READY_PACKAGES.get('categories', []))} دسته")
+        logger.info(f"📊 load results:")
+        logger.info(f"  users: {len(users)}")
+        logger.info(f"  orders: {len(orders)}")
+        logger.info(f"  referrals: {len(referrals)}")
+        logger.info(f"  configs: {len(configs_pool.get('configs', []))}")
+        logger.info(f"  feedback: {len(feedbacks)}")
+        logger.info(f"  chats: {len(chats)}")
+        logger.info(f"  blacklist: {len(BLACKLIST)}")
+        logger.info(f"  test users: {len(USER_TEST_USAGE)}")
+        logger.info(f"Test status: {'enabled' if TEST_SERVICE_STATUS.get('enabled') else 'disabled'}")
+        logger.info(f"  test inbounds: {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
+        logger.info(f"  ready packages: {len(READY_PACKAGES.get('categories', []))} category")
         logger.info("=" * 60)
         if len(users) == 0 and len(orders) == 0:
-            logger.warning("⚠️ همه دیتابیس‌ها خالی هستند! تلاش برای بازیابی از بکاپ کامل...")
+            logger.warning('⚠️ All databases are empty! Attempting full backup recovery...')
             try_full_restore_from_backup()
         _init_default_settings_if_needed()
         migrate_old_data()
         
-        logger.info("✅ بارگذاری کامل دیتابیس با موفقیت انجام شد")
+        logger.info('✅ complete database loading succeeded')
         return True
         
     except Exception as e:
-        logger.error(f"❌ خطا در بارگذاری دیتابیس: {e}", exc_info=True)
+        logger.error(f"❌ Error loading database: {e}", exc_info=True)
         _init_empty_databases()
         return False
     
@@ -5493,13 +5508,13 @@ def load_test_usage():
         if os.path.exists(test_file):
             with open(test_file, 'r', encoding='utf-8') as f:
                 USER_TEST_USAGE = json.load(f)
-            logger.info(f"✅ اطلاعات تست کاربران بارگذاری شد: {len(USER_TEST_USAGE)} کاربر")
+            logger.info(f"✅ User test information loaded: {len(USER_TEST_USAGE)} user")
         else:
             USER_TEST_USAGE = {}
             with open(test_file, 'w', encoding='utf-8') as f:
                 json.dump({}, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        logger.error(f"❌ خطا در بارگذاری تست: {e}")
+        logger.error(f"❌ Error loading tests: {e}")
         USER_TEST_USAGE = {}
 
 def save_test_usage():
@@ -5510,7 +5525,7 @@ def save_test_usage():
             json.dump(USER_TEST_USAGE, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره تست: {e}")
+        logger.error(f"❌ Error saving tests: {e}")
         return False
 
 def try_full_restore_from_backup():
@@ -5521,13 +5536,13 @@ def try_full_restore_from_backup():
     backups = [f for f in os.listdir(backup_dir) if f.startswith('full_backup_') and f.endswith('.json')]
     
     if not backups:
-        logger.warning("⚠️ هیچ بکاپ کاملی یافت نشد")
+        logger.warning('⚠️ no complete backup found')
         return False
     
     backups.sort(reverse=True)
     latest_backup = os.path.join(backup_dir, backups[0])
     
-    logger.info(f"🔄 تلاش برای بازیابی کامل از بکاپ: {backups[0]}")
+    logger.info(f"🔄 attempting full restore from backup: {backups[0]}")
     
     try:
         with open(latest_backup, 'r', encoding='utf-8') as f:
@@ -5535,16 +5550,16 @@ def try_full_restore_from_backup():
         
         if data.get('users'):
             users = data['users']
-            logger.info(f"✅ {len(users)} کاربر از بکاپ بازیابی شد")
+            logger.info(f"✅ {len(users)} user restored from backup")
         if data.get('orders'):
             orders = data['orders']
-            logger.info(f"✅ {len(orders)} سفارش از بکاپ بازیابی شد")
+            logger.info(f"✅ {len(orders)} order restored from backup")
         if data.get('referrals'):
             referrals = data['referrals']
-            logger.info(f"✅ {len(referrals)} رفرال از بکاپ بازیابی شد")
+            logger.info(f"✅ {len(referrals)} referral restored from backup")
         if data.get('configs'):
             configs_pool = data['configs']
-            logger.info(f"✅ {len(configs_pool.get('configs', []))} کانفیگ از بکاپ بازیابی شد")
+            logger.info(f"✅ {len(configs_pool.get('configs', []))} config restored from backup")
         if data.get('feedback'):
             feedbacks = data['feedback']
         if data.get('chats'):
@@ -5554,16 +5569,16 @@ def try_full_restore_from_backup():
         if data.get('daily_usage'):
             try:
                 usage_store.import_backup_data(data['daily_usage'])
-                logger.info("✅ اطلاعات مصرف روزانه از بکاپ بازیابی شد")
+                logger.info('✅ Daily usage data restored from backup')
             except Exception as ex_u:
-                logger.warning(f"⚠️ خطا در بازیابی مصرف روزانه از بکاپ: {ex_u}")
+                logger.warning(f"⚠️ Error restoring daily usage from backup: {ex_u}")
         save_all()
         
-        logger.info(f"✅ بازیابی کامل از بکاپ با موفقیت انجام شد")
+        logger.info(f"✅ complete backup restore succeeded")
         return True
         
     except Exception as e:
-        logger.error(f"❌ خطا در بازیابی کامل از بکاپ: {e}")
+        logger.error(f"❌ Error performing full backup recovery: {e}")
         return False
 
 def _init_default_settings_if_needed():
@@ -5571,21 +5586,21 @@ def _init_default_settings_if_needed():
     global configs_pool, TEST_SERVICE_STATUS
     if 'configs' not in configs_pool:
         configs_pool['configs'] = []
-        logger.info("📦 آرایه configs به configs_pool اضافه شد")
+        logger.info('📦 configs array added to configs_pool')
     
     if 'last_id' not in configs_pool:
         configs_pool['last_id'] = 0
-        logger.info("🔢 last_id در configs_pool تنظیم شد")
+        logger.info('🔢 last_id set in configs_pool')
         
     if 'default_inbound_id' not in configs_pool:
         configs_pool['default_inbound_id'] = None
-        logger.info("⚙️ default_inbound_id به configs_pool اضافه شد")
+        logger.info('⚙️ default_inbound_id added to configs_pool')
     if 'ai_settings' not in configs_pool:
         configs_pool['ai_settings'] = {
             'button_enabled': True,
             'last_updated': datetime.now().isoformat()
         }
-        logger.info("⚙️ ai_settings به configs_pool اضافه شد (پیش‌فرض: فعال)")
+        logger.info('⚙️ ai_settings added to configs_pool (default: active)')
     if 'test_service' not in configs_pool:
         configs_pool['test_service'] = {
             'enabled': False,
@@ -5596,7 +5611,7 @@ def _init_default_settings_if_needed():
             'last_updated': datetime.now().isoformat()
         }
         TEST_SERVICE_STATUS = configs_pool['test_service']
-        logger.info("🧪 test_service به configs_pool اضافه شد (پیش‌فرض: غیرفعال)")
+        logger.info('🧪 test_service added to configs_pool (default: disabled)')
     defaults = {
         'price_settings': {
             'base_price': 20000,
@@ -5620,12 +5635,12 @@ def _init_default_settings_if_needed():
         if key not in configs_pool:
             configs_pool[key] = default_value
             modified = True
-            logger.info(f"⚙️ {key} به configs_pool اضافه شد (مقدار پیش‌فرض)")
+            logger.info(f"⚙️ {key} added to configs_pool (default value)")
     if modified:
         save_json(DB_FILES['configs'], configs_pool)
-        logger.info(f"✅ تنظیمات پیش‌فرض در {DB_FILES['configs']} ذخیره شد")
+        logger.info(f"✅ default settings saved in {DB_FILES['configs']} saved")
     else:
-        logger.debug("✅ همه تنظیمات قبلاً وجود داشتند - تغییری اعمال نشد")
+        logger.debug('✅ all settings existed already - no changes applied')
         
     
     
@@ -5636,7 +5651,7 @@ async def cmd_check_data(message: Message):
     if message.from_user.id != ADMIN_ID_INT:
         return
     
-    logger.info(f"👑 ادمین درخواست بررسی داده‌ها کرد")
+    logger.info(f"👑 admin requested data check")
     
     report = []
     report.append("📊 <b>بررسی فایل‌های دیتابیس:</b>\n")
@@ -5694,7 +5709,7 @@ def _init_default_settings():
         if key not in configs_pool:
             configs_pool[key] = default_value
             modified = True
-            logger.info(f"⚙️ {key} به configs_pool اضافه شد")
+            logger.info(f"⚙️ {key} added to configs_pool")
     
     if modified:
         save_json(DB_FILES['configs'], configs_pool)
@@ -5712,19 +5727,19 @@ def _init_empty_databases():
     BLACKLIST = set()
     
     _init_default_settings()
-    logger.warning("⚠️ دیتابیس‌ها با مقادیر پیش‌فرض مقداردهی شدند")
+    logger.warning('⚠️ databases initialized with default values')
 
 
 
     
 
 
-logger.info(f"بارگذاری کامل شد - کاربران: {len(users)}, سفارشات: {len(orders)}, کانفیگ‌ها: {len(configs_pool.get('configs', []))}")
+logger.info(f"loading complete - users: {len(users)}, orders: {len(orders)}, configs: {len(configs_pool.get('configs', []))}")
 
 def save_all(save_blacklist: bool = True):
     """ذخیره تمام دیتابیس‌ها با لاگ کامل"""
     start_time = time.time()
-    logger.debug("💾 شروع ذخیره‌سازی تمام دیتابیس‌ها...")
+    logger.debug('💾 starting save of all databases...')
     
     db_mapping = {
         'users': (DB_FILES['users'], users),
@@ -5747,31 +5762,31 @@ def save_all(save_blacklist: bool = True):
                 success = False
                 failed_files.append(name)
         except Exception as e:
-            logger.error(f"❌ خطا در ذخیره {name}: {e}")
+            logger.error(f"❌ error saving {name}: {e}")
             success = False
             failed_files.append(name)
     try:
         configs_pool['ready_packages'] = READY_PACKAGES
         if save_json(DB_FILES['configs'], configs_pool):
             saved_count += 1
-            logger.info("📦 بسته‌های آماده در configs_pool ذخیره شد")
+            logger.info('📦 Ready-made packages saved in configs_pool')
         else:
             success = False
             failed_files.append('configs (ready_packages)')
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره بسته‌های آماده: {e}")
+        logger.error(f"❌ Error saving ready-made packages: {e}")
         success = False
         failed_files.append('ready_packages')
     try:
         configs_pool['test_service'] = TEST_SERVICE_STATUS
         if save_json(DB_FILES['configs'], configs_pool):
             saved_count += 1
-            logger.info("🧪 تنظیمات تست سرویس در configs_pool ذخیره شد")
+            logger.info('🧪 Service test settings saved in configs_pool')
         else:
             success = False
             failed_files.append('configs (test_service)')
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره تنظیمات تست: {e}")
+        logger.error(f"❌ Error saving test settings: {e}")
         success = False
         failed_files.append('test_service')
     
@@ -5788,23 +5803,23 @@ def save_all(save_blacklist: bool = True):
                 success = False
                 failed_files.append('blacklist')
         except Exception as e:
-            logger.error(f"❌ خطا در ذخیره blacklist: {e}")
+            logger.error(f"❌ Error saving blacklist: {e}")
             success = False
             failed_files.append('blacklist')
     try:
         save_test_usage()
         saved_count += 1
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره test_usage: {e}")
+        logger.error(f"❌ Error saving test_usage: {e}")
         success = False
         failed_files.append('test_usage')
     
     elapsed = time.time() - start_time
     
     if success:
-        logger.info(f"✅ همه دیتابیس‌ها ذخیره شدند ({saved_count} فایل، {elapsed:.2f} ثانیه)")
+        logger.info(f"✅ all databases saved ({saved_count} files, {elapsed:.2f} seconds)")
     else:
-        logger.error(f"❌ خطا در ذخیره {len(failed_files)} فایل: {failed_files}")
+        logger.error(f"❌ error saving {len(failed_files)} file: {failed_files}")
     
     return success
 
@@ -5819,7 +5834,7 @@ async def errors_handler(event: types.ErrorEvent):
     
     # ✅ نادیده گرفتن خطاهای timeout در callback.answer
     if "query is too old" in error_str or "query ID is invalid" in error_str:
-        logger.debug(f"callback.answer timeout - نادیده گرفته شد")
+        logger.debug(f"callback.answer timeout - ignored")
         return True  # نکش ربات رو
     
     # بقیه‌ی خطاها
@@ -5832,7 +5847,7 @@ async def errors_handler(event: types.ErrorEvent):
 
 📝 آپدیت: {str(update)[:200]}
 """
-    logger.error(f"خطا: {exception}", exc_info=True)
+    logger.error(f"Error: {exception}", exc_info=True)
     try:
         await bot.send_message(ADMIN_ID_INT, error_text, parse_mode=ParseMode.HTML)
     except:
@@ -5848,14 +5863,14 @@ async def cmd_start(message: Message):
         try:
             await message.react([ReactionTypeEmoji(emoji=START_REACTION_EMOJI)])
         except Exception as e:
-            logger.debug(f"خطا در ثبت ری‌اکشن استارت: {e}")
+            logger.debug(f"Error recording start reaction: {e}")
     await auto_pause_user_ticket_if_active(user_id)
     if await _is_admin_broadcasting(message):
         await admin_broadcast_send(message)
         return
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id, message)
-        logger.warning(f"⛔ کاربر مسدود {user_id} دستور /start را اجرا کرد")
+        logger.warning(f"⛔ blocked user {user_id} executed /start command")
         return
     user_name = message.from_user.first_name or message.from_user.username or "کاربر"
     user_name_escaped = html.escape(user_name)
@@ -5881,7 +5896,7 @@ async def cmd_start(message: Message):
                     referred_by = ref_id
                     await process_referral(user_id, ref_id)
                 else:
-                    logger.warning(f"⚠️ رفرال دهنده {ref_id} در دیتابیس یافت نشد")
+                    logger.warning(f"⚠️ Referrer {ref_id}not found in database")
         
         if log_system:
             asyncio.create_task(log_system.log_user_register(user_id, user_name, user_username))
@@ -5916,7 +5931,7 @@ async def cmd_start(message: Message):
                 'admin_notified': False,
                 'last_request_time': None
             }
-            logger.info(f"👤 کاربر جدید ایجاد شد: {user_name} (ID: {user_id}) - وضعیت: approved (خودکار)")
+            logger.info(f"👤 New user created: {user_name} (ID: {user_id}) - status: approved (automatic)")
         else:
             users[uid] = {
                 'id': user_id,
@@ -5948,7 +5963,7 @@ async def cmd_start(message: Message):
                 'admin_notified': False,
                 'last_request_time': None
             }
-            logger.info(f"👤 کاربر جدید ایجاد شد: {user_name} (ID: {user_id}) - وضعیت: pending (در انتظار تایید)")
+            logger.info(f"👤 New user created: {user_name} (ID: {user_id}) - status: pending (awaiting approval)")
         
         save_json(DB_FILES['users'], users)
         
@@ -5985,19 +6000,19 @@ async def cmd_start(message: Message):
             users[uid]['registration_status'] = 'approved'
             users[uid]['admin_notified'] = False
             updated = True
-            logger.info(f"✅ کاربر {user_id} به دلیل غیرفعال بودن تایید دستی، خودکار تایید شد")
+            logger.info(f"✅ user {user_id} automatically approved because manual approval is disabled")
         if users[uid].get('has_purchased', False) and not users[uid].get('approved_by_admin', False):
             users[uid]['approved_by_admin'] = True
             users[uid]['approved_date'] = datetime.now().isoformat()
             users[uid]['registration_status'] = 'approved'
             users[uid]['admin_notified'] = False
             updated = True
-            logger.info(f"✅ کاربر {user_id} به دلیل داشتن خرید، خودکار تایید شد")
+            logger.info(f"✅ user {user_id}auto-approved due to existing purchase")
         
         if updated:
             users[uid]['updated_at'] = datetime.now().isoformat()
             save_json(DB_FILES['users'], users)
-            logger.info(f"📝 اطلاعات کاربر {user_id} بروزرسانی و ذخیره شد")
+            logger.info(f"📝 User information for {user_id} updated and saved")
     
     user = users[uid]
     lang = user.get('lang', 'fa')
@@ -6024,7 +6039,7 @@ async def cmd_start(message: Message):
                 users[uid]['verified'] = False
                 users[uid]['updated_at'] = datetime.now().isoformat()
                 save_json(DB_FILES['users'], users)
-                logger.warning(f"⚠️ کاربر {user_id} از کانال لفت داده، صفحه عضویت نمایش داده شد")
+                logger.warning(f"⚠️ user {user_id} left the channel; membership page displayed")
             
             await show_verification_page(message, user_id, lang)
             return False
@@ -6034,7 +6049,7 @@ async def cmd_start(message: Message):
                 users[uid]['verified'] = True
                 users[uid]['updated_at'] = datetime.now().isoformat()
                 save_json(DB_FILES['users'], users)
-                logger.info(f"✅ کاربر {user_id} عضو همه کانال‌هاست، verified به True تغییر کرد")
+                logger.info(f"✅ user {user_id} is a member of all channels; verified changed to True")
             
             return True
     if not approval_enabled:
@@ -6044,7 +6059,7 @@ async def cmd_start(message: Message):
             users[uid]['approved_date'] = datetime.now().isoformat()
             users[uid]['updated_at'] = datetime.now().isoformat()
             save_json(DB_FILES['users'], users)
-            logger.info(f"✅ کاربر {user_id} خودکار تایید شد (تایید دستی غیرفعال)")
+            logger.info(f"✅ user {user_id} automatically approved (manual approval disabled)")
         can_continue = await check_force_join_and_show()
         if not can_continue:
             return
@@ -6067,9 +6082,9 @@ async def cmd_start(message: Message):
                     'coupon_discount': coupon_discount if coupon_discount else 0,
                     'coupon_applied': True
                 }
-                logger.info(f"🏷️ کوپن {coupon_code} در user_states کاربر {user_id} ذخیره شد")
+                logger.info(f"🏷️ coupon {coupon_code} in user_states for user {user_id} saved")
             else:
-                logger.warning(f"⚠️ کوپن {coupon_code} نامعتبر: {reason}")
+                logger.warning(f"⚠️ Coupon {coupon_code} invalid: {reason}")
                 clear_coupon_from_user_db(user_id)
         else:
             user_state = user_states.get(user_id, {})
@@ -6114,7 +6129,7 @@ async def cmd_start(message: Message):
         users[uid]['admin_notified'] = False
         users[uid]['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
-        logger.info(f"🔄 وضعیت کاربر {user_id} از {status} به pending تغییر کرد (درخواست مجدد)")
+        logger.info(f"🔄 user status {user_id} from {status} changed to pending (retry request)")
     if lang == "fa":
         text = f"""
 {premium_emoji('loading', '🔹')}  <b>به جمع ما خوش آمدید</b>
@@ -6163,10 +6178,10 @@ async def check_membership_detailed(user_id: int) -> dict:
     """
     بررسی دقیق عضویت کاربر در همه کانال‌ها
     """
-    logger.info(f"🔍 شروع بررسی عضویت کاربر {user_id}")
+    logger.info(f"🔍 starting check of user membership {user_id}")
     
     if user_id == ADMIN_ID_INT:
-        logger.info(f"👑 کاربر {user_id} ادمین است")
+        logger.info(f"👑 user {user_id} is admin")
         return {
             'is_all_joined': True,
             'not_joined': [],
@@ -6178,7 +6193,7 @@ async def check_membership_detailed(user_id: int) -> dict:
     settings = configs_pool.get('force_join_settings', {})
     
     if not settings.get('enabled', False):
-        logger.info(f"ℹ️ عضویت اجباری غیرفعال است")
+        logger.info(f"ℹ️ mandatory membership is disabled")
         return {
             'is_all_joined': True,
             'not_joined': [],
@@ -6190,7 +6205,7 @@ async def check_membership_detailed(user_id: int) -> dict:
     channels = settings.get('channels', [])
     
     if not channels:
-        logger.info(f"ℹ️ هیچ کانالی ثبت نشده است")
+        logger.info(f"ℹ️ no channels registered")
         return {
             'is_all_joined': True,
             'not_joined': [],
@@ -6211,7 +6226,7 @@ async def check_membership_detailed(user_id: int) -> dict:
         try:
             channel_id = ch.get('id')
             channel_name = ch.get('name', channel_id)
-            logger.info(f"📢 بررسی کانال {channel_name} (ID: {channel_id})")
+            logger.info(f"📢 Checking channel {channel_name} (ID: {channel_id})")
             if isinstance(channel_id, str) and channel_id.startswith('@'):
                 chat_id = channel_id
             elif isinstance(channel_id, str) and channel_id.lstrip('-').isdigit():
@@ -6219,7 +6234,7 @@ async def check_membership_detailed(user_id: int) -> dict:
             elif isinstance(channel_id, int):
                 chat_id = channel_id
             else:
-                logger.error(f"❌ فرمت نامعتبر channel_id: {channel_id}")
+                logger.error(f"❌ Invalid channel_id format: {channel_id}")
                 result['is_all_joined'] = False
                 result['not_joined'].append(ch)
                 result['details'].append({
@@ -6233,7 +6248,7 @@ async def check_membership_detailed(user_id: int) -> dict:
             member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
             status = member.status
             
-            logger.info(f"📊 وضعیت کاربر در {channel_name}: {status}")
+            logger.info(f"📊 User status in {channel_name}: {status}")
             
             channel_detail = {
                 'channel_id': channel_id,
@@ -6250,13 +6265,13 @@ async def check_membership_detailed(user_id: int) -> dict:
                 
                 if status == 'left':
                     result['left_channels'].append(channel_name)
-                    logger.warning(f"🚪 کاربر از {channel_name} لفت داده")
+                    logger.warning(f"🚪 User left {channel_name} left")
                 elif status == 'kicked':
                     result['kicked_channels'].append(channel_name)
-                    logger.warning(f"⛔ کاربر از {channel_name} بن شده")
+                    logger.warning(f"⛔ User banned from {channel_name} was banned")
                     
         except Exception as e:
-            logger.error(f"❌ خطا در بررسی عضویت کاربر {user_id} در کانال {channel_id}: {e}")
+            logger.error(f"❌ Error checking user membership {user_id} in channel {channel_id}: {e}")
             result['is_all_joined'] = False
             result['not_joined'].append(ch)
             result['details'].append({
@@ -6266,7 +6281,7 @@ async def check_membership_detailed(user_id: int) -> dict:
                 'is_member': False
             })
     
-    logger.info(f"📋 نتیجه نهایی بررسی: is_all_joined={result['is_all_joined']}")
+    logger.info(f"📋 final check result: is_all_joined={result['is_all_joined']}")
     
     return result
 
@@ -6387,7 +6402,7 @@ async def request_approval(callback: CallbackQuery):
     users[uid]['admin_notified'] = True
     save_json(DB_FILES['users'], users)
     
-    logger.info(f"📨 درخواست تایید برای کاربر {user_id} ثبت و به ادمین ارسال شد")
+    logger.info(f"📨 confirmation request for user {user_id} registered and sent to admin")
     
     try:
         await callback.answer()
@@ -6435,7 +6450,7 @@ Use <b>/start</b> again if you wish to try again.
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     lang = get_user(message.from_user.id).get('lang', 'fa')
-    logger.debug(f"کاربر {message.from_user.id} راهنما را مشاهده می‌کند")
+    logger.debug(f"User {message.from_user.id} viewed the guide")
     
     if lang == "fa":
         text = f"""
@@ -6499,7 +6514,7 @@ async def block_unauthorized(message: Message, user_id: int) -> bool:
     if user_id == ADMIN_ID_INT:
         return False
     if user_id in BLACKLIST:
-        logger.warning(f"⛔ کاربر مسدود {user_id} تلاش به استفاده از ربات کرد")
+        logger.warning(f"⛔ blocked user {user_id} attempted to use bot")
         await notify_blacklisted_user(user_id, message)
         return True
     
@@ -6514,7 +6529,7 @@ async def notify_blacklisted_user(user_id: int, message: Message = None):
             support_contact = SUPPORT_USERNAME
         else:
             support_contact = "@my_name_is_navid"
-            logger.warning(f"⚠️ SUPPORT_USERNAME خالی است، از مقدار پیش‌فرض استفاده شد: {support_contact}")
+            logger.warning(f"⚠️ SUPPORT_USERNAME is empty; using the default value: {support_contact}")
         emoji_result = premium_emoji('access_denied', '⛔')
         logger.info(f"🔍 premium_emoji('access_denied', '⛔') = '{emoji_result}'")
         
@@ -6536,7 +6551,7 @@ You are blacklisted and cannot use this bot.
 Contact support if needed:
 {support_contact}
 """
-        logger.info(f"🔍 متن ارسالی: {text[:200]}...")
+        logger.info(f"🔍 sent text: {text[:200]}...")
         
         support_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
@@ -6550,10 +6565,10 @@ Contact support if needed:
         else:
             await bot.send_message(user_id, text, reply_markup=support_keyboard, parse_mode=ParseMode.HTML)
             
-        logger.info(f"📨 پیام مسدودیت به کاربر {user_id} ارسال شد")
+        logger.info(f"📨 block message sent to user {user_id} sent")
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال پیام به کاربر مسدود {user_id}: {e}")
+        logger.error(f"❌ Error sending message to blocked user {user_id}: {e}")
         return False
 
 async def get_user_info_from_telegram(user_id: int) -> dict:
@@ -6573,7 +6588,7 @@ async def get_user_info_from_telegram(user_id: int) -> dict:
             'full_name': html.escape(full_name_raw)
         }
     except Exception as e:
-        logger.error(f"خطا در دریافت اطلاعات کاربر {user_id}: {e}")
+        logger.error(f"Error retrieving user information {user_id}: {e}")
         return {
             'id': user_id,
             'first_name': 'نامشخص',
@@ -6595,10 +6610,10 @@ def save_blacklist():
         }
         with open(blacklist_file, 'w', encoding='utf-8') as f:
             json.dump(blacklist_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"✅ لیست سیاه ذخیره شد - {len(BLACKLIST)} کاربر")
+        logger.info(f"✅ blacklist saved - {len(BLACKLIST)} user")
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره لیست سیاه: {e}")
+        logger.error(f"❌ Error saving blacklist: {e}")
         return False
 
 
@@ -6613,15 +6628,15 @@ def load_blacklist():
             users_list = data.get('users', [])
             BLACKLIST = set(users_list)
             
-            logger.info(f"✅ لیست سیاه بارگذاری شد - {len(BLACKLIST)} کاربر")
+            logger.info(f"✅ Blacklist loaded - {len(BLACKLIST)} user")
             if BLACKLIST:
-                logger.info(f"📋 کاربران مسدود: {BLACKLIST}")
+                logger.info(f"📋 Blocked users: {BLACKLIST}")
         else:
             BLACKLIST = set()
-            logger.info("📭 فایل لیست سیاه وجود ندارد - ایجاد set خالی")
+            logger.info('📭 Blacklist file does not exist - creating an empty set')
             save_blacklist()
     except Exception as e:
-        logger.error(f"❌ خطا در بارگذاری لیست سیاه: {e}")
+        logger.error(f"❌ Error loading blacklist: {e}")
         BLACKLIST = set()
 
 def remove_from_blacklist(user_id: int) -> bool:
@@ -6634,7 +6649,7 @@ def remove_from_blacklist(user_id: int) -> bool:
             'last_updated': datetime.now().isoformat(),
             'count': len(BLACKLIST)
         })
-        logger.info(f"✅ کاربر {user_id} از لیست سیاه خارج شد - تعداد: {len(BLACKLIST)}")
+        logger.info(f"✅ user {user_id}removed from blacklist - count: {len(BLACKLIST)}")
         return True
     return False
 
@@ -6645,7 +6660,7 @@ def get_user(user_id: int, username: str = None) -> dict:
     if uid not in users:
         user_name = username or f"کاربر_{user_id}"
         
-        logger.info(f"👤 ایجاد کاربر جدید: {user_id} - نام: {user_name}")
+        logger.info(f"👤 creating new user: {user_id} - name: {user_name}")
         manual_approval = configs_pool.get('manual_approval_settings', {})
         approval_enabled = manual_approval.get('enabled', False)
         is_admin = (user_id == ADMIN_ID_INT)
@@ -6682,9 +6697,9 @@ def get_user(user_id: int, username: str = None) -> dict:
         save_json(DB_FILES['users'], users)
         
         if is_admin:
-            logger.info(f"👑 کاربر ادمین {user_id} ایجاد شد - وضعیت: approved")
+            logger.info(f"👑 Admin user {user_id} created - status: approved")
         else:
-            logger.info(f"✅ کاربر جدید {user_id} ایجاد شد - وضعیت: pending")
+            logger.info(f"✅ New user {user_id} created - status: pending")
         
         return users[uid]
     
@@ -6738,7 +6753,7 @@ def get_user(user_id: int, username: str = None) -> dict:
             user['approved_date'] = datetime.now().isoformat()
             user['registration_status'] = 'approved'
             modified = True
-            logger.info(f"👑 کاربر ادمین {user_id} تایید شد")
+            logger.info(f"👑 Admin user {user_id} approved")
     
     # ✅ تایید خودکار کاربران دارای خرید
     if user.get('has_purchased', False) and not user.get('approved_by_admin', False):
@@ -6746,7 +6761,7 @@ def get_user(user_id: int, username: str = None) -> dict:
         user['approved_date'] = datetime.now().isoformat()
         user['registration_status'] = 'approved'
         modified = True
-        logger.info(f"✅ کاربر {user_id} به دلیل داشتن خرید، خودکار تایید شد")
+        logger.info(f"✅ user {user_id}auto-approved due to existing purchase")
     
     # ✅ تایید خودکار وقتی تایید دستی غیرفعال است
     if not user.get('approved_by_admin', False) and user_id != ADMIN_ID_INT:
@@ -6756,7 +6771,7 @@ def get_user(user_id: int, username: str = None) -> dict:
             user['approved_date'] = datetime.now().isoformat()
             user['registration_status'] = 'approved'
             modified = True
-            logger.info(f"✅ کاربر {user_id} به دلیل غیرفعال بودن تایید دستی، خودکار تایید شد")
+            logger.info(f"✅ user {user_id} automatically approved because manual approval is disabled")
     
     # ✅✅✅ بررسی خودکار کوپن - مهمترین بخش!
     coupon_code = user.get('coupon_code')
@@ -6772,7 +6787,7 @@ def get_user(user_id: int, username: str = None) -> dict:
         if coupon_code not in COUPONS:
             coupon_valid = False
             invalid_reason = "در لیست کوپن‌ها نیست"
-            logger.warning(f"⚠️ کوپن {coupon_code} در لیست کوپن‌ها نیست - از کاربر {user_id} پاک می‌شود")
+            logger.warning(f"⚠️ Coupon {coupon_code} is not in the coupon list - removing from user {user_id} will be removed")
         else:
             coupon = COUPONS[coupon_code]
             
@@ -6780,7 +6795,7 @@ def get_user(user_id: int, username: str = None) -> dict:
             if coupon.get('status') != 'active':
                 coupon_valid = False
                 invalid_reason = f"وضعیت: {coupon.get('status')}"
-                logger.warning(f"⚠️ کوپن {coupon_code} غیرفعال است ({coupon.get('status')}) - از کاربر {user_id} پاک می‌شود")
+                logger.warning(f"⚠️ Coupon {coupon_code} is inactive ({coupon.get('status')}) - from user {user_id} will be removed")
             
             # ✅ 3. بررسی تاریخ انقضا
             if coupon_valid:
@@ -6793,9 +6808,9 @@ def get_user(user_id: int, username: str = None) -> dict:
                             invalid_reason = "منقضی شده"
                             coupon['status'] = 'expired'
                             save_coupons(COUPONS)
-                            logger.warning(f"⚠️ کوپن {coupon_code} منقضی شده - از کاربر {user_id} پاک می‌شود")
+                            logger.warning(f"⚠️ Coupon {coupon_code} expired - from user {user_id} will be removed")
                     except ValueError:
-                        logger.warning(f"⚠️ تاریخ نامعتبر برای کوپن {coupon_code}: {expiry_date}")
+                        logger.warning(f"⚠️ Invalid date for coupon {coupon_code}: {expiry_date}")
             
             # ✅ 4. بررسی تعداد استفاده
             if coupon_valid:
@@ -6807,7 +6822,7 @@ def get_user(user_id: int, username: str = None) -> dict:
                     invalid_reason = f"ظرفیت پر شده ({used_count}/{usage_limit})"
                     coupon['status'] = 'used'
                     save_coupons(COUPONS)
-                    logger.warning(f"⚠️ کوپن {coupon_code} به حداکثر استفاده رسیده - از کاربر {user_id} پاک می‌شود")
+                    logger.warning(f"⚠️ Coupon {coupon_code} reached the maximum usage limit - user {user_id} will be removed")
             if coupon_valid:
                 coupon_type = coupon.get('coupon_type', 'normal')
                 
@@ -6819,14 +6834,14 @@ def get_user(user_id: int, username: str = None) -> dict:
                     if user_used_count >= max_usage:
                         coupon_valid = False
                         invalid_reason = f"به حداکثر استفاده رسیده ({user_used_count}/{max_usage})"
-                        logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن ادمین {coupon_code} رسیده - پاک می‌شود")
+                        logger.warning(f"⚠️ user {user_id} reached the maximum uses for admin coupon {coupon_code} reached the limit - will be deleted")
                     else:
-                        logger.info(f"✅ کوپن ادمین {coupon_code} همچنان معتبر است ({user_used_count}/{max_usage})")
+                        logger.info(f"✅ Admin coupon {coupon_code} is still valid ({user_used_count}/{max_usage})")
                 else:
                     if user_id in coupon.get('used_by', []):
                         coupon_valid = False
                         invalid_reason = "قبلاً توسط کاربر استفاده شده"
-                        logger.warning(f"⚠️ کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده - پاک می‌شود")        
+                        logger.warning(f"⚠️ user {user_id} has already used coupon {coupon_code} uses - will be deleted")        
         if coupon_valid:
             if user_id not in user_states:
                 user_states[user_id] = {}
@@ -6836,7 +6851,7 @@ def get_user(user_id: int, username: str = None) -> dict:
                 user_states[user_id]['coupon_code'] = coupon_code
                 user_states[user_id]['coupon_discount'] = coupon_discount
                 user_states[user_id]['coupon_applied'] = True
-                logger.info(f"🏷️ کوپن {coupon_code} (تخفیف: {coupon_discount}%) از دیتابیس به user_states کاربر {user_id} لود شد")
+                logger.info(f"🏷️ coupon {coupon_code} (discount: {coupon_discount}%) from the database into user_states for user {user_id} loaded")
         else:
             user['coupon_code'] = None
             user['coupon_discount'] = 0
@@ -6847,7 +6862,7 @@ def get_user(user_id: int, username: str = None) -> dict:
                 user_states[user_id].pop('coupon_discount', None)
                 user_states[user_id].pop('coupon_applied', None)
             
-            logger.info(f"🗑️ کوپن {coupon_code} از کاربر {user_id} پاک شد - دلیل: {invalid_reason}")
+            logger.info(f"🗑️ coupon {coupon_code} from user {user_id} removed - reason: {invalid_reason}")
     else:
         if user_id in user_states:
             has_coupon_in_state = (
@@ -6858,11 +6873,11 @@ def get_user(user_id: int, username: str = None) -> dict:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
                 user_states[user_id].pop('coupon_applied', None)
-                logger.debug(f"کوپن از user_states کاربر {user_id} پاک شد (در دیتابیس نیست)")
+                logger.debug(f"Coupon from user {user_id} cleared (not in the database)")
     if modified:
         user['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
-        logger.debug(f"💾 تغییرات کاربر {user_id} ذخیره شد")
+        logger.debug(f"💾 user changes {user_id} saved")
     
     return user
 
@@ -6903,7 +6918,7 @@ def save_coupon_to_user_db(user_id: int) -> bool:
     
     # ✅ بررسی وجود کاربر
     if uid not in users:
-        logger.warning(f"⚠️ کاربر {user_id} در دیتابیس یافت نشد - کوپن ذخیره نشد")
+        logger.warning(f"⚠️ user {user_id}not found in database - coupon not saved")
         return False
     
     # ✅ دریافت اطلاعات کوپن از user_states
@@ -6913,7 +6928,7 @@ def save_coupon_to_user_db(user_id: int) -> bool:
     coupon_applied = user_state.get('coupon_applied', False)
     
     if not coupon_code:
-        logger.warning(f"⚠️ کوپنی در user_states کاربر {user_id} یافت نشد")
+        logger.warning(f"⚠️ coupon in user_states for user {user_id} not found")
         return False
     
     # ✅ اطمینان از وجود فیلدهای کوپن
@@ -6926,10 +6941,10 @@ def save_coupon_to_user_db(user_id: int) -> bool:
     
     try:
         save_json(DB_FILES['users'], users)
-        logger.info(f"✅ کوپن {coupon_code} در دیتابیس کاربر {user_id} ذخیره شد (تخفیف: {coupon_discount}%)")
+        logger.info(f"✅ coupon {coupon_code} saved in user database {user_id}saved (discount: {coupon_discount}%)")
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره کوپن در دیتابیس: {e}")
+        logger.error(f"❌ Error saving coupon to the database: {e}")
         return False
 
 def load_coupon_from_user_db(user_id: int) -> dict:
@@ -6953,14 +6968,14 @@ def load_coupon_from_user_db(user_id: int) -> dict:
         if coupon_applied and coupon_code:
             is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
             if is_valid:
-                logger.info(f"📁 [load_coupon_from_user_db] کوپن {coupon_code} از دیتابیس کاربر بازیابی شد - {reason}")
+                logger.info(f"📁 [load_coupon_from_user_db] Coupon {coupon_code} restored from the user\'s database - {reason}")
                 return {
                     'coupon_code': coupon_code,
                     'coupon_discount': coupon_discount,
                     'coupon_applied': True
                 }
             else:
-                logger.warning(f"⚠️ [load_coupon_from_user_db] کوپن {coupon_code} نامعتبر: {reason}")
+                logger.warning(f"⚠️ [load_coupon_from_user_db] Coupon {coupon_code} invalid: {reason}")
                 users[uid]['coupon_code'] = None
                 users[uid]['coupon_discount'] = 0
                 users[uid]['coupon_applied'] = False
@@ -6968,7 +6983,7 @@ def load_coupon_from_user_db(user_id: int) -> dict:
             
                 
     except Exception as e:
-        logger.error(f"❌ [load_coupon_from_user_db] خطا: {e}")
+        logger.error(f"❌ [load_coupon_from_user_db] Error: {e}")
     
     return result
 
@@ -6986,13 +7001,13 @@ def clear_coupon_from_user_db(user_id: int, force: bool = False) -> bool:
     
     # ✅ بررسی وجود کاربر
     if uid not in users:
-        logger.warning(f"⚠️ کاربر {user_id} در دیتابیس یافت نشد")
+        logger.warning(f"⚠️ user {user_id}not found in database")
         return False
     
     # ✅ بررسی اینکه آیا اصلاً کوپنی دارد
     current_coupon = users[uid].get('coupon_code')
     if not current_coupon and not users[uid].get('coupon_applied'):
-        logger.debug(f"کاربر {user_id} کوپنی ندارد")
+        logger.debug(f"User {user_id}has no coupon")
         return False
     
     # ✅ بررسی وضعیت کوپن (اگر force=False)
@@ -7009,19 +7024,19 @@ def clear_coupon_from_user_db(user_id: int, force: bool = False) -> bool:
                     try:
                         expiry_date = datetime.fromisoformat(expiry)
                         if expiry_date > datetime.now():
-                            logger.info(f"⏳ کوپن {current_coupon} هنوز فعال است (تا {expiry}) - پاک نشد")
+                            logger.info(f"⏳ Coupon {current_coupon} is still active (until {expiry}) - not deleted")
                             return False
                         else:
-                            logger.info(f"⌛ کوپن {current_coupon} منقضی شده - در حال پاک کردن")
+                            logger.info(f"⌛ Coupon {current_coupon} expired - deleting")
                     except ValueError:
-                        logger.warning(f"⚠️ تاریخ نامعتبر برای کوپن {current_coupon}: {expiry}")
+                        logger.warning(f"⚠️ Invalid date for coupon {current_coupon}: {expiry}")
                 else:
-                    logger.info(f"⏳ کوپن {current_coupon} فعال است (بدون تاریخ انقضا) - پاک نشد")
+                    logger.info(f"⏳ Coupon {current_coupon} is active (no expiration date) - not deleted")
                     return False
             else:
-                logger.info(f"🚫 کوپن {current_coupon} غیرفعال است - در حال پاک کردن")
+                logger.info(f"🚫 Coupon {current_coupon} is inactive - clearing it")
         else:
-            logger.warning(f"⚠️ کوپن {current_coupon} در لیست کوپن‌ها نیست - در حال پاک کردن")
+            logger.warning(f"⚠️ Coupon {current_coupon} is not in the coupon list - removing")
     
     # ✅ ذخیره مقادیر قبلی برای لاگ
     old_coupon = users[uid].get('coupon_code')
@@ -7041,12 +7056,12 @@ def clear_coupon_from_user_db(user_id: int, force: bool = False) -> bool:
     # ✅ ذخیره‌سازی
     try:
         save_json(DB_FILES['users'], users)
-        logger.info(f"✅ کوپن کاربر {user_id} پاک شد:")
-        logger.info(f"  - کد قبلی: {old_coupon}")
-        logger.info(f"  - تخفیف قبلی: {old_discount}%")
+        logger.info(f"✅ user coupon {user_id}cleared:")
+        logger.info(f"  - previous code: {old_coupon}")
+        logger.info(f"  - previous discount: {old_discount}%")
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره‌سازی پس از پاک کردن کوپن: {e}")
+        logger.error(f"❌ Error saving after removing coupon: {e}")
         return False
 @dp.callback_query(F.data == "admin_price_settings")
 async def admin_price_settings(callback: CallbackQuery):
@@ -7133,7 +7148,7 @@ async def edit_price_start(callback: CallbackQuery):
     
     if not db_key:
         await callback.answer(f"❌ کلید نامعتبر: {setting_key}", show_alert=True)
-        logger.error(f"کلید نامعتبر در edit_price_start: {setting_key}")
+        logger.error(f"invalid key in edit_price_start: {setting_key}")
         return
     user_states[callback.from_user.id] = {
         'awaiting_price_edit': True,
@@ -7242,12 +7257,12 @@ async def save_price_edit(message: Message):
         
         lang = get_user(admin_id).get('lang', 'fa')
         setting_display_name = setting_names.get(setting_key, {}).get(lang, setting_key)
-        CustomLogger.log_event('PRICE_UPDATE', f'تنظیم {db_key} از {old_value:,} به {new_value:,} تومان تغییر کرد', admin_id)
+        CustomLogger.log_event('PRICE_UPDATE', f'Price setting {db_key} changed from {old_value:,} to {new_value:,} Toman', admin_id)
         if log_system:
             await log_system.log_admin_action(
                 admin_id,
-                f"تغییر تنظیم قیمت: {db_key}",
-                details=f"مقدار قدیم: {old_value:,} | مقدار جدید: {new_value:,} تومان"
+                f"Updated price setting: {db_key}",
+                details=f"Previous value: {old_value:,} | New value: {new_value:,} Toman"
             )
         if lang == "fa":
             await message.reply(f"✅ تنظیمات با موفقیت بروزرسانی شد!\n💰 {setting_display_name}: {old_value:,} → {new_value:,} تومان")
@@ -7306,7 +7321,7 @@ Click the button below to change:
     except ValueError:
         await message.reply("❌ لطفاً یک عدد معتبر وارد کنید!")
     except Exception as e:
-        logger.error(f"خطا در save_price_edit: {e}", exc_info=True)
+        logger.error(f"Error in save_price_edit: {e}", exc_info=True)
         await message.reply(f"❌ خطا در ذخیره سازی: {str(e)}")
         user_states.pop(admin_id, None)
         
@@ -7457,16 +7472,16 @@ async def blacklist_add_user(message: Message):
         return
     BLACKLIST.add(target_id)
     save_blacklist()
-    CustomLogger.log_event('BLACKLIST_ADD', f'کاربر {target_id} توسط ادمین به لیست سیاه اضافه شد', target_id)
+    CustomLogger.log_event('BLACKLIST_ADD', f'User {target_id} was added to the blacklist by an admin', target_id)
     if log_system:
         await log_system.log_admin_action(
             admin_id,
-            "افزودن دستی به لیست سیاه",
+            "Manually added to blacklist",
             target_user=target_id,
-            details=f"نام: {full_name_escaped} | یوزرنیم: {username_display}"
+            details=f"Name: {full_name_escaped} | Username: {username_display}"
         )
     
-    logger.info(f"🚫 کاربر {target_id} ({full_name_escaped}) توسط ادمین {admin_id} به لیست سیاه اضافه شد")
+    logger.info(f"🚫 user {target_id} ({full_name_escaped}) by admin {admin_id} added to blacklist")
     if lang == "fa":
         success_text = f"""
 ✅ <b>کاربر با موفقیت به لیست سیاه اضافه شد!</b>
@@ -7633,13 +7648,13 @@ async def blacklist_remove_user(callback: CallbackQuery):
     full_name_escaped = html.escape(user_info['full_name'])
     
     if remove_from_blacklist(user_id):
-        CustomLogger.log_event('BLACKLIST_REMOVE', f'کاربر {user_id} از لیست سیاه خارج شد', user_id)
+        CustomLogger.log_event('BLACKLIST_REMOVE', f'User {user_id} was removed from the blacklist', user_id)
         if log_system:
             await log_system.log_admin_action(
                 callback.from_user.id,
-                f"خروج کاربر {user_id} از لیست سیاه",
+                f"Removed user {user_id} from the blacklist",
                 target_user=user_id,
-                details=f"نام: {full_name_escaped}"
+                details=f"Name: {full_name_escaped}"
             )
         try:
             await bot.send_message(
@@ -7725,15 +7740,15 @@ async def blacklist_confirm_clear_all(callback: CallbackQuery):
     removed_users = list(BLACKLIST)
     BLACKLIST.clear()
     save_blacklist()
-    CustomLogger.log_event('BLACKLIST_CLEAR_ALL', f'لیست سیاه پاکسازی شد - {count} کاربر خارج شدند', callback.from_user.id)
+    CustomLogger.log_event('BLACKLIST_CLEAR_ALL', f'Blacklist cleared - {count} users removed', callback.from_user.id)
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            "پاکسازی کامل لیست سیاه",
-            details=f"{count} کاربر خارج شدند"
+            "Cleared the entire blacklist",
+            details=f"Removed {count} users"
         )
     
-    logger.info(f"🗑 لیست سیاه توسط ادمین {callback.from_user.id} پاکسازی شد - {count} کاربر")
+    logger.info(f"🗑 blacklist cleared by admin {callback.from_user.id} cleaned - {count} user")
     for uid in removed_users:
         try:
             await bot.send_message(uid, "✅ شما از لیست سیاه خارج شدید!\nاکنون می‌توانید از ربات استفاده کنید.")
@@ -7764,10 +7779,10 @@ def update_user(user_id: int, key: str, value):
         old_value = users[uid].get(key)
         users[uid][key] = value
         users[uid]['updated_at'] = datetime.now().isoformat()
-        logger.debug(f"📝 کاربر {user_id}: {key} از {old_value} به {value}")
+        logger.debug(f"📝 user {user_id}: {key} from {old_value} to {value}")
         save_json(DB_FILES['users'], users)
     else:
-        logger.warning(f"⚠️ کاربر {user_id} برای بروزرسانی یافت نشد")
+        logger.warning(f"⚠️ user {user_id}not found to update")
 
 def record_purchase(user_id: int, amount: int):
     """ثبت خرید کاربر"""
@@ -7779,7 +7794,7 @@ def record_purchase(user_id: int, amount: int):
         users[uid]['has_purchased'] = True
         users[uid]['updated_at'] = datetime.now().isoformat()
         save_json(DB_FILES['users'], users)
-        logger.info(f"🛒 خرید کاربر {user_id}: {amount} تومان")
+        logger.info(f"🛒 user purchase {user_id}: {amount}tomans")
 
 def add_balance(user_id: int, amount: int) -> int:
     """افزایش موجودی کاربر"""
@@ -7788,7 +7803,7 @@ def add_balance(user_id: int, amount: int) -> int:
     user['balance'] = old_balance + amount
     user['updated_at'] = datetime.now().isoformat()
     save_json(DB_FILES['users'], users)
-    logger.info(f"💰 کاربر {user_id}: {old_balance} + {amount} = {user['balance']}")
+    logger.info(f"💰 user {user_id}: {old_balance} + {amount} = {user['balance']}")
     return user['balance']
 def calculate_price(volume: int, days: int, user_id: int = None) -> int:
     """محاسبه قیمت با اعمال تخفیف"""
@@ -7809,7 +7824,7 @@ def calculate_price(volume: int, days: int, user_id: int = None) -> int:
             if discount > 0:
                 total = total - (total * discount // 100)
     
-    logger.debug(f"💰 محاسبه قیمت: {volume}GB/{days}روز = {total}تومان")
+    logger.debug(f"💰 calculating price: {volume}GB/{days}day = {total}tomans")
     return total
 
 def get_next_order_id(exclude_ids: Optional[set] = None) -> int:
@@ -7852,7 +7867,7 @@ def get_next_order_id(exclude_ids: Optional[set] = None) -> int:
     while candidate_id in used_ids or str(candidate_id) in orders:
         candidate_id += 1
 
-    logger.debug(f"🔢 شناسه سفارش جدید اختصاص داده شد: #{candidate_id} (کوچک‌ترین شناسه خالی و یونیک)")
+    logger.debug(f"🔢 new order ID assigned: #{candidate_id} (smallest empty & unique ID)")
     return candidate_id
 
 def create_order(user_id: int, volume: int, days: int, price: int, order_type: str = "purchase", ip_limit: int = 0) -> int:
@@ -7886,7 +7901,7 @@ def create_order(user_id: int, volume: int, days: int, price: int, order_type: s
     save_json(DB_FILES['orders'], orders)
     
     ip_display = "نامحدود" if ip_limit == 0 else ip_limit
-    logger.info(f"📝 سفارش جدید #{order_id} - کاربر:{user_id} - {volume_display}/{days}روز - IP Limit: {ip_display}")
+    logger.info(f"📝 new order #{order_id} - user:{user_id} - {volume_display}/{days}days - IP Limit: {ip_display}")
     return order_id
 
 
@@ -7897,10 +7912,10 @@ def update_order(order_id: int, **kwargs):
         for k, v in kwargs.items():
             orders[oid][k] = v
         orders[oid]['updated_at'] = datetime.now().isoformat()
-        logger.debug(f"📝 سفارش #{order_id} بروزرسانی شد: {list(kwargs.keys())}")
+        logger.debug(f"📝 order #{order_id} updated: {list(kwargs.keys())}")
         save_json(DB_FILES['orders'], orders)
         return True
-    logger.error(f"❌ سفارش #{order_id} یافت نشد")
+    logger.error(f"❌ order #{order_id} not found")
     return False
 
 
@@ -7935,7 +7950,7 @@ def get_global_stats() -> dict:
             'today_revenue': today_revenue
         }
     except Exception as e:
-        logger.error(f"❌ خطا در get_global_stats: {e}", exc_info=True)
+        logger.error(f"❌ Error in get_global_stats: {e}", exc_info=True)
         return {
             'total_users': len(users),
             'total_orders': 0,
@@ -7954,7 +7969,7 @@ def migrate_old_data():
     global users, orders, referrals, configs_pool
     
     updated = 0
-    logger.info("🔄 شروع مهاجرت داده‌های قدیمی...")
+    logger.info('🔄 starting migration of old data...')
     user_defaults = {
         'total_purchases': 0,
         'total_spent': 0,
@@ -8016,7 +8031,7 @@ def migrate_old_data():
                 order[field] = default
                 changed = True
                 if field == 'ip_limit':
-                    logger.info(f"📝 فیلد ip_limit با مقدار 0 به سفارش #{oid} اضافه شد")
+                    logger.info(f"📝 ip_limit field set to 0 for order #{oid} added")
         
         if 'type' not in order:
             order['type'] = 'purchase' if 'volume' in order else 'balance_charge'
@@ -8036,13 +8051,13 @@ def migrate_old_data():
     migrate_inbound_data()
     if 'ip_limit' not in configs_pool:
         configs_pool['ip_limit'] = 0
-        logger.info("📝 فیلد ip_limit به configs_pool اضافه شد")
+        logger.info('📝 file ip_limit added to configs_pool')
     
     if updated > 0:
         save_all()
-        logger.info(f"✅ {updated} رکورد به‌روزرسانی شد")
+        logger.info(f"✅ {updated} record updated")
     else:
-        logger.info("✅ همه رکوردها به‌روز هستند")
+        logger.info('✅ all records are up-to-date')
 
 @dp.callback_query(F.data == "delete_old_before_restore")
 async def delete_old_before_restore(callback: CallbackQuery):
@@ -8073,10 +8088,10 @@ async def delete_old_before_restore(callback: CallbackQuery):
                     os.remove(file_path)
                     deleted_count += 1
                     deleted_files.append(f)
-                    logger.info(f"🗑 بکاپ before_restore قدیمی حذف شد: {f}")
+                    logger.info(f"🗑 Old before_restore backup deleted: {f}")
             except Exception as e:
                 failed_count += 1
-                logger.error(f"❌ خطا در حذف {f}: {e}")
+                logger.error(f"❌ Error deleting {f}: {e}")
     
     if lang == "fa":
         text = f"""
@@ -8133,19 +8148,19 @@ def backup_database():
     # ✅ اطمینان از وجود alert_settings در configs_pool
     alert_settings = configs_pool.get('alert_settings', {})
     if alert_settings:
-        logger.info(f"🔔 alert_settings در configs_pool یافت شد: {len(alert_settings.get('volume_thresholds', []))} volume thresholds, {len(alert_settings.get('expiry_warnings', []))} expiry warnings")
+        logger.info(f"🔔 alert_settings found in configs_pool: {len(alert_settings.get('volume_thresholds', []))} volume thresholds, {len(alert_settings.get('expiry_warnings', []))} expiry warnings")
     else:
-        logger.warning("⚠️ alert_settings در configs_pool یافت نشد")
+        logger.warning('⚠️ alert_settings not found in configs_pool')
     
     # ==================== 2. لاگ force_join_settings ====================
     force_settings = configs_pool.get('force_join_settings', {})
-    logger.info(f"🔍 در حال بکاپ - force_join_settings: {force_settings}")
-    logger.info(f"🔍 تعداد کانال‌ها: {len(force_settings.get('channels', []))}")
+    logger.info(f"🔍 backing up - force_join_settings: {force_settings}")
+    logger.info(f"🔍 number of channels: {len(force_settings.get('channels', []))}")
     
     # ==================== 3. لاگ اینباندهای دسته‌ها ====================
     for cat in READY_PACKAGES.get('categories', []):
         inbound_ids = cat.get('inbound_ids', [])
-        logger.info(f"📡 بکاپ - دسته {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
+        logger.info(f"Category {cat.get('name')}: inbounds = {inbound_ids if inbound_ids else 'default'}")
     
     # ==================== 4. آماده‌سازی سفارشات با ip_limit ====================
     orders_with_ip = {}
@@ -8153,7 +8168,7 @@ def backup_database():
         if isinstance(order, dict):
             if 'ip_limit' not in order:
                 order['ip_limit'] = 0
-                logger.info(f"📝 فیلد ip_limit با مقدار 0 به سفارش {oid} اضافه شد")
+                logger.info(f"📝 Added ip_limit field with value 0 to order {oid} added")
             orders_with_ip[oid] = order
         else:
             orders_with_ip[oid] = order
@@ -8165,22 +8180,22 @@ def backup_database():
         try:
             with open(alert_cache_file, 'r', encoding='utf-8') as f:
                 alert_cache = json.load(f)
-            logger.info(f"🔔 alert_cache.json بارگذاری شد:")
+            logger.info(f"🔔 alert_cache.json loaded:")
             logger.info(f"  - volume_alerts: {len(alert_cache.get('volume_alerts', {}))}")
             logger.info(f"  - expiry_alerts: {len(alert_cache.get('expiry_alerts', {}))}")
             logger.info(f"  - history: {len(alert_cache.get('history', {}))}")
             logger.info(f"  - service_info: {len(alert_cache.get('service_info', {}))}")
         except Exception as e:
-            logger.error(f"❌ خطا در خواندن alert_cache.json: {e}")
+            logger.error(f"❌ Error reading alert_cache.json: {e}")
             alert_cache = {}
     else:
-        logger.warning("⚠️ فایل alert_cache.json یافت نشد - بکاپ بدون alert_cache خواهد بود")
+        logger.warning('⚠️ alert_cache.json file not found - backup will be without alert_cache')
     
     # ==================== 6. دریافت آمار ====================
     try:
         stats = get_global_stats()
     except Exception as e:
-        logger.error(f"❌ خطا در get_global_stats: {e}")
+        logger.error(f"❌ Error in get_global_stats: {e}")
         stats = {
             'total_users': len(users),
             'total_orders': len(get_valid_orders()),
@@ -8197,9 +8212,9 @@ def backup_database():
     daily_usage_backup = {}
     try:
         daily_usage_backup = usage_store.export_backup_data()
-        logger.info(f"📊 daily_usage پشتیبان‌گیری شد: {len(daily_usage_backup.get('daily_usage', []))} رکورد")
+        logger.info(f"📊 daily_usage backed up: {len(daily_usage_backup.get('daily_usage', []))} record")
     except Exception as ex_d:
-        logger.error(f"❌ خطا در export_backup_data مصرف روزانه: {ex_d}")
+        logger.error(f"❌ Error in export_backup_data daily usage: {ex_d}")
 
     full_backup = {
         'users': users,
@@ -8231,7 +8246,7 @@ def backup_database():
     # ==================== 8. ذخیره بکاپ ====================
     backup_file = os.path.join(backup_dir, f'full_backup_{timestamp}.json')
     if save_json(backup_file, full_backup):
-        logger.info(f"✅ بکاپ کامل در {backup_file} ذخیره شد")
+        logger.info(f"✅ complete backup in {backup_file} saved")
         
         # کپی فایل فیزیکی دیتابیس مصرف روزانه در صورت وجود
         db_path = os.path.join(DATA_DIR, 'daily_usage.db')
@@ -8239,9 +8254,9 @@ def backup_database():
             try:
                 import shutil
                 shutil.copy2(db_path, os.path.join(backup_dir, f'daily_usage_{timestamp}.db'))
-                logger.info("✅ کپی فیزیکی daily_usage.db در بکاپ ذخیره شد")
+                logger.info('✅ Physical copy of daily_usage.db saved in backup')
             except Exception as e_cp:
-                logger.warning(f"⚠️ خطا در کپی دیتابیس daily_usage.db: {e_cp}")
+                logger.warning(f"⚠️ Error copying database daily_usage.db: {e_cp}")
         
         # ==================== 9. بررسی فایل بکاپ ذخیره شده ====================
         try:
@@ -8261,23 +8276,23 @@ def backup_database():
                 orders_with_ip_count = sum(1 for o in saved_orders.values() if isinstance(o, dict) and 'ip_limit' in o)
                 
                 # لاگ بررسی
-                logger.info(f"🔍 بررسی فایل بکاپ:")
-                logger.info(f"  - کاربران: {len(saved_data.get('users', {}))}")
-                logger.info(f"  - سفارشات: {len(saved_orders)}")
-                logger.info(f"  - سفارشات با ip_limit: {orders_with_ip_count}/{len(saved_orders)}")
+                logger.info(f"🔍 Checking backup file:")
+                logger.info(f"  - Users: {len(saved_data.get('users', {}))}")
+                logger.info(f"  - Orders: {len(saved_orders)}")
+                logger.info(f"  - Orders with ip_limit: {orders_with_ip_count}/{len(saved_orders)}")
                 logger.info(f"  - force_join_settings: {saved_force}")
-                logger.info(f"  - ready_packages: {len(saved_ready.get('categories', []))} دسته")
+                logger.info(f"  - ready_packages: {len(saved_ready.get('categories', []))} category")
                 logger.info(f"  - test_service: {saved_test.get('inbound_ids', [])}")
-                logger.info(f"  - alert_settings (جداگانه): {saved_alert_settings}")
-                logger.info(f"  - alert_settings (در configs): {saved_alert_settings_in_configs}")
+                logger.info(f"  - alert_settings (separate): {saved_alert_settings}")
+                logger.info(f"  - alert_settings (in configs): {saved_alert_settings_in_configs}")
                 logger.info(f"  - alert_cache:")
                 logger.info(f"    • volume_alerts: {len(saved_alert_cache.get('volume_alerts', {}))}")
                 logger.info(f"    • expiry_alerts: {len(saved_alert_cache.get('expiry_alerts', {}))}")
                 logger.info(f"    • history: {len(saved_alert_cache.get('history', {}))}")
                 logger.info(f"    • service_info: {len(saved_alert_cache.get('service_info', {}))}")
-                logger.info(f"  - blacklist: {saved_data.get('blacklist', {}).get('count', 0)} کاربر")
-                logger.info(f"  - user_inbound_selection: {len(saved_data.get('user_inbound_selection', {}))} کاربر")
-                logger.info(f"  - user_test_usage: {len(saved_data.get('user_test_usage', {}))} کاربر")
+                logger.info(f"  - blacklist: {saved_data.get('blacklist', {}).get('count', 0)} user")
+                logger.info(f"  - user_inbound_selection: {len(saved_data.get('user_inbound_selection', {}))} user")
+                logger.info(f"  - user_test_usage: {len(saved_data.get('user_test_usage', {}))} user")
                 logger.info(f"  - shop_status: {saved_data.get('shop_status', {}).get('open', 'unknown')}")
                 logger.info(f"  - version: {saved_data.get('backup_info', {}).get('version', 'unknown')}")
                 
@@ -8285,19 +8300,19 @@ def backup_database():
                 required_keys = ['users', 'orders', 'configs', 'alert_cache', 'ready_packages', 'test_service']
                 missing_keys = [k for k in required_keys if k not in saved_data]
                 if missing_keys:
-                    logger.warning(f"⚠️ کلیدهای گمشده در بکاپ: {missing_keys}")
+                    logger.warning(f"⚠️ Missing keys in backup: {missing_keys}")
                 else:
-                    logger.info(f"✅ بکاپ کامل است - همه {len(required_keys)} کلید اصلی موجود است")
+                    logger.info(f"✅ Backup is complete - all {len(required_keys)} primary keys are present")
                     
         except Exception as e:
-            logger.warning(f"⚠️ خطا در بررسی فایل بکاپ: {e}")
+            logger.warning(f"⚠️ Error checking backup file: {e}")
         
         # ==================== 10. پاکسازی بکاپ‌های قدیمی ====================
         _cleanup_old_backups(backup_dir, keep=7)
         
         return True
     else:
-        logger.error("❌ خطا در ذخیره بکاپ")
+        logger.error('❌ error saving backup')
         return False
 
 
@@ -8306,7 +8321,7 @@ def backup_database():
 def save_alert_cache(alert_cache: dict) -> bool:
     """ذخیره alert_cache در فایل JSON"""
     if not alert_cache:
-        logger.warning("⚠️ alert_cache خالی است - ذخیره انجام نشد")
+        logger.warning('⚠️ alert_cache is empty - save not performed')
         return False
     
     alert_cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
@@ -8318,7 +8333,7 @@ def save_alert_cache(alert_cache: dict) -> bool:
         with open(alert_cache_file, 'w', encoding='utf-8') as f:
             json.dump(alert_cache, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"✅ alert_cache.json ذخیره شد:")
+        logger.info(f"✅ alert_cache.json saved:")
         logger.info(f"  - volume_alerts: {len(alert_cache.get('volume_alerts', {}))}")
         logger.info(f"  - expiry_alerts: {len(alert_cache.get('expiry_alerts', {}))}")
         logger.info(f"  - history: {len(alert_cache.get('history', {}))}")
@@ -8326,7 +8341,7 @@ def save_alert_cache(alert_cache: dict) -> bool:
         
         return True
     except Exception as e:
-        logger.error(f"❌ خطا در ذخیره alert_cache.json: {e}")
+        logger.error(f"❌ Error saving alert_cache.json: {e}")
         return False
 def _cleanup_old_backups(backup_dir: str, keep: int = 5, filename: str = 'full_backup_'):
     """نگه داشتن فقط N بکاپ آخر برای هر نوع فایل"""
@@ -8349,22 +8364,22 @@ def _cleanup_old_backups(backup_dir: str, keep: int = 5, filename: str = 'full_b
         other_backups.sort(reverse=True)
         for _, path, name in full_backups[keep:]:
             os.remove(path)
-            logger.debug(f"🗑 بکاپ قدیمی full_backup حذف شد: {name}")
+            logger.debug(f"🗑 Old full_backup deleted: {name}")
         cutoff_7days = time.time() - (7 * 24 * 3600)
         for mtime, path, name in before_restore_backups:
             if mtime < cutoff_7days:
                 os.remove(path)
-                logger.debug(f"🗑 بکاپ before_restore قدیمی (>7 روز) حذف شد: {name}")
+                logger.debug(f"🗑 Old before_restore backup (>7 days) deleted: {name}")
         cutoff_30days = time.time() - (30 * 24 * 3600)
         for mtime, path, name in other_backups:
             if mtime < cutoff_30days:
                 os.remove(path)
-                logger.debug(f"🗑 بکاپ قدیمی دیگر حذف شد: {name}")
-        logger.info(f"🧹 پاکسازی بکاپ‌ها: {len(full_backups)} full, {len(before_restore_backups)} before_restore, {len(other_backups)} other")
-        logger.info(f"   نگهداری شده: {min(len(full_backups), keep)} full_backup, before_restoreهای کمتر از 7 روز")
+                logger.debug(f"🗑 Other old backup deleted: {name}")
+        logger.info(f"🧹 backup cleanup: {len(full_backups)} full, {len(before_restore_backups)} before_restore, {len(other_backups)} other")
+        logger.info(f"   kept: {min(len(full_backups), keep)} full_backup, before_restores less than 7 days")
             
     except Exception as e:
-        logger.warning(f"⚠️ خطا در پاکسازی بکاپ‌های قدیمی: {e}")
+        logger.warning(f"⚠️ Error cleaning up old backups: {e}")
 
 def optimize_storage():
     """بهینه‌سازی فضای ذخیره‌سازی"""
@@ -8407,12 +8422,12 @@ def optimize_storage():
     
     if cleaned > 0:
         save_all()
-        logger.info(f"✅ بهینه‌سازی انجام شد:")
-        logger.info(f"  🗑 {len(old_rejected)} سفارش رد شده قدیمی")
-        logger.info(f"  🗑 {len(old_cancelled)} سفارش لغو شده قدیمی")
-        logger.info(f"  🗑 {len(old_inactive)} کاربر غیرفعال قدیمی")
+        logger.info(f"✅ optimization completed:")
+        logger.info(f"  🗑 {len(old_rejected)}old rejected order")
+        logger.info(f"  🗑 {len(old_cancelled)}old cancelled order")
+        logger.info(f"  🗑 {len(old_inactive)}old inactive user")
     else:
-        logger.info("✅ دیتابیس بهینه است - چیزی برای حذف وجود ندارد")
+        logger.info('✅ database is optimized - nothing to delete')
     
     return cleaned
 
@@ -9392,7 +9407,7 @@ def get_database_size() -> dict:
     sizes = {}
     total = 0
     
-    logger.info("🔍 در حال محاسبه حجم دیتابیس...")
+    logger.info('🔍 calculating database size...')
     
     for name, file_path in DB_FILES.items():
         if os.path.exists(file_path):
@@ -9402,16 +9417,16 @@ def get_database_size() -> dict:
                 total += size
                 logger.info(f"  ✅ {name}: {format_size(size)}")
             except Exception as e:
-                logger.error(f"  ❌ خطا در خواندن {name}: {e}")
+                logger.error(f"  ❌ Error reading {name}: {e}")
                 sizes[name] = 0
         else:
-            logger.warning(f"  ⚠️ فایل {name} وجود ندارد: {file_path}")
+            logger.warning(f"  ⚠️ File {name} does not exist: {file_path}")
             sizes[name] = 0
     
     sizes['total'] = total
     sizes['total_formatted'] = format_size(total)
     
-    logger.info(f"📊 حجم کل: {format_size(total)}")
+    logger.info(f"📊 total size: {format_size(total)}")
     
     return sizes
 
@@ -9432,9 +9447,9 @@ def find_pending_order(user_id: int) -> Optional[dict]:
         return None
     pending_orders.sort(key=lambda x: x.get('created_at', x.get('date', '')), reverse=True)
     latest_order = pending_orders[0]
-    logger.debug(f"🔍 جدیدترین سفارش در انتظار: #{latest_order['order_id']} - نوع: {latest_order.get('type')}")
+    logger.debug(f"🔍 newest pending order: #{latest_order['order_id']} - type: {latest_order.get('type')}")
     if len(pending_orders) > 1:
-        logger.warning(f"⚠️ کاربر {user_id} دارای {len(pending_orders)} سفارش در انتظار پرداخت است!")
+        logger.warning(f"⚠️ user {user_id} has {len(pending_orders)} order pending payment!")
     
     return latest_order
 
@@ -9527,9 +9542,9 @@ async def send_config_with_qr_option(
                 telegram_proxy_url=telegram_proxy_url,
             )
         )
-        logger.info(f"QR Code برای سفارش #{order_id} به کاربر {chat_id} ارسال شد")
+        logger.info(f"QR Code for order #{order_id} to user {chat_id} sent")
     except Exception as e:
-        logger.error(f"خطا در ارسال QR Code: {e}")
+        logger.error(f"Error sending QR Code: {e}")
         await bot.send_message(
             chat_id,
             caption,
@@ -9555,7 +9570,7 @@ def add_config_to_pool(volume: int, days: int, link: str) -> int:
         'order_id': None
     })
     save_json(DB_FILES['configs'], configs_pool)
-    logger.info(f"📦 کانفیگ #{configs_pool['last_id']} به مخزن اضافه شد - {volume}GB/{days}روز")
+    logger.info(f"📦 config #{configs_pool['last_id']} added to repository - {volume}GB/{days}days")
     return configs_pool['last_id']
 
 
@@ -9567,17 +9582,17 @@ def get_config_from_pool(volume: int, days: int) -> Optional[dict]:
             config = c.copy()
             del configs_pool['configs'][i]
             save_json(DB_FILES['configs'], configs_pool)
-            logger.info(f"📤 کانفیگ #{config['id']} از مخزن خارج شد")
+            logger.info(f"📤 Config #{config['id']} removed from the repository")
             return config
     for i, c in enumerate(configs):
         if c.get('volume') >= volume and c.get('days') >= days and not c.get('used'):
             config = c.copy()
             del configs_pool['configs'][i]
             save_json(DB_FILES['configs'], configs_pool)
-            logger.info(f"📤 کانفیگ جایگزین #{config['id']} از مخزن خارج شد")
+            logger.info(f"📤 Replacement config #{config['id']} removed from the repository")
             return config
     
-    logger.warning(f"⚠️ کانفیگی برای {volume}GB/{days}روز یافت نشد")
+    logger.warning(f"⚠️ config for {volume}GB/{days}days not found")
     return None
 
 
@@ -9599,7 +9614,7 @@ def delete_config(config_id: int) -> bool:
             del configs[i]
             configs_pool['configs'] = configs
             save_json(DB_FILES['configs'], configs_pool)
-            logger.info(f"🗑 کانفیگ #{config_id} حذف شد")
+            logger.info(f"🗑 Config #{config_id} deleted")
             return True
     return False
 
@@ -9626,7 +9641,7 @@ async def _get_order_wireguard_clients(order_id: int, force_refresh: bool = Fals
             settings = _decode_inbound_settings(inbound)
         except (RuntimeError, ValueError) as error:
             logger.error(
-                "تنظیمات اینباند WireGuard %s قابل خواندن نیست: %s",
+                'WireGuard inbound settings for %s are unreadable: %s',
                 inbound.get("id"),
                 error,
             )
@@ -9635,7 +9650,7 @@ async def _get_order_wireguard_clients(order_id: int, force_refresh: bool = Fals
         clients = settings.get("clients", [])
         if not isinstance(clients, list):
             logger.error(
-                "فهرست کلاینت‌های اینباند WireGuard %s معتبر نیست",
+                'Client list for WireGuard inbound %s is invalid',
                 inbound.get("id"),
             )
             continue
@@ -9649,7 +9664,7 @@ async def _get_order_wireguard_clients(order_id: int, force_refresh: bool = Fals
         ]
         if len(inbound_matches) > 1:
             logger.error(
-                "کلاینت %s چندبار در اینباند WireGuard %s تکرار شده است",
+                'Client %s is duplicated in WireGuard inbound %s',
                 email,
                 inbound.get("id"),
             )
@@ -9678,7 +9693,7 @@ async def _order_has_wireguard(
         )
     except Exception as error:
         logger.error(
-            "بررسی اینباند WireGuard سفارش #%s ناموفق بود: %s",
+            'WireGuard inbound check for order #%s failed: %s',
             order_id,
             error,
             exc_info=True,
@@ -9737,7 +9752,7 @@ async def _fetch_proxy_from_subscription(sub_link: str) -> Optional[str]:
                         if _is_telegram_proxy(line):
                             return line
     except Exception as e:
-        logger.debug(f"خطا در واکشی پروکسی از ساب {sub_link}: {e}")
+        logger.debug(f"Error fetching proxy from subscription {sub_link}: {e}")
     return None
 
 
@@ -9749,7 +9764,7 @@ async def _get_order_telegram_proxy(order_id: int) -> Optional[str]:
             if _is_telegram_proxy(link):
                 return link
     except Exception as e:
-        logger.debug(f"خطا در بررسی پروکسی تلگرام برای سفارش #{order_id}: {e}")
+        logger.debug(f"Error checking Telegram proxy for order #{order_id}: {e}")
     return None
 
 def get_config_view_keyboard(
@@ -9993,7 +10008,7 @@ async def show_platform_guide(callback: CallbackQuery, platform: str):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.warning(f"خطا در حذف صفحهٔ کانفیگ پیش از نمایش راهنما: {e}")
+        logger.warning(f"Error deleting the config page before showing the guide: {e}")
     await bot.send_message(
         callback.message.chat.id,
         text,
@@ -10059,7 +10074,7 @@ async def platform_back_to_config(callback: CallbackQuery):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.warning(f"خطا در حذف راهنما هنگام بازگشت به کانفیگ: {e}")
+        logger.warning(f"Error deleting the guide while returning to the config: {e}")
 
     if show_qr:
         await send_config_with_qr_option(
@@ -10081,7 +10096,7 @@ async def platform_back_to_config(callback: CallbackQuery):
                     traffic_data = await xui_get_client_traffic(email)
                     traffic_info = format_traffic_info(client_info, traffic_data, lang)
             except Exception as e:
-                logger.error(f"خطا در دریافت اطلاعات ترافیک هنگام بازگشت به کانفیگ: {e}")
+                logger.error(f"Error retrieving traffic information while reverting to config: {e}")
 
         telegram_proxy_url = await _get_order_telegram_proxy(order_id)
         caption = get_config_caption(
@@ -10222,7 +10237,7 @@ async def init_http_session():
     try:
         await xui_sync_sub_settings()
     except Exception as e:
-        logger.warning(f"خطا در همگام‌سازی تنظیمات ساب: {e}")
+        logger.warning(f"Error syncing subscription settings: {e}")
 
 
 async def close_http_session():
@@ -10288,7 +10303,7 @@ async def _do_login() -> Optional[str]:
                 return None
             SENAI_CSRF = data.get("obj")
             CSRF_TIME = time.time()
-            logger.debug("CSRF token دریافت شد")
+            logger.debug('CSRF token received')
         async with HTTP_SESSION.post(
             f"{SENAI_PANEL_URL}/login",
             data={
@@ -10304,22 +10319,22 @@ async def _do_login() -> Optional[str]:
                 if jar_cookie:
                     SENAI_COOKIE = jar_cookie
                     COOKIE_TIME = time.time()
-                    logger.debug("لاگین موفق (از CookieJar)")
+                    logger.debug('Login successful (from CookieJar)')
                     return SENAI_COOKIE
                 for name in ("3x-ui", "session"):
                     cookie = resp.cookies.get(name)
                     if cookie and cookie.value:
                         SENAI_COOKIE = cookie.value
                         COOKIE_TIME = time.time()
-                        logger.debug("لاگین موفق (از response.cookies)")
+                        logger.debug('Login successful (from response.cookies)')
                         return SENAI_COOKIE
                 
-                logger.error("کوکی در response و CookieJar پیدا نشد")
+                logger.error('Cookie not found in response or CookieJar')
             
             return None
             
     except Exception as e:
-        logger.error(f"خطا در لاگین: {e}")
+        logger.error(f"Error logging in: {e}")
         return None
 
 
@@ -10407,7 +10422,7 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
             **kwargs
         ) as resp:
             if resp.status == 401:
-                logger.warning("401 - لاگین مجدد...")
+                logger.warning('401 - logging in again...')
                 
                 async with LOGIN_LOCK:
                     cookie_check = _get_cookie_from_session()
@@ -10416,7 +10431,7 @@ async def _api_request(method: str, path: str, **kwargs) -> Optional[dict]:
                         COOKIE_TIME = time.time()
                         SENAI_CSRF = None
                         CSRF_TIME = 0
-                        logger.debug("لاگین همزمان تشخیص داده شد")
+                        logger.debug('Concurrent login detected')
                     else:
                         SENAI_COOKIE = None
                         COOKIE_TIME = 0
@@ -10469,7 +10484,7 @@ async def xui_sync_sub_settings() -> bool:
         if not result or not result.get("success"):
             result = await _api_request("GET", "/panel/api/setting/all")
 
-        logger.info(f"📡 نتیجه درخواست تنظیمات از پنل سنایی: success={bool(result and result.get('success'))}")
+        logger.info(f"📡 request settings result from Sanaei panel: success={bool(result and result.get('success'))}")
 
         if result and result.get("success"):
             raw_obj = result.get("obj")
@@ -10480,7 +10495,7 @@ async def xui_sync_sub_settings() -> bool:
             else:
                 settings_map = {}
 
-            logger.info(f"📋 کلیدهای دریافتی از تنظیمات پنل سنایی: {list(settings_map.keys())}")
+            logger.info(f"📋 Keys received from Sanaei panel settings: {list(settings_map.keys())}")
 
             # 1. استخراج دامنه سابسکریپشن (بررسی همه کلیدهای ممکن در نسخه‌های مختلف 3X-UI)
             sub_domain = (
@@ -10545,22 +10560,22 @@ async def xui_sync_sub_settings() -> bool:
                         for name in reality_names:
                             if name and "." in name and not name.startswith("127."):
                                 sub_domain = name.strip()
-                                logger.info(f"🔍 دامنه جایگزین از Reality اینباند استخراج شد: {sub_domain}")
+                                logger.info(f"🔍 Fallback domain extracted from Reality inbound: {sub_domain}")
                                 break
                         if sub_domain:
                             break
                         tls_name = stream.get("tlsSettings", {}).get("serverName") or ""
                         if tls_name and "." in tls_name and not tls_name.startswith("127."):
                             sub_domain = tls_name.strip()
-                            logger.info(f"🔍 دامنه جایگزین از TLS اینباند استخراج شد: {sub_domain}")
+                            logger.info(f"🔍 Fallback domain extracted from TLS inbound: {sub_domain}")
                             break
                         ws_host = stream.get("wsSettings", {}).get("headers", {}).get("Host") or ""
                         if ws_host and "." in ws_host and not ws_host.startswith("127."):
                             sub_domain = ws_host.strip()
-                            logger.info(f"🔍 دامنه جایگزین از WebSocket اینباند استخراج شد: {sub_domain}")
+                            logger.info(f"🔍 Fallback domain extracted from WebSocket inbound: {sub_domain}")
                             break
                 except Exception as e:
-                    logger.debug(f"عدم امکان استخراج دامنه از اینباندها: {e}")
+                    logger.debug(f"Unable to extract domain from inbounds: {e}")
 
             # تعیین پروتکل (http یا https)
             scheme = "https"
@@ -10609,12 +10624,12 @@ async def xui_sync_sub_settings() -> bool:
 
                 PANEL_COMPUTED_SUB_BASE_URL = f"{scheme}://{netloc}/{sub_path}".rstrip('/')
 
-            logger.info(f"🌐 آدرس سابسکریپشن نهایی استخراج‌شده از پنل سنایی: {PANEL_COMPUTED_SUB_BASE_URL}")
+            logger.info(f"🌐 Final subscription URL extracted from the Sanaei panel: {PANEL_COMPUTED_SUB_BASE_URL}")
             return True
         else:
-            logger.warning(f"⚠️ پاسخ ناموفق یا خالی از تنظیمات پنل سنایی: {result}")
+            logger.warning(f"⚠️ Unsuccessful or empty response from Sanaei panel settings: {result}")
     except Exception as e:
-        logger.warning(f"⚠️ عدم موفقیت در دریافت تنظیمات ساب از پنل: {e}", exc_info=True)
+        logger.warning(f"⚠️ Failed to retrieve subscription settings from panel: {e}", exc_info=True)
     return False
 
 
@@ -10630,7 +10645,7 @@ async def xui_get_inbounds(
             result = await _api_request("GET", "/panel/api/inbounds/list")
         if result and result.get("success") and isinstance(result.get("obj"), list):
             return result["obj"]
-        logger.error("دریافت همه اینباندها از پنل ناموفق بود")
+        logger.error('failed to receive all inbounds from panel')
         return []
     
     # ✅ اگه force_refresh، کش رو باطل کن
@@ -10640,7 +10655,7 @@ async def xui_get_inbounds(
     
     current_time = time.time()
     if INBOUND_CACHE["loaded"] and (current_time - INBOUND_CACHE["time"]) < INBOUND_CACHE_TTL:
-        logger.debug(f"کش اینباندها: {len(INBOUND_CACHE['data'])} عدد")
+        logger.debug(f"inbound cache: {len(INBOUND_CACHE['data'])} number")
         return INBOUND_CACHE["data"]
     async with INBOUND_LOCK:
         current_time = time.time()
@@ -10653,10 +10668,10 @@ async def xui_get_inbounds(
             INBOUND_CACHE["data"] = inbounds
             INBOUND_CACHE["time"] = current_time
             INBOUND_CACHE["loaded"] = True
-            logger.debug(f"{len(inbounds)} اینباند فعال دریافت شد")
+            logger.debug(f"{len(inbounds)} active inbound retrieved")
             return inbounds
         if INBOUND_CACHE["loaded"]:
-            logger.warning("خطا در دریافت اینباندها، استفاده از کش قبلی")
+            logger.warning('Error retrieving inbounds; using previous cache')
             return INBOUND_CACHE["data"]
         
         return []
@@ -10723,7 +10738,7 @@ async def check_shop_status_and_notify(
         try:
             await callback.answer(alert_text, show_alert=True)
         except Exception as e:
-            logger.warning(f"خطا در alert فروش بسته: {e}")
+            logger.warning(f"Package sales alert error: {e}")
             # fallback: فقط عنوان
             try:
                 await callback.answer(title, show_alert=True)
@@ -10783,9 +10798,9 @@ async def check_shop_status_and_notify(
                         parse_mode=ParseMode.HTML
                     )
                 except Exception as e2:
-                    logger.error(f"❌ خطا در ارسال پیام بسته بودن فروش: {e2}")
+                    logger.error(f"❌ Error sending shop-closed message: {e2}")
             else:
-                logger.warning(f"⚠️ خطا در check_shop_status: {e}")
+                logger.warning(f"⚠️ Error in check_shop_status: {e}")
         
         try:
             await callback.answer()
@@ -10808,27 +10823,27 @@ async def xui_create_client_with_inbound(
     if inbound_id is not None:
         if isinstance(inbound_id, list):
             inbound_ids = inbound_id
-            logger.info(f"📡 استفاده از لیست اینباندهای مشخص: {inbound_ids}")
+            logger.info(f"📡 Using the specified inbound list: {inbound_ids}")
         else:
             inbound_ids = [inbound_id]
-            logger.info(f"📡 استفاده از اینباند مشخص: {inbound_id}")
+            logger.info(f"📡 Using the specified inbound: {inbound_id}")
     elif user_id:
         user_inbound = get_user_inbound(user_id)
         if user_inbound:
             if isinstance(user_inbound, list):
                 inbound_ids = user_inbound
-                logger.info(f"👤 استفاده از اینباندهای کاربر {user_id}: {inbound_ids}")
+                logger.info(f"👤 Using inbounds for user {user_id}: {inbound_ids}")
             else:
                 inbound_ids = [user_inbound]
-                logger.info(f"👤 استفاده از اینباند کاربر {user_id}: {user_inbound}")
+                logger.info(f"👤 Using inbound selected by user {user_id}: {user_inbound}")
     if not inbound_ids:
         default_ids = configs_pool.get('default_inbound_ids', [])
         if default_ids:
             inbound_ids = default_ids
-            logger.info(f"📌 استفاده از اینباندهای پیش‌فرض: {default_ids}")
+            logger.info(f"📌 Using default inbounds: {default_ids}")
     for attempt in range(3):  # 3 تلاش برای دریافت اینباندها
         if attempt > 0:
-            logger.info(f"🔄 تلاش مجدد {attempt+1}/3 برای دریافت اینباندها")
+            logger.info(f"🔄 Retrying {attempt+1}/3 to retrieve inbounds")
             await asyncio.sleep(2 * attempt)
         
         try:
@@ -10837,16 +10852,16 @@ async def xui_create_client_with_inbound(
                 
                 cookie = await xui_login()
                 if not cookie:
-                    logger.error("❌ عدم موفقیت در لاگین به پنل")
+                    logger.error('❌ Failed to log in to panel')
                     continue
                 
                 inbounds = await xui_get_inbounds()
                 if not inbounds:
-                    logger.error("❌ هیچ اینباند فعالی یافت نشد")
+                    logger.error('❌ No active inbounds found')
                     continue
                 if not inbound_ids:
                     inbound_ids = [i.get('id') for i in inbounds if i.get('enable', True)]
-                    logger.info(f"📡 استفاده از همه اینباندهای فعال: {inbound_ids}")
+                    logger.info(f"📡 Using all active inbounds: {inbound_ids}")
                 valid_inbound_ids = []
                 invalid_inbounds = []
                 
@@ -10861,24 +10876,24 @@ async def xui_create_client_with_inbound(
                         invalid_inbounds.append(ib_id)
                 
                 if invalid_inbounds:
-                    logger.warning(f"⚠️ اینباندهای نامعتبر: {invalid_inbounds}")
+                    logger.warning(f"⚠️ Invalid inbounds: {invalid_inbounds}")
                 
                 if not valid_inbound_ids:
                     valid_inbound_ids = [i.get('id') for i in inbounds if i.get('enable', True)]
-                    logger.info(f"📡 استفاده از همه اینباندهای فعال (به دلیل نامعتبر بودن اینباندهای قبلی): {valid_inbound_ids}")
+                    logger.info(f"📡 Using all active inbounds (because the previous inbounds were invalid): {valid_inbound_ids}")
                 
                 if not valid_inbound_ids:
-                    logger.error("❌ هیچ اینباند معتبری یافت نشد")
+                    logger.error('❌ No valid inbounds found')
                     continue
                 expiry_time = int(datetime.now().timestamp() * 1000) + (days * 24 * 60 * 60 * 1000)
                 if volume_gb == 0:
                     total_bytes = 0  # 0 در پنل به معنی نامحدود است
-                    logger.info(f"📦 حجم: نامحدود (0 bytes)")
+                    logger.info(f"📦 Volume: unlimited (0 bytes)")
                 else:
                     total_bytes = int(volume_gb * 1024 * 1024 * 1024)
-                    logger.info(f"📦 حجم: {volume_gb} GB = {total_bytes:,} bytes")
+                    logger.info(f"📦 Data: {volume_gb} GB = {total_bytes:,} bytes")
                 
-                logger.info(f"⏱ انقضا: {days} روز = {expiry_time}")
+                logger.info(f"⏱ Expiration: {days} days = {expiry_time}")
                 comment_parts = []
                 if user_name:
                     comment_parts.append(user_name)
@@ -10889,7 +10904,7 @@ async def xui_create_client_with_inbound(
                 if len(comment_text) > 100:
                     comment_text = comment_text[:97] + "..."
                 
-                logger.info(f"📝 کامنت: {comment_text}")
+                logger.info(f"📝 Comment: {comment_text}")
                 import secrets
                 sub_id = secrets.token_urlsafe(16)
                 bulk_data = [
@@ -10907,9 +10922,9 @@ async def xui_create_client_with_inbound(
                         "inboundIds": valid_inbound_ids
                     }
                 ]
-                logger.info("📤 درخواست ساخت کلاینت به پنل ارسال شد (%s اینباند)", len(valid_inbound_ids))
-                logger.info(f"👤 محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
-                logger.info(f"📦 حجم: {'نامحدود' if volume_gb == 0 else f'{volume_gb} GB'}")
+                logger.info('📤 Client creation request sent to the panel (%s inbounds)', len(valid_inbound_ids))
+                logger.info(f"👤 IP limit: {ip_limit if ip_limit > 0 else 'unlimited'}")
+                logger.info(f"📦 Data: {'unlimited' if volume_gb == 0 else f'{volume_gb} GB'}")
                 connector = aiohttp.TCPConnector(ssl=False)
                 
                 async with aiohttp.ClientSession(connector=connector) as session:
@@ -10924,61 +10939,61 @@ async def xui_create_client_with_inbound(
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as response:
                         response_text = await response.text()
-                        logger.info(f"📥 پاسخ پنل: Status {response.status}")
+                        logger.info(f"📥 Panel response: Status {response.status}")
                         if response.status == 200:
                             try:
                                 data = json.loads(response_text)
                                 if data.get("success"):
-                                    logger.info(f"✅ کلاینت {email} با اینباندهای {valid_inbound_ids} ساخته شد!")
-                                    logger.info(f"   📦 حجم: {'نامحدود' if volume_gb == 0 else f'{volume_gb} GB'}")
-                                    logger.info(f"   👤 محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
-                                    logger.info(f"   📡 اینباندها: {valid_inbound_ids}")
-                                    logger.info(f"   📝 کامنت: {comment_text}")
+                                    logger.info(f"✅ Client {email} with inbounds {valid_inbound_ids} created!")
+                                    logger.info(f"   📦 Volume: {'unlimited' if volume_gb == 0 else f'{volume_gb} GB'}")
+                                    logger.info(f"   👤 IP limit: {ip_limit if ip_limit > 0 else 'unlimited'}")
+                                    logger.info(f"   📡 Inbounds: {valid_inbound_ids}")
+                                    logger.info(f"   📝 Comment: {comment_text}")
                                     try:
                                         actual_client = await xui_get_client_info(email)
                                         if actual_client:
                                             actual_sub_id = actual_client.get('subId', '') or email
-                                            logger.info(f"   🔗 subId واقعی از پنل: {actual_sub_id}")
+                                            logger.info(f"   🔗 Actual subId from panel: {actual_sub_id}")
                                             base_sub = await ensure_sub_base_url()
                                             return f"{base_sub}/{actual_sub_id}"
                                     except Exception as e:
-                                        logger.warning(f"⚠️ خطا در دریافت subId واقعی: {e}")
+                                        logger.warning(f"⚠️ Error retrieving actual subId: {e}")
 
                                     base_sub = await ensure_sub_base_url()
                                     return f"{base_sub}/{email}"
                                 else:
                                     error_msg = data.get('msg', 'Unknown error')
-                                    logger.error(f"❌ خطا در ساخت کلاینت: {error_msg}")
-                                    logger.info(f"📝 پاسخ کامل: {response_text[:500]}")
+                                    logger.error(f"❌ Error creating client: {error_msg}")
+                                    logger.info(f"📝 Full response: {response_text[:500]}")
                             except json.JSONDecodeError:
-                                logger.error(f"❌ پاسخ JSON نامعتبر: {response_text[:200]}")
+                                logger.error(f"❌ Invalid JSON response: {response_text[:200]}")
                         elif response.status == 403:
-                            logger.error("❌ خطای 403 - دسترسی غیرمجاز")
+                            logger.error('❌ Error 403 - Unauthorized access')
                             SENAI_COOKIE = None
                             SENAI_CSRF = None
                             await asyncio.sleep(3)
                         elif response.status == 429:
-                            logger.warning("⚠️ محدودیت نرخ درخواست (429)")
+                            logger.warning('⚠️ Request rate limit (429)')
                             await asyncio.sleep(5 * (attempt + 1))
                         else:
-                            logger.error(f"❌ خطا در ساخت کلاینت: Status {response.status}")
-                            logger.info(f"📝 پاسخ: {response_text[:200]}")
+                            logger.error(f"❌ Error creating client: Status {response.status}")
+                            logger.info(f"📝 Response: {response_text[:200]}")
                     
         except asyncio.TimeoutError:
-            logger.error(f"⏰ تایم‌اوت در ساخت کلاینت {email} (تلاش {attempt+1}/3)")
+            logger.error(f"⏰ Timeout creating client {email} (attempt {attempt+1}/3)")
             await asyncio.sleep(5 * (attempt + 1))
         except aiohttp.ClientError as e:
-            logger.error(f"🌐 خطای شبکه در ساخت کلاینت {email} (تلاش {attempt+1}/3): {e}")
+            logger.error(f"🌐 Network error creating client {email} (attempt {attempt+1}/3): {e}")
             await asyncio.sleep(3 * (attempt + 1))
         except Exception as e:
-            logger.error(f"❌ خطای غیرمنتظره در ساخت کلاینت (تلاش {attempt+1}/3): {e}")
+            logger.error(f"❌ Unexpected error creating client (attempt {attempt+1}/3): {e}")
             import traceback
             traceback.print_exc()
             SENAI_COOKIE = None
             SENAI_CSRF = None
             await asyncio.sleep(3 * (attempt + 1))
     
-    logger.error(f"❌ ساخت کلاینت {email} پس از 3 تلاش ناموفق بود")
+    logger.error(f"❌ client creation {email} after 3 failed attempts failed")
     return None
 
 def get_user_inbound(user_id: int) -> Optional[Union[int, List[int]]]:
@@ -11016,7 +11031,7 @@ async def filter_valid_inbounds(inbound_ids) -> list:
         inbounds = await xui_get_inbounds()
         active_inbound_ids = {i.get('id') for i in inbounds if i.get('enable', True)}
     except Exception as e:
-        logger.error(f"❌ [filter_valid_inbounds] خطا در دریافت اینباندها: {e}")
+        logger.error(f"❌ [filter_valid_inbounds] Error retrieving inbounds: {e}")
         return inbound_ids  # اگه پنل در دسترس نبود، دست نزن
     
     # فیلتر
@@ -11024,7 +11039,7 @@ async def filter_valid_inbounds(inbound_ids) -> list:
     invalid = [ib for ib in inbound_ids if ib not in active_inbound_ids]
     
     if invalid:
-        logger.warning(f"⚠️ [filter_valid_inbounds] اینباندهای نامعتبر حذف شدند: {invalid}")
+        logger.warning(f"⚠️ [filter_valid_inbounds] invalid inbounds removed: {invalid}")
     
     return valid
 
@@ -11037,7 +11052,7 @@ async def reset_panel_rate_limits():
     panel_semaphore = asyncio.Semaphore(3)
     panel_rate_limiter = PanelRateLimiter(requests_per_minute=30)
     
-    logger.info("🔄 محدودیت‌های پنل ریست شدند")
+    logger.info('🔄 panel limits reset')
     return True
 
 import aiohttp
@@ -11254,7 +11269,7 @@ def reset_ai_limits():
     configs_pool['user_ai_requests'] = user_ai_requests
     save_all()
     
-    logger.info(f"🔄 ریست محدودیت‌های AI - {before_users} کاربر با {before_count} سوال ریست شد")
+    logger.info(f"🔄 AI limits reset - {before_users} user with {before_count} question reset")
     
     return before_users, before_count
 
@@ -11348,10 +11363,10 @@ Send /cancel to abort.
 """
         
         await processing_msg.edit_text(response_text, parse_mode=ParseMode.HTML)
-        logger.info(f"AI سوال از کاربر {user_id}: {question[:50]}...")
+        logger.info(f"AI question from user {user_id}: {question[:50]}...")
         
     except Exception as e:
-        logger.error(f"خطا در پاسخ AI برای کاربر {user_id}: {e}")
+        logger.error(f"Error in AI response for user {user_id}: {e}")
         await processing_msg.edit_text(
             "❌ خطا در پردازش درخواست. لطفاً بعداً تلاش کنید." if lang == "fa" else "❌ Error processing request. Please try again later."
         )
@@ -11602,8 +11617,8 @@ async def admin_toggle_ai_button(callback: CallbackQuery):
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            f"تغییر وضعیت دکمه AI",
-            details=f"دکمه AI {status_text} شد"
+            "Updated AI button status",
+            details=f"AI button is now {status_text}"
         )
     
     await callback.answer(f"✅ دکمه AI {status_text} شد!", show_alert=True)
@@ -11756,14 +11771,14 @@ async def admin_ai_reset_limits(callback: CallbackQuery):
     reset_ai_limits()
     configs_pool['user_ai_requests'] = user_ai_requests
     save_all()
-    logger.info(f"🔄 محدودیت‌های AI توسط ادمین {callback.from_user.id} ریست شد")
-    logger.info(f"   تعداد کاربران قبل: {before_users} | تعداد سوالات: {before_count}")
+    logger.info(f"🔄 AI limits reset by admin {callback.from_user.id} reset")
+    logger.info(f"   user count before: {before_users} | question count: {before_count}")
     
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            "ریست محدودیت‌های AI",
-            details=f"کاربران: {before_users} | سوالات: {before_count}"
+            "Reset AI limits",
+            details=f"Users: {before_users} | Questions: {before_count}"
         )
     if lang == "fa":
         text = f"""
@@ -11840,42 +11855,42 @@ async def xui_get_client_info(email: str) -> Optional[dict]:
                         obj = data.get("obj", {})
                         client = obj.get("client", obj)
                         
-                        logger.debug("کلاینت از پنل دریافت شد (%s)", type(client).__name__)
+                        logger.debug('Client retrieved from panel (%s)', type(client).__name__)
                         
                         # اگر client دیکشنری نیست، برگردان None
                         if not isinstance(client, dict):
-                            logger.warning(f"⚠️ client برای {email} دیکشنری نیست: {type(client)}")
+                            logger.warning(f"⚠️ Client for {email} is not a dictionary: {type(client)}")
                             return None
                         
                         expiry = client.get('expiryTime', 0)
                         if expiry > 0:
                             try:
                                 expiry_date = datetime.fromtimestamp(expiry / 1000)
-                                logger.info(f"📅 تاریخ انقضا: {expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                                logger.info(f"📅 Expiration date: {expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
                             except:
                                 pass
                         
                         return client
                     else:
-                        logger.info(f"ℹ️ کلاینت {email} در پنل یافت نشد (success: false)")
+                        logger.info(f"ℹ️ Client {email} not found in panel (success: false)")
                         return None
                 elif response.status == 404:
-                    logger.info(f"ℹ️ کلاینت {email} در پنل یافت نشد (404)")
+                    logger.info(f"ℹ️ Client {email} not found in panel (404)")
                     return None
                 else:
-                    logger.warning(f"⚠️ خطا در دریافت کلاینت {email}: Status {response.status}")
+                    logger.warning(f"⚠️ Error retrieving client {email}: Status {response.status}")
                     if response.status >= 500:
-                        logger.warning(f"⚠️ خطای سرور {response.status} - کلاینت {email} ممکنه وجود داشته باشه")
+                        logger.warning(f"⚠️ Server error {response.status} - client {email} may exist")
                         return {}  # آبجکت خالی یعنی "کلاینت وجود داره ولی نتونستیم اطلاعاتش رو بگیریم"
                     return None
     except asyncio.TimeoutError:
-        logger.warning(f"⏰ تایم‌اوت در دریافت کلاینت {email}")
+        logger.warning(f"⏰ Timeout retrieving client {email}")
         return {}
     except aiohttp.ClientError as e:
-        logger.warning(f"🌐 خطای شبکه در دریافت کلاینت {email}: {e}")
+        logger.warning(f"🌐 Network error retrieving client {email}: {e}")
         return {}
     except Exception as e:
-        logger.error(f"❌ خطا در دریافت اطلاعات کلاینت {email}: {e}")
+        logger.error(f"❌ Error retrieving client information {email}: {e}")
         return None
 
 
@@ -11920,8 +11935,7 @@ def get_order_client_email(order: dict) -> Optional[str]:
     # ⚠️ این fallback فقط زمانی استفاده می‌شه که email نداریم
     # ولی ممکنه اشتباه باشه چون آخر لینک subId هست نه email
     logger.warning(
-        f"⚠️ [get_order_client_email] سفارش #{order.get('order_id')} "
-        f"email نداره - نمی‌تونیم به API پنل درخواست بدیم"
+        f"⚠️ [get_order_client_email] order #{order.get('order_id')} no email - cannot request from panel API"
     )
     return None
 # ═══════════════════════════════════════════
@@ -11977,7 +11991,7 @@ async def find_email_by_sub_id(sub_id: str, use_cache: bool = True) -> Optional[
                         logger.info(f"✅ [find_email_by_sub_id] {sub_id[:15]}... → {email}")
                         return email
     except Exception as e:
-        logger.error(f"❌ [find_email_by_sub_id] خطا: {e}")
+        logger.error(f"❌ [find_email_by_sub_id] Error: {e}")
         # اگه خطا داد، از کش قبلی استفاده کن (اگه بود)
         if sub_id in _subid_to_email_cache:
             _, cached_email = _subid_to_email_cache[sub_id]
@@ -12003,8 +12017,7 @@ def get_order_client_email(order: dict) -> Optional[str]:
         return str(email).strip()
     
     logger.debug(
-        f"⚠️ [get_order_client_email] سفارش #{order.get('order_id')} "
-        f"email مستقیم نداره"
+        f"⚠️ [get_order_client_email] order #{order.get('order_id')} no direct email"
     )
     return None
 
@@ -12034,7 +12047,7 @@ async def xui_get_client_traffic(email: str) -> Optional[dict]:
                         return data.get("obj", {})
                 return None
     except Exception as e:
-        logger.error(f"❌ خطا در دریافت ترافیک: {e}")
+        logger.error(f"❌ Error retrieving traffic: {e}")
         return None
 
 
@@ -12176,7 +12189,7 @@ def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") ->
 
 def generate_qr_code(data: str, order_id: int):
     """ساخت QR Code و برگردوندن به فرمت مناسب aiogram 3.x"""
-    logger.debug(f"تولید QR Code برای سفارش #{order_id}")
+    logger.debug(f"QR Code generation for order #{order_id}")
     qr = qrcode.QRCode(
         version=5,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -12299,10 +12312,10 @@ async def process_referral(new_id: int, ref_id: int):
     """پردازش رفرال - فقط برای کاربران جدید"""
     uid = str(new_id)
     if uid in users:
-        logger.info(f"⚠️ کاربر {new_id} قبلاً ثبت نام کرده، رفرال ثبت نشد")
+        logger.info(f"⚠️ user {new_id}already registered, referral not recorded")
         return
     if str(ref_id) == str(new_id):
-        logger.warning(f"⚠️ کاربر {new_id} تلاش کرد خودش را دعوت کند")
+        logger.warning(f"⚠️ user {new_id}attempted to invite themselves")
         return
     key = f"{ref_id}_{new_id}"
     if key not in referrals:
@@ -12321,26 +12334,26 @@ async def process_referral(new_id: int, ref_id: int):
                 f"🎁 بعد از اولین خرید، {configs_pool.get('price_settings', {}).get('referral_bonus', 5000):,} تومان پاداش دریافت خواهید کرد."
             )
         except Exception as e:
-            logger.error(f"خطا در ارسال پیام رفرال به {ref_id}: {e}")
+            logger.error(f"Error sending referral message to {ref_id}: {e}")
         
-        logger.info(f"رفرال جدید: {ref_id} دعوت کرد {new_id}")
+        logger.info(f"new referral: {ref_id}invited {new_id}")
 
 async def check_referral_bonus(user_id: int):
     """بررسی و اعمال پاداش رفرال - فقط برای کاربرانی که با لینک دعوت ثبت نام کرده‌اند"""
     user = get_user(user_id)
     ref_id = user.get('referred_by')
     if not ref_id:
-        logger.info(f"کاربر {user_id} بدون لینک دعوت ثبت نام کرده، پاداشی تعلق نمی‌گیرد")
+        logger.info(f"User {user_id}registered without invite link, no reward granted")
         return False
     if user.get('has_purchased'):
-        logger.info(f"کاربر {user_id} قبلاً خرید کرده، پاداش قبلاً داده شده")
+        logger.info(f"User {user_id}already purchased, reward already granted")
         return False
     key = f"{ref_id}_{user_id}"
     if key not in referrals:
-        logger.warning(f"⚠️ رفرال {key} در دیتابیس یافت نشد")
+        logger.warning(f"⚠️ referral {key}not found in database")
         return False
     if referrals[key].get('reward_given'):
-        logger.info(f"پاداش رفرال {key} قبلاً داده شده")
+        logger.info(f"referral reward {key}already granted")
         return False
     settings = configs_pool.get('price_settings', {})
     bonus = settings.get('referral_bonus', 5000)
@@ -12352,7 +12365,7 @@ async def check_referral_bonus(user_id: int):
     
     new_balance = old_balance + bonus
     
-    logger.info(f"✅ پاداش رفرال {bonus} تومانی به کاربر {ref_id} داده شد (از طرف {user_id})")
+    logger.info(f"✅ referral reward {bonus} tomans to user {ref_id} given (from {user_id})")
     if log_system:
         await log_system.log_balance_change(
             user_id=ref_id,
@@ -12360,12 +12373,12 @@ async def check_referral_bonus(user_id: int):
             new_balance=new_balance,
             action="add",
             admin_id=None,
-            details=f"پاداش دعوت از کاربر {user_id}"
+            details=f"Referral reward for referring user {user_id}"
         )
         await log_system.log_user_action(
             user_id=ref_id,
-            action="دریافت پاداش دعوت",
-            details=f"مبلغ: {bonus:,} تومان | کاربر دعوت شده: {user_id}"
+            action="Received referral reward",
+            details=f"Amount: {bonus:,} Toman | Referred user: {user_id}"
         )
     try:
         await bot.send_message(
@@ -12403,9 +12416,9 @@ async def save_feedback(user_id: int, order_id: int, rating: str, comment: str =
 """
     try:
         await bot.send_message(ADMIN_ID_INT, text)
-        logger.info(f"بازخورد جدید از کاربر {user_id} برای سفارش #{order_id} ذخیره شد")
+        logger.info(f"new feedback from user {user_id} for order #{order_id} saved")
     except Exception as e:
-        logger.error(f"خطا در ارسال بازخورد به ادمین: {e}")
+        logger.error(f"Error sending feedback to admin: {e}")
         
         
 def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = None) -> InlineKeyboardMarkup:
@@ -12440,7 +12453,7 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             
             can_take_test = test_count < max_tests
         except Exception as e:
-            logger.warning(f"خطا در بررسی سقف تست کاربر {user_id}: {e}")
+            logger.warning(f"Error checking test limit for user {user_id}: {e}")
             can_take_test = True
     
     if lang == "fa":
@@ -12612,11 +12625,11 @@ async def get_test_service(callback: CallbackQuery):
         volume_gb = volume_mb / 1024
         volume_display = format_volume(volume_mb, is_test=True)
     
-    logger.info(f"🧪 تست برای کاربر {user_id}:")
-    logger.info(f"  📦 حجم: {volume_mb} MB ({volume_gb} GB) - {volume_display}")
-    logger.info(f"  ⏱ مدت: {days} روز")
-    logger.info(f"  🔢 حداکثر تست: {max_tests}")
-    logger.info(f"  👤 محدودیت IP: {ip_limit}")
+    logger.info(f"🧪 test for user {user_id}:")
+    logger.info(f"  Volume: {volume_mb} MB ({volume_gb} GB) - {volume_display}")
+    logger.info(f"  Duration: {days}days")
+    logger.info(f"  Maximum tests: {max_tests}")
+    logger.info(f"  IP limit: {ip_limit}")
     
     # ═══════════════════════════════════════════
     # ۳. بررسی سقف تست کاربر
@@ -12646,12 +12659,12 @@ async def get_test_service(callback: CallbackQuery):
                 test_inbound_ids = user_inbounds
             else:
                 test_inbound_ids = [user_inbounds]
-            logger.info(f"👤 استفاده از اینباندهای کاربر {user_id} برای تست: {test_inbound_ids}")
+            logger.info(f"👤 Using inbounds for user {user_id} for test: {test_inbound_ids}")
         else:
             default_ids = configs_pool.get('default_inbound_ids', [])
             if default_ids:
                 test_inbound_ids = default_ids
-                logger.info(f"📌 استفاده از اینباندهای پیش‌فرض برای تست: {test_inbound_ids}")
+                logger.info(f"📌 Using default inbounds for test: {test_inbound_ids}")
     
     # ═══════════════════════════════════════════
     # ۵. ارسال پیام لودینگ
@@ -12669,7 +12682,7 @@ async def get_test_service(callback: CallbackQuery):
         try:
             loading_msg = await callback.message.answer(loading_text)
         except Exception as e2:
-            logger.warning(f"خطا در ارسال پیام لودینگ: {e2}")
+            logger.warning(f"Error sending loading message: {e2}")
     
     # ═══════════════════════════════════════════
     # ۶. ساخت سرویس تست
@@ -12736,7 +12749,7 @@ async def get_test_service(callback: CallbackQuery):
                 with open(test_file, 'w', encoding='utf-8') as f:
                     json.dump(USER_TEST_USAGE, f, ensure_ascii=False, indent=2)
             except Exception as e:
-                logger.error(f"خطا در ذخیره تست یوزر: {e}")
+                logger.error(f"Error saving test user: {e}")
             
             # ─── حذف پیام لودینگ ───
             deleted = False
@@ -12745,7 +12758,7 @@ async def get_test_service(callback: CallbackQuery):
                     await loading_msg.delete()
                     deleted = True
                 except Exception as e:
-                    logger.debug(f"خطا در حذف پیام لودینگ: {e}")
+                    logger.debug(f"Error deleting loading message: {e}")
             
             if not deleted:
                 try:
@@ -12759,17 +12772,15 @@ async def get_test_service(callback: CallbackQuery):
             # ─── لاگ ───
             inbound_display = test_inbound_ids if test_inbound_ids else 'پیش‌فرض'
             logger.info(
-                f"🧪 کاربر {user_id} تست سرویس دریافت کرد - "
-                f"سفارش #{order_id} - {volume_display}/{days} روز - "
-                f"اینباندها: {inbound_display} - IP Limit: {ip_limit}"
+                f"🧪 User {user_id} received a test service - order #{order_id} - {volume_display}/{days} days - inbounds: {inbound_display} - IP Limit: {ip_limit}"
             )
             
             if log_system:
                 await log_system.log_user_action(
                     user_id,
-                    "دریافت تست سرویس",
-                    f"سفارش #{order_id} | {volume_display}/{days} روز | "
-                    f"اینباندها: {inbound_display} | IP Limit: {ip_limit}"
+                    "Received service trial",
+                    f"Order #{order_id} | {volume_display}/{days} days | "
+                    f"Inbounds: {inbound_display} | IP Limit: {ip_limit}"
                 )
             
             await callback.answer(
@@ -12799,13 +12810,13 @@ async def get_test_service(callback: CallbackQuery):
             except Exception:
                 pass
             
-            logger.error(f"❌ خطا در ساخت تست برای کاربر {user_id}")
+            logger.error(f"❌ Error creating test for user {user_id}")
     
     # ───────────────────────────────────────
     # ۶.۳. خطای غیرمنتظره
     # ───────────────────────────────────────
     except Exception as e:
-        logger.error(f"❌ خطا در دریافت تست: {e}", exc_info=True)
+        logger.error(f"❌ Error retrieving test: {e}", exc_info=True)
         
         if loading_msg:
             try:
@@ -12859,7 +12870,7 @@ async def get_client_inbounds(email: str) -> list:
         return found_inbounds
         
     except Exception as e:
-        logger.error(f"❌ خطا در دریافت اینباندهای کلاینت {email}: {e}")
+        logger.error(f"❌ Error retrieving client inbounds {email}: {e}")
         return []
 
 
@@ -12870,7 +12881,7 @@ async def xui_detach_inbounds(email: str, inbound_ids: list) -> bool:
     Body: {"inboundIds": [7, 9]}
     """
     if not inbound_ids:
-        logger.info("ℹ️ هیچ اینباندی برای detach وجود ندارد")
+        logger.info('ℹ️ no inbounds to detach')
         return True
 
     try:
@@ -12878,7 +12889,7 @@ async def xui_detach_inbounds(email: str, inbound_ids: list) -> bool:
         async with aiohttp.ClientSession(connector=connector) as session:
             cookie = await xui_login()
             if not cookie:
-                logger.error("❌ خطا در ورود به پنل")
+                logger.error('❌ Error logging in to the panel')
                 return False
 
             csrf = await xui_get_csrf_token(session)
@@ -12887,7 +12898,7 @@ async def xui_detach_inbounds(email: str, inbound_ids: list) -> bool:
             detach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/detach"
             detach_data = {"inboundIds": inbound_ids}
 
-            logger.info("📤 درخواست detach برای %s اینباند ارسال شد", len(inbound_ids))
+            logger.info('📤 Detach request sent for %s inbounds', len(inbound_ids))
 
             async with session.post(
                 detach_url,
@@ -12897,26 +12908,26 @@ async def xui_detach_inbounds(email: str, inbound_ids: list) -> bool:
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as response:
                 response_text = await response.text()
-                logger.info(f"📥 پاسخ detach: Status {response.status}")
+                logger.info(f"📥 Detach response: Status {response.status}")
 
                 if response.status == 200:
                     try:
                         data = json.loads(response_text)
                         if data.get("success"):
-                            logger.info(f"✅ اینباندهای {inbound_ids} با موفقیت از کلاینت {email} حذف شدند")
+                            logger.info(f"✅ Inbounds {inbound_ids} successfully detached from client {email} removed")
                             return True
                         else:
-                            logger.error(f"❌ detach ناموفق: {data.get('msg', 'Unknown error')}")
+                            logger.error(f"❌ detach failed: {data.get('msg', 'Unknown error')}")
                             return False
                     except json.JSONDecodeError:
-                        logger.error(f"❌ خطا در دیکد JSON: {response_text[:200]}")
+                        logger.error(f"❌ Error decoding JSON: {response_text[:200]}")
                         return False
                 else:
-                    logger.error(f"❌ detach ناموفق: Status {response.status}")
+                    logger.error(f"❌ detach failed: Status {response.status}")
                     return False
 
     except Exception as e:
-        logger.error(f"❌ خطا در detach اینباندها از کلاینت {email}: {e}")
+        logger.error(f"❌ Error detaching inbounds from client {email}: {e}")
         return False
     finally:
         try:
@@ -12933,7 +12944,7 @@ async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
     Body: {"inboundIds": [7, 9]}
     """
     if not inbound_ids:
-        logger.info("ℹ️ هیچ اینباندی برای attach وجود ندارد")
+        logger.info('ℹ️ no inbounds to attach')
         return True
 
     try:
@@ -12941,7 +12952,7 @@ async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
         async with aiohttp.ClientSession(connector=connector) as session:
             cookie = await xui_login()
             if not cookie:
-                logger.error("❌ خطا در ورود به پنل")
+                logger.error('❌ Error logging in to the panel')
                 return False
 
             csrf = await xui_get_csrf_token(session)
@@ -12950,7 +12961,7 @@ async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
             attach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/attach"
             attach_data = {"inboundIds": inbound_ids}
 
-            logger.info("📤 درخواست attach برای %s اینباند ارسال شد", len(inbound_ids))
+            logger.info('📤 Attach request sent for %s inbounds', len(inbound_ids))
 
             async with session.post(
                 attach_url,
@@ -12960,27 +12971,27 @@ async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as response:
                 response_text = await response.text()
-                logger.info(f"📥 پاسخ attach: Status {response.status}")
+                logger.info(f"📥 Attach response: Status {response.status}")
 
                 if response.status == 200:
                     try:
                         data = json.loads(response_text)
                         if data.get("success"):
-                            logger.info(f"✅ اینباندهای {inbound_ids} با موفقیت به کلاینت {email} اضافه شدند")
+                            logger.info(f"✅ Inbounds {inbound_ids} successfully attached to client {email} added")
                             return True
                         else:
                             error_msg = data.get('msg', 'Unknown error')
-                            logger.error(f"❌ attach ناموفق: {error_msg}")
+                            logger.error(f"❌ attach failed: {error_msg}")
                             return False
                     except json.JSONDecodeError:
-                        logger.error(f"❌ خطا در دیکد JSON: {response_text[:200]}")
+                        logger.error(f"❌ Error decoding JSON: {response_text[:200]}")
                         return False
                 else:
-                    logger.error(f"❌ attach ناموفق: Status {response.status}")
+                    logger.error(f"❌ attach failed: Status {response.status}")
                     return False
 
     except Exception as e:
-        logger.error(f"❌ خطا در attach اینباندها به کلاینت {email}: {e}")
+        logger.error(f"❌ Error attaching inbounds to client {email}: {e}")
         return False
     finally:
         try:
@@ -13006,7 +13017,7 @@ async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
         async with aiohttp.ClientSession(connector=connector) as session:
             cookie = await xui_login()
             if not cookie:
-                logger.error(f"❌ خطا در ورود به پنل برای ریست ترافیک {email}")
+                logger.error(f"❌ Error logging in to the panel to reset traffic {email}")
                 return False
 
             csrf = await xui_get_csrf_token(session)
@@ -13027,7 +13038,7 @@ async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
                         try:
                             data = json.loads(resp_text)
                             if data.get("success"):
-                                logger.info(f"✅ ترافیک کلاینت {email} از اندپوینت clients/resetTraffic ریست شد")
+                                logger.info(f"✅ Client traffic {email} reset via the clients/resetTraffic endpoint")
                                 success = True
                         except Exception:
                             pass
@@ -13059,12 +13070,12 @@ async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
                                 try:
                                     data = json.loads(resp_text)
                                     if data.get("success"):
-                                        logger.info(f"✅ ترافیک کلاینت {email} در اینباند {inb_id} ریست شد")
+                                        logger.info(f"✅ Client traffic {email} in inbound {inb_id} reset")
                                         success = True
                                 except Exception:
                                     pass
                     except Exception as e:
-                        logger.warning(f"⚠️ خطا در ریست ترافیک اینباند {inb_id} کلاینت {email}: {e}")
+                        logger.warning(f"⚠️ Error resetting traffic for inbound {inb_id} client {email}: {e}")
 
             # 3. تلاش با اندپوینت عمومی inbounds/resetClientTraffic/{email}
             if not success:
@@ -13081,7 +13092,7 @@ async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
                             try:
                                 data = json.loads(resp_text)
                                 if data.get("success"):
-                                    logger.info(f"✅ ترافیک کلاینت {email} از اندپوینت عمومی inbounds ریست شد")
+                                    logger.info(f"✅ Client traffic {email} reset via the public inbounds endpoint")
                                     success = True
                             except Exception:
                                 pass
@@ -13090,7 +13101,7 @@ async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
 
             return success
     except Exception as e:
-        logger.error(f"❌ خطا در xui_reset_client_traffic برای {email}: {e}")
+        logger.error(f"❌ Error in xui_reset_client_traffic for {email}: {e}")
         return False
     finally:
         try:
@@ -13116,35 +13127,35 @@ async def extend_service(
     + آپدیت اطلاعات دسته در سفارش اصلی
     + ریست ترافیک مصرفی در صورت سرویس نامحدود قبلی یا تغییر پکیج/دسته
     """
-    logger.info(f"🔄 [extend_service] شروع تمدید سرویس - order_id={order_id}, user_id={user_id}")
-    logger.info(f"   📦 حجم اضافی: {extra_volume}GB {'(نامحدود)' if extra_volume == 0 else ''}")
-    logger.info(f"   ⏱ روز اضافی: {extra_days} روز")
-    logger.info(f"   👤 محدودیت IP جدید: {new_ip_limit if new_ip_limit is not None else 'بدون تغییر'}")
+    logger.info(f"🔄 [extend_service] starting service extension - order_id={order_id}, user_id={user_id}")
+    logger.info(f"   Additional Volume: {extra_volume}GB {'(unlimited)' if extra_volume == 0 else ''}")
+    logger.info(f"   Additional Days: {extra_days}days")
+    logger.info(f"   New IP limit: {new_ip_limit if new_ip_limit is not None else 'no change'}")
     order = orders.get(str(order_id))
     if not order:
-        logger.error(f"❌ سفارش #{order_id} برای تمدید یافت نشد")
+        logger.error(f"❌ order #{order_id}not found for renewal")
         return False
     
     email = order.get('email')
     if not email:
-        logger.error(f"❌ ایمیل سفارش #{order_id} یافت نشد")
+        logger.error(f"❌ order # email{order_id} not found")
         return False
     
     if not SENAI_PANEL_ENABLED:
-        logger.error("❌ پنل برای تمدید سرویس فعال نیست")
+        logger.error('❌ panel service renewal not active')
         return False
     try:
-        logger.info(f"📡 دریافت اطلاعات کلاینت {email} از پنل...")
+        logger.info(f"📡 receiving client info {email} from panel...")
         client_info = await xui_get_client_info(email)
         
         if not client_info:
-            logger.error(f"❌ کلاینت {email} در پنل یافت نشد")
+            logger.error(f"❌ Client {email} not found in the panel")
             return False
         current_inbounds = await get_client_inbounds(email)
         if not isinstance(current_inbounds, list):
             current_inbounds = [current_inbounds] if current_inbounds else []
         
-        logger.info(f"📡 اینباندهای فعلی: {current_inbounds}")
+        logger.info(f"📡 current inbounds: {current_inbounds}")
         if new_inbounds:
             selected_inbounds = new_inbounds
         else:
@@ -13155,26 +13166,26 @@ async def extend_service(
         if not isinstance(selected_inbounds, list):
             selected_inbounds = [selected_inbounds] if selected_inbounds else []
         
-        logger.info(f"📡 اینباندهای جدید (انتخاب شده): {selected_inbounds}")
+        logger.info(f"📡 new inbounds (selected): {selected_inbounds}")
         inbounds_to_detach = []
         for inbound_id in current_inbounds:
             if inbound_id and inbound_id not in selected_inbounds:
                 inbounds_to_detach.append(inbound_id)
-                logger.info(f"➖ اینباند {inbound_id} باید حذف شود")
+                logger.info(f"➖ Inbound {inbound_id} should be removed")
         
         inbounds_to_attach = []
         for inbound_id in selected_inbounds:
             if inbound_id and inbound_id not in current_inbounds:
                 inbounds_to_attach.append(inbound_id)
-                logger.info(f"➕ اینباند {inbound_id} باید اضافه شود")
+                logger.info(f"➕ Inbound {inbound_id} should be added")
         current_volume_gb = client_info.get('totalGB', 0) / (1024**3)
         current_expiry = client_info.get('expiryTime', 0)
         current_ip_limit = client_info.get('limitIp', 0)
         
-        logger.info(f"📊 اطلاعات فعلی کلاینت:")
-        logger.info(f"   📦 حجم فعلی: {current_volume_gb:.2f} GB")
-        logger.info(f"   ⏱ انقضای فعلی: {datetime.fromtimestamp(current_expiry/1000).strftime('%Y-%m-%d %H:%M:%S') if current_expiry > 0 else 'نامحدود'}")
-        logger.info(f"   👤 محدودیت IP فعلی: {current_ip_limit if current_ip_limit > 0 else 'نامحدود'}")
+        logger.info(f"📊 Current client information:")
+        logger.info(f"   📦 Current volume: {current_volume_gb:.2f} GB")
+        logger.info(f"   ⏱ Current expiration: {datetime.fromtimestamp(current_expiry/1000).strftime('%Y-%m-%d %H:%M:%S') if current_expiry > 0 else 'unlimited'}")
+        logger.info(f"   👤 Current IP limit: {current_ip_limit if current_ip_limit > 0 else 'unlimited'}")
 
         # ✅ بررسی سرویس نامحدود
         old_volume = order.get('volume', 0)
@@ -13210,24 +13221,24 @@ async def extend_service(
         should_replace_volume = is_old_unlimited or is_new_unlimited or is_category_changed
         should_reset_traffic = is_old_unlimited or is_new_unlimited or is_category_changed
 
-        logger.info(f"🔍 وضعیت تمدید: is_old_unlimited={is_old_unlimited}, is_new_unlimited={is_new_unlimited}, is_category_changed={is_category_changed}")
+        logger.info(f"🔍 Renewal status: is_old_unlimited={is_old_unlimited}, is_new_unlimited={is_new_unlimited}, is_category_changed={is_category_changed}")
         logger.info(f"   ➡️ should_replace_volume={should_replace_volume}, should_reset_traffic={should_reset_traffic}")
 
         if is_new_unlimited:
             new_volume_bytes = 0
             new_volume_gb = 0
             new_volume_total = 0
-            logger.info(f"📦 حجم جدید: نامحدود (0 bytes)")
+            logger.info(f"📦 New data limit: Unlimited (0 bytes)")
         elif should_replace_volume:
             new_volume_bytes = int(extra_volume * 1024 * 1024 * 1024)
             new_volume_gb = float(extra_volume)
             new_volume_total = extra_volume
-            logger.info(f"📦 حجم جدید (جایگزین شده): {new_volume_gb:.2f} GB")
+            logger.info(f"📦 New data limit (replaced): {new_volume_gb:.2f} GB")
         else:
             new_volume_bytes = int((current_volume_gb + extra_volume) * 1024 * 1024 * 1024)
             new_volume_gb = current_volume_gb + extra_volume
             new_volume_total = current_volume_gb + extra_volume
-            logger.info(f"📦 حجم جدید (تجمعی): {new_volume_gb:.2f} GB")
+            logger.info(f"📦 New data limit (cumulative): {new_volume_gb:.2f} GB")
 
         now_dt = datetime.now()
         if current_expiry > 0:
@@ -13239,18 +13250,18 @@ async def extend_service(
             new_expiry_date = now_dt + timedelta(days=extra_days)
             new_expiry = int(new_expiry_date.timestamp() * 1000)
         
-        logger.info(f"⏱ انقضای جدید: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"⏱ New expiration: {new_expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
         final_ip_limit = new_ip_limit if new_ip_limit is not None else current_ip_limit
-        logger.info(f"👤 محدودیت IP جدید: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
+        logger.info(f"👤 New IP limit: {final_ip_limit if final_ip_limit > 0 else 'unlimited'}")
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
-            logger.info(f"🔑 ورود به پنل...")
+            logger.info(f"🔑 Logging in to the panel...")
             cookie = await xui_login()
             if not cookie:
-                logger.error(f"❌ خطا در ورود به پنل")
+                logger.error(f"❌ Error logging in to the panel")
                 return False
             
-            logger.info(f"🔐 دریافت CSRF token...")
+            logger.info(f"🔐 Retrieving CSRF token...")
             csrf = await xui_get_csrf_token(session)
             headers = {"X-CSRF-Token": csrf} if csrf else {}
             update_data = {
@@ -13266,10 +13277,10 @@ async def extend_service(
                 "resetStrategy": client_info.get('resetStrategy', 'no_reset')
             }
             
-            logger.info(f"📤 ارسال درخواست UPDATE به پنل...")
+            logger.info(f"📤 Sending UPDATE request to the panel...")
             logger.info(f"   🌐 URL: {SENAI_PANEL_URL}/panel/api/clients/update/{email}")
-            logger.info(f"   📝 حجم: {'نامحدود' if new_volume_bytes == 0 else f'{new_volume_gb:.2f}GB'}")
-            logger.info(f"   👤 محدودیت IP: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
+            logger.info(f"   📝 Data: {'unlimited' if new_volume_bytes == 0 else f'{new_volume_gb:.2f}GB'}")
+            logger.info(f"   👤 IP limit: {final_ip_limit if final_ip_limit > 0 else 'unlimited'}")
             
             async with session.post(
                 f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}",
@@ -13279,53 +13290,53 @@ async def extend_service(
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as response:
                 response_text = await response.text()
-                logger.info(f"📥 پاسخ UPDATE: Status {response.status}")
+                logger.info(f"📥 UPDATE response: Status {response.status}")
                 
                 if response.status != 200:
-                    logger.error(f"❌ خطا در UPDATE: Status {response.status}")
+                    logger.error(f"❌ Error in UPDATE: Status {response.status}")
                     return False
                 
                 try:
                     data = json.loads(response_text)
                     if not data.get("success"):
-                        logger.error(f"❌ UPDATE ناموفق: {data.get('msg', 'Unknown error')}")
+                        logger.error(f"❌ UPDATE failed: {data.get('msg', 'Unknown error')}")
                         return False
                 except json.JSONDecodeError:
-                    logger.error(f"❌ پاسخ JSON نامعتبر")
+                    logger.error(f"❌ Invalid JSON response")
                     return False
             
-            logger.info(f"✅ UPDATE با موفقیت انجام شد")
+            logger.info(f"✅ UPDATE completed successfully")
 
             # ✅ در صورت تمدید سرویس نامحدود یا تغییر پکیج، ترافیک مصرفی ریست شود
             if should_reset_traffic:
-                logger.info(f"🔄 شروع ریست ترافیک مصرفی کلاینت {email} در پنل...")
+                logger.info(f"🔄 Starting used traffic reset for client {email} in the panel...")
                 reset_ok = await xui_reset_client_traffic(email, selected_inbounds)
                 if reset_ok:
-                    logger.info(f"✅ ترافیک مصرفی کلاینت {email} با موفقیت در پنل ریست شد")
+                    logger.info(f"✅ Traffic usage for client {email} successfully reset in the panel")
                 else:
-                    logger.warning(f"⚠️ نتیجه ریست ترافیک کلاینت {email} ناموفق یا پشتیبانی نشده بود")
+                    logger.warning(f"⚠️ Traffic reset result for client {email} failed or was unsupported")
 
             if inbounds_to_detach:
-                logger.info(f"📤 حذف اینباندهای {inbounds_to_detach} از کلاینت {email}...")
+                logger.info(f"📤 Removing inbounds {inbounds_to_detach} from client {email}...")
                 detach_success = await xui_detach_inbounds(email, inbounds_to_detach)
                 if detach_success:
-                    logger.info(f"✅ اینباندهای {inbounds_to_detach} با موفقیت حذف شدند")
+                    logger.info(f"✅ Inbounds {inbounds_to_detach} successfully removed")
                 else:
-                    logger.warning(f"⚠️ خطا در detach اینباندها")
+                    logger.warning(f"⚠️ Error detaching inbounds")
             if inbounds_to_attach:
-                logger.info(f"📤 اضافه کردن اینباندهای {inbounds_to_attach} به کلاینت {email}...")
+                logger.info(f"📤 Adding inbounds {inbounds_to_attach} to client {email}...")
                 attach_success = await xui_attach_inbounds(email, inbounds_to_attach)
                 if attach_success:
-                    logger.info(f"✅ اینباندهای {inbounds_to_attach} با موفقیت اضافه شدند")
+                    logger.info(f"✅ Inbounds {inbounds_to_attach} successfully added")
                 else:
-                    logger.warning(f"⚠️ خطا در attach اینباندها")
+                    logger.warning(f"⚠️ Error attaching inbounds")
         new_days_total = order.get('days', 0) + extra_days
         
-        logger.info(f"📝 به‌روزرسانی سفارش #{order_id} در دیتابیس...")
-        logger.info(f"   📦 حجم جدید: {'نامحدود' if new_volume_total == 0 else f'{new_volume_total:.2f}GB'}")
-        logger.info(f"   ⏱ روز جدید: {new_days_total}")
-        logger.info(f"   👤 محدودیت IP جدید: {final_ip_limit if final_ip_limit > 0 else 'نامحدود'}")
-        logger.info(f"   📡 اینباندها: {selected_inbounds}")
+        logger.info(f"📝 Updating order #{order_id} in the database...")
+        logger.info(f"   📦 New volume: {'unlimited' if new_volume_total == 0 else f'{new_volume_total:.2f}GB'}")
+        logger.info(f"   ⏱ New days: {new_days_total}")
+        logger.info(f"   New IP limit: {final_ip_limit if final_ip_limit > 0 else 'unlimited'}")
+        logger.info(f"   📡 Inbounds: {selected_inbounds}")
 
         # ✅ ساخت data برای آپدیت
         update_data = {
@@ -13340,7 +13351,7 @@ async def extend_service(
         # ✅ اگه کتگوری جدید داریم، آپدیتش کن
         if new_category_id is not None:
             update_data['category_id'] = new_category_id
-            logger.info(f"   🏷️ کتگوری جدید: {new_category_name or new_category_id}")
+            logger.info(f"   🏷️ New category: {new_category_name or new_category_id}")
 
         if new_category_name:
             update_data['category_name'] = new_category_name
@@ -13356,11 +13367,11 @@ async def extend_service(
         if selected_inbounds:
             save_user_inbound_selection(user_id, selected_inbounds)
         
-        logger.info(f"✅ تمدید سرویس {email} با موفقیت انجام شد!")
+        logger.info(f"✅ Service renewal {email} completed successfully!")
         return True
         
     except Exception as e:
-        logger.error(f"❌ خطا در تمدید: {e}", exc_info=True)
+        logger.error(f"❌ Error extending service: {e}", exc_info=True)
         return False
     finally:
         try:
@@ -13439,8 +13450,7 @@ async def extend_service_start(callback: CallbackQuery):
     
     if is_test:
         logger.info(
-            f"🚫 [extend_service_start] کاربر {user_id} تلاش کرد "
-            f"سرویس تست #{order_id} را تمدید کند - جلوگیری شد"
+            f"🚫 [extend_service_start] User {user_id} tried to renew test service #{order_id} - blocked from renewing"
         )
         
         # لاگ
@@ -13448,11 +13458,11 @@ async def extend_service_start(callback: CallbackQuery):
             try:
                 await log_system.log_user_action(
                     user_id,
-                    "تلاش برای تمدید سرویس تست",
-                    f"سفارش #{order_id}"
+                    "Attempted to renew trial service",
+                    f"Order #{order_id}"
                 )
             except Exception as e:
-                logger.warning(f"خطا در ارسال لاگ: {e}")
+                logger.warning(f"Error sending log: {e}")
         
         # ✅ هشدار کوتاه به کاربر
         alert_text = (
@@ -13464,7 +13474,7 @@ async def extend_service_start(callback: CallbackQuery):
         try:
             await callback.answer(alert_text, show_alert=True)
         except Exception as e:
-            logger.warning(f"خطا در نمایش alert: {e}")
+            logger.warning(f"Error displaying alert: {e}")
         
         return
     
@@ -13475,8 +13485,7 @@ async def extend_service_start(callback: CallbackQuery):
         # اگه ایمیل پیدا نشد، سرویس ناقص است
         if not email:
             logger.warning(
-                f"⚠️ [extend_service_start] سفارش #{order_id} "
-                f"ایمیل ندارد - کاربر {user_id}"
+                f"⚠️ [extend_service_start] Order #{order_id} has no email - user {user_id}"
             )
             await callback.answer(
                 "❌ اطلاعات سرویس ناقص است. لطفاً با پشتیبانی تماس بگیرید."
@@ -13491,7 +13500,7 @@ async def extend_service_start(callback: CallbackQuery):
             client_info = await xui_get_client_info(email)
         except Exception as e:
             logger.error(
-                f"❌ [extend_service_start] خطا در بررسی کانفیگ "
+                f"❌ [extend_service_start] Error checking configuration "
                 f"{email}: {e}", exc_info=True
             )
             await callback.answer(
@@ -13505,15 +13514,13 @@ async def extend_service_start(callback: CallbackQuery):
         # ❌ کانفیگ در پنل وجود ندارد
         if not client_info:
             logger.warning(
-                f"⚠️ [extend_service_start] کاربر {user_id} تلاش کرد "
-                f"سرویس حذف شده #{order_id} (email: {email}) را تمدید کند"
+                f"⚠️ [extend_service_start] User {user_id} tried to extend deleted service #{order_id} (email: {email})"
             )
             
             # به‌روزرسانی وضعیت سفارش به deleted
             update_order(order_id, status='deleted')
             logger.info(
-                f"🗑 سفارش #{order_id} به وضعیت deleted تغییر کرد "
-                f"(کانفیگ در پنل حذف شده)"
+                f"🗑 order #{order_id} changed to deleted status (configuration deleted from the panel)"
             )
             
             # لاگ در سیستم خارجی
@@ -13521,11 +13528,11 @@ async def extend_service_start(callback: CallbackQuery):
                 try:
                     await log_system.log_user_action(
                         user_id,
-                        "تلاش برای تمدید سرویس حذف شده",
-                        f"سفارش #{order_id} | ایمیل: {email}"
+                        "Attempted to renew deleted service",
+                        f"Order #{order_id} | Email: {email}"
                     )
                 except Exception as e:
-                    logger.warning(f"خطا در ارسال لاگ: {e}")
+                    logger.warning(f"Error sending log: {e}")
             
             # ✅ هشدار به کاربر
             alert_text = (
@@ -13543,14 +13550,13 @@ async def extend_service_start(callback: CallbackQuery):
             try:
                 await callback.answer(alert_text, show_alert=True)
             except Exception as e:
-                logger.warning(f"خطا در نمایش alert: {e}")
+                logger.warning(f"Error displaying alert: {e}")
             
             return
         
         # ✅ کانفیگ موجود است → ادامه تمدید
         logger.info(
-            f"✅ [extend_service_start] کانفیگ {email} در پنل موجود "
-            f"است - ادامه تمدید سفارش #{order_id}"
+            f"✅ [extend_service_start] Config {email} exists in the panel - continuing renewal for order #{order_id}"
         )
     
     # ✅ ذخیره state تمدید
@@ -13565,8 +13571,7 @@ async def extend_service_start(callback: CallbackQuery):
     }
     
     logger.info(
-        f"🔄 [extend_service_start] کاربر {user_id} تمدید "
-        f"سرویس #{order_id} را شروع کرد"
+        f"🔄 [extend_service_start] user {user_id} extending order #{order_id} started"
     )
     
     # ✅ ریست حجم و روز
@@ -13586,10 +13591,10 @@ async def emergency_backup_from_panel():
     """
     global users, orders, referrals, configs_pool, feedbacks, chats, BLACKLIST
     
-    logger.info("🚨 شروع بکاپ اضطراری از پنل (حفظ کاربران موجود)...")
+    logger.info('🚨 emergency panel backup started (keeping existing users)...')
     
     if not SENAI_PANEL_ENABLED:
-        logger.error("❌ پنل غیرفعال است")
+        logger.error('❌ Panel is disabled')
         return {"success": False, "error": "پنل غیرفعال است"}
     
     try:
@@ -13611,14 +13616,14 @@ async def emergency_backup_from_panel():
         
         with open(old_backup_file, 'w', encoding='utf-8') as f:
             json.dump(old_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"💾 بکاپ از وضعیت قبلی در {old_backup_file} ذخیره شد")
+        logger.info(f"💾 Backup of the previous state at {old_backup_file} saved")
         
         
-        logger.info("📡 دریافت اطلاعات از پنل...")
+        logger.info('📡 Fetching information from the panel...')
         
         inbounds = await xui_get_inbounds()
         if not inbounds:
-            logger.error("❌ هیچ اینباندی یافت نشد")
+            logger.error('❌ No inbounds found')
             return {"success": False, "error": "هیچ اینباندی یافت نشد"}
         
         
@@ -13666,7 +13671,7 @@ async def emergency_backup_from_panel():
                     user_name = re.sub(r'[<>/\\|]+$', '', user_name).strip()
                     if not user_id:
                         user_id = int(match.group(2))
-                    logger.info(f"✅ [کامنت] user_id: {user_id}, name: {user_name}")
+                    logger.info(f"✅ [comment] user_id: {user_id}, name: {user_name}")
                 else:
                     match_id = re.search(r'ID[:=](\d+)', comment)
                     if match_id:
@@ -13676,7 +13681,7 @@ async def emergency_backup_from_panel():
                         name_part = re.sub(r'[\(\)\[\]\{\}<>/]+', '', name_part).strip()
                         if name_part:
                             user_name = name_part
-                            logger.info(f"✅ [کامنت-ID] user_id: {user_id}, name: {user_name}")
+                            logger.info(f"✅ [comment-ID] user_id: {user_id}, name: {user_name}")
             
             if user_id and not order_type:
                 order_type = 'purchase'
@@ -13742,12 +13747,12 @@ async def emergency_backup_from_panel():
                         
                         if order_type == 'test' and existing['order_type'] != 'test':
                             existing['order_type'] = 'test'
-                            logger.info(f"🔄 به‌روزرسانی نوع: {email} → test")
+                            logger.info(f"🔄 Updating type: {email} → test")
                         
                         
                         if not existing.get('user_name') and user_name:
                             existing['user_name'] = user_name
-                            logger.info(f"🔄 به‌روزرسانی نام: {email} → {user_name}")
+                            logger.info(f"🔄 Updating name: {email} → {user_name}")
                         
                         
                         if comment and len(comment) > len(existing.get('comment', '')):
@@ -13762,10 +13767,10 @@ async def emergency_backup_from_panel():
                         'port': port
                     })
                     
-                    logger.info(f"✅ کلاینت: {email} (User: {user_id}) - نوع: {clients_dict[email]['order_type']} - نام: {user_name or 'نامشخص'}")
+                    logger.info(f"✅ Client: {email} (User: {user_id}) - Type: {clients_dict[email]['order_type']} - name: {user_name or 'unknown'}")
                 else:
                     skipped_clients += 1
-                    logger.info(f"⏭️ کلاینت دستی رد شد: {email}")
+                    logger.info(f"⏭️ Manual client skipped: {email}")
         
         clients = list(clients_dict.values())
         
@@ -13774,19 +13779,19 @@ async def emergency_backup_from_panel():
         purchase_count = len([c for c in clients if c.get('order_type') == 'purchase'])
         names_found = len(user_names_from_panel)
         
-        logger.info(f"✅ {len(clients)} کلاینت یکتا پیدا شد")
-        logger.info(f"⏭️ {skipped_clients} کلاینت دستی رد شد")
-        logger.info(f"👥 {len(users_with_configs)} کاربر با کانفیگ فعال")
-        logger.info(f"📊 تست‌ها: {test_count} | خریدها: {purchase_count}")
-        logger.info(f"📝 {names_found} نام کاربر از کامنت‌ها استخراج شد")
+        logger.info(f"✅ {len(clients)} unique client found")
+        logger.info(f"⏭️ {skipped_clients} manual client skipped")
+        logger.info(f"👥 {len(users_with_configs)} user with an active config")
+        logger.info(f"📊 Tests: {test_count} | Purchases: {purchase_count}")
+        logger.info(f"📝 {names_found} username extracted from comments")
         
         if not clients:
             return {"success": False, "error": "هیچ کلاینتی که توسط ربات ساخته شده باشد، در پنل یافت نشد!"}
         
         
-        logger.info("🗑 پاک کردن اوردرهای قبلی...")
+        logger.info('🗑 Deleting previous orders...')
         orders.clear()
-        logger.info("✅ اوردرهای قبلی پاک شدند")
+        logger.info('✅ Previous orders deleted')
         
         
         updated_users = 0
@@ -13804,14 +13809,14 @@ async def emergency_backup_from_panel():
                 
                 if panel_name and (old_name.startswith('کاربر_') or old_name == 'کاربر ناشناس' or 'ناشناس' in old_name):
                     users[uid]['name'] = panel_name
-                    logger.info(f"✅ نام کاربر {user_id} از '{old_name}' به '{panel_name}' تغییر یافت")
+                    logger.info(f"✅ User name {user_id} changed from \'{old_name}\' to \'{panel_name}\'")
                 elif panel_name and old_name != panel_name:
-                    logger.info(f"ℹ️ کاربر {user_id}: نام قبلی '{old_name}' حفظ شد (کامنت: '{panel_name}')")
+                    logger.info(f"ℹ️ User {user_id}: previous name \'{old_name}\' was retained (comment: \'{panel_name}')")
                 
                 users[uid]['has_purchased'] = True
                 users[uid]['updated_at'] = datetime.now().isoformat()
                 updated_users += 1
-                logger.info(f"👤 کاربر {user_id} به‌روزرسانی شد")
+                logger.info(f"👤 User {user_id} updated")
             else:
                 
                 final_name = panel_name if panel_name else f'کاربر_{user_id}'
@@ -13845,10 +13850,10 @@ async def emergency_backup_from_panel():
                     'registration_status': 'approved'
                 }
                 new_users += 1
-                logger.info(f"👤 کاربر جدید {user_id} ایجاد شد با نام '{final_name}'")
+                logger.info(f"👤 New user {user_id} created with name \'{final_name}'")
         
-        logger.info(f"✅ {updated_users} کاربر به‌روزرسانی شدند")
-        logger.info(f"✅ {new_users} کاربر جدید ایجاد شدند")
+        logger.info(f"✅ {updated_users} users updated")
+        logger.info(f"✅ {new_users} new users created")
         
        
         new_orders = {}
@@ -13915,20 +13920,20 @@ async def emergency_backup_from_panel():
                 'ip_limit': ip_limit
             }
             
-            logger.info(f"📝 اوردر #{order_id} برای کاربر {user_id} ساخته شد")
-            logger.info(f"   📦 {total_gb}GB/{days} روز - نوع: {order_type} - قیمت: {price:,} تومان")
+            logger.info(f"📝 Order #{order_id} for user {user_id} created")
+            logger.info(f"   📦 {total_gb}GB/{days} days - type: {order_type} - price: {price:,}tomans")
         
         
         orders.clear()
         orders.update(new_orders)
         
-        logger.info(f"✅ {len(new_orders)} اوردر جدید ساخته شد")
-        logger.info(f"   🧪 تست‌ها: {len([o for o in new_orders.values() if o.get('type') == 'test'])}")
-        logger.info(f"   🛒 خریدها: {len([o for o in new_orders.values() if o.get('type') == 'purchase'])}")
+        logger.info(f"✅ {len(new_orders)} new order created")
+        logger.info(f"   🧪 Tests: {len([o for o in new_orders.values() if o.get('type') == 'test'])}")
+        logger.info(f"   🛒 Purchases: {len([o for o in new_orders.values() if o.get('type') == 'purchase'])}")
         
         
         save_all()
-        logger.info("✅ دیتابیس با موفقیت ذخیره شد")
+        logger.info('✅ Database saved successfully')
         
        
         backup_dir = os.path.join(DATA_DIR, 'emergency_backups')
@@ -13962,7 +13967,7 @@ async def emergency_backup_from_panel():
         with open(backup_file, 'w', encoding='utf-8') as f:
             json.dump(backup_data, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"✅ بکاپ اضطراری در {backup_file} ذخیره شد")
+        logger.info(f"✅ Emergency backup at {backup_file} saved")
         
         return {
             "success": True,
@@ -13985,7 +13990,7 @@ async def emergency_backup_from_panel():
         }
         
     except Exception as e:
-        logger.error(f"❌ خطا در بکاپ اضطراری: {e}")
+        logger.error(f"❌ Error creating emergency backup: {e}")
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
@@ -14137,7 +14142,7 @@ async def confirm_emergency_backup(callback: CallbackQuery):
             )
             
     except Exception as e:
-        logger.error(f"خطا در بکاپ اضطراری: {e}", exc_info=True)
+        logger.error(f"Error creating emergency backup: {e}", exc_info=True)
         await callback.message.edit_text(
             f"❌ خطا: {str(e)}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -14207,7 +14212,7 @@ def migrate_test_inbound_data():
         old_inbound = TEST_SERVICE_STATUS.get('inbound_id')
         if old_inbound and 'inbound_ids' not in TEST_SERVICE_STATUS:
             TEST_SERVICE_STATUS['inbound_ids'] = [old_inbound]
-            logger.info(f"✅ مهاجرت اینباند تست: {old_inbound} -> {TEST_SERVICE_STATUS['inbound_ids']}")
+            logger.info(f"✅ Test inbound migration: {old_inbound} -> {TEST_SERVICE_STATUS['inbound_ids']}")
         del TEST_SERVICE_STATUS['inbound_id']
         configs_pool['test_service'] = TEST_SERVICE_STATUS
         save_all()
@@ -14378,14 +14383,14 @@ async def clear_ai_memory(callback: CallbackQuery):
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
-    logger.info(f"🔍 [clear_ai_memory] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
+    logger.info(f"🔍 [clear_ai_memory] previous coupon: code={coupon_code}, applied={coupon_applied}")
     
     conversation_memory.clear(user_id)
     if coupon_applied and coupon_code:
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount
-        logger.info(f"🏷️ [clear_ai_memory] کوپن {coupon_code} حفظ شد")
+        logger.info(f"🏷️ [clear_ai_memory] Coupon {coupon_code} preserved")
     await callback.message.delete()
     await start_ai_support_chat(callback)
         
@@ -14400,7 +14405,7 @@ async def exit_ai_chat(callback: CallbackQuery):
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
-    logger.info(f"🔍 [exit_ai_chat] کوپن قبل: code={coupon_code}, applied={coupon_applied}")
+    logger.info(f"🔍 [exit_ai_chat] previous coupon: code={coupon_code}, applied={coupon_applied}")
     if user_id in user_states:
         user_states.pop(user_id, None)
     if coupon_applied and coupon_code:
@@ -14409,9 +14414,9 @@ async def exit_ai_chat(callback: CallbackQuery):
             'coupon_discount': coupon_discount,
             'coupon_applied': True
         }
-        logger.info(f"🏷️ [exit_ai_chat] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
+        logger.info(f"🏷️ [exit_ai_chat] Coupon {coupon_code} for user {user_id} preserved")
     else:
-        logger.warning(f"⚠️ [exit_ai_chat] کوپنی برای کاربر {user_id} یافت نشد")
+        logger.warning(f"⚠️ [exit_ai_chat] No coupon for user {user_id} not found")
     is_admin = (user_id == ADMIN_ID_INT)
     
     
@@ -14494,7 +14499,7 @@ async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_mar
             return
         
         elif "there is no text in the message to edit" in error_str:
-            logger.warning(f"⚠️ پیام قابل ویرایش نیست، حذف و ارسال جدید...")
+            logger.warning(f"⚠️ Message cannot be edited; deleting and sending a new one...")
             try:
                 await callback.message.delete()
             except:
@@ -14508,11 +14513,11 @@ async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_mar
                         reply_markup=reply_markup
                     )
                 except Exception as e2:
-                    logger.error(f"خطا در ارسال پیام جدید: {e2}")
+                    logger.error(f"Error sending new message: {e2}")
             return
         
         elif "message to edit not found" in error_str:
-            logger.warning(f"⚠️ پیام یافت نشد، ارسال پیام جدید...")
+            logger.warning(f"⚠️ Message not found; sending a new message...")
             if text:
                 try:
                     await callback.message.answer(
@@ -14521,11 +14526,11 @@ async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_mar
                         reply_markup=reply_markup
                     )
                 except Exception as e2:
-                    logger.error(f"خطا در ارسال پیام جدید: {e2}")
+                    logger.error(f"Error sending new message: {e2}")
             return
         
         elif "message can't be edited" in error_str:
-            logger.warning(f"⚠️ پیام قابل ویرایش نیست (ممکن است قدیمی باشد)")
+            logger.warning(f"⚠️ Message cannot be edited (it may be outdated)")
             try:
                 await callback.message.delete()
             except:
@@ -14539,7 +14544,7 @@ async def safe_edit_message(callback: CallbackQuery, text: str = None, reply_mar
                         reply_markup=reply_markup
                     )
                 except Exception as e2:
-                    logger.error(f"خطا در ارسال پیام جدید: {e2}")
+                    logger.error(f"Error sending new message: {e2}")
             return
         
         else:
@@ -14567,12 +14572,12 @@ def get_purchase_keyboard(volume: int, days: int, lang: str = "fa") -> InlineKey
                     style="primary"
                 )
             ])
-            logger.info("✅ دکمه بسته‌های آماده به کیبورد اضافه شد")
+            logger.info('✅ Ready packages button added to the keyboard')
         else:
-            logger.warning(f"⚠️ بسته‌های آماده نمایش داده نمی‌شوند - enabled: {ready_enabled}, has_packages: {has_packages}")
+            logger.warning(f"⚠️ Ready packages are not displayed - enabled: {ready_enabled}, has_packages: {has_packages}")
             
     except Exception as e:
-        logger.error(f"❌ خطا در بررسی بسته‌های آماده: {e}", exc_info=True)
+        logger.error(f"❌ Error checking ready packages: {e}", exc_info=True)
     buttons.extend([
         [
             InlineKeyboardButton(text="➖", callback_data="vol_down"),
@@ -15286,7 +15291,7 @@ async def admin_coupon_create_process(message: Message):
     except ValueError as e:
         await message.reply(f"❌ لطفاً یک عدد معتبر وارد کنید! ({str(e)})" if lang == "fa" else f"❌ Please enter a valid number! ({str(e)})")
     except Exception as e:
-        logger.error(f"خطا در ایجاد کوپن: {e}")
+        logger.error(f"Error creating coupon: {e}")
         import traceback
         traceback.print_exc()
         await message.reply(f"❌ خطا: {str(e)}" if lang == "fa" else f"❌ Error: {str(e)}")
@@ -15583,12 +15588,12 @@ async def admin_coupon_delete_execute(callback: CallbackQuery):
     del COUPONS[code]
     save_coupons(COUPONS)
     
-    logger.info(f"🗑️ کوپن {code} توسط ادمین {callback.from_user.id} حذف شد")
+    logger.info(f"🗑️ coupon {code} cleared by admin {callback.from_user.id} deleted")
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            "حذف کوپن",
-            details=f"کد: {code} | تخفیف: {coupon_data.get('discount', 0)}% | وضعیت: {coupon_data.get('status', 'نامشخص')}"
+            "Coupon deleted",
+            details=f"Code: {code} | Discount: {coupon_data.get('discount', 0)}% | Status: {coupon_data.get('status', 'Unspecified')}"
         )
     
     await callback.answer(
@@ -15690,9 +15695,9 @@ def add_coupon_fields_to_user(user_id: int):
         if modified:
             try:
                 save_json(DB_FILES['users'], users)
-                logger.info(f"✅ فیلدهای کوپن به کاربر {user_id} اضافه شد")
+                logger.info(f"✅ Coupon fields added to user {user_id} added")
             except Exception as e:
-                logger.error(f"❌ خطا در ذخیره فیلدهای کوپن: {e}")
+                logger.error(f"❌ Error saving coupon fields: {e}")
             
             
 def safe_html(text: str, max_length: int = 100) -> str:
@@ -15841,9 +15846,9 @@ async def use_coupon(message: Message):
         if locked_user_id is None:
             coupon['locked_user_id'] = user_id
             save_coupons(COUPONS)
-            logger.info(f"🔒 کوپن ادمین {code} برای کاربر {user_id} قفل شد (اولین کاربر)")
+            logger.info(f"🔒 Admin coupon {code} for user {user_id} locked (first user)")
         elif locked_user_id != user_id:
-            logger.warning(f"⛔ کاربر {user_id} تلاش کرد از کوپن ادمین {code} استفاده کند (قفل: {locked_user_id})")
+            logger.warning(f"⛔ User {user_id} tried to use admin coupon {code} tried to use it (lock: {locked_user_id})")
             await message.reply(
                 f"❌ <b>این کوپن اختصاصی است!</b>\n\n"
                 f"👤 این کوپن فقط برای کاربر دیگری فعال شده است و شما نمی‌توانید از آن استفاده کنید."
@@ -15860,7 +15865,7 @@ async def use_coupon(message: Message):
         max_usage = coupon.get('usage_limit', 1)
 
         if user_used_count >= max_usage:
-            logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن ادمین {code} رسیده ({user_used_count}/{max_usage})")
+            logger.warning(f"⚠️ user {user_id} reached the maximum uses for admin coupon {code} reached ({user_used_count}/{max_usage})")
             await message.reply(
                 f"❌ <b>شما به حداکثر استفاده از این کوپن رسیده‌اید!</b>\n\n"
                 f"🔢 استفاده شده: {user_used_count}/{max_usage}"
@@ -15882,7 +15887,7 @@ async def use_coupon(message: Message):
             'coupon_applied': True
         }
 
-        logger.info(f"✅ [use_coupon] کوپن ادمین {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد (استفاده {user_used_count + 1}/{max_usage})")
+        logger.info(f"✅ [use_coupon] Admin coupon {code} with discount {discount}% for user {user_id} applied (used {user_used_count + 1}/{max_usage})")
         save_coupon_to_user_db(user_id)
 
         success_buttons = InlineKeyboardMarkup(inline_keyboard=[
@@ -15923,7 +15928,7 @@ async def use_coupon(message: Message):
         return
 
     # ==================== کوپن معمولی ====================
-    logger.info(f"🔍 [use_coupon] کوپن معمولی {code} پیدا شد - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
+    logger.info(f"🔍 [use_coupon] regular coupon {code} found - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
 
     if user_id in coupon.get('used_by', []):
         clear_coupon_from_user_db(user_id)
@@ -15986,7 +15991,7 @@ async def use_coupon(message: Message):
         'coupon_applied': True
     }
 
-    logger.info(f"✅ [use_coupon] کوپن {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد")
+    logger.info(f"✅ [use_coupon] coupon {code} with discount {discount}% for user {user_id} applied")
     save_coupon_to_user_db(user_id)
 
     success_buttons = InlineKeyboardMarkup(inline_keyboard=[
@@ -16122,10 +16127,10 @@ async def handle_coupon_code_input(message: Message):
         if locked_user_id is None:
             coupon['locked_user_id'] = user_id
             save_coupons(COUPONS)
-            logger.info(f"🔒 کوپن ادمین {code} برای کاربر {user_id} قفل شد")
+            logger.info(f"🔒 Admin coupon {code} for user {user_id} locked")
 
         elif locked_user_id != user_id:
-            logger.warning(f"⛔ کاربر {user_id} تلاش کرد از کوپن ادمین {code} استفاده کند (قفل: {locked_user_id})")
+            logger.warning(f"⛔ User {user_id} tried to use admin coupon {code} tried to use it (lock: {locked_user_id})")
             await message.reply(
                 "❌ <b>این کوپن اختصاصی است!</b>\n\n"
                 "👤 این کوپن فقط برای کاربر دیگری فعال شده است و شما نمی‌توانید از آن استفاده کنید."
@@ -16143,7 +16148,7 @@ async def handle_coupon_code_input(message: Message):
         max_usage = coupon.get('usage_limit', 1)
 
         if user_used_count >= max_usage:
-            logger.warning(f"⚠️ کاربر {user_id} به حداکثر استفاده از کوپن {code} رسیده ({user_used_count}/{max_usage})")
+            logger.warning(f"⚠️ user {user_id} reached the maximum uses for coupon {code} reached ({user_used_count}/{max_usage})")
             await message.reply(
                 f"❌ <b>شما به حداکثر استفاده از این کوپن رسیده‌اید!</b>\n\n"
                 f"🔢 استفاده شده: {user_used_count}/{max_usage}"
@@ -16207,7 +16212,7 @@ async def handle_coupon_code_input(message: Message):
     # ══════════════════════════════════════════════
     # کوپن معمولی
     # ══════════════════════════════════════════════
-    logger.info(f"🔍 [coupon_input] کوپن معمولی {code} - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
+    logger.info(f"🔍 [coupon_input] regular coupon {code} - status: {coupon.get('status')}, used_by: {coupon.get('used_by', [])}")
 
     # قبلاً استفاده کرده؟
     if user_id in coupon.get('used_by', []):
@@ -16280,7 +16285,7 @@ async def handle_coupon_code_input(message: Message):
     user_states[user_id]['coupon_applied'] = True
 
     save_coupon_to_user_db(user_id)
-    logger.info(f"✅ [coupon_input] کوپن {code} با تخفیف {discount}% برای کاربر {user_id} اعمال شد")
+    logger.info(f"✅ [coupon_input] coupon {code} with discount {discount}% for user {user_id} applied")
 
     success_buttons = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -16904,7 +16909,7 @@ def get_user_last_purchased_package(user_id: int, target_order_id: Optional[int]
 
         return None
     except Exception as e:
-        logger.error(f"❌ خطا در get_user_last_purchased_package: {e}")
+        logger.error(f"❌ Error in get_user_last_purchased_package: {e}")
         return None
 
 @dp.callback_query(F.data == "show_ready_categories")
@@ -16948,7 +16953,7 @@ async def show_ready_categories(callback: CallbackQuery):
     if coupon_applied and coupon_code:
         is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
         if not is_valid:
-            logger.warning(f"⚠️ [show_ready_categories] کوپن {coupon_code} نامعتبر: {reason}")
+            logger.warning(f"⚠️ [show_ready_categories] Coupon {coupon_code} invalid: {reason}")
             coupon_applied = False
             coupon_code = None
             coupon_discount = 0
@@ -16957,10 +16962,10 @@ async def show_ready_categories(callback: CallbackQuery):
                 user_states[user_id].pop('coupon_discount', None)
                 user_states[user_id].pop('coupon_applied', None)
         else:
-            logger.info(f"✅ [show_ready_categories] کوپن {coupon_code} معتبر: {reason}")
+            logger.info(f"✅ [show_ready_categories] Coupon {coupon_code} is valid: {reason}")
     
-    logger.info(f"🔍 [show_ready_categories] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
-    logger.info(f"🔄 [show_ready_categories] حالت تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [show_ready_categories] coupon: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
+    logger.info(f"🔄 [show_ready_categories] renewal status: is_extend={is_extend}, extend_order_id={extend_order_id}")
     
     categories = [c for c in READY_PACKAGES.get('categories', []) if c.get('is_active', True)]
     
@@ -17053,7 +17058,7 @@ async def show_ready_categories(callback: CallbackQuery):
                                 order['category_name'] = c.get('name')
                                 order['category_name_en'] = c.get('name_en', c.get('name'))
                                 save_all()
-                                logger.info(f"✅ [show_ready_categories] دسته سرویس #{extend_order_id} از روی اینباندهای تطبیقی شناسایی شد: {c.get('name')}")
+                                logger.info(f"✅ [show_ready_categories] Service category #{extend_order_id} identified from matching inbounds: {c.get('name')}")
                                 break
         
         if not matching_cat:
@@ -17120,9 +17125,9 @@ async def show_ready_categories(callback: CallbackQuery):
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount
-        logger.info(f"🏷️ [show_ready_categories] کوپن {coupon_code} در user_states کاربر {user_id} ذخیره شد")
+        logger.info(f"🏷️ [show_ready_categories] Coupon {coupon_code} in user_states for user {user_id} saved")
     else:
-        logger.warning(f"⚠️ [show_ready_categories] کوپنی برای کاربر {user_id} یافت نشد")
+        logger.warning(f"⚠️ [show_ready_categories] No coupon for user {user_id} not found")
     
     # ═══════════════════════════════════════════
     # ✅ متن متفاوت برای تمدید vs خرید
@@ -17302,7 +17307,7 @@ async def cancel_extend(callback: CallbackQuery):
             'coupon_discount': coupon_discount,
             'coupon_applied': True
         }
-        logger.info(f"🏷️ [cancel_extend] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
+        logger.info(f"🏷️ [cancel_extend] Coupon {coupon_code} for user {user_id} preserved")
     
     # ─── هشدار توست (خودش محو می‌شه) ───
     toast_text = (
@@ -17312,7 +17317,7 @@ async def cancel_extend(callback: CallbackQuery):
     try:
         await callback.answer(toast_text, show_alert=False)
     except Exception as e:
-        logger.warning(f"خطا در نمایش توست: {e}")
+        logger.warning(f"Error displaying toast: {e}")
     
     # ─── بازگشت به منوی اصلی ───
     is_admin = (user_id == ADMIN_ID_INT)
@@ -17464,7 +17469,7 @@ async def show_category_packages(callback: CallbackQuery):
             )
         except Exception as e:
             if "message is not modified" not in str(e):
-                logger.error(f"خطا در ویرایش پیام: {e}")
+                logger.error(f"Error editing message: {e}")
         
         try:
             await callback.answer()
@@ -17532,7 +17537,7 @@ async def show_category_packages(callback: CallbackQuery):
                             num = to_persian_digits(rem_num_str) if lang == "fa" else rem_num_str
                             remaining_display = f"{num} {unit}"
                 except Exception as e:
-                    logger.warning(f"⚠️ [show_category_packages] خطا در دریافت مصرف کلاینت برای تمدید: {e}")
+                    logger.warning(f"⚠️ [show_category_packages] Error retrieving client usage for renewal: {e}")
         
         if not remaining_display:
             if order_vol == 0:
@@ -17811,8 +17816,8 @@ async def buy_specific_package(callback: CallbackQuery):
     current_volume = full_state.get('current_volume', 0)
     current_days = full_state.get('current_days', 0)
     if is_extend and extend_order_id:
-        logger.info(f"🔄 [buy_specific_package] کاربر {user_id} در حالت تمدید است - سفارش اصلی: #{extend_order_id}")
-        logger.info(f"   📦 حجم فعلی: {current_volume}GB - ⏱ مدت فعلی: {current_days} روز")
+        logger.info(f"🔄 [buy_specific_package] User {user_id} is in renewal mode - original order: #{extend_order_id}")
+        logger.info(f"   📦 Current volume: {current_volume}GB - ⏱ Current duration: {current_days}days")
         
         # 🔒 بررسی محدودیت تمدید فقط در همان دسته
         if READY_PACKAGES.get('restrict_extend_to_same_category', False):
@@ -17867,21 +17872,21 @@ async def buy_specific_package(callback: CallbackQuery):
                 
                 if locked_user_id == user_id and user_used_count < max_usage:
                     coupon_valid = True
-                    logger.info(f"✅ کوپن ادمین {coupon_code} معتبر است ({user_used_count}/{max_usage})")
+                    logger.info(f"✅ Admin coupon {coupon_code} is valid ({user_used_count}/{max_usage})")
                 else:
-                    logger.warning(f"⚠️ کوپن ادمین {coupon_code} نامعتبر - locked={locked_user_id}, usage={user_used_count}/{max_usage}")
+                    logger.warning(f"⚠️ Admin coupon {coupon_code} is invalid - locked={locked_user_id}, usage={user_used_count}/{max_usage}")
             else:
                 # ✅ برای کوپن معمولی: بررسی used_by
                 if user_id not in coupon.get('used_by', []):
                     coupon_valid = True
                 else:
-                    logger.warning(f"⚠️ کوپن معمولی {coupon_code} قبلاً مصرف شده")
+                    logger.warning(f"⚠️ Regular coupon {coupon_code} was already used")
             
             if coupon_valid:
                 discount_percent = coupon.get('discount', 0)
                 if discount_percent > 0:
                     final_price = original_price - (original_price * discount_percent // 100)
-                    logger.info(f"🏷️ تخفیف {discount_percent}% روی بسته {package_id} اعمال شد: {original_price:,} → {final_price:,}")
+                    logger.info(f"🏷️ Discount {discount_percent}% on package {package_id} applied: {original_price:,} → {final_price:,}")
             else:
                 # ✅ کوپن نامعتبر - پاک کن
                 if user_id in user_states:
@@ -17891,7 +17896,7 @@ async def buy_specific_package(callback: CallbackQuery):
                 discount_percent = 0
                 final_price = original_price
         else:
-            logger.warning(f"⚠️ کوپن {coupon_code} نامعتبر است یا فعال نیست")
+            logger.warning(f"⚠️ Coupon {coupon_code} is invalid or inactive")
             if user_id in user_states:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
@@ -17914,15 +17919,15 @@ async def buy_specific_package(callback: CallbackQuery):
         default_ids = configs_pool.get('default_inbound_ids', [])
         if default_ids:
             category_inbound_ids = default_ids
-            logger.info(f"📌 استفاده از اینباندهای پیش‌فرض برای دسته {category.get('name')}: {category_inbound_ids}")
+            logger.info(f"📌 Using default inbounds for category {category.get('name')}: {category_inbound_ids}")
         else:
             inbounds = await xui_get_inbounds()
             category_inbound_ids = [i.get('id') for i in inbounds if i.get('enable', True)]
-            logger.info(f"📡 استفاده از همه اینباندهای فعال برای دسته {category.get('name')}: {category_inbound_ids}")
+            logger.info(f"📡 Using all active inbounds for category {category.get('name')}: {category_inbound_ids}")
     
-    logger.info(f"📦 کاربر {user_id} بسته {package_id} از دسته {category.get('name')} را انتخاب کرد - {volume_display}/{days} روز - قیمت اصلی: {original_price:,} - قیمت نهایی: {final_price:,}")
-    logger.info(f"📡 اینباندهای دسته {category.get('name')}: {category_inbound_ids}")
-    logger.info(f"👤 تعداد کاربر: {ip_limit if ip_limit > 0 else 'نامحدود'}")
+    logger.info(f"📦 user {user_id} package {package_id} from category {category.get('name')} selected {volume_display}/{days}days - original price: {original_price:,} - final price: {final_price:,}")
+    logger.info(f"📡 category inbounds {category.get('name')}: {category_inbound_ids}")
+    logger.info(f"User count: {ip_limit if ip_limit > 0 else 'unlimited'}")
     update_user(user_id, 'volume', volume if volume > 0 else 1)
     update_user(user_id, 'days', days)
     old_state = user_states.get(user_id, {})
@@ -17934,14 +17939,14 @@ async def buy_specific_package(callback: CallbackQuery):
     coupon_discount_old = old_state.get('coupon_discount')
     coupon_applied_old = old_state.get('coupon_applied', False)
     
-    logger.info(f"🔍 [buy_specific_package] STATE قبل: is_extend={is_extend}, extend_order_id={extend_order_id}")
-    logger.info(f"🔍 [buy_specific_package] کوپن قبل: code={coupon_code_old}, applied={coupon_applied_old}")
-    logger.info(f"🔍 [buy_specific_package] حجم/روز قبل: {current_volume}GB / {current_days} روز")
+    logger.info(f"🔍 [buy_specific_package] previous STATE: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [buy_specific_package] previous coupon: code={coupon_code_old}, applied={coupon_applied_old}")
+    logger.info(f"🔍 [buy_specific_package] previous volume/days: {current_volume}GB / {current_days}days")
     
     # ✅✅✅ مرحله 2: تنظیم اینباندهای کاربر
     if category_inbound_ids:
         save_user_inbound_selection(user_id, category_inbound_ids)
-        logger.info(f"📡 اینباندهای {category_inbound_ids} برای کاربر {user_id} تنظیم شد (بسته آماده)")
+        logger.info(f"📡 Inbounds for {category_inbound_ids} for user {user_id} set (ready-made package)")
     
     # ✅✅✅ مرحله 3: ساخت state جدید با حفظ مقادیر مهم
     user_states[user_id] = {
@@ -17971,7 +17976,7 @@ async def buy_specific_package(callback: CallbackQuery):
     
     # ✅✅✅ مرحله 4: لاگ برای دیباگ
     if is_extend and extend_order_id:
-        logger.info(f"🔄 [buy_specific_package] وضعیت تمدید در user_states ذخیره شد: order_id={extend_order_id}")
+        logger.info(f"🔄 [buy_specific_package] Renewal status saved in user_states: order_id={extend_order_id}")
         logger.info(f"   user_states[{user_id}]['is_extend'] = {user_states[user_id].get('is_extend')}")
         logger.info(f"   user_states[{user_id}]['extend_order_id'] = {user_states[user_id].get('extend_order_id')}")
     
@@ -17980,7 +17985,7 @@ async def buy_specific_package(callback: CallbackQuery):
         user_states[user_id]['coupon_code'] = coupon_code_old
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount_old or 0
-        logger.info(f"🏷️ [buy_specific_package] کوپن {coupon_code_old} حفظ شد")
+        logger.info(f"🏷️ [buy_specific_package] Coupon {coupon_code_old} preserved")
     
     # ✅ بقیه کد بدون تغییر
     category_icon = category.get('icon', '📦')
@@ -18090,7 +18095,7 @@ async def buy_specific_package(callback: CallbackQuery):
         )
     except Exception as e:
         if "message is not modified" not in str(e):
-            logger.error(f"خطا در ویرایش پیام: {e}")
+            logger.error(f"Error editing message: {e}")
     
     try:
         await callback.answer()
@@ -18114,7 +18119,7 @@ def fully_remove_coupon_from_user(user_id: int) -> bool:
         user_states[user_id].pop('coupon_code', None)
         user_states[user_id].pop('coupon_discount', None)
         user_states[user_id].pop('coupon_applied', None)
-        logger.info(f"🏷️ کوپن از user_states کاربر {user_id} حذف شد")
+        logger.info(f"🏷️ Coupon from user_states for user {user_id} deleted")
         removed = True
     
     # ✅ 2. حذف از دیتابیس users
@@ -18128,14 +18133,14 @@ def fully_remove_coupon_from_user(user_id: int) -> bool:
         
         try:
             save_json(DB_FILES['users'], users)
-            logger.info(f"🏷️ کوپن از دیتابیس کاربر {user_id} حذف شد: {old_coupon} (تخفیف: {old_discount}%)")
+            logger.info(f"🏷️ Coupon from user database {user_id} deleted: {old_coupon} (discount: {old_discount}%)")
             removed = True
         except Exception as e:
-            logger.error(f"❌ خطا در ذخیره‌سازی پس از حذف کوپن: {e}")
+            logger.error(f"❌ Error saving after coupon deletion: {e}")
             return False
     
     if not removed:
-        logger.debug(f"کاربر {user_id} کوپنی برای حذف نداشت")
+        logger.debug(f"User {user_id} had no coupon to remove")
     
     return removed
 
@@ -18155,7 +18160,7 @@ def consume_coupon(user_id: int) -> bool:
     
     coupon = COUPONS.get(coupon_code)
     if not coupon:
-        logger.warning(f"⚠️ [consume_coupon] کوپن {coupon_code} در دیتابیس یافت نشد")
+        logger.warning(f"⚠️ [consume_coupon] Coupon {coupon_code}not found in database")
         fully_remove_coupon_from_user(user_id)
         return False
     
@@ -18166,7 +18171,7 @@ def consume_coupon(user_id: int) -> bool:
         locked_user_id = coupon.get('locked_user_id')
         
         if locked_user_id != user_id:
-            logger.warning(f"⚠️ [consume_coupon] کاربر {user_id} نمی‌تواند از کوپن ادمین {coupon_code} استفاده کند")
+            logger.warning(f"⚠️ [consume_coupon] User {user_id} cannot use admin coupon {coupon_code} use it")
             fully_remove_coupon_from_user(user_id)
             return False
         
@@ -18190,11 +18195,11 @@ def consume_coupon(user_id: int) -> bool:
         if current_usage >= max_usage:
             coupon['status'] = 'used'
             save_coupons(COUPONS)
-            logger.info(f"🔴 کوپن ادمین {coupon_code} به حداکثر رسید ({current_usage}/{max_usage}) - پاک می‌شود")
+            logger.info(f"🔴 Admin coupon {coupon_code} reached its limit ({current_usage}/{max_usage}) - will be deleted")
             fully_remove_coupon_from_user(user_id)
         else:
             # ✅✅✅ کوپن هنوز اعتبار داره - فقط از user_states نگهدار، از دیتابیس پاک نکن
-            logger.info(f"✅ کوپن ادمین {coupon_code} مصرف شد ({current_usage}/{max_usage}) - همچنان معتبر است")
+            logger.info(f"✅ Admin coupon {coupon_code} used ({current_usage}/{max_usage}) - still valid")
             
             # ✅ دوباره در user_states ذخیره کن (چون fully_remove صدا زده نشد، ولی مطمئن شو)
             if user_id not in user_states:
@@ -18211,12 +18216,12 @@ def consume_coupon(user_id: int) -> bool:
                 users[uid]['coupon_applied'] = True
                 save_json(DB_FILES['users'], users)
         
-        logger.info(f"✅ [consume_coupon] کوپن ادمین {coupon_code} - کاربر: {user_id} ({current_usage}/{max_usage})")
+        logger.info(f"✅ [consume_coupon] Admin coupon {coupon_code} - user: {user_id} ({current_usage}/{max_usage})")
         return True
     
     # ✅ کوپن معمولی
     if user_id in coupon.get('used_by', []):
-        logger.warning(f"⚠️ [consume_coupon] کاربر {user_id} قبلاً از کوپن {coupon_code} استفاده کرده")
+        logger.warning(f"⚠️ [consume_coupon] User {user_id} has already used coupon {coupon_code}")
         fully_remove_coupon_from_user(user_id)
         return False
     
@@ -18234,7 +18239,7 @@ def consume_coupon(user_id: int) -> bool:
     # ✅ کوپن معمولی: همیشه پاک کن (چون هر کاربر فقط یک بار می‌تونه استفاده کنه)
     fully_remove_coupon_from_user(user_id)
     
-    logger.info(f"✅ [consume_coupon] کوپن معمولی {coupon_code} مصرف شد - کاربر: {user_id}")
+    logger.info(f"✅ [consume_coupon] regular coupon {coupon_code} consumed - user: {user_id}")
     return True
 
 
@@ -18263,18 +18268,18 @@ def release_coupon_on_cancel(user_id: int) -> bool:
         max_usage = coupon.get('usage_limit', 1)
         
         if user_used_count >= max_usage:
-            logger.info(f"🏷️ کوپن ادمین {code} به حداکثر رسیده ({user_used_count}/{max_usage})، قابل آزادسازی نیست")
+            logger.info(f"🏷️ Admin coupon {code} has reached its limit ({user_used_count}/{max_usage}), cannot be released")
             return False
     else:
         # برای کوپن معمولی: بررسی used_by
         if user_id in coupon.get('used_by', []):
             clear_coupon_from_user_db(user_id)
-            logger.info(f"🏷️ کوپن {code} قبلاً توسط کاربر {user_id} مصرف شده، قابل آزادسازی نیست")
+            logger.info(f"🏷️ coupon {code} already used by user {user_id} was used and cannot be released")
             return False
     
     # بررسی وضعیت
     if coupon.get('status') != 'active':
-        logger.info(f"🏷️ کوپن {code} دیگر فعال نیست (وضعیت: {coupon.get('status')})")
+        logger.info(f"🏷️ coupon {code} is no longer active (status: {coupon.get('status')})")
         return False
     
     # آزادسازی
@@ -18282,7 +18287,7 @@ def release_coupon_on_cancel(user_id: int) -> bool:
     user_states[user_id]['coupon_code'] = code
     user_states[user_id]['coupon_discount'] = coupon.get('discount', 0)
     
-    logger.info(f"🏷️ کوپن {code} برای کاربر {user_id} آزاد شد (لغو سفارش قبل از مصرف)")
+    logger.info(f"🏷️ coupon {code} for user {user_id} released (order cancelled before consumption)")
     return True
         
      
@@ -18306,7 +18311,7 @@ async def show_ready_categories_keep_coupon(callback: CallbackQuery):
             user_states[user_id]['coupon_code'] = coupon_code
             user_states[user_id]['coupon_discount'] = coupon_discount
             user_states[user_id]['coupon_applied'] = True
-            logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} در بازگشت به بسته‌ها حفظ شد")
+            logger.info(f"🏷️ coupon {coupon_code} for user {user_id} was preserved when returning to packages")
     await show_ready_categories(callback)
     
     
@@ -18474,12 +18479,12 @@ async def pay_ready_package_balance(callback: CallbackQuery):
                 reply_markup=get_feedback_keyboard(order_id, lang)
             )
         except Exception as e:
-            logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
+            logger.error(f"Error sending feedback request: {e}")
         
-        logger.info(f"✅ خرید بسته آماده برای کاربر {user_id} - سفارش #{order_id} - {volume}GB/{days} روز - {price:,} تومان")
+        logger.info(f"✅ Ready-made package purchased for user {user_id} - order #{order_id} - {volume}GB/{days} days - {price:,}tomans")
         
         if log_system:
-            await log_system.log_purchase(user_id, order_id, volume, days, price, f"بسته آماده - {cat_name}")
+            await log_system.log_purchase(user_id, order_id, volume, days, price, f"Ready package - {cat_name}")
         
     else:
         update_user(user_id, 'balance', balance)
@@ -18489,7 +18494,7 @@ async def pay_ready_package_balance(callback: CallbackQuery):
             error_msg,
             reply_markup=get_back_only_keyboard(lang)
         )
-        logger.error(f"❌ خطا در ساخت کلاینت برای کاربر {user_id}")
+        logger.error(f"❌ Error creating client for user {user_id}")
     
     try:
         await callback.answer()
@@ -18907,7 +18912,7 @@ async def admin_category_add_process(message: Message):
             await show_ready_packages_menu(message)
     
     except Exception as e:
-        logger.error(f"خطا در افزودن دسته: {e}", exc_info=True)
+        logger.error(f"Error adding category: {e}", exc_info=True)
         await message.reply(f"❌ خطا: {str(e)}")
         user_states.pop(admin_id, None)
 
@@ -19032,7 +19037,7 @@ async def admin_category_edit(callback: CallbackQuery):
         category_id = int(parts[3])
         logger.info(f"✅ category_id: {category_id}")
     except (ValueError, IndexError) as e:
-        logger.error(f"❌ خطا در استخراج category_id: {e}")
+        logger.error(f"❌ Error extracting category_id: {e}")
         await callback.answer("❌ خطا در پردازش", show_alert=True)
         return
     
@@ -19545,7 +19550,7 @@ async def save_package_edit(message: Message):
     except ValueError:
         await message.reply("❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid number!")
     except Exception as e:
-        logger.error(f"خطا در ویرایش بسته: {e}")
+        logger.error(f"Error editing package: {e}")
         await message.reply(f"❌ خطا: {str(e)}")
         user_states.pop(admin_id, None)
         
@@ -19866,7 +19871,7 @@ async def admin_alert_settings(callback: CallbackQuery):
         )
     except Exception as e:
         if "message is not modified" not in str(e):
-            logger.error(f"خطا در ویرایش پیام تنظیمات: {e}")
+            logger.error(f"Error editing settings message: {e}")
     
     await callback.answer()
 
@@ -20172,7 +20177,7 @@ async def admin_check_alerts(callback: CallbackQuery):
             pass
         
     except Exception as e:
-        logger.error(f"خطا در بررسی دستی: {e}", exc_info=True)
+        logger.error(f"Error during manual check: {e}", exc_info=True)
         try:
             await callback.message.answer(
                 f"❌ خطا در بررسی: {str(e)}" if lang == "fa" else f"❌ Error: {str(e)}"
@@ -20220,7 +20225,7 @@ async def admin_clear_alert_cache(callback: CallbackQuery):
         await admin_alert_settings(callback)
         
     except Exception as e:
-        logger.error(f"خطا در پاک کردن کش: {e}", exc_info=True)
+        logger.error(f"Error clearing cache: {e}", exc_info=True)
         await callback.answer(
             f"❌ خطا: {str(e)}" if lang == "fa" else f"❌ Error: {str(e)}",
             show_alert=True
@@ -20413,7 +20418,7 @@ async def inbound_save_category(callback: CallbackQuery):
     try:
         await admin_category_edit(callback.model_copy(update={"data": f"admin_category_edit_{category_id}"}))
     except Exception as e:
-        logger.error(f"خطا در بازگشت به ویرایش دسته: {e}")
+        logger.error(f"Error returning to category editing: {e}")
     
 
 @dp.message(Command("check_storage"))
@@ -20453,7 +20458,7 @@ def migrate_category_inbound_data():
         if 'inbound_id' in cat and cat['inbound_id']:
             if 'inbound_ids' not in cat or not cat['inbound_ids']:
                 cat['inbound_ids'] = [cat['inbound_id']]
-                logger.info(f"✅ مهاجرت اینباند دسته {cat.get('name')}: {cat['inbound_id']} -> {cat['inbound_ids']}")
+                logger.info(f"✅ Category inbound migration {cat.get('name')}: {cat['inbound_id']} -> {cat['inbound_ids']}")
             cat['inbound_id'] = None
     
     READY_PACKAGES['last_updated'] = datetime.now().isoformat()
@@ -20885,7 +20890,7 @@ async def admin_package_add_process(message: Message):
     except ValueError:
         await message.reply("❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid number!")
     except Exception as e:
-        logger.error(f"خطا در افزودن بسته: {e}", exc_info=True)
+        logger.error(f"Error adding package: {e}", exc_info=True)
         await message.reply(f"❌ خطا: {str(e)}")
         user_states.pop(admin_id, None)
 
@@ -21082,12 +21087,12 @@ async def force_join_add_channel(message: Message):
         await message.reply(f"✅ کانال {channel_name} با موفقیت اضافه شد!" if lang=="fa" else f"✅ Channel {channel_name} added!")
         
         if log_system:
-            await log_system.log_admin_action(admin_id, "افزودن کانال به عضویت اجباری", details=f"کانال: {channel_name}")
+            await log_system.log_admin_action(admin_id, "Added required-membership channel", details=f"Channel: {channel_name}")
         
     except ValueError:
         await message.reply("❌ آیدی کانال نامعتبر است!" if lang=="fa" else "❌ Invalid channel ID!")
     except Exception as e:
-        logger.error(f"خطا در افزودن کانال: {e}")
+        logger.error(f"Error adding channel: {e}")
         await message.reply(f"❌ خطا: {str(e)[:100]}" if lang=="fa" else f"❌ Error: {str(e)[:100]}")
     
     user_states.pop(admin_id, None)
@@ -21161,8 +21166,8 @@ async def force_join_remove_channel(callback: CallbackQuery):
         if log_system:
             await log_system.log_admin_action(
                 callback.from_user.id,
-                "حذف کانال از لیست عضویت اجباری",
-                details=f"کانال: {removed.get('name')} (ID: {channel_id})"
+                "Removed required-membership channel",
+                details=f"Channel: {removed.get('name')} (ID: {channel_id})"
             )
     else:
         await callback.answer("❌ کانال یافت نشد" if lang=="fa" else "❌ Channel not found", show_alert=True)
@@ -21198,7 +21203,7 @@ async def force_join_check_membership(callback: CallbackQuery):
             if member.status in ['left', 'kicked']:
                 not_joined.append(ch)
         except Exception as e:
-            logger.error(f"خطا در بررسی عضویت کانال {ch.get('id')}: {e}")
+            logger.error(f"Error checking channel membership {ch.get('id')}: {e}")
             not_joined.append(ch)
     
     lang = get_user(user_id).get('lang', 'fa')
@@ -21240,7 +21245,7 @@ async def check_membership(user_id: int) -> bool:
             if member.status in ['left', 'kicked']:
                 return False
         except Exception as e:
-            logger.error(f"خطا در بررسی عضویت کاربر {user_id} در کانال {channel_id}: {e}")
+            logger.error(f"Error checking user membership {user_id} in channel {channel_id}: {e}")
             return False
     
     return True
@@ -21264,7 +21269,7 @@ async def process_verify_membership(callback: CallbackQuery):
                 user['verified'] = True
                 user['updated_at'] = datetime.now().isoformat()
                 save_json(DB_FILES['users'], users)
-                logger.info(f"✅ کاربر {user_id} عضویت در همه کانال‌ها تایید شد")
+                logger.info(f"✅ user {user_id} membership in all channels confirmed")
             
             if lang == "fa":
                 success_text = f"""
@@ -21344,7 +21349,7 @@ async def process_verify_membership(callback: CallbackQuery):
                 user['verified'] = False
                 user['updated_at'] = datetime.now().isoformat()
                 save_json(DB_FILES['users'], users)
-                logger.warning(f"⚠️ کاربر {user_id} از کانال لفت داده، verified به False تغییر کرد")
+                logger.warning(f"⚠️ user {user_id} left the channel; verified changed to False")
             
             await callback.answer("❌ هنوز عضو نشده‌اید!", show_alert=True)
             
@@ -21357,7 +21362,7 @@ async def process_verify_membership(callback: CallbackQuery):
             await show_verification_page(callback.message, user_id, lang)
             
     except Exception as e:
-        logger.error(f"❌ خطا در بررسی عضویت: {e}")
+        logger.error(f"❌ Error checking membership: {e}")
         await callback.answer("❌ خطا در بررسی، لطفاً دوباره تلاش کنید", show_alert=True)
 
 async def show_verification_page(message: Message, user_id: int, lang: str = "fa"):
@@ -21448,7 +21453,7 @@ async def catch_admin_messages(message: Message):
     user_name = user_info.get('name', f'کاربر_{user_id}')
     lang = user_info.get('lang', 'fa')
     
-    logger.info(f"🔴 تایید خودکار سفارش #{order_id} - ساخت کلاینت در پنل...")
+    logger.info(f"🔴 auto-approval of order #{order_id} - client creation in panel...")
     update_order(order_id, status='approved', approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     await check_referral_bonus(user_id)
     if SENAI_PANEL_ENABLED:
@@ -21468,7 +21473,7 @@ async def catch_admin_messages(message: Message):
                     reply_markup=get_feedback_keyboard(order_id, lang)
                 )
             except Exception as e:
-                logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
+                logger.error(f"Error sending feedback request: {e}")
             
             await message.reply(
                 f"✅ سفارش #{order_id} تایید شد!\n"
@@ -21499,11 +21504,11 @@ async def catch_admin_messages(message: Message):
                 reply_markup=get_feedback_keyboard(order_id, lang)
             )
         except Exception as e:
-            logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
+            logger.error(f"Error sending feedback request: {e}")
         
         await message.reply(f"✅ کانفیگ سفارش #{order_id} با موفقیت ارسال شد!")
     user_states.pop(admin_id, None)
-    logger.info(f"وضعیت ادمین پاک شد")
+    logger.info(f"admin status cleared")
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -21514,7 +21519,7 @@ async def back_to_main(callback: CallbackQuery):
     is_admin = (user_id == ADMIN_ID_INT)
     before_state = user_states.get(user_id, {})
     was_ticket_input = before_state.get('awaiting_chat', False)
-    logger.debug(f"کاربر {user_id} به منوی اصلی برگشت - وضعیت قبلی: {before_state}")
+    logger.debug(f"User {user_id}returned to main menu - previous status: {before_state}")
     coupon_code = before_state.get('coupon_code')
     coupon_discount = before_state.get('coupon_discount')
     coupon_applied = before_state.get('coupon_applied')
@@ -21531,12 +21536,12 @@ async def back_to_main(callback: CallbackQuery):
             chat['updated_at'] = datetime.now().isoformat()
             save_all()
         logger.info(
-            "کاربر %s با انتخاب منوی اصلی از حالت دریافت پیام تیکت #%s خارج شد",
+            'User %s left ticket #%s message-receiving mode by selecting the main menu',
             user_id,
             chat_id,
         )
     
-    logger.info(f"🔍 کوپن در back_to_main - code: {coupon_code}, applied: {coupon_applied}, discount: {coupon_discount}")
+    logger.info(f"🔍 coupon in back_to_main - code: {coupon_code}, applied: {coupon_applied}, discount: {coupon_discount}")
     if user_id in user_states:
         user_states.pop(user_id, None)
     if coupon_applied and coupon_code:
@@ -21545,12 +21550,12 @@ async def back_to_main(callback: CallbackQuery):
             'coupon_discount': coupon_discount,
             'coupon_applied': True
         }
-        logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} در back_to_main حفظ شد")
+        logger.info(f"🏷️ coupon {coupon_code} for user {user_id} preserved in back_to_main")
     else:
-        logger.warning(f"⚠️ کوپنی برای کاربر {user_id} در back_to_main یافت نشد - coupon_applied: {coupon_applied}, coupon_code: {coupon_code}")
+        logger.warning(f"⚠️ No coupon for user {user_id} not found in back_to_main - coupon_applied: {coupon_applied}, coupon_code: {coupon_code}")
     save_all()
     after_state = user_states.get(user_id, {})
-    logger.info(f"🔍 وضعیت نهایی user_states در back_to_main: {after_state}")
+    logger.info(f"🔍 final user_states status in back_to_main: {after_state}")
     
     if lang == "fa":
         text = f"{premium_emoji('rocket', '🚀')} منوی اصلی"
@@ -21562,7 +21567,7 @@ async def back_to_main(callback: CallbackQuery):
         try:
             await callback.message.delete()
         except Exception as e:
-            logger.warning(f"نتوانست پیام را حذف کند: {e}")
+            logger.warning(f"Failed to delete message: {e}")
         
         await bot.send_message(
             callback.message.chat.id,
@@ -22195,7 +22200,7 @@ async def test_panel_connection() -> dict:
                 result['ping'] = round(ping_result, 1)  # گرد کردن به ۱ رقم اعشار
             else:
                 result['ping'] = None
-                logger.warning(f"⚠️ پینگ به {host} ناموفق بود")
+                logger.warning(f"⚠️ Ping to {host} failed")
         else:
             result['ping'] = None
         start = time.time()
@@ -22211,10 +22216,10 @@ async def test_panel_connection() -> dict:
                     result['http_status'] = response.status
             except asyncio.TimeoutError:
                 result['http_ping'] = None
-                logger.warning(f"⏰ تایم‌اوت HTTP به {SENAI_PANEL_URL}")
+                logger.warning(f"⏰ HTTP timeout to {SENAI_PANEL_URL}")
             except Exception as e:
                 result['http_ping'] = None
-                logger.warning(f"⚠️ خطای HTTP: {e}")
+                logger.warning(f"⚠️ HTTP error: {e}")
         cookie = await xui_login()
         if cookie:
             result['login'] = True
@@ -22224,7 +22229,7 @@ async def test_panel_connection() -> dict:
 
     except Exception as e:
         result['error'] = str(e)[:80]
-        logger.error(f"❌ خطا در تست پنل: {e}")
+        logger.error(f"❌ Error testing the panel: {e}")
 
     return result
 
@@ -22265,7 +22270,7 @@ async def admin_broadcast_send(message: Message):
         caption = message.caption or ""
         parse_mode = None if message.caption_entities else detect_safe_parse_mode(caption)
         file_name = f"photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        logger.info("📸 رسانهٔ تصویری برودکست دریافت شد")
+        logger.info('📸 Broadcast image media received')
     
     elif broadcast_type == 'file':
         if not message.document and not message.video:
@@ -22283,7 +22288,7 @@ async def admin_broadcast_send(message: Message):
         
         caption = message.caption or ""
         parse_mode = None if message.caption_entities else detect_safe_parse_mode(caption)
-        logger.info("📄 فایل برودکست دریافت شد")
+        logger.info('📄 Broadcast file received')
     
     elif broadcast_type == 'audio':
         if not message.audio and not message.voice:
@@ -22305,7 +22310,7 @@ async def admin_broadcast_send(message: Message):
         
         caption = message.caption or ""
         parse_mode = None if message.caption_entities else detect_safe_parse_mode(caption)
-        logger.info(f"🎵 صوت برودکست دریافت شد - subtype: {audio_subtype}")
+        logger.info(f"🎵 Broadcast audio received - subtype: {audio_subtype}")
     
     else:
         await message.reply("❌ نوع پیام نامشخص است" if lang=="fa" else "❌ Unknown message type")
@@ -22436,7 +22441,7 @@ async def preview_broadcast(callback: CallbackQuery):
     try:
         await bot.send_message(admin_id, preview_header, parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.error(f"خطا در ارسال هدر پیش‌نمایش: {e}")
+        logger.error(f"Error sending preview header: {e}")
     
     preview_sent = False
     try:
@@ -22445,7 +22450,7 @@ async def preview_broadcast(callback: CallbackQuery):
         state["broadcast_preview_verified"] = True
     
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال پیش‌نمایش: {e}", exc_info=True)
+        logger.error(f"❌ Error sending preview: {e}", exc_info=True)
         await bot.send_message(
             admin_id,
             f"❌ خطا در پیش‌نمایش:\n<code>{str(e)[:200]}</code>" if lang == "fa"
@@ -22493,7 +22498,7 @@ async def preview_broadcast(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
-            logger.error(f"خطا در ارسال footer پیش‌نمایش: {e}")
+            logger.error(f"Error sending preview footer: {e}")
     
     try:
         await callback.answer("👁️ پیش‌نمایش ارسال شد" if lang == "fa" else "👁️ Preview sent")
@@ -22510,7 +22515,7 @@ async def broadcast_back_to_main(callback: CallbackQuery):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.debug(f"نتوانست پیام برودکست را حذف کند: {e}")
+        logger.debug(f"Failed to delete broadcast message: {e}")
     
     # ✅ نمایش منوی اصلی
     lang = get_user(user_id).get('lang', 'fa')
@@ -22527,7 +22532,7 @@ async def broadcast_back_to_main(callback: CallbackQuery):
             reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     except Exception as e:
-        logger.error(f"خطا در نمایش منوی اصلی بعد از برودکست: {e}")
+        logger.error(f"Error displaying the main menu after broadcast: {e}")
         try:
             await bot.send_message(
                 user_id, text,
@@ -22599,13 +22604,13 @@ async def confirm_broadcast(callback: CallbackQuery):
         await callback.answer("پیام اصلی برودکست در دسترس نیست؛ لطفاً دوباره بسازید." if lang == "fa" else "The source message is unavailable; please create the broadcast again.", show_alert=True)
         return
     state["broadcast_sending"] = True
-    logger.info(f"📢 شروع ارسال پیام همگانی:")
-    logger.info(f"  - نوع: {broadcast_data.get('type')}")
-    logger.info(f"  - تعداد کاربران: {len(users)}")
+    logger.info(f"📢 starting broadcast message:")
+    logger.info(f" - type: {broadcast_data.get('type')}")
+    logger.info(f" - user count: {len(users)}")
     status_msg = await callback.message.answer(
         "⏳ در حال ارسال پیام همگانی..." if lang=="fa" else "⏳ Sending broadcast..."
     )
-    logger.info(f"✅ پیام وضعیت با message_id={status_msg.message_id} ارسال شد")
+    logger.info(f"✅ status message with message_id={status_msg.message_id} sent")
     sent_count = 0
     failed_count = 0
     failed_users = []
@@ -22626,7 +22631,7 @@ async def confirm_broadcast(callback: CallbackQuery):
                 try:
                     await status_msg.edit_text(progress_text)
                 except Exception as e:
-                    logger.warning(f"⚠️ خطا در بروزرسانی پیام وضعیت: {e}")
+                    logger.warning(f"⚠️ Error updating status message: {e}")
                     try:
                         await status_msg.delete()
                     except:
@@ -22637,23 +22642,23 @@ async def confirm_broadcast(callback: CallbackQuery):
             
         except Exception as e:
             error_str = str(e)
-            logger.error(f"❌ خطا در ارسال به کاربر {uid}: {error_str}")
+            logger.error(f"❌ Error sending to user {uid}: {error_str}")
             failed_count += 1
             failed_users.append(str(uid))
     user_states.pop(callback.from_user.id, None)
     try:
         if status_msg:
             await status_msg.delete()
-            logger.info(f"✅ پیام وضعیت با message_id={status_msg.message_id} حذف شد")
+            logger.info(f"✅ status message with message_id={status_msg.message_id} deleted")
         else:
-            logger.warning("⚠️ پیام وضعیت وجود ندارد")
+            logger.warning('⚠️ Status message does not exist')
     except Exception as e:
-        logger.warning(f"⚠️ خطا در حذف پیام وضعیت: {e}")
+        logger.warning(f"⚠️ Error deleting status message: {e}")
         try:
             if "message to delete not found" in str(e):
-                logger.info("ℹ️ پیام وضعیت قبلاً حذف شده بود")
+                logger.info('ℹ️ Status message had already been deleted')
             else:
-                logger.error(f"❌ خطا در حذف پیام وضعیت: {e}")
+                logger.error(f"❌ Error deleting status message: {e}")
         except:
             pass
     failed_preview = ', '.join(str(u) for u in failed_users[:10])
@@ -22702,9 +22707,9 @@ async def confirm_broadcast(callback: CallbackQuery):
         except:
             pass
         await callback.message.answer(result_text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
-        logger.info("✅ گزارش ارسال شد")
+        logger.info('✅ Report sent')
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال گزارش: {e}")
+        logger.error(f"❌ Error sending report: {e}")
         await callback.message.answer(result_text, parse_mode=ParseMode.HTML)
     
     try:
@@ -22798,7 +22803,7 @@ async def buy_service(callback: CallbackQuery):
 
     # ✅ buy_service = شروع خرید جدید
     old_state = user_states.get(user_id, {})
-    logger.info(f"🔍 [buy_service] state قبل: {old_state}")
+    logger.info(f"🔍 [buy_service] previous state: {old_state}")
 
     # ✅ فقط اطلاعات ضروری حفظ میشن
     preserved_state = {
@@ -22822,13 +22827,13 @@ async def buy_service(callback: CallbackQuery):
             preserved_state['coupon_code'] = coupon_data.get('coupon_code')
             preserved_state['coupon_discount'] = coupon_data.get('coupon_discount', 0)
             preserved_state['coupon_applied'] = True
-            logger.info(f"🏷️ [buy_service] کوپن {coupon_data.get('coupon_code')} از دیتابیس بازیابی شد")
+            logger.info(f"🏷️ [buy_service] Coupon {coupon_data.get('coupon_code')} restored from the database")
 
     # ✅ state رو با preserved جایگزین کن
     user_states[user_id] = preserved_state
     full_state = user_states[user_id]
 
-    logger.info(f"🔄 [buy_service] state پاک شد - حفظ‌شده: {preserved_state}")
+    logger.info(f"🔄 [buy_service] cleared - preserved: {preserved_state}")
 
     coupon_code = full_state.get('coupon_code')
     coupon_discount = full_state.get('coupon_discount')
@@ -22841,9 +22846,9 @@ async def buy_service(callback: CallbackQuery):
     days = user.get('days', 30)
     original_price = calculate_price(vol, days)
 
-    logger.info(f"🔍 [buy_service] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
-    logger.info(f"🔍 [buy_service] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
-    logger.info(f"🔍 [buy_service] حجم/روز: {vol}GB / {days} روز")
+    logger.info(f"🔍 [buy_service] coupon: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
+    logger.info(f"🔍 [buy_service] renewal: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [buy_service] volume/days: {vol}GB / {days}days")
     discount_percent = 0
     final_price = original_price
     
@@ -22853,9 +22858,9 @@ async def buy_service(callback: CallbackQuery):
             discount_percent = coupon_discount
             if discount_percent > 0:
                 final_price = original_price - (original_price * discount_percent // 100)
-                logger.info(f"🏷️ [buy_service] تخفیف {discount_percent}% اعمال شد: {original_price:,} → {final_price:,}")
+                logger.info(f"🏷️ [buy_service] Discount {discount_percent}% applied: {original_price:,} → {final_price:,}")
         else:
-            logger.warning(f"⚠️ [buy_service] کوپن نامعتبر: {reason}")
+            logger.warning(f"⚠️ [buy_service] Invalid coupon: {reason}")
             if user_id in user_states:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
@@ -22865,7 +22870,7 @@ async def buy_service(callback: CallbackQuery):
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = discount_percent
-        logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+        logger.info(f"🏷️ [buy_service] Coupon {coupon_code} in user_states for user {user_id} preserved")
     
     balance = user.get('balance', 0)
     ready_enabled = READY_PACKAGES.get('enabled', True)
@@ -22887,7 +22892,7 @@ async def buy_service(callback: CallbackQuery):
     inbound_ids = full_state.get('inbound_ids', [])
     if is_ready_package and package_price > 0:
         final_price = package_price
-        logger.info(f"📦 [buy_service] بسته آماده: {category_name} - قیمت ثابت: {final_price:,} تومان")
+        logger.info(f"📦 [buy_service] Ready-made package: {category_name} - fixed price: {final_price:,}tomans")
         
         discount_text = ""
         
@@ -22918,13 +22923,13 @@ async def buy_service(callback: CallbackQuery):
             user_states[user_id]['coupon_code'] = coupon_code
             user_states[user_id]['coupon_applied'] = True
             user_states[user_id]['coupon_discount'] = discount_percent
-            logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+            logger.info(f"🏷️ [buy_service] Coupon {coupon_code} in user_states for user {user_id} preserved")
         if is_extend and extend_order_id:
             user_states[user_id]['is_extend'] = True
             user_states[user_id]['extend_order_id'] = extend_order_id
             user_states[user_id]['current_volume'] = full_state.get('current_volume', 0)
             user_states[user_id]['current_days'] = full_state.get('current_days', 0)
-            logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
+            logger.info(f"🔄 [buy_service] Renewal mode enabled - order_id: {extend_order_id}")
         
         if lang == "fa":
             text = f"""
@@ -23001,7 +23006,7 @@ async def buy_service(callback: CallbackQuery):
             logger.warning(f"callback.answer failed: {e}")
         return
     if ready_enabled and has_active_packages:
-        logger.info(f"📦 بسته‌های آماده فعال هستند - کاربر {user_id} به صفحه دسته‌بندی هدایت شد")
+        logger.info(f"📦 Ready-made packages are enabled - user {user_id} redirected to the category page")
         
         user_states[user_id] = {
             'payment_type': 'purchase',
@@ -23019,17 +23024,17 @@ async def buy_service(callback: CallbackQuery):
             user_states[user_id]['coupon_code'] = coupon_code
             user_states[user_id]['coupon_applied'] = True
             user_states[user_id]['coupon_discount'] = discount_percent
-            logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+            logger.info(f"🏷️ [buy_service] Coupon {coupon_code} in user_states for user {user_id} preserved")
         if is_extend and extend_order_id:
             user_states[user_id]['is_extend'] = True
             user_states[user_id]['extend_order_id'] = extend_order_id
             user_states[user_id]['current_volume'] = full_state.get('current_volume', 0)
             user_states[user_id]['current_days'] = full_state.get('current_days', 0)
-            logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
+            logger.info(f"🔄 [buy_service] Renewal mode enabled - order_id: {extend_order_id}")
         
         await show_ready_categories(callback)
         return
-    logger.info(f"🛒 [buy_service] خرید سفارشی: {vol}GB/{days} روز - قیمت: {final_price:,} تومان")
+    logger.info(f"🛒 [buy_service] custom purchase: {vol}GB/{days}days - price: {final_price:,}tomans")
     user_states[user_id] = {
         'payment_type': 'purchase',
         'volume': vol,
@@ -23047,13 +23052,13 @@ async def buy_service(callback: CallbackQuery):
         user_states[user_id]['coupon_code'] = coupon_code
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = discount_percent
-        logger.info(f"🏷️ [buy_service] کوپن {coupon_code} در user_states کاربر {user_id} حفظ شد")
+        logger.info(f"🏷️ [buy_service] Coupon {coupon_code} in user_states for user {user_id} preserved")
     if is_extend and extend_order_id:
         user_states[user_id]['is_extend'] = True
         user_states[user_id]['extend_order_id'] = extend_order_id
         user_states[user_id]['current_volume'] = full_state.get('current_volume', 0)
         user_states[user_id]['current_days'] = full_state.get('current_days', 0)
-        logger.info(f"🔄 [buy_service] حالت تمدید فعال - order_id: {extend_order_id}")
+        logger.info(f"🔄 [buy_service] Renewal mode enabled - order_id: {extend_order_id}")
     discount_text = ""
     if discount_percent > 0 and final_price != original_price:
         if lang == "fa":
@@ -23117,7 +23122,7 @@ async def vol_down(callback: CallbackQuery):
     vol = user.get('volume', 1)
     if vol > 1:
         update_user(user_id, 'volume', vol - 1)
-        logger.debug(f"کاربر {user_id} حجم را کاهش داد: {vol} -> {vol-1}")
+        logger.debug(f"User {user_id} reduced the volume: {vol} -> {vol-1}")
         await buy_service(callback)
     else:
         if lang == "fa":
@@ -23176,7 +23181,7 @@ async def show_subscription_qr(callback: CallbackQuery):
         )
         await callback.answer()
     except Exception as e:
-        logger.error(f"خطا در show_subscription_qr: {e}", exc_info=True)
+        logger.error(f"Error in show_subscription_qr: {e}", exc_info=True)
         await callback.answer("❌ خطا در تولید QR Code" if lang == 'fa' else "❌ Error generating QR Code", show_alert=True)        
         
         
@@ -23204,11 +23209,11 @@ async def xui_get_client_links(email: str) -> Optional[list]:
                     data = await response.json()
                     if data.get("success"):
                         links = data.get("obj", [])
-                        logger.debug("لینک‌های پنل دریافت شد (%s مورد)", len(links) if isinstance(links, list) else 0)
+                        logger.debug('Panel links retrieved (%s items)', len(links) if isinstance(links, list) else 0)
                         return links
                 return None
     except Exception as e:
-        logger.error(f"❌ خطا در دریافت لینک‌ها: {e}")
+        logger.error(f"❌ Error retrieving links: {e}")
         return None
 
 
@@ -23678,7 +23683,7 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
                     else:
                         related_order[field] = value
             if not save_json(DB_FILES["orders"], orders):
-                logger.critical("ذخیرهٔ مقدار قبلی لینک سفارش پس از شکست عملیات انجام نشد")
+                logger.critical('Failed to save the previous order link after the operation failed')
 
         rollback_errors = []
         for inbound_id in reversed(attempted_ids):
@@ -23760,7 +23765,7 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
                     rollback_errors.append("subscription-links")
             except Exception as rollback_verification_error:
                 logger.error(
-                    "تأیید بازگردانی پنل برای کلاینت %s خطا داد: %s",
+                    'Panel restore confirmation failed for client %s: %s',
                     email,
                     rollback_verification_error,
                     exc_info=True,
@@ -23768,7 +23773,7 @@ async def _rotate_panel_client_identity(email: str, user_id: int, order_id: int)
                 rollback_errors.append("verification-error")
         if rollback_errors:
             logger.critical(
-                "بازگردانی چرخش لینک کلاینت %s ناموفق بود؛ اینباندهای نیازمند بررسی: %s",
+                'Failed to restore client link rotation for %s; inbounds requiring review: %s',
                 email,
                 rollback_errors,
                 exc_info=True,
@@ -23879,7 +23884,7 @@ async def change_subscription_link_cancel(callback: CallbackQuery):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.warning(f"خطا در پاک‌کردن پیام لغو تغییر لینک: {e}")
+        logger.warning(f"Error deleting the link-change cancellation message: {e}")
     await callback.answer("عملیات لغو شد" if get_user(callback.from_user.id).get("lang", "fa") == "fa" else "Cancelled")
 
 
@@ -23911,7 +23916,7 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
     except Exception as e:
         confirmation["processing"] = False
         logger.error(
-            "خطا در تغییر لینک اشتراک سفارش #%s برای کاربر %s: %s",
+            'Error changing the subscription link for order #%s for user %s: %s',
             order_id,
             user_id,
             e,
@@ -23934,18 +23939,18 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML,
             )
         except Exception as delete_error:
-            logger.warning(f"خطا در نمایش خطای تغییر لینک: {delete_error}")
+            logger.warning(f"Error displaying link-change error: {delete_error}")
         return
 
     LINK_ROTATION_CONFIRMATIONS.pop(key, None)
     try:
         await bot.delete_message(callback.message.chat.id, confirmation["origin_message_id"])
     except Exception as e:
-        logger.warning(f"خطا در حذف صفحهٔ حاوی لینک قدیمی: {e}")
+        logger.warning(f"Error deleting the page containing the old link: {e}")
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.warning(f"خطا در حذف پیام تأیید تغییر لینک: {e}")
+        logger.warning(f"Error deleting the link-change confirmation message: {e}")
     try:
         await _show_rotated_subscription(
             callback.message.chat.id,
@@ -23954,7 +23959,7 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
             lang,
         )
     except Exception as e:
-        logger.error(f"خطا در نمایش QR لینک جدید سفارش #{order_id}: {e}", exc_info=True)
+        logger.error(f"Error displaying the QR code for the new link of order #{order_id}: {e}", exc_info=True)
         wireguard_available = await _order_has_wireguard(order_id)
         await bot.send_message(
             callback.message.chat.id,
@@ -23971,7 +23976,7 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
                 wireguard_available=wireguard_available,
             ),
         )
-    logger.info("کاربر %s لینک اشتراک سفارش #%s را تغییر داد", user_id, order_id)
+    logger.info('User %s changed subscription link for order #%s', user_id, order_id)
 
 
 @dp.callback_query(F.data.regexp(r"^daily_usage_\d+(_\d+)?$"))
@@ -24033,7 +24038,7 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
                 )
             except (TypeError, ValueError) as error:
                 logger.error(
-                    "ساخت متن وایرگارد سفارش #%s ناموفق بود: %s",
+                    'Failed to generate WireGuard text for order #%s: %s',
                     order_id,
                     error,
                     exc_info=True,
@@ -24069,9 +24074,9 @@ async def _delete_downloaded_files(user_id: int, chat_id: int = None):
                 chat_id=item.get('chat_id', chat_id),
                 message_id=item['message_id']
             )
-            logger.info(f"🗑 فایل دانلود کاربر {user_id} پاک شد (msg_id: {item['message_id']})")
+            logger.info(f"🗑 Download file for user {user_id} deleted (msg_id: {item['message_id']})")
         except Exception as e:
-            logger.debug(f"خطا در پاک کردن فایل: {e}")
+            logger.debug(f"Error deleting file: {e}")
     
     DOWNLOADED_FILES[user_id].clear()
     del DOWNLOADED_FILES[user_id]
@@ -24156,7 +24161,7 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
 
     # اگه خیلی طولانی شد، کوتاه‌سازی کن
     if len(text) > 4000:
-        logger.warning(f"⚠️ صفحه {page + 1} سفارش #{order_id} طولانی شد: {len(text)} کاراکتر")
+        logger.warning(f"⚠️ Page {page + 1} order #{order_id} became too long: {len(text)} characters")
         truncated_body = ""
         for local_idx, link in enumerate(page_links[:2]):
             abs_idx = start_idx + local_idx + 1
@@ -24302,7 +24307,7 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
                 elif "message is not modified" not in err:
                     raise
     except Exception as e:
-        logger.error(f"❌ خطا در نمایش صفحه کانفیگ: {e}", exc_info=True)
+        logger.error(f"❌ Error displaying the configuration page: {e}", exc_info=True)
         await callback.answer(
             "❌ خطا در نمایش. دوباره تلاش کنید." if lang == 'fa' else "❌ Error. Try again.",
             show_alert=True
@@ -24415,11 +24420,11 @@ async def copy_all_links_file(callback: CallbackQuery):
             'chat_id': user_id
         })
 
-        logger.info(f"📥 فایل لینک‌ها (سفارش #{order_id}) به کاربر {user_id} ارسال شد")
+        logger.info(f"📥 Links file (order #{order_id}) sent to user {user_id} sent")
         await callback.answer("✅ فایل ارسال شد" if lang == "fa" else "✅ File sent")
 
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال فایل: {e}", exc_info=True)
+        logger.error(f"❌ Error sending file: {e}", exc_info=True)
         await callback.answer(
             "❌ خطا در ارسال فایل" if lang == "fa" else "❌ Error sending file",
             show_alert=True
@@ -24511,7 +24516,7 @@ async def show_wireguard_config(callback: CallbackQuery):
 
         if len(matches) > 1:
             logger.warning(
-                "سفارش #%s شامل %s اینباند WireGuard است؛ فقط نخستین اینباند نمایش داده می‌شود",
+                'Order #%s contains %s WireGuard inbounds; only the first inbound will be displayed',
                 order_id,
                 len(matches),
             )
@@ -24548,7 +24553,7 @@ async def show_wireguard_config(callback: CallbackQuery):
         try:
             await callback.message.delete()
         except Exception as error:
-            logger.debug("حذف پیام قبلی وایرگارد ناموفق بود: %s", error)
+            logger.debug('Failed to delete previous WireGuard message: %s', error)
         if lang == "fa":
             cat_title = order.get('category_name') or 'UDP گیمینگ و استریم'
         else:
@@ -24562,7 +24567,7 @@ async def show_wireguard_config(callback: CallbackQuery):
         )
     except Exception as error:
         logger.error(
-            "ساخت یا ارسال QR وایرگارد سفارش #%s ناموفق بود: %s",
+            'Failed to create or send the WireGuard QR code for order #%s: %s',
             order_id,
             error,
             exc_info=True,
@@ -24645,7 +24650,7 @@ async def send_wireguard_config_file(callback: CallbackQuery):
         )
     except Exception as error:
         logger.error(
-            "ارسال فایل وایرگارد سفارش #%s ناموفق بود: %s",
+            'Failed to send the WireGuard file for order #%s: %s',
             order_id,
             error,
             exc_info=True,
@@ -24776,7 +24781,7 @@ async def show_single_qr(callback: CallbackQuery):
         await callback.answer("✅ ارسال شد" if lang == 'fa' else "✅ Sent")
 
     except Exception as e:
-        logger.error(f"❌ خطا در تولید QR: {e}")
+        logger.error(f"❌ Error generating QR code: {e}")
         await callback.answer(
             "❌ خطا در تولید QR" if lang == 'fa' else "❌ Error",
             show_alert=True
@@ -24790,7 +24795,7 @@ async def vol_up(callback: CallbackQuery):
     vol = user.get('volume', 1)
     if vol < 100:
         update_user(user_id, 'volume', vol + 1)
-        logger.debug(f"کاربر {user_id} حجم را افزایش داد: {vol} -> {vol+1}")
+        logger.debug(f"User {user_id} increased the volume: {vol} -> {vol+1}")
         await buy_service(callback)
     else:
         if lang == "fa":
@@ -24805,7 +24810,7 @@ async def day_down(callback: CallbackQuery):
     days = user.get('days', 30)
     if days > 30:
         update_user(user_id, 'days', days - 15)
-        logger.debug(f"کاربر {user_id} روز را کاهش داد: {days} -> {days-15}")
+        logger.debug(f"User {user_id} reduced the days: {days} -> {days-15}")
         await buy_service(callback)
     else:
         if lang == "fa":
@@ -24821,7 +24826,7 @@ async def day_up(callback: CallbackQuery):
     days = user.get('days', 30)
     if days < 365:
         update_user(user_id, 'days', days + 15)
-        logger.debug(f"کاربر {user_id} روز را افزایش داد: {days} -> {days+15}")
+        logger.debug(f"User {user_id} increased the days: {days} -> {days+15}")
         await buy_service(callback)
     else:
         if lang == "fa":
@@ -24878,7 +24883,7 @@ async def reject_expired_checkout(callback, lang):
 async def pay_card(callback: CallbackQuery):
     """پرداخت با کارت بانکی - نسخه کامل با پشتیبانی از تمدید"""
     user_id = callback.from_user.id
-    logger.info(f"🔍 [pay_card] شروع برای کاربر {user_id}")
+    logger.info(f"🔍 [pay_card] starting for user {user_id}")
     debug_coupon_state(user_id, "pay_card_start")
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
@@ -24896,7 +24901,7 @@ async def pay_card(callback: CallbackQuery):
     # ✅✅✅ خواندن مستقیم از user_states (نه از full_state)
     current_user_state = user_states.get(user_id, {})
     if not is_valid_checkout_state(current_user_state):
-        logger.warning(f"⚠️ [pay_card] پرداخت رد شد؛ state خرید معتبر یا تازه نیست (کاربر {user_id})")
+        logger.warning(f"⚠️ [pay_card] Payment rejected; purchase state is invalid or stale (user {user_id})")
         await reject_expired_checkout(callback, lang)
         return
 
@@ -24909,17 +24914,17 @@ async def pay_card(callback: CallbackQuery):
     
     full_state = current_user_state  # برای سازگاری با بقیه کد
     
-    logger.info(f"🔍 [pay_card] STATE کامل: {current_user_state}")
+    logger.info(f"🔍 [pay_card] complete STATE: {current_user_state}")
     logger.info(f"🔍 [pay_card] is_extend={is_extend}, extend_order_id={extend_order_id}")
     
-    logger.info(f"🔍 [pay_card] وضعیت کامل قبل: {full_state}")
-    logger.info(f"🔍 [pay_card] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
-    logger.info(f"🔍 [pay_card] current_volume={current_volume}GB, current_days={current_days}روز")
+    logger.info(f"🔍 [pay_card] previous state: {full_state}")
+    logger.info(f"🔍 [pay_card] renewal: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [pay_card] current_volume={current_volume}GB, current_days={current_days}days")
     coupon_code = full_state.get('coupon_code')
     coupon_discount = full_state.get('coupon_discount')
     coupon_applied = full_state.get('coupon_applied', False)
     
-    logger.info(f"🔍 [pay_card] کوپن استخراج شده: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
+    logger.info(f"🔍 [pay_card] extracted coupon: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
     is_ready_package = full_state.get('is_ready_package', False)
     if is_ready_package:
         vol = full_state.get('volume', 1)
@@ -24959,7 +24964,7 @@ async def pay_card(callback: CallbackQuery):
         order_type = "ready_package"
         
         volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-        logger.info(f"📦 [pay_card] بسته آماده: {category_name} - حجم: {volume_display} - قیمت: {final_price:,} تومان")
+        logger.info(f"📦 [pay_card] Ready-made package: {category_name} - Volume: {volume_display} - price: {final_price:,}tomans")
     else:
         vol = user.get('volume', 1)
         days = user.get('days', 30)
@@ -24979,18 +24984,18 @@ async def pay_card(callback: CallbackQuery):
                     discount_percent = coupon_discount
                     if discount_percent > 0:
                         final_price = original_price - (original_price * discount_percent // 100)
-                        logger.info(f"🏷️ [pay_card] تخفیف {discount_percent}% اعمال شد: {original_price:,} → {final_price:,}")
+                        logger.info(f"🏷️ [pay_card] Discount {discount_percent}% applied: {original_price:,} → {final_price:,}")
         
         volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-        logger.info(f"🛒 [pay_card] خرید سفارشی: {vol}GB/{days} روز - قیمت: {final_price:,} تومان")
+        logger.info(f"🛒 [pay_card] Custom purchase: {vol}GB/{days}days - price: {final_price:,}tomans")
     if final_price == 0:
-        logger.info(f"💰 [pay_card] پرداخت رایگان برای کاربر {user_id}")
+        logger.info(f"💰 [pay_card] Free payment for user {user_id}")
         await callback.message.edit_text("⏳ در حال فعال‌سازی سرویس رایگان...")
         if is_extend and extend_order_id:
-            logger.info(f"🔄 [pay_card] شروع تمدید رایگان سفارش #{extend_order_id}")
+            logger.info(f"🔄 [pay_card] Starting free renewal for order #{extend_order_id}")
             parent_order = orders.get(str(extend_order_id))
             if not parent_order:
-                logger.error(f"❌ [pay_card] سفارش اصلی #{extend_order_id} یافت نشد")
+                logger.error(f"❌ [pay_card] Original order #{extend_order_id} not found")
                 await callback.message.edit_text(
                     "❌ خطا: سفارش اصلی برای تمدید یافت نشد. لطفاً دوباره تلاش کنید." if lang == "fa" else "❌ Error: Original order not found. Please try again.",
                     reply_markup=get_back_only_keyboard(lang)
@@ -25098,7 +25103,7 @@ async def pay_card(callback: CallbackQuery):
                     parse_mode=ParseMode.HTML, 
                     reply_markup=get_extension_success_keyboard(extend_order_id, lang)
                 )
-                logger.info(f"✅ [pay_card] تمدید رایگان برای کاربر {user_id} - سفارش #{order_id}")
+                logger.info(f"✅ [pay_card] Free renewal for user {user_id} - order #{order_id}")
                 await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
                 return
             else:
@@ -25171,7 +25176,7 @@ async def pay_card(callback: CallbackQuery):
 """
             
             await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=get_back_only_keyboard(lang))
-            logger.info(f"✅ [pay_card] سرویس رایگان برای کاربر {user_id} فعال شد - سفارش #{order_id}")
+            logger.info(f"✅ [pay_card] Free service activated for user {user_id} activated - order #{order_id}")
             await callback.answer("✅ سرویس رایگان فعال شد!" if lang == "fa" else "✅ Free service activated!")
             return
         else:
@@ -25180,13 +25185,13 @@ async def pay_card(callback: CallbackQuery):
                 reply_markup=get_back_only_keyboard(lang)
             )
             return
-    logger.info(f"💰 [pay_card] کاربر {user_id} شروع پرداخت با کارت - قیمت: {final_price:,} تومان")
+    logger.info(f"💰 [pay_card] user {user_id} starting card payment - price: {final_price:,}tomans")
     
     if log_system:
         await log_system.log_user_action(
             user_id, 
-            "شروع پرداخت با کارت", 
-            f"قیمت: {final_price:,} تومان | حجم: {vol}GB | مدت: {days} روز"
+            "Started card payment",
+            f"Price: {final_price:,} Toman | Volume: {vol}GB | Duration: {days} days"
         )
     order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
 
@@ -25206,7 +25211,7 @@ async def pay_card(callback: CallbackQuery):
             )
             final_price = payable_amount
         except Exception as e:
-            logger.error(f"❌ خطا در رزرو مبلغ اختصاصی برای کارت: {e}")
+            logger.error(f"❌ Error reserving custom card amount: {e}")
             update_order(order_id, status='cancelled')
             err_msg = (
                 "⚠️ در حال حاضر امکان صدور فاکتور با شناسه پرداخت مقدور نیست. لطفاً دقایقی دیگر تلاش کنید."
@@ -25249,18 +25254,18 @@ async def pay_card(callback: CallbackQuery):
             update_order(order_id, 
                         parent_order_id=extend_order_id,
                         is_extend=True)  # ✅ اضافه کردن فلگ تمدید
-            logger.info(f"🔄 [pay_card] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} ایجاد شد")
+            logger.info(f"🔄 [pay_card] Order #{order_id} for renewal of order #{extend_order_id} created")
         else:
-            logger.warning(f"⚠️ [pay_card] سفارش اصلی #{extend_order_id} یافت نشد، تمدید لغو شد")
+            logger.warning(f"⚠️ [pay_card] Original order #{extend_order_id} not found; renewal canceled")
             is_extend = False
             extend_order_id = None
     
-    logger.info(f"📝 [pay_card] سفارش #{order_id} ایجاد شد - نوع: {order_type} - حجم: {vol}GB")
-    logger.info(f"💳 [pay_card] روش پرداخت: کارت به کارت")
+    logger.info(f"📝 [pay_card] order #{order_id} created - type: {order_type} - Volume: {vol}GB")
+    logger.info(f"💳 [pay_card] payment method: card-to-card")
     try:
         await send_sticker(user_id, 'payment', '💳')
     except Exception as e:
-        logger.warning(f"خطا در ارسال استیکر: {e}")
+        logger.warning(f"Error sending sticker: {e}")
         await callback.message.answer(premium_emoji('card', '💳'))
     card_num = ' '.join([BANK_CARD_NUMBER[i:i+4] for i in range(0, 16, 4)])
     price_display = f"{final_price:,} تومان" if lang == "fa" else f"{final_price:,} Toman"
@@ -25312,7 +25317,7 @@ async def pay_card(callback: CallbackQuery):
         new_state['coupon_code'] = coupon_code
         new_state['coupon_applied'] = True
         new_state['coupon_discount'] = coupon_discount if coupon_discount else 0
-        logger.info(f"🏷️ [pay_card] کوپن {coupon_code} به state جدید منتقل شد")
+        logger.info(f"🏷️ [pay_card] Coupon {coupon_code} transferred to the new state")
     if is_ready_package:
         new_state['is_ready_package'] = True
         new_state['category_id'] = category_id
@@ -25324,17 +25329,17 @@ async def pay_card(callback: CallbackQuery):
         new_state['extend_order_id'] = extend_order_id
         new_state['current_volume'] = current_volume
         new_state['current_days'] = current_days
-        logger.info(f"🔄 [pay_card] اطلاعات تمدید به state جدید منتقل شد: order_id={extend_order_id}")
+        logger.info(f"🔄 [pay_card] Renewal information transferred to the new state: order_id={extend_order_id}")
     else:
         if full_state.get('is_extend', False) and full_state.get('extend_order_id'):
             new_state['is_extend'] = full_state.get('is_extend')
             new_state['extend_order_id'] = full_state.get('extend_order_id')
             new_state['current_volume'] = full_state.get('current_volume', 0)
             new_state['current_days'] = full_state.get('current_days', 0)
-            logger.info(f"🔄 [pay_card] اطلاعات تمدید از full_state به new_state منتقل شد: order_id={full_state.get('extend_order_id')}")
+            logger.info(f"🔄 [pay_card] Renewal information transferred from full_state to new_state: order_id={full_state.get('extend_order_id')}")
     user_states[user_id] = new_state
     
-    logger.info(f"✅ [pay_card] وضعیت کاربر {user_id} تنظیم شد: awaiting_receipt برای سفارش #{order_id}")
+    logger.info(f"✅ [pay_card] user status {user_id} set to awaiting_receipt for order #{order_id}")
     logger.info(f"🔍 [pay_card] new_state: {new_state}")
     debug_coupon_state(user_id, "pay_card_end")
     
@@ -25402,7 +25407,7 @@ async def send_receipt_reminder(callback: CallbackQuery):
 async def cancel_order_direct(callback: CallbackQuery):
     """انصراف مستقیم از سفارش توسط کاربر - کوپن باقی می‌ماند"""
     if callback.data.startswith("cancel_order_admin_"):
-        logger.debug(f"⏩ کالبک cancel_order_admin به هندلر ادمین هدایت شد: {callback.data}")
+        logger.debug(f"⏩ Callback cancel_order_admin routed to the admin handler: {callback.data}")
         await cancel_order_admin(callback)
         return
     
@@ -25428,7 +25433,7 @@ async def cancel_order_direct(callback: CallbackQuery):
     # ✅ چک واقعی: کوپن باید هم applied باشه هم code داشته باشه
     has_real_coupon = bool(coupon_applied and coupon_code)
     
-    logger.info(f"🔍 [cancel_order_direct] کوپن: code={coupon_code}, applied={coupon_applied}, has_real={has_real_coupon}")
+    logger.info(f"🔍 [cancel_order_direct] coupon: code={coupon_code}, applied={coupon_applied}, has_real={has_real_coupon}")
     
     order = orders.get(str(order_id))
     if order:
@@ -25445,13 +25450,13 @@ async def cancel_order_direct(callback: CallbackQuery):
                 sms_payment_manager.db.cancel_reservation(order_id, order.get('type', 'purchase'))
             except Exception:
                 pass
-            logger.info(f"سفارش #{order_id} توسط کاربر لغو شد")
+            logger.info(f"Order #{order_id} canceled by the user")
             
             if log_system:
                 await log_system.log_user_action(
                     user_id,
-                    "لغو سفارش",
-                    f"سفارش #{order_id} لغو شد"
+                    "Cancelled order",
+                    f"Order #{order_id} was cancelled"
                 )
             
             if lang == "fa":
@@ -25476,7 +25481,7 @@ async def cancel_order_direct(callback: CallbackQuery):
             'coupon_discount': coupon_discount if coupon_discount else 0,
             'coupon_applied': True
         }
-        logger.info(f"🏷️ [cancel_order_direct] کوپن {coupon_code} برای کاربر {user_id} حفظ شد")
+        logger.info(f"🏷️ [cancel_order_direct] Coupon {coupon_code} for user {user_id} preserved")
         save_coupon_to_user_db(user_id)
     
     is_admin = (user_id == ADMIN_ID_INT)
@@ -25519,7 +25524,7 @@ async def cancel_order_direct(callback: CallbackQuery):
 async def create_client_in_panel(user_id: int, email: str, volume_gb: int, days: int, user_name: str = None, ip_limit: int = 0) -> Optional[str]:
     """ساخت کلاینت در پنل با استفاده از اینباند انتخاب شده کاربر"""
     if not SENAI_PANEL_ENABLED:
-        logger.warning("⚠️ پنل غیرفعال است")
+        logger.warning('⚠️ Panel is disabled')
         return None
     
     if not user_name:
@@ -25615,7 +25620,7 @@ async def send_admin_notification(purchase_type: str, data: dict):
         user_name_raw = user_info.get('full_name', f'کاربر {user_id}')
         user_username = user_info.get('username', '')
     except Exception as e:
-        logger.error(f"خطا در دریافت اطلاعات کاربر {user_id}: {e}")
+        logger.error(f"Error retrieving user information {user_id}: {e}")
         user_name_raw = f'کاربر {user_id}'
         user_username = ''
     
@@ -25789,9 +25794,9 @@ async def send_admin_notification(purchase_type: str, data: dict):
     # ✅ ارسال نوتیفیکیشن
     try:
         await bot.send_message(ADMIN_ID_INT, text, parse_mode=ParseMode.HTML)
-        logger.info(f"📨 نوتیفیکیشن {purchase_type} به ادمین ارسال شد - کاربر {user_id}")
+        logger.info(f"📨 Notification {purchase_type} sent to admin - user {user_id}")
     except Exception as e:
-        logger.error(f"❌ خطا در ارسال نوتیفیکیشن به ادمین: {e}")
+        logger.error(f"❌ Error sending notification to admin: {e}")
         try:
             # ارسال ساده بدون HTML
             simple_text = (
@@ -25803,16 +25808,16 @@ async def send_admin_notification(purchase_type: str, data: dict):
                 f"نوع: {purchase_type}"
             )
             await bot.send_message(ADMIN_ID_INT, simple_text, parse_mode=None)
-            logger.info(f"📨 نوتیفیکیشن {purchase_type} با متن ساده ارسال شد")
+            logger.info(f"📨 Notification {purchase_type} sent as plain text")
         except Exception as e2:
-            logger.error(f"❌ خطا در ارسال نوتیفیکیشن ساده: {e2}")
+            logger.error(f"❌ Error sending simple notification: {e2}")
 
 
 @dp.callback_query(F.data == "pay_balance")
 async def pay_balance(callback: CallbackQuery):
     """پرداخت از موجودی - نسخه کامل با پشتیبانی از تمدید و ترکیب اینباندها"""
     user_id = callback.from_user.id
-    logger.info(f"🔍 [pay_balance] شروع برای کاربر {user_id}")
+    logger.info(f"🔍 [pay_balance] starting for user {user_id}")
     debug_coupon_state(user_id, "pay_balance_start")
     
     if user_id in BLACKLIST:
@@ -25834,7 +25839,7 @@ async def pay_balance(callback: CallbackQuery):
     # ✅✅✅ خواندن مستقیم از user_states (نه از full_state)
     current_user_state = user_states.get(user_id, {})
     if not is_valid_checkout_state(current_user_state):
-        logger.warning(f"⚠️ [pay_balance] پرداخت رد شد؛ state خرید معتبر یا تازه نیست (کاربر {user_id})")
+        logger.warning(f"⚠️ [pay_balance] Payment rejected; purchase state is invalid or stale (user {user_id})")
         await reject_expired_checkout(callback, lang)
         return
     
@@ -25845,7 +25850,7 @@ async def pay_balance(callback: CallbackQuery):
     
     full_state = current_user_state  # برای سازگاری با بقیه کد
     
-    logger.info(f"🔍 [pay_balance] STATE کامل: {current_user_state}")
+    logger.info(f"🔍 [pay_balance] complete STATE: {current_user_state}")
     logger.info(f"🔍 [pay_balance] is_extend={is_extend}, extend_order_id={extend_order_id}")
     
     is_ready_package = full_state.get('is_ready_package', False)
@@ -25855,9 +25860,9 @@ async def pay_balance(callback: CallbackQuery):
     if not isinstance(inbound_ids, list):
         inbound_ids = [inbound_ids] if inbound_ids else []
     
-    logger.info(f"🔍 [pay_balance] وضعیت کامل: {full_state}")
-    logger.info(f"🔍 [pay_balance] تمدید: is_extend={is_extend}, extend_order_id={extend_order_id}")
-    logger.info(f"🔍 [pay_balance] current_volume={current_volume}GB, current_days={current_days}روز")
+    logger.info(f"🔍 [pay_balance] complete state: {full_state}")
+    logger.info(f"🔍 [pay_balance] renewal: is_extend={is_extend}, extend_order_id={extend_order_id}")
+    logger.info(f"🔍 [pay_balance] current_volume={current_volume}GB, current_days={current_days}days")
     logger.info(f"🔍 [pay_balance] ip_limit={ip_limit}, inbound_ids={inbound_ids}")
     
     if is_ready_package:
@@ -25894,7 +25899,7 @@ async def pay_balance(callback: CallbackQuery):
         order_type = "ready_package"
         
         volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-        logger.info(f"📦 [pay_balance] بسته آماده: {category_name} - حجم: {volume_display} - قیمت نهایی: {final_price:,} تومان")
+        logger.info(f"📦 [pay_balance] Ready-made package: {category_name} - Volume: {volume_display} - final price: {final_price:,}tomans")
     else:
         vol = user.get('volume', 1)
         days = user.get('days', 30)
@@ -25915,28 +25920,28 @@ async def pay_balance(callback: CallbackQuery):
                 if discount_percent > 0:
                     final_price = original_price - (original_price * discount_percent // 100)
             else:
-                logger.warning(f"⚠️ [pay_balance] کوپن نامعتبر: {reason}")
+                logger.warning(f"⚠️ [pay_balance] Invalid coupon: {reason}")
                 if user_id in user_states:
                     user_states[user_id].pop('coupon_code', None)
                     user_states[user_id].pop('coupon_discount', None)
                     user_states[user_id].pop('coupon_applied', None)
         
         volume_display = ("♾️ نامحدود" if lang == "fa" else "♾️ Unlimited") if vol == 0 else f"{vol} GB"
-        logger.info(f"🛒 [pay_balance] خرید سفارشی: {volume_display}/{days} روز - قیمت: {final_price:,} تومان")
+        logger.info(f"🛒 [pay_balance] Custom purchase: {volume_display}/{days}days - price: {final_price:,}tomans")
     
     balance = user.get('balance', 0)
     
-    logger.info(f"💰 [pay_balance] موجودی کاربر: {balance:,} تومان")
-    logger.info(f"💰 [pay_balance] قیمت نهایی: {final_price:,} تومان")
+    logger.info(f"💰 [pay_balance] user balance: {balance:,}tomans")
+    logger.info(f"💰 [pay_balance] final price: {final_price:,}tomans")
     
     # ✅ بررسی موجودی کافی (برای خریدهای غیر رایگان)
     if final_price > 0 and balance < final_price:
         # ==================== 0) حذف پیام بسته ====================
         try:
             await callback.message.delete()
-            logger.info(f"🗑 پیام بسته آماده برای کاربر {user_id} حذف شد")
+            logger.info(f"🗑 Ready-package message for user {user_id} deleted")
         except Exception as e:
-            logger.debug(f"نتوانست پیام را حذف کند: {e}")
+            logger.debug(f"Failed to delete message: {e}")
         
         # ==================== محاسبه کمبود ====================
         shortage = final_price - balance
@@ -25950,14 +25955,14 @@ async def pay_balance(callback: CallbackQuery):
         try:
             await callback.answer(alert_text, show_alert=False)
         except Exception as e:
-            logger.warning(f"⚠️ خطا در نمایش alert: {e}")
+            logger.warning(f"⚠️ Error displaying alert: {e}")
         
         # ==================== 2) استیکر ====================
         try:
             insufficient_sticker = "CAACAgIAAxkBAAERYtdqLYNgjzOUQi8uRFj-ZxHiOhEZvwACRh4AAvyUOEnTIzZfgD7FIDwE"
             await callback.message.answer_sticker(insufficient_sticker)
         except Exception as e:
-            logger.warning(f"⚠️ خطا در ارسال استیکر: {e}")
+            logger.warning(f"⚠️ Error sending sticker: {e}")
         
         # ==================== 3) متن + دکمه‌ها ====================
         if lang == "fa":
@@ -26001,14 +26006,14 @@ async def pay_balance(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
-            logger.error(f"❌ خطا در ارسال پیام: {e}", exc_info=True)
+            logger.error(f"❌ Error sending message: {e}", exc_info=True)
         
         # ==================== 4) لاگ ====================
         if log_system:
             await log_system.log_user_action(
                 user_id,
-                "موجودی ناکافی",
-                f"موجودی: {balance:,} | نیاز: {final_price:,} | کسری: {shortage:,}"
+                "Insufficient balance",
+                f"Balance: {balance:,} | Required: {final_price:,} | Shortfall: {shortage:,}"
             )
         
         return
@@ -26025,7 +26030,7 @@ async def pay_balance(callback: CallbackQuery):
                 new_balance=new_balance,
                 action="reduce",
                 admin_id=None,
-                details=f"خرید سرویس {vol}GB/{days} روز (تخفیف {discount_percent}%)"
+                details=f"Purchased service {vol}GB/{days} days (discount {discount_percent}%)"
             )
     
     # ============================================
@@ -26036,7 +26041,7 @@ async def pay_balance(callback: CallbackQuery):
     else:
         order_id = create_order(user_id, vol, days, final_price, order_type, ip_limit=ip_limit)
     
-    logger.info(f"📝 [pay_balance] سفارش #{order_id} ایجاد شد - نوع: {order_type if not is_extend else 'extend'} - حجم: {vol}GB - قیمت: {final_price:,}")
+    logger.info(f"📝 [pay_balance] order #{order_id} created - type: {order_type if not is_extend else 'extend'} - Volume: {vol}GB - price: {final_price:,}")
     
     # ✅ آپدیت اطلاعات پایه سفارش
     update_order(order_id, inbound_id=inbound_ids, ip_limit=ip_limit)
@@ -26050,20 +26055,20 @@ async def pay_balance(callback: CallbackQuery):
     
     if is_extend and extend_order_id:
         update_order(order_id, parent_order_id=extend_order_id, is_extend=True)
-        logger.info(f"🔄 [pay_balance] سفارش #{order_id} برای تمدید سفارش #{extend_order_id} تنظیم شد")
+        logger.info(f"🔄 [pay_balance] Order #{order_id} for renewal of order #{extend_order_id} set")
     
-    logger.info(f"💰 [pay_balance] روش پرداخت: {'موجودی حساب' if final_price > 0 else 'رایگان (کوپن)'}")
-    logger.info(f"📡 [pay_balance] اینباندها: {inbound_ids}")
-    logger.info(f"👤 [pay_balance] محدودیت IP: {ip_limit if ip_limit > 0 else 'نامحدود'}")
+    logger.info(f"[pay_balance] payment method: {'account balance' if final_price > 0 else 'free (coupon)'}")
+    logger.info(f"📡 [pay_balance] inbounds: {inbound_ids}")
+    logger.info(f"[pay_balance] IP limit: {ip_limit if ip_limit > 0 else 'unlimited'}")
     
     # ============================================
     # ✅ پردازش تمدید
     # ============================================
     if is_extend and extend_order_id:
-        logger.info(f"🔄 [pay_balance] شروع تمدید سفارش #{extend_order_id}")
+        logger.info(f"🔄 [pay_balance] Starting renewal for order #{extend_order_id}")
         parent_order = orders.get(str(extend_order_id))
         if not parent_order:
-            logger.error(f"❌ [pay_balance] سفارش اصلی #{extend_order_id} یافت نشد")
+            logger.error(f"❌ [pay_balance] Original order #{extend_order_id} not found")
             if final_price > 0:
                 update_user(user_id, 'balance', balance)
                 if log_system:
@@ -26073,7 +26078,7 @@ async def pay_balance(callback: CallbackQuery):
                         new_balance=balance,
                         action="add",
                         admin_id=None,
-                        details="برگشت موجودی به دلیل عدم یافتن سفارش اصلی تمدید"
+                        details="Balance refunded because the original renewal order was not found"
                     )
             await callback.message.edit_text(
                 "❌ خطا: سفارش اصلی برای تمدید یافت نشد. موجودی برگشت داده شد." if lang == "fa" else "❌ Error: Original order not found. Balance refunded.",
@@ -26196,7 +26201,7 @@ async def pay_balance(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML, 
                 reply_markup=get_extension_success_keyboard(extend_order_id, lang)
             )
-            logger.info(f"✅ [pay_balance] تمدید برای کاربر {user_id} - سفارش #{order_id}")
+            logger.info(f"✅ [pay_balance] Renewal for user {user_id} - order #{order_id}")
             await callback.answer("✅ سرویس تمدید شد!" if lang == "fa" else "✅ Service extended!")
             debug_coupon_state(user_id, "pay_balance_end")
             return
@@ -26211,7 +26216,7 @@ async def pay_balance(callback: CallbackQuery):
                         new_balance=balance,
                         action="add",
                         admin_id=None,
-                        details="برگشت موجودی به دلیل خطا در تمدید سرویس"
+                        details="Balance refunded because service renewal failed"
                     )
             error_msg = "خطا در تمدید سرویس\nموجودی برگشت داده شد" if lang == "fa" else "Error extending service\nBalance refunded"
             await callback.message.edit_text(
@@ -26232,10 +26237,10 @@ async def pay_balance(callback: CallbackQuery):
     # ✅ انتخاب اینباند مناسب
     if is_ready_package and inbound_ids:
         inbound_to_use = inbound_ids
-        logger.info(f"📡 [pay_balance] استفاده از اینباندهای بسته: {inbound_ids}")
+        logger.info(f"📡 [pay_balance] Using package inbounds: {inbound_ids}")
     else:
         inbound_to_use = get_user_inbound(user_id)
-        logger.info(f"📡 [pay_balance] استفاده از اینباند پیش‌فرض: {inbound_to_use}")
+        logger.info(f"📡 [pay_balance] Using default inbound: {inbound_to_use}")
     
     # ✅ تلاش برای ساخت کانفیگ
     sub_link = None
@@ -26246,11 +26251,11 @@ async def pay_balance(callback: CallbackQuery):
         try:
             if is_ready_package and inbound_ids:
                 sub_link = await xui_create_client_with_inbound(email, vol, days, user_name, user_id, inbound_ids, ip_limit=ip_limit)
-                logger.info(f"📡 [pay_balance] استفاده از اینباندهای بسته: {inbound_ids}")
+                logger.info(f"📡 [pay_balance] Using package inbounds: {inbound_ids}")
             else:
                 sub_link = await create_client_in_panel(user_id, email, vol, days, user_name)
         except Exception as e:
-            logger.error(f"❌ [pay_balance] خطا در ساخت کلاینت پنل: {e}")
+            logger.error(f"❌ [pay_balance] Error creating panel client: {e}")
             sub_link = None
     else:
         # حالت پنل غیرفعال - استفاده از مخزن کانفیگ
@@ -26259,9 +26264,9 @@ async def pay_balance(callback: CallbackQuery):
             if config:
                 sub_link = config['link']
                 config_id = config.get('id')
-                logger.info("📦 [pay_balance] کانفیگ از مخزن دریافت شد")
+                logger.info('📦 [pay_balance] Config retrieved from repository')
         except Exception as e:
-            logger.error(f"❌ [pay_balance] خطا در دریافت از مخزن: {e}")
+            logger.error(f"❌ [pay_balance] Error retrieving from repository: {e}")
             sub_link = None
     
     if sub_link:
@@ -26296,11 +26301,11 @@ async def pay_balance(callback: CallbackQuery):
         if final_price > 0:
             referral_result = await check_referral_bonus(user_id)
             if referral_result:
-                logger.info(f"✅ [pay_balance] پاداش رفرال برای کاربر {user_id} اعمال شد")
+                logger.info(f"✅ [pay_balance] Referral reward for user {user_id} applied")
         
         if log_system:
             await log_system.log_config_created(user_id, order_id, email, vol, days)
-            await log_system.log_purchase(user_id, order_id, vol, days, final_price, "موجودی" if final_price > 0 else "رایگان")
+            await log_system.log_purchase(user_id, order_id, vol, days, final_price, "Balance" if final_price > 0 else "Free")
         
         payment_type = 'balance' if final_price > 0 else 'free'
         payment_label = '💰 موجودی حساب' if final_price > 0 else '🎁 رایگان (کوپن)'
@@ -26374,7 +26379,7 @@ async def pay_balance(callback: CallbackQuery):
 ✅ Your config is available in 'My Configs'.
 """
         
-        logger.info(f"✅ [pay_balance] خرید موفق کاربر {user_id} - سفارش #{order_id} - حجم: {volume_display_text} - مبلغ: {final_price:,} تومان")
+        logger.info(f"✅ [pay_balance] Successful purchase by user {user_id} - order #{order_id} - Volume: {volume_display_text} - amount: {final_price:,}tomans")
         
     else:
         # ✅ خطا در ساخت کانفیگ - برگشت موجودی
@@ -26387,7 +26392,7 @@ async def pay_balance(callback: CallbackQuery):
                     new_balance=balance,
                     action="add",
                     admin_id=None,
-                    details="برگشت موجودی به دلیل خطا در ساخت کانفیگ"
+                    details="Balance refunded because configuration creation failed"
                 )
         
         error_msg = "خطا در ساخت کانفیگ\nموجودی برگشت داده شد" if lang == "fa" else "Error creating config\nBalance refunded"
@@ -26399,12 +26404,12 @@ async def pay_balance(callback: CallbackQuery):
         
         if log_system:
             await log_system.log_error(
-                Exception("خطا در ساخت کلاینت"), 
+                Exception("Failed to create client"), 
                 "pay_balance_create_client", 
                 user_id
             )
         
-        logger.error(f"❌ [pay_balance] خطا در ساخت کلاینت برای کاربر {user_id}")
+        logger.error(f"❌ [pay_balance] Error creating client for user {user_id}")
     
     debug_coupon_state(user_id, "pay_balance_end")
     
@@ -26422,12 +26427,12 @@ def debug_coupon_state(user_id: int, location: str):
     coupon_applied = user_state.get('coupon_applied', False)
     coupon_discount = user_state.get('coupon_discount', 0)
     
-    logger.info(f"🔍 [{location}] user_states کامل: {user_state}")
-    logger.info(f"🔍 [{location}] کوپن: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
+    logger.info(f"🔍 [{location}] complete user_states: {user_state}")
+    logger.info(f"🔍 [{location}] coupon: code={coupon_code}, applied={coupon_applied}, discount={coupon_discount}")
     
     if coupon_code and coupon_code in COUPONS:
         coupon = COUPONS[coupon_code]
-        logger.info(f"🔍 [{location}] کوپن در دیتابیس: status={coupon.get('status')}, used_by={coupon.get('used_by', [])}")
+        logger.info(f"🔍 [{location}] Coupon in database: status={coupon.get('status')}, used_by={coupon.get('used_by', [])}")
         
         
         
@@ -26487,7 +26492,7 @@ async def admin_get_config(message: Message):
             reply_markup=get_feedback_keyboard(order_id, lang)
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
+        logger.error(f"Error sending feedback request: {e}")
     
     await message.reply(f"✅ کانفیگ سفارش #{order_id} ارسال شد!")
     user_states.pop(message.from_user.id, None)
@@ -26500,7 +26505,7 @@ async def cancel_payment(callback: CallbackQuery):
     lang = user.get('lang', 'fa')
     is_admin = (user_id == ADMIN_ID_INT)
     
-    logger.info(f"کاربر {user_id} پرداخت را لغو کرد - وضعیت قبلی: {user_states.get(user_id, 'No state')}")
+    logger.info(f"User {user_id} cancelled payment - previous status: {user_states.get(user_id, 'No state')}")
     user_state = user_states.get(user_id, {})
     coupon_code = user_state.get('coupon_code')
     coupon_discount = user_state.get('coupon_discount')
@@ -26517,13 +26522,13 @@ async def cancel_payment(callback: CallbackQuery):
         
         if pending_order.get('status') == 'awaiting_payment':
             update_order(pending_order['order_id'], status='cancelled')
-            logger.info(f"سفارش #{pending_order['order_id']} لغو شد")
+            logger.info(f"Order #{pending_order['order_id']} cancelled")
             
             if log_system:
                 await log_system.log_user_action(
                     user_id,
-                    "لغو پرداخت",
-                    f"سفارش #{pending_order['order_id']} لغو شد"
+                    "Cancelled payment",
+                    f"Order #{pending_order['order_id']} was cancelled"
                 )
             
             if lang == "fa":
@@ -26538,7 +26543,7 @@ async def cancel_payment(callback: CallbackQuery):
             'coupon_discount': coupon_discount,
             'coupon_applied': True
         }
-        logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} در cancel_payment حفظ شد")
+        logger.info(f"🏷️ coupon {coupon_code} for user {user_id} preserved in cancel_payment")
     
     has_real_coupon = bool(coupon_applied and coupon_code)
     
@@ -26638,7 +26643,7 @@ async def get_user_display_name(user_id: int) -> str:
         return f"{name_escaped} (ID: {user_id})"
         
     except Exception as e:
-        logger.error(f"خطا در دریافت نام کاربر {user_id}: {e}")
+        logger.error(f"Error retrieving username for user {user_id}: {e}")
         user = get_user(user_id)
         name = user.get('name', f"کاربر_{user_id}")
         name_escaped = html.escape(name)
@@ -26656,11 +26661,11 @@ async def handle_receipt(message: Message):
         await admin_chat_reply(message)
         return
     if not user_state.get('awaiting_receipt'):
-        logger.debug(f"کاربر {user_id} عکس فرستاد ولی در حالت awaiting_receipt نیست")
+        logger.debug(f"User {user_id} sent a photo but is not in awaiting_receipt state")
         return
     
     if user_id in BLACKLIST:
-        logger.warning(f"⛔ کاربر مسدود {user_id} تلاش به ارسال فیش کرد")
+        logger.warning(f"⛔ blocked user {user_id} attempted to send a receipt")
         await message.reply(
             "⛔ <b>دسترسی مسدود شده</b>\n\nشما در لیست سیاه قرار دارید و امکان استفاده از ربات را ندارید.",
             parse_mode=ParseMode.HTML
@@ -26699,7 +26704,7 @@ async def handle_receipt(message: Message):
         for old_o in old_orders:
             old_id = old_o.get('order_id')
             update_order(old_id, status='cancelled')
-            logger.info(f"🗑 سفارش قدیمی #{old_id} به دلیل وجود سفارش جدیدتر لغو شد")
+            logger.info(f"🗑 Old order #{old_id} was canceled because a newer order exists")
         
         try:
             old_ids = [str(o.get('order_id')) for o in old_orders]
@@ -26729,9 +26734,9 @@ async def handle_receipt(message: Message):
     
     update_order(order_id, receipt_photo_id=photo_id, status=new_status, payment_method=pending.get('payment_method') or 'card')
     
-    logger.info(f"📸 فیش برای سفارش #{order_id} دریافت شد - وضعیت جدید: {new_status}")
+    logger.info(f"📸 receipt for order #{order_id} received - new status: {new_status}")
     if is_extend:
-        logger.info(f"🔄 این سفارش برای تمدید سرویس #{parent_order_id} است")
+        logger.info(f"🔄 This order is for renewing service #{parent_order_id} is")
     
     # ✅ تعریف همه متغیرها با مقادیر امن
     order_price = pending.get('price', 0) or 0
@@ -27009,12 +27014,12 @@ async def handle_receipt(message: Message):
     try:
         await bot.send_photo(ADMIN_ID_INT, photo_id, caption=admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
     except Exception as e:
-        logger.error(f"خطا در ارسال فیش به ادمین: {e}")
+        logger.error(f"Error sending receipt to admin: {e}")
         try:
             await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
             await bot.send_photo(ADMIN_ID_INT, photo_id)
         except Exception as e2:
-            logger.error(f"خطا در ارسال فیش به ادمین (تلاش دوم): {e2}")
+            logger.error(f"Error sending receipt to admin (second attempt): {e2}")
     
     # ✅ پیام به کاربر - بدون نمایش مبلغ
     if is_extend:
@@ -27068,7 +27073,7 @@ async def handle_receipt(message: Message):
             reply_markup=get_main_keyboard(is_admin, lang, user_id)
         )
     except Exception as e:
-        logger.warning(f"خطا در ارسال منوی اصلی: {e}")
+        logger.warning(f"Error sending the main menu: {e}")
         try:
             await bot.send_message(
                 user_id,
@@ -27076,7 +27081,7 @@ async def handle_receipt(message: Message):
                 reply_markup=get_main_keyboard(is_admin, lang, user_id)
             )
         except Exception as e2:
-            logger.error(f"خطا در ارسال منوی اصلی (تلاش دوم): {e2}")
+            logger.error(f"Error sending main menu (second attempt): {e2}")
             
 
 async def custom_payment_receipt_amount(message: Message):
@@ -27221,7 +27226,7 @@ Add this amount to user's balance?
     except ValueError:
         await message.reply("❌ لطفاً یک عدد معتبر وارد کنید!" if lang == "fa" else "❌ Please enter a valid number!")
     except Exception as e:
-        logger.error(f"خطا در custom_payment_receipt_amount: {e}")
+        logger.error(f"Error in custom_payment_receipt_amount: {e}")
         await message.reply(f"❌ خطا: {str(e)}")
         user_states.pop(admin_id, None)
 
@@ -27281,7 +27286,7 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
             new_balance=new_balance,
             action="add",
             admin_id=callback.from_user.id,
-            details=f"شارژ حساب از طریق پرداخت دلخواه (سفارش #{oid})"
+            details=f"Balance top-up through custom payment (order #{oid})"
         )
     if order_type in ['ready_package', 'category_purchase'] and category_name:
         order_desc = f"بسته آماده '{category_name}'"
@@ -27332,9 +27337,9 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
     
     try:
         await bot.send_message(user_id, user_text, parse_mode=ParseMode.HTML)
-        logger.info(f"پیام شارژ موجودی به کاربر {user_id} ارسال شد")
+        logger.info(f"Balance top-up message to user {user_id} sent")
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام به کاربر {user_id}: {e}")
+        logger.error(f"Error sending message to user {user_id}: {e}")
     user_name = html.escape(str(target_user.get('name', 'کاربر')))
     
     if lang == "fa":
@@ -27392,7 +27397,7 @@ async def custom_payment_receipt_confirm(callback: CallbackQuery):
     )
     user_states.pop(callback.from_user.id, None)
     
-    logger.info(f"✅ شارژ موجودی برای کاربر {user_id} - سفارش #{oid} - مبلغ: {amount:,} تومان")
+    logger.info(f"✅ added balance to user {user_id} - order #{oid} - amount: {amount:,}tomans")
     
     try:
         await callback.answer("✅ شارژ موجودی با موفقیت انجام شد" if lang == "fa" else "✅ Balance charged successfully")
@@ -27740,7 +27745,7 @@ async def approve_receipt(callback: CallbackQuery):
     
     # اگر قبلاً تایید شده باشد
     if current_status == 'approved':
-        logger.warning(f"⚠️ سفارش #{oid} قبلاً تایید شده است! جلوگیری از تایید مجدد")
+        logger.warning(f"⚠️ Order #{oid} was already approved! Preventing duplicate approval")
         await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
         try:
             await callback.message.delete()
@@ -27750,7 +27755,7 @@ async def approve_receipt(callback: CallbackQuery):
     
     # اگر قبلاً رد شده باشد
     if current_status in ['rejected', 'cancelled', 'deleted']:
-        logger.warning(f"⚠️ سفارش #{oid} قبلاً رد/لغو شده است! وضعیت: {current_status}")
+        logger.warning(f"⚠️ Order #{oid} was already rejected/canceled! Status: {current_status}")
         await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
         try:
             await callback.message.delete()
@@ -27761,7 +27766,7 @@ async def approve_receipt(callback: CallbackQuery):
     # بررسی وجود کانفیگ برای سفارشات خرید
     if order.get('config_link') or order.get('email'):
         if current_status not in ['pending', 'pending_balance_charge', 'awaiting_payment']:
-            logger.warning(f"⚠️ سفارش #{oid} قبلاً پردازش شده و کانفیگ ساخته شده است!")
+            logger.warning(f"⚠️ Order #{oid} has already been processed and the configuration has been created!")
             await callback.answer("⚠️ این سفارش قبلاً پردازش شده است!", show_alert=True)
             try:
                 await callback.message.delete()
@@ -27794,7 +27799,7 @@ async def approve_receipt(callback: CallbackQuery):
         user_name = html.escape(user_info.get('name', f'کاربر_{uid}'))
         lang = user_info.get('lang', 'fa')
         
-        logger.info(f"📝 تایید سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
+        logger.info(f"📝 Approving order #{oid} - user: {uid} - {vol}GB/{days}days - amount: {price:,}tomans - renewal: {is_extend}")
         
         # ✅ مثل بسته‌های آماده: نمایش اینباندهای انتخاب شده فعلی کاربر
         user_inbounds = get_user_inbound(uid)
@@ -27931,7 +27936,7 @@ async def approve_receipt(callback: CallbackQuery):
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
                 )
         except Exception as e:
-            logger.warning(f"⚠️ خطا در ویرایش پیام: {e}")
+            logger.warning(f"⚠️ Error editing message: {e}")
             try:
                 await callback.message.delete()
             except:
@@ -27974,7 +27979,7 @@ async def approve_receipt(callback: CallbackQuery):
                         backfill_order_category(int(_oid))
                         category_name = order.get('category_name') or category_name
                 except Exception as e:
-                    logger.warning(f"خطا در backfill category: {e}")
+                    logger.warning(f"Error backfilling category: {e}")
 
         if not category_name:
             category_name = "بسته آماده" if lang == 'fa' else "Ready Package"
@@ -27988,9 +27993,8 @@ async def approve_receipt(callback: CallbackQuery):
 
         cat_name_escaped = html.escape(category_name)
         logger.info(
-            f"📦 تایید بسته آماده #{oid} - کاربر: {uid} - "
-            f"{vol}GB/{days} روز - مبلغ: {price:,} تومان - "
-            f"دسته: {category_name} - تمدید: {is_extend}"
+            f"📦 Ready package # approved{oid} - user: {uid} - "
+            f"{vol}GB/{days}days - amount: {price:,} tomans - category: {category_name} - renewal: {is_extend}"
         )
                 
         user_inbounds = get_user_inbound(uid)
@@ -28102,7 +28106,7 @@ async def approve_receipt(callback: CallbackQuery):
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
                 )
         except Exception as e:
-            logger.warning(f"⚠️ خطا در ویرایش پیام: {e}")
+            logger.warning(f"⚠️ Error editing message: {e}")
             try:
                 await callback.message.delete()
             except:
@@ -28117,7 +28121,7 @@ async def approve_receipt(callback: CallbackQuery):
         return
     
     else:
-        logger.warning(f"⚠️ نوع سفارش نامشخص برای #{oid}: {order_type}")
+        logger.warning(f"⚠️ Unknown order type for #{oid}: {order_type}")
         return await callback.answer("❌ نوع سفارش نامشخص", show_alert=True)
     
 @dp.callback_query(F.data.startswith("select_user_inbound_"))
@@ -28165,7 +28169,7 @@ async def select_user_inbound(callback: CallbackQuery):
     temp_key = f"{uid}_{oid}"
     TEMP_INBOUND_SELECTION[temp_key] = current_inbounds
     
-    logger.info(f"📡 [select_user_inbound] اینباندهای فیلترشده برای کاربر {uid} سفارش #{oid}: {current_inbounds}")
+    logger.info(f"📡 [select_user_inbound] filtered inbounds for user {uid} order #{oid}: {current_inbounds}")
     
     await show_inbound_selection(callback.message, uid, oid, callback.from_user.id)
     
@@ -28538,7 +28542,7 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
     # ✅ فیلتر اینباندهای نامعتبر
     invalid_ids = [ib for ib in current_list if ib not in valid_ids]
     if invalid_ids:
-        logger.warning(f"⚠️ [show_inbound_selection] اینباندهای نامعتبر حذف شدند: {invalid_ids}")
+        logger.warning(f"⚠️ [show_inbound_selection] Invalid inbounds removed: {invalid_ids}")
         current_list = [ib for ib in current_list if ib in valid_ids]
         TEMP_INBOUND_SELECTION[temp_key] = current_list
     
@@ -28628,14 +28632,14 @@ async def show_inbound_selection(message: types.Message, uid: int, oid: int, adm
                         await message.edit_reply_markup(reply_markup=keyboard)
                     except Exception as e2:
                         if "message is not modified" not in str(e2):
-                            logger.error(f"خطا در ویرایش کیبورد: {e2}")
+                            logger.error(f"Error editing keyboard: {e2}")
                 else:
                     raise
         else:
             await message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     except Exception as e:
         if "message is not modified" in str(e):
-            logger.debug("پیام تغییر نکرده")
+            logger.debug('Message unchanged')
         else:
             try:
                 await message.delete()
@@ -28875,7 +28879,7 @@ async def cancel_coupon(callback: CallbackQuery):
         users[uid]['coupon_applied'] = False
         save_json(DB_FILES['users'], users)
     
-    logger.info(f"🗑️ کوپن {coupon_code} توسط کاربر {user_id} لغو شد")
+    logger.info(f"🗑️ coupon {coupon_code} by user {user_id} cancelled")
     
     await callback.answer("✅ کوپن با موفقیت لغو شد!" if lang == "fa" else "✅ Coupon cancelled successfully!", show_alert=True)
     await callback.message.edit_text(
@@ -29222,7 +29226,7 @@ async def set_package_inbound(callback: CallbackQuery):
         logger.info(f"✅ oid: {oid}, inbound_value: {inbound_value}")
         
     except (ValueError, IndexError) as e:
-        logger.error(f"❌ خطا در استخراج داده‌ها: {e} - data: {callback.data}")
+        logger.error(f"❌ Error extracting data: {e} - data: {callback.data}")
         await callback.answer("❌ خطا در پردازش داده‌ها", show_alert=True)
         return
     
@@ -29261,7 +29265,7 @@ async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict
     global orders
     
     logger.info("=" * 60)
-    logger.info(f"🧹 شروع پاکسازی دیتابیس سفارشات (days={days}, dry_run={dry_run})")
+    logger.info(f"🧹 starting database cleanup for orders (days={days}, dry_run={dry_run})")
     
     start_time = time.time()
     cutoff_date = datetime.now() - timedelta(days=days)
@@ -29370,7 +29374,7 @@ async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict
             stats['kept_other'] += 1
             
         except Exception as e:
-            logger.error(f"❌ خطا در بررسی سفارش {oid}: {e}")
+            logger.error(f"❌ Error checking order {oid}: {e}")
             stats['errors'].append(f"#{oid}: {str(e)[:50]}")
     
     # ─────────────────────────────────────────
@@ -29402,10 +29406,10 @@ async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict
                 with open(backup_file, 'w', encoding='utf-8') as f:
                     json.dump(backup_data, f, ensure_ascii=False, indent=2)
                 
-                logger.info(f"💾 بکاپ سفارش‌های حذف‌شده در: {backup_file}")
+                logger.info(f"💾 Backup of deleted orders at: {backup_file}")
                 stats['backup_file'] = backup_file
             except Exception as e:
-                logger.error(f"❌ خطا در گرفتن بکاپ: {e}")
+                logger.error(f"❌ Error creating backup: {e}")
                 stats['errors'].append(f"Backup error: {str(e)[:50]}")
         
         # حذف واقعی
@@ -29421,15 +29425,15 @@ async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict
                     'date': order.get('date', ''),
                 })
             except Exception as e:
-                logger.error(f"❌ خطا در حذف سفارش {oid}: {e}")
+                logger.error(f"❌ Error deleting order {oid}: {e}")
                 stats['errors'].append(f"Delete #{oid}: {str(e)[:50]}")
         
         # ذخیره دیتابیس
         try:
             save_json(DB_FILES['orders'], orders)
-            logger.info(f"💾 دیتابیس سفارشات ذخیره شد")
+            logger.info(f"💾 Orders database saved")
         except Exception as e:
-            logger.error(f"❌ خطا در ذخیره دیتابیس: {e}")
+            logger.error(f"❌ Error saving database: {e}")
             stats['errors'].append(f"Save error: {str(e)[:50]}")
     
     stats['total_after'] = len(orders)
@@ -29439,20 +29443,20 @@ async def cleanup_orders_database(days: int = 30, dry_run: bool = False) -> dict
     # گزارش
     # ─────────────────────────────────────────
     logger.info("-" * 60)
-    logger.info(f"🧹 نتیجه پاکسازی سفارشات:")
-    logger.info(f"   📊 قبل: {stats['total_before']} | بعد: {stats['total_after']}")
-    logger.info(f"   🗑 حذف شده: {stats['total_removed']}")
+    logger.info(f"🧹 order cleanup result:")
+    logger.info(f"   Before: {stats['total_before']} | After: {stats['total_after']}")
+    logger.info(f"   Deleted: {stats['total_removed']}")
     logger.info(f"     ├─ deleted: {stats['deleted_removed']}")
     logger.info(f"     ├─ cancelled: {stats['cancelled_removed']}")
     logger.info(f"     ├─ rejected: {stats['rejected_removed']}")
     logger.info(f"     ├─ awaiting_payment: {stats['awaiting_payment_removed']}")
     logger.info(f"     └─ empty: {stats['empty_removed']}")
-    logger.info(f"   ✅ حفظ شده:")
+    logger.info(f"   Preserved:")
     logger.info(f"     ├─ approved: {stats['kept_approved']}")
     logger.info(f"     ├─ inactive: {stats['kept_inactive']}")
     logger.info(f"     ├─ pending: {stats['kept_pending']}")
     logger.info(f"     └─ other: {stats['kept_other']}")
-    logger.info(f"   ⏱ زمان: {elapsed:.2f} ثانیه")
+    logger.info(f"   Time: {elapsed:.2f} seconds")
     logger.info("=" * 60)
     
     return stats
@@ -29481,7 +29485,7 @@ def _is_older_than(date_str: str, cutoff: datetime, days: int) -> bool:
         return updated_dt < cutoff
         
     except Exception as e:
-        logger.debug(f"⚠️ خطا در parse تاریخ '{date_str}': {e}")
+        logger.debug(f"⚠️ Error parsing date \'{date_str}': {e}")
         # اگه نتونستیم parse کنیم، فرض می‌کنیم قدیمیه
         return True
     
@@ -29635,10 +29639,10 @@ async def cmd_cleanup_orders(message: Message):
                     parse_mode=ParseMode.HTML
                 )
                 
-                logger.info(f"📨 فایل گزارش ({len(result['removed_order_ids'])} سفارش) ارسال شد")
+                logger.info(f"📨 Report file ({len(result['removed_order_ids'])} order) sent")
                 
             except Exception as e:
-                logger.error(f"❌ خطا در ارسال فایل گزارش: {e}", exc_info=True)
+                logger.error(f"❌ Error sending report file: {e}", exc_info=True)
                 # fallback: ارسال به صورت متن اگه فایل کار نکرد
                 try:
                     fallback_text = f"❌ خطا در ارسال فایل. تعداد حذف شده: {result['total_removed']}"
@@ -29650,16 +29654,16 @@ async def cmd_cleanup_orders(message: Message):
         if log_system:
             await log_system.log_admin_action(
                 message.from_user.id,
-                "پاکسازی دیتابیس سفارشات",
+                "Cleaned orders database",
                 details=(
                     f"days={days} | dry_run={dry_run} | "
-                    f"حذف: {result['total_removed']} | "
-                    f"باقی: {result['total_after']}"
+                    f"Deleted: {result['total_removed']} | "
+                    f"Remaining: {result['total_after']}"
                 )
             )
         
     except Exception as e:
-        logger.error(f"❌ خطا در پاکسازی سفارشات: {e}", exc_info=True)
+        logger.error(f"❌ Error cleaning up orders: {e}", exc_info=True)
         await status_msg.edit_text(
             f"❌ خطا در پاکسازی:\n<code>{str(e)[:200]}</code>",
             parse_mode=ParseMode.HTML
@@ -29686,7 +29690,7 @@ async def confirm_approve_package(callback: CallbackQuery):
     current_status = order.get('status')
     
     if current_status == 'approved':
-        logger.warning(f"⚠️ سفارش #{oid} قبلاً تایید شده است!")
+        logger.warning(f"⚠️ Order #{oid} was already approved!")
         await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
         try:
             await callback.message.delete()
@@ -29695,7 +29699,7 @@ async def confirm_approve_package(callback: CallbackQuery):
         return
     
     if current_status in ['rejected', 'cancelled', 'deleted']:
-        logger.warning(f"⚠️ سفارش #{oid} قبلاً رد/لغو شده است! وضعیت: {current_status}")
+        logger.warning(f"⚠️ Order #{oid} was already rejected/canceled! Status: {current_status}")
         await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
         try:
             await callback.message.delete()
@@ -29705,7 +29709,7 @@ async def confirm_approve_package(callback: CallbackQuery):
     
     if order.get('is_extend'):
         if order.get('new_volume') and order.get('new_days'):
-            logger.warning(f"⚠️ تمدید سفارش #{oid} قبلاً انجام شده است!")
+            logger.warning(f"⚠️ Renewal for order #{oid} has already been completed!")
             await callback.answer("⚠️ این تمدید قبلاً انجام شده است!", show_alert=True)
             try:
                 await callback.message.delete()
@@ -29715,7 +29719,7 @@ async def confirm_approve_package(callback: CallbackQuery):
     
     if not order.get('is_extend'):
         if order.get('config_link') or order.get('email'):
-            logger.warning(f"⚠️ سفارش #{oid} قبلاً پردازش شده است!")
+            logger.warning(f"⚠️ Order #{oid} has already been processed!")
             await callback.answer("⚠️ این سفارش قبلاً پردازش شده است!", show_alert=True)
             try:
                 await callback.message.delete()
@@ -29745,7 +29749,7 @@ async def confirm_approve_package(callback: CallbackQuery):
                                 )
                                 return
                         except Exception as e:
-                            logger.warning(f"خطا در parse تاریخ: {e}")
+                            logger.warning(f"Error parsing date: {e}")
     
     # ==================== ادامه کد اصلی ====================
     uid = order['user_id']
@@ -29810,7 +29814,7 @@ async def confirm_approve_package(callback: CallbackQuery):
     payment_emoji = payment_info['emoji']
     payment_type = payment_info['type']
     
-    logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_method} → {payment_type} ({payment_label})")
+    logger.info(f"💳 [confirm_approve_package] payment method: {payment_method} → {payment_type} ({payment_label})")
     
     # ============================================================
     # ✅ جمع‌آوری selected_inbounds از اولویت‌های مختلف
@@ -29819,9 +29823,9 @@ async def confirm_approve_package(callback: CallbackQuery):
     
     if not selected_inbounds:
         selected_inbounds = order.get('inbound_id', [])
-        logger.info(f"📡 [confirm_approve_package] اینباندها از سفارش: {selected_inbounds}")
+        logger.info(f"📡 [confirm_approve_package] Inbounds from order: {selected_inbounds}")
     else:
-        logger.info(f"📡 [confirm_approve_package] اینباندهای انتخاب شده از user_inbound_selection: {selected_inbounds}")
+        logger.info(f"📡 [confirm_approve_package] Selected inbounds from user_inbound_selection: {selected_inbounds}")
     
     if not selected_inbounds:
         category_id = order.get('category_id')
@@ -29859,7 +29863,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             )
             return
     
-    logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی فیلترشده: {selected_inbounds}")
+    logger.info(f"📡 [confirm_approve_package] final filtered inbounds: {selected_inbounds}")
     
     # ✅ category_name با fallback
     category_name = order.get('category_name')
@@ -29882,9 +29886,9 @@ async def confirm_approve_package(callback: CallbackQuery):
     
     lang = user_info.get('lang', 'fa')
     
-    logger.info(f"📦 [confirm_approve_package] سفارش #{oid} - کاربر: {uid} - تمدید: {is_extend} - parent_order_id: {parent_order_id}")
-    logger.info(f"📦 [confirm_approve_package] حجم: {vol}GB - مدت: {days} روز - قیمت: {price:,} تومان")
-    logger.info(f"💳 [confirm_approve_package] روش پرداخت: {payment_label}")
+    logger.info(f"📦 [confirm_approve_package] order #{oid} - user: {uid} - renewal: {is_extend} - parent_order_id: {parent_order_id}")
+    logger.info(f"📦 [confirm_approve_package] Volume: {vol}GB - Duration: {days}days - price: {price:,}tomans")
+    logger.info(f"💳 [confirm_approve_package] payment method: {payment_label}")
     
     await safe_edit_message(
         callback,
@@ -29897,7 +29901,7 @@ async def confirm_approve_package(callback: CallbackQuery):
             backfill_order_category(oid)
             order = orders.get(str(oid))
     except Exception as e:
-        logger.warning(f"خطا در backfill: {e}")
+        logger.warning(f"Error in backfill: {e}")
     
     # ✅✅✅ اینباندهای فیلترشده رو توی سفارش ذخیره کن
     update_order(
@@ -29912,13 +29916,13 @@ async def confirm_approve_package(callback: CallbackQuery):
     coupon_consumed = consume_coupon(uid)
     
     if coupon_consumed:
-        logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
+        logger.info(f"🏷️ Coupon for order #{oid} consumed")
     else:
-        logger.info(f"ℹ️ کوپنی برای سفارش #{oid} وجود نداشت یا قبلاً مصرف شده")
+        logger.info(f"ℹ️ No coupon for order #{oid} did not exist or was already consumed")
     
     # ==================== بخش تمدید ====================
     if is_extend and parent_order_id:
-        logger.info(f"🔄 [confirm_approve_package] شروع تمدید سرویس #{parent_order_id} با بسته #{oid}")
+        logger.info(f"🔄 [confirm_approve_package] Starting service renewal #{parent_order_id} with package #{oid}")
         
         parent_order = orders.get(str(parent_order_id))
         if parent_order:
@@ -29926,9 +29930,9 @@ async def confirm_approve_package(callback: CallbackQuery):
             old_days = parent_order.get('days', 0)
             old_email = parent_order.get('email', '')
             old_inbound = parent_order.get('inbound_id', [])
-            logger.info(f"📊 [confirm_approve_package] سفارش اصلی: حجم={old_volume}GB, مدت={old_days} روز")
+            logger.info(f"📊 [confirm_approve_package] Original order: data={old_volume}GB, duration={old_days}days")
         else:
-            logger.warning(f"⚠️ [confirm_approve_package] سفارش اصلی #{parent_order_id} یافت نشد!")
+            logger.warning(f"⚠️ [confirm_approve_package] Original order #{parent_order_id} not found!")
             old_volume = 0
             old_days = 0
             old_email = ''
@@ -29939,21 +29943,21 @@ async def confirm_approve_package(callback: CallbackQuery):
             current_inbounds = await get_client_inbounds(old_email)
             if not current_inbounds:
                 current_inbounds = old_inbound if isinstance(old_inbound, list) else [old_inbound] if old_inbound else []
-            logger.info(f"📡 [confirm_approve_package] اینباندهای فعلی کاربر: {current_inbounds}")
+            logger.info(f"📡 [confirm_approve_package] User\'s current inbounds: {current_inbounds}")
         else:
             current_inbounds = get_user_inbound(uid)
             if not isinstance(current_inbounds, list):
                 current_inbounds = [current_inbounds] if current_inbounds else []
-            logger.info(f"📡 [confirm_approve_package] اینباندهای فعلی از user_inbound_selection: {current_inbounds}")
+            logger.info(f"📡 [confirm_approve_package] Current inbounds from user_inbound_selection: {current_inbounds}")
         
         # ✅ اینباندهای نهایی = همون فیلترشده‌ها
         final_inbounds = selected_inbounds.copy()
         
-        logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی فیلترشده: {final_inbounds}")
+        logger.info(f"📡 [confirm_approve_package] final filtered inbounds: {final_inbounds}")
         
         if final_inbounds:
             save_user_inbound_selection(uid, final_inbounds)
-            logger.info(f"📡 [confirm_approve_package] اینباندهای نهایی برای کاربر {uid} ذخیره شد: {final_inbounds}")
+            logger.info(f"📡 [confirm_approve_package] Final inbounds for user {uid} saved: {final_inbounds}")
         
         _state = user_states.get(uid, {})
         _cat_id = order.get('category_id')
@@ -29975,7 +29979,7 @@ async def confirm_approve_package(callback: CallbackQuery):
                 if cat.get('id') == _cat_id:
                     _cat_name = cat.get('name')
                     _cat_name_en = cat.get('name_en', _cat_name)
-                    logger.info(f"✅ category_name از READY_PACKAGES بازیابی شد: {_cat_name}")
+                    logger.info(f"✅ category_name recovered from READY_PACKAGES: {_cat_name}")
                     break
         
         success = await extend_service(
@@ -30067,11 +30071,11 @@ async def confirm_approve_package(callback: CallbackQuery):
                 ])
             )
             
-            logger.info(f"✅ تمدید بسته آماده #{oid} با موفقیت انجام شد - سفارش اصلی: #{parent_order_id}")
-            logger.info(f"   📊 حجم: {old_volume}GB → {new_volume}GB (+{vol}GB)")
-            logger.info(f"   ⏱ مدت: {old_days}روز → {new_days}روز (+{days}روز)")
-            logger.info(f"   💳 روش پرداخت: {payment_label}")
-            logger.info(f"   📡 اینباندها: {final_inbounds}")
+            logger.info(f"✅ Ready package renewal #{oid} completed successfully - original order: #{parent_order_id}")
+            logger.info(f"   📊 Data: {old_volume}GB → {new_volume}GB (+{vol}GB)")
+            logger.info(f"   ⏱ Duration: {old_days}days → {new_days}days (+{days}days)")
+            logger.info(f"   💳 Payment method: {payment_label}")
+            logger.info(f"   📡 Inbounds: {final_inbounds}")
             
             await callback.answer("✅ تمدید انجام شد" if lang == "fa" else "✅ Extended")
             return
@@ -30133,7 +30137,7 @@ async def confirm_approve_package(callback: CallbackQuery):
                     reply_markup=get_feedback_keyboard(oid, lang)
                 )
             except Exception as e:
-                logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
+                logger.error(f"Error sending feedback request: {e}")
             
             inbound_info = f"اینباندها: {selected_inbounds if selected_inbounds else 'پیش‌فرض'}"
             
@@ -30163,8 +30167,8 @@ async def confirm_approve_package(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML
             )
             
-            logger.info(f"✅ بسته آماده #{oid} با موفقیت تایید شد - اینباندها: {selected_inbounds}")
-            logger.info(f"   💳 روش پرداخت: {payment_label}")
+            logger.info(f"✅ Ready package #{oid} approved successfully - inbounds: {selected_inbounds}")
+            logger.info(f"   💳 Payment method: {payment_label}")
             
         else:
             user = get_user(uid)
@@ -30308,7 +30312,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
     
     await send_sticker(uid, 'order_approved', '✅')
     
-    logger.info(f"📝 تایید نهایی سفارش #{oid} - کاربر: {uid} - {vol}GB/{days} روز - مبلغ: {price:,} تومان - تمدید: {is_extend}")
+    logger.info(f"📝 final approval of order #{oid} - user: {uid} - {vol}GB/{days}days - amount: {price:,}tomans - renewal: {is_extend}")
     
     # ============================================================
     # ✅ فیلتر اینباندها (قبل از هر کاری)
@@ -30335,7 +30339,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             )
             return
     
-    logger.info(f"📡 [confirm_approve_with_inbound] اینباندهای نهایی: {inbound_id}")
+    logger.info(f"📡 [confirm_approve_with_inbound] final inbounds: {inbound_id}")
     
     # ============================================================
     # به‌روزرسانی سفارش و کوپن و رفرال
@@ -30350,17 +30354,17 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
     
     coupon_consumed = consume_coupon(uid)
     if coupon_consumed:
-        logger.info(f"🏷️ کوپن برای سفارش #{oid} مصرف شد")
+        logger.info(f"🏷️ Coupon for order #{oid} consumed")
     
     if not is_extend:
         referral_result = await check_referral_bonus(uid)
         if referral_result:
-            logger.info(f"✅ پاداش رفرال برای کاربر {uid} اعمال شد")
+            logger.info(f"✅ Referral reward for user {uid} applied")
             if log_system:
                 await log_system.log_user_action(
                     uid,
-                    "دریافت پاداش رفرال",
-                    f"به دلیل خرید اولین سرویس"
+                    "Received referral reward",
+                    f"For purchasing the first service"
                 )
     
     # ============================================================
@@ -30393,7 +30397,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                 new_package_id=_pkg_id,
             )
         except Exception as e:
-            logger.error(f"❌ خطا در extend_service: {e}", exc_info=True)
+            logger.error(f"❌ Error in extend_service: {e}", exc_info=True)
             success = False
         
         if success:
@@ -30416,9 +30420,9 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                         "✅ Your service has been extended successfully.",
                         reply_markup=get_extension_success_keyboard(parent_order_id, lang),
                     )
-                logger.info(f"📨 پیام تایید تمدید به کاربر {uid} ارسال شد")
+                logger.info(f"📨 Renewal confirmation message to user {uid} sent")
             except Exception as e:
-                logger.error(f"❌ خطا در ارسال پیام به کاربر {uid}: {e}")
+                logger.error(f"❌ Error sending message to user {uid}: {e}")
             
             if lang == "fa":
                 success_text = f"""
@@ -30458,7 +30462,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                 ])
             )
             
-            logger.info(f"✅ تمدید سفارش #{oid} با موفقیت انجام شد - سفارش اصلی: #{parent_order_id}")
+            logger.info(f"✅ Renewal for order #{oid} completed successfully - original order: #{parent_order_id}")
             await callback.answer("✅ تمدید انجام شد" if lang == "fa" else "✅ Extended")
             return
         else:
@@ -30519,7 +30523,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
             
             CustomLogger.log_event(
                 'ORDER_APPROVED',
-                f'سفارش #{oid} تایید شد - {vol}GB/{days} روز - {price:,} تومان - اینباند: {inbound_id or "پیش‌فرض"}',
+                f'Order #{oid} approved - {vol}GB/{days} days - {price:,} Toman - inbound: {inbound_id or "Default"}',
                 uid
             )
             
@@ -30532,7 +30536,7 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                     reply_markup=get_feedback_keyboard(oid, lang)
                 )
             except Exception as e:
-                logger.error(f"خطا در ارسال درخواست بازخورد: {e}")
+                logger.error(f"Error sending feedback request: {e}")
             
             inbound_info = f"اینباند: {', '.join(map(str, inbound_id)) or 'پیش‌فرض'}"
             
@@ -30556,15 +30560,15 @@ async def confirm_approve_with_inbound(callback: CallbackQuery):
                 ])
             )
             
-            logger.info(f"✅ سفارش #{oid} با موفقیت تایید شد - کلاینت ساخته شد")
+            logger.info(f"✅ Order #{oid} approved successfully - client created")
         else:
             user = get_user(uid)
             update_user(uid, 'balance', user['balance'] + price)
             
-            logger.error(f"❌ خطا در ساخت کلاینت برای سفارش #{oid}")
+            logger.error(f"❌ Error creating client for order #{oid}")
             if log_system:
                 await log_system.log_error(
-                    Exception("خطا در ساخت کلاینت در پنل"),
+                    Exception("Failed to create client in panel"),
                     "confirm_approve_with_inbound",
                     uid
                 )
@@ -30717,7 +30721,7 @@ async def reject_receipt(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error(
-            "ارسال پیام رد فیش سفارش #%s به کاربر %s ناموفق بود: %s",
+            'Failed to send the receipt-rejection message for order #%s to user %s: %s',
             order_id,
             user_id,
             e,
@@ -30725,15 +30729,15 @@ async def reject_receipt(callback: CallbackQuery):
         )
     
     if log_system:
-        await log_system.log_order_rejected(order_id, order['user_id'], "فیش نامعتبر")
+        await log_system.log_order_rejected(order_id, order['user_id'], "Invalid receipt")
     
-    CustomLogger.log_event('ORDER_REJECTED', f'سفارش #{order_id} توسط ادمین رد شد', order['user_id'])
+    CustomLogger.log_event('ORDER_REJECTED', f'Order #{order_id} was rejected by an admin', order['user_id'])
     
     # ✅ حذف پیام از چت ادمین
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.error(f"خطا در حذف پیام: {e}")
+        logger.error(f"Error deleting message: {e}")
         try:
             if callback.message.photo:
                 await callback.message.edit_caption(
@@ -30966,7 +30970,7 @@ def backfill_order_category(order_id: int) -> bool:
                 order['updated_at'] = datetime.now().isoformat()
                 save_json(DB_FILES['orders'], orders)
                 logger.info(
-                    f"✅ category_name / name_en سفارش #{order_id} پر شد: "
+                    f"✅ category_name / name_en for order #{order_id} was filled: "
                     f"{name_fa} / {name_en}"
                 )
                 return True
@@ -31001,10 +31005,10 @@ async def my_configs(callback: CallbackQuery):
 
     if log_system:
         asyncio.create_task(log_system.log_user_action(
-            user_id, "مشاهده کانفیگ‌ها", f"تعداد: {len(configs_list)}"
+            user_id, "Viewed configurations", f"Count: {len(configs_list)}"
         ))
 
-    logger.info(f"📁 کاربر {user_id} کانفیگ‌های خود را مشاهده می‌کند - تعداد: {len(configs_list)}")
+    logger.info(f"📁 user {user_id} views their configs - count: {len(configs_list)}")
 
     # ══════════════════════════════════════════════
     # Helpers
@@ -31244,7 +31248,7 @@ async def my_configs(callback: CallbackQuery):
                             pass
 
             except Exception as e:
-                logger.debug(f"⚠️ خطا در دریافت اطلاعات {email}: {e}")
+                logger.debug(f"⚠️ Error retrieving information {email}: {e}")
 
         # ✅ fallback: اگه پنل نداد، از days سفارش استفاده کن
         if time_left_text is None and order.get('days'):
@@ -31374,18 +31378,18 @@ async def my_configs(callback: CallbackQuery):
             reply_markup=keyboard,
             parse_mode=ParseMode.HTML
         )
-        logger.debug(f"✅ پیام کانفیگ‌های کاربر {user_id} ویرایش شد")
+        logger.debug(f"✅ User {user_id} configs message edited")
 
     except Exception as e:
         err = str(e)
 
         if "message is not modified" in err:
             # کاربر دوباره کلیک کرده - محتوا یکیه
-            logger.debug("پیام تغییر نکرده - بدون ویرایش")
+            logger.debug('Message unchanged - no edit needed')
 
         elif "there is no text in the message to edit" in err:
             # پیام قبلی عکس/فایل/ویدیو بوده → حذف و ارسال جدید
-            logger.debug("پیام قبلی رسانه‌ای بوده - حذف و ارسال جدید")
+            logger.debug('Previous message contained media - deleting and sending a new one')
             try:
                 await callback.message.delete()
             except Exception:
@@ -31398,7 +31402,7 @@ async def my_configs(callback: CallbackQuery):
 
         elif "message to edit not found" in err:
             # پیام قبلی حذف شده → ارسال جدید
-            logger.debug("پیام قبلی یافت نشد - ارسال جدید")
+            logger.debug('Previous message not found - sending a new one')
             try:
                 await callback.message.answer(
                     text,
@@ -31406,11 +31410,11 @@ async def my_configs(callback: CallbackQuery):
                     parse_mode=ParseMode.HTML
                 )
             except Exception as e2:
-                logger.error(f"خطا در ارسال پیام جدید: {e2}")
+                logger.error(f"Error sending new message: {e2}")
 
         else:
             # هر خطای دیگه - fallback
-            logger.warning(f"خطا در ویرایش پیام: {e}")
+            logger.warning(f"Error editing message: {e}")
             try:
                 await callback.message.delete()
             except Exception:
@@ -31422,7 +31426,7 @@ async def my_configs(callback: CallbackQuery):
                     parse_mode=ParseMode.HTML
                 )
             except Exception as e2:
-                logger.error(f"خطا در ارسال پیام جدید: {e2}")
+                logger.error(f"Error sending new message: {e2}")
 
     try:
         await callback.answer()
@@ -31593,7 +31597,7 @@ async def show_all_my_configs(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
-            logger.warning(f"خطا در ویرایش لیست کانفیگ‌ها: {e}")
+            logger.warning(f"Error editing config list: {e}")
             try:
                 await callback.message.delete()
             except Exception:
@@ -31743,7 +31747,7 @@ async def my_account(callback: CallbackQuery):
             user_states[user_id]['coupon_discount'] = coupon_data.get('coupon_discount')
             user_states[user_id]['coupon_applied'] = True
             user_state = user_states[user_id]
-            logger.info(f"🏷️ [my_account] کوپن از دیتابیس به user_states لود شد")
+            logger.info(f"🏷️ [my_account] Coupon loaded from database into user_states")
     
     # ✅ حالا بررسی اعتبار با تابع کمکی
     if user_state.get('coupon_applied') and user_state.get('coupon_code'):
@@ -31777,7 +31781,7 @@ async def my_account(callback: CallbackQuery):
                     coupon_info = f"\n{premium_emoji('gift', '🏷️')} <b>Active Coupon:</b> <code>{html.escape(coupon_code)}</code> ({coupon_discount}%)"
         else:
             # ❌ کوپن نامعتبر - پاک کن
-            logger.warning(f"⚠️ [my_account] کوپن {coupon_code} نامعتبر: {reason}")
+            logger.warning(f"⚠️ [my_account] Coupon {coupon_code} invalid: {reason}")
             if user_id in user_states:
                 user_states[user_id].pop('coupon_code', None)
                 user_states[user_id].pop('coupon_discount', None)
@@ -31788,7 +31792,7 @@ async def my_account(callback: CallbackQuery):
     user_name_escaped = html.escape(user_name_raw)
     join_date_escaped = html.escape(user.get('join_date', 'نامشخص'))
     
-    logger.debug(f"کاربر {user_id} حساب کاربری خود را مشاهده می‌کند - کل خریدها: {total_purchases}, کانفیگ فعال: {len(active_configs)}")
+    logger.debug(f"User {user_id} views their account - total purchases: {total_purchases}, active configs: {len(active_configs)}")
     
     if lang == "fa":
         RLM = "\u200F"  # Right-to-Left Mark
@@ -31880,7 +31884,7 @@ async def my_account(callback: CallbackQuery):
         )
     except Exception as e:
         if "message is not modified" not in str(e):
-            logger.error(f"خطا در ویرایش پیام: {e}")
+            logger.error(f"Error editing message: {e}")
             try:
                 await callback.message.delete()
             except:
@@ -32233,7 +32237,7 @@ async def coupon_status(callback: CallbackQuery):
             coupon_code = coupon_data.get('coupon_code')
             coupon_discount = coupon_data.get('coupon_discount')
             coupon_applied = True
-            logger.info(f"🏷️ [coupon_status] کوپن {coupon_code} از دیتابیس به user_states لود شد")
+            logger.info(f"🏷️ [coupon_status] Coupon {coupon_code} loaded from database into user_states")
     
     if not coupon_applied or not coupon_code:
         if lang == "fa":
@@ -32283,7 +32287,7 @@ async def coupon_status(callback: CallbackQuery):
     
     if not is_valid:
         # ❌ کوپن نامعتبر - پاک کن
-        logger.warning(f"⚠️ [coupon_status] کوپن {coupon_code} نامعتبر: {reason}")
+        logger.warning(f"⚠️ [coupon_status] Coupon {coupon_code} invalid: {reason}")
         
         if user_id in user_states:
             user_states[user_id].pop('coupon_code', None)
@@ -32459,9 +32463,9 @@ async def invite_friends(callback: CallbackQuery):
     settings = configs_pool.get('price_settings', {})
     referral_bonus = settings.get('referral_bonus', 5000)
     if log_system:
-        await log_system.log_user_action(user_id, "مشاهده لینک دعوت", f"تعداد دعوت‌ها: {ref_count}")
+        await log_system.log_user_action(user_id, "Viewed referral link", f"Referral count: {ref_count}")
     
-    logger.debug(f"کاربر {user_id} لینک دعوت خود را مشاهده می‌کند - تعداد رفرال: {ref_count} - پاداش: {referral_bonus:,}")
+    logger.debug(f"User {user_id} views their invite link - referral count: {ref_count} - reward: {referral_bonus:,}")
     
     if lang == "fa":
         text = f"""
@@ -32486,7 +32490,7 @@ async def invite_friends(callback: CallbackQuery):
     try:
         await callback.message.delete()
     except Exception as e:
-        logger.debug(f"نتوانست پیام قبلی را حذف کند: {e}")
+        logger.debug(f"Failed to delete the previous message: {e}")
     await callback.message.answer(text, reply_markup=get_back_only_keyboard(lang), parse_mode=ParseMode.HTML)
     
     try:
@@ -32496,7 +32500,7 @@ async def invite_friends(callback: CallbackQuery):
 @dp.callback_query(F.data == "change_language")
 async def change_language(callback: CallbackQuery):
     user_id = callback.from_user.id
-    logger.debug(f"کاربر {user_id} در حال تغییر زبان")
+    logger.debug(f"User {user_id}changing language")
     
     # ✅ پاس دادن user_id برای تشخیص زبان فعال
     await callback.message.edit_text(
@@ -32513,7 +32517,7 @@ async def change_language(callback: CallbackQuery):
 async def set_lang_fa(callback: CallbackQuery):
     user_id = callback.from_user.id
     update_user(user_id, 'lang', 'fa')
-    logger.info(f"زبان کاربر {user_id} به فارسی تغییر کرد")
+    logger.info(f"user language {user_id} changed to Persian")
     
     await callback.answer("✅ زبان به فارسی تغییر کرد", show_alert=True)
     
@@ -32533,7 +32537,7 @@ async def set_lang_fa(callback: CallbackQuery):
 async def set_lang_en(callback: CallbackQuery):
     user_id = callback.from_user.id
     update_user(user_id, 'lang', 'en')
-    logger.info(f"زبان کاربر {user_id} به انگلیسی تغییر کرد")
+    logger.info(f"user language {user_id} changed to English")
     
     await callback.answer("✅ Language changed to English", show_alert=True)
     
@@ -32630,7 +32634,7 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
                             parse_mode=ParseMode.HTML,
                         )
                     except Exception as e:
-                        logger.error(f"خطا در ارسال اعلان بستن تیکت به ادمین: {e}")
+                        logger.error(f"Error sending ticket-closure notification to admin: {e}")
             elif closed_by == "admin":
                 # ادمین تیکت را بسته است. فقط در صورتی به کاربر پیام بده که کاربر خود ادمین نباشد
                 if user_id != ADMIN_ID_INT:
@@ -32658,12 +32662,12 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
                             parse_mode=ParseMode.HTML,
                         )
                     except Exception as e:
-                        logger.error(f"خطا در ارسال اعلان بستن تیکت به کاربر {user_id}: {e}")
+                        logger.error(f"Error sending ticket-closure notification to user {user_id}: {e}")
         
-        logger.info(f"چت #{chat_id} بسته شد - توسط: {closed_by}")
+        logger.info(f"chat #{chat_id} closed - by: {closed_by}")
         return True
     
-    logger.warning(f"چت #{chat_id} برای بسته شدن یافت نشد")
+    logger.warning(f"chat #{chat_id} not found to close")
     return False
 
 
@@ -32723,9 +32727,9 @@ async def auto_pause_user_ticket_if_active(user_id: int) -> bool:
     try:
         await bot.send_message(user_id, notice, reply_markup=ReplyKeyboardRemove())
     except Exception as e:
-        logger.debug(f"خطا در بستن کیبورد تیکت: {e}")
+        logger.debug(f"Error closing the ticket keyboard: {e}")
 
-    logger.info(f"⏸ ارسال پیام به تیکت #{chat_id} برای کاربر {user_id} خودکار متوقف شد.")
+    logger.info(f"⏸ sending message to ticket #{chat_id} for user {user_id} auto-stopped.")
     return True
 
 
@@ -33021,7 +33025,7 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
             ]),
         )
     except Exception as e:
-        logger.error(f"خطا در اعلان تیکت #{chat_id} به ادمین: {e}", exc_info=True)
+        logger.error(f"Error notifying about ticket #{chat_id} to admin: {e}", exc_info=True)
         await close_chat(chat_id, closed_by="admin", notify_other=False)
         user_states.pop(user_id, None)
         await callback.message.answer(
@@ -33041,7 +33045,7 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
             reply_markup=None,
         )
     except Exception as e:
-        logger.warning(f"خطا در ویرایش پیام انتخاب تیکت: {e}")
+        logger.warning(f"Error editing the ticket-selection message: {e}")
 
     prompt_text = (
         "پیامت رو همینجا بنویس و بفرست 🛟\n"
@@ -33190,7 +33194,7 @@ async def user_close_ticket(callback: CallbackQuery):
             reply_markup=ReplyKeyboardRemove(),
         )
     except Exception as e:
-        logger.debug(f"خطا در ارسال تایید بستن تیکت به کاربر: {e}")
+        logger.debug(f"Error sending ticket-closure confirmation to user: {e}")
     await callback.answer()
 
 
@@ -33236,7 +33240,7 @@ async def user_pause_ticket_input(callback: CallbackQuery):
             reply_markup=ReplyKeyboardRemove(),
         )
     except Exception as e:
-        logger.debug(f"خطا در ارسال اعلان توقف تیکت به کاربر: {e}")
+        logger.debug(f"Error sending ticket-stop notification to user: {e}")
     await callback.answer("⏹ ارسال پیام متوقف شد" if lang == "fa" else "⏹ Input paused")
 
 
@@ -33343,7 +33347,7 @@ async def relay_support_message(
             )
         except Exception as e:
             logger.error(
-                "پیام رسانه‌ای تیکت #%s ارسال شد اما ارسال توضیحات ناموفق بود: %s",
+                'Media message for ticket #%s was sent, but sending the caption failed: %s',
                 chat_id,
                 e,
             )
@@ -33490,7 +33494,7 @@ async def handle_chat_message(message: Message):
             sender_label="user",
         )
     except Exception as e:
-        logger.error(f"خطا در انتقال پیام کاربر به تیکت #{chat_id}: {e}", exc_info=True)
+        logger.error(f"Error forwarding user message to ticket #{chat_id}: {e}", exc_info=True)
         await message.reply("❌ ارسال پیام به پشتیبانی ناموفق بود. لطفاً دوباره تلاش کنید.")
         return
     add_message(chat_id, 'user', text_content)
@@ -33504,7 +33508,7 @@ async def handle_chat_message(message: Message):
             ]]),
         )
     except Exception as e:
-        logger.error(f"پیام تیکت #{chat_id} ارسال شد اما دکمه پاسخ ارسال نشد: {e}")
+        logger.error(f"Ticket message #{chat_id} sent, but the reply button could not be sent: {e}")
     
     if lang == "fa":
         await message.reply("✅ پیام شما ارسال شد.")
@@ -33520,7 +33524,7 @@ async def handle_feedback(callback: CallbackQuery):
     
     
     
-    logger.info(f"کاربر {user_id} بازخورد {rating} برای سفارش #{order_id} ثبت کرد")
+    logger.info(f"User {user_id}feedback {rating} for order #{order_id} registered")
     
     if rating == "nocomment":
         await save_feedback(user_id, order_id, "بدون نظر" if lang == 'fa' else "No comment", "")
@@ -33610,7 +33614,7 @@ async def handle_feedback_comment(message: Message):
     if log_system:
         await log_system.log_feedback(user_id, order_id,comment)
     
-    logger.info(f"کاربر {user_id} نظر خود را برای سفارش #{order_id} ثبت کرد: {comment}")
+    logger.info(f"User {user_id}left their comment for order #{order_id}registered: {comment}")
     
     await save_feedback(user_id, order_id, rating, comment)
     if lang == "fa":
@@ -33632,7 +33636,7 @@ def reduce_balance(user_id: int, amount: int) -> int:
         amount = old_balance  # نمیتوان بیشتر از موجودی کم کرد
     
     user['balance'] -= amount
-    logger.info(f"کاهش موجودی کاربر {user_id}: {old_balance} - {amount} = {user['balance']}")
+    logger.info(f"user balance decreased {user_id}: {old_balance} - {amount} = {user['balance']}")
     save_all()
     return user['balance']
 
@@ -33641,7 +33645,7 @@ def reset_balance(user_id: int) -> int:
     user = get_user(user_id)
     old_balance = user['balance']
     user['balance'] = 0
-    logger.info(f"صفر شدن موجودی کاربر {user_id}: {old_balance} -> 0")
+    logger.info(f"user balance reached zero {user_id}: {old_balance} -> 0")
     save_all()
     return 0
 
@@ -33766,12 +33770,12 @@ async def xui_delete_client(email: str) -> bool:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("success"):
-                        logger.info(f"✅ کلاینت {email} از پنل حذف شد")
+                        logger.info(f"✅ Client {email} deleted from the panel")
                         return True
-                logger.error(f"❌ خطا در حذف کلاینت {email}: {response.status}")
+                logger.error(f"❌ Error deleting client {email}: {response.status}")
                 return False
     except Exception as e:
-        logger.error(f"❌ خطا در حذف کلاینت {email}: {e}")
+        logger.error(f"❌ Error deleting client {email}: {e}")
         return False
     
     
@@ -33819,7 +33823,7 @@ async def confirm_reset_balance(callback: CallbackQuery):
         ])
     )
     
-    logger.info(f"موجودی کاربر {target_id} صفر شد (کانفیگ‌ها حذف نشدند)")
+    logger.info(f"user balance {target_id} reached zero (configs not deleted)")
     await callback.answer("✅ انجام شد" if lang == "fa" else "✅ Done", show_alert=True)
 
 
@@ -34088,7 +34092,7 @@ async def confirm_clear_logs(callback: CallbackQuery):
                     f.writelines(last_lines)
                 
                 cleared_items.append(f"📄 {os.path.basename(log_file)}")
-        logger.info("✅ فایل‌های لاگ پاک شدند")
+        logger.info('✅ Log files deleted')
     except Exception as e:
         error_msg = f"خطا در پاکسازی لاگ: {str(e)[:50]}"
         errors.append(error_msg)
@@ -34109,7 +34113,7 @@ async def confirm_clear_logs(callback: CallbackQuery):
         if closed_count > 0:
             cleared_items.append(f"💬 {closed_count} چت بسته قدیمی")
             save_json(DB_FILES['chats'], chats)
-            logger.info(f"✅ {closed_count} چت بسته قدیمی پاک شد")
+            logger.info(f"✅ {closed_count} old closed chat deleted")
     except Exception as e:
         error_msg = f"خطا در پاکسازی چت‌ها: {str(e)[:50]}"
         errors.append(error_msg)
@@ -34125,7 +34129,7 @@ async def confirm_clear_logs(callback: CallbackQuery):
             feedbacks = dict(sorted_feedbacks[:50])
             cleared_items.append(f"📝 {len(feedbacks)} بازخورد (قدیمی‌ها حذف)")
             save_json(DB_FILES['feedback'], feedbacks)
-            logger.info(f"✅ بازخوردهای قدیمی پاک شدند - {len(feedbacks)} عدد باقی ماند")
+            logger.info(f"✅ Old feedback entries deleted - {len(feedbacks)} entries remaining")
     except Exception as e:
         error_msg = f"خطا در پاکسازی بازخوردها: {str(e)[:50]}"
         errors.append(error_msg)
@@ -34148,7 +34152,7 @@ async def confirm_clear_logs(callback: CallbackQuery):
         if cancelled_count > 0:
             cleared_items.append(f"🛒 {cancelled_count} سفارش معلق قدیمی")
             save_json(DB_FILES['orders'], orders)
-            logger.info(f"✅ {cancelled_count} سفارش معلق قدیمی پاک شد")
+            logger.info(f"✅ {cancelled_count} old pending order deleted")
     except Exception as e:
         error_msg = f"خطا در پاکسازی سفارشات: {str(e)[:50]}"
         errors.append(error_msg)
@@ -34159,7 +34163,7 @@ async def confirm_clear_logs(callback: CallbackQuery):
         _db_cache.clear()
         _db_modified.clear()
         cleared_items.append(f"🗄 کش دیتابیس ({cache_size} آیتم)")
-        logger.info(f"✅ کش دیتابیس پاک شد - {cache_size} آیتم")
+        logger.info(f"✅ Database cache cleared - {cache_size} items")
     except Exception as e:
         error_msg = f"خطا در پاکسازی کش: {str(e)[:50]}"
         errors.append(error_msg)
@@ -34168,7 +34172,7 @@ async def confirm_clear_logs(callback: CallbackQuery):
         states_count = len(user_states)
         user_states.clear()
         cleared_items.append(f"📊 وضعیت کاربران ({states_count} مورد)")
-        logger.info(f"✅ وضعیت کاربران پاک شد - {states_count} مورد")
+        logger.info(f"✅ User states cleared - {states_count} entries")
     except Exception as e:
         error_msg = f"خطا در پاکسازی وضعیت‌ها: {str(e)[:50]}"
         errors.append(error_msg)
@@ -34234,7 +34238,7 @@ async def auto_log_cleanup():
     
     # از LOG_BOT_TOKEN و LOG_CHANNEL_ID استفاده کنید
     if not LOG_BOT_TOKEN or not LOG_CHANNEL_ID:
-        logger.warning("⚠️ بات لاگ تنظیم نشده است! لاگ‌ها به بات اصلی ارسال می‌شوند.")
+        logger.warning('⚠️ Log bot is not configured! Logs will be sent to the main bot.')
         log_bot = bot
         log_chat_id = ADMIN_ID_INT
     else:
@@ -34415,7 +34419,7 @@ async def admin_chat_reply(message: Message):
             sender_label="admin",
         )
     except Exception as e:
-        logger.error(f"خطا در ارسال پاسخ تیکت #{chat_id} به کاربر {chat['user_id']}: {e}")
+        logger.error(f"Error sending reply to ticket #{chat_id} to user {chat['user_id']}: {e}")
         await message.reply("❌ ارسال پاسخ ناموفق بود؛ پیام در تیکت ذخیره نشد.")
         return
     add_message(chat_id, 'admin', reply_text)
@@ -34753,10 +34757,10 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
     - کاربران بدون کانفیگ حذف نمی‌شوند
     """
     if not SENAI_PANEL_ENABLED:
-        logger.info("📴 پنل غیرفعال است - همگام‌سازی انجام نشد")
+        logger.info('📴 Panel is disabled - synchronization skipped')
         return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
     
-    logger.info("🔄 شروع همگام‌سازی با پنل...")
+    logger.info('🔄 starting sync with panel...')
     
     try:
         user_balances = {}
@@ -34770,12 +34774,12 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 'coupon_applied': user_data.get('coupon_applied', False)
             }
         
-        logger.info(f"💰 اطلاعات {len(user_balances)} کاربر ذخیره شد")
-        logger.info("📡 دریافت اطلاعات از پنل...")
+        logger.info(f"💰 Information for {len(user_balances)} user saved")
+        logger.info('📡 Fetching information from the panel...')
         
         inbounds = await xui_get_inbounds()
         if not inbounds:
-            logger.error("❌ هیچ اینباندی یافت نشد")
+            logger.error('❌ No inbounds found')
             return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
         clients_dict = {}
         skipped_clients = 0
@@ -34830,7 +34834,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                         user_id, extracted_name, is_bot_client, order_type = extract_user_info_from_comment(comment)
                         
                         if is_bot_client and user_id:
-                            logger.info(f"✅ کاربر {user_id} از کامنت شناسایی شد: {comment[:50]}...")
+                            logger.info(f"✅ user {user_id} identified from comment: {comment[:50]}...")
                             
                             # ذخیره نام کاربر اگر موجود بود
                             if extracted_name and extracted_name != f'کاربر_{user_id}':
@@ -34838,9 +34842,9 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                                 if uid_temp in users:
                                     if not users[uid_temp].get('name') or users[uid_temp]['name'].startswith('کاربر'):
                                         users[uid_temp]['name'] = extracted_name
-                                        logger.info(f"📝 نام کاربر {user_id} به '{extracted_name}' به‌روزرسانی شد")
+                                        logger.info(f"📝 User name {user_id} to \'{extracted_name}\' was updated")
                     except Exception as e:
-                        logger.error(f"❌ خطا در استخراج اطلاعات از کامنت: {e}")
+                        logger.error(f"❌ Error extracting information from comment: {e}")
                         user_id = None
                         is_bot_client = False
                 
@@ -34872,19 +34876,19 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     })
                     
                     status_text = "🟢 فعال" if is_active else "🔴 غیرفعال"
-                    logger.debug(f"✅ کلاینت: {email} (User: {user_id}) - {status_text}")
+                    logger.debug(f"✅ Client: {email} (User: {user_id}) - {status_text}")
                 else:
                     skipped_clients += 1
         
         clients = list(clients_dict.values())
         
-        logger.info(f"✅ {len(clients)} کلاینت یکتا پیدا شد")
-        logger.info(f"👥 {len(users_with_configs)} کاربر با کانفیگ")
+        logger.info(f"✅ {len(clients)} unique client found")
+        logger.info(f"👥 {len(users_with_configs)} user with config")
         
         if not clients:
-            logger.warning("⚠️ هیچ کلاینتی در پنل یافت نشد")
+            logger.warning('⚠️ No clients found in the panel')
             return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
-        logger.info("👤 به‌روزرسانی کاربران...")
+        logger.info('👤 Updating users...')
         
         for user_id in users_with_configs:
             uid = str(user_id)
@@ -34904,7 +34908,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                             user_name = full_name
                         telegram_username = user_info.get('username', '')
                 except Exception as e:
-                    logger.warning(f"⚠️ خطا در دریافت اطلاعات تلگرام برای {user_id}: {e}")
+                    logger.warning(f"⚠️ Error retrieving Telegram information for {user_id}: {e}")
                 
                 # اگر نام از تلگرام نگرفتیم، از کامنت‌های موجود استفاده کن
                 if user_name == f'کاربر_{user_id}':
@@ -34952,8 +34956,8 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     users[uid]['coupon_discount'] = user_coupons[uid]['coupon_discount']
                     users[uid]['coupon_applied'] = user_coupons[uid]['coupon_applied']
         
-        logger.info(f"💰 موجودی {len(user_balances)} کاربر حفظ شد")
-        logger.info("💾 ذخیره اطلاعات اوردرهای قبلی از دیتابیس...")
+        logger.info(f"💰 Balance for {len(user_balances)} user preserved")
+        logger.info('💾 Saving previous order data from the database...')
         old_order_info = {}
         existing_emails = set()
         
@@ -34987,8 +34991,8 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     }
                     existing_emails.add(email)
         
-        logger.info(f"📋 اطلاعات {len(old_order_info)} اوردر قبلی از دیتابیس ذخیره شد")
-        logger.info("📝 به‌روزرسانی اوردرها بر اساس پنل...")
+        logger.info(f"📋 Information for {len(old_order_info)} previous order saved from the database")
+        logger.info('📝 Updating orders based on the panel...')
         
         stats = {
             'approved': 0,
@@ -35032,7 +35036,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     status = 'inactive'
                     stats['inactive'] += 1
                     
-                logger.debug(f"🔄 به‌روزرسانی اوردر #{order_id} - {email} - وضعیت: {status}")
+                logger.debug(f"🔄 Order update #{order_id} - {email} - Status: {status}")
                 
             else:
                 order_id = get_next_order_id()
@@ -35054,7 +35058,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                     stats['inactive'] += 1
                 
                 stats['new'] += 1
-                logger.info(f"🆕 اوردر جدید #{order_id} - {email} - کاربر {user_id}")
+                logger.info(f"🆕 New order #{order_id} - {email} - user {user_id}")
             # ✅ اگه سفارش قبلی داشت، این فیلدها رو نگه دار
             preserved_category_id = None
             preserved_category_name = None
@@ -35119,7 +35123,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
                 display_volume = f"{volume_gb:.2f}GB"
             
             status_icon = "🟢" if is_active else "🔴"
-            logger.info(f"📝 اوردر #{order_id} - کاربر {user_id} - {display_volume}/{days} روز - {price} تومان - {status_icon}")
+            logger.info(f"📝 Order #{order_id} - user {user_id} - {display_volume}/{days} days - {price} tomans - {status_icon}")
         deleted_configs = []
         for oid, order in orders.items():
             email = order.get('email')
@@ -35129,22 +35133,22 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
         for order in deleted_configs:
             orders[str(order['order_id'])]['status'] = 'deleted'
             stats['deleted'] += 1
-            logger.info(f"🗑 کانفیگ #{order['order_id']} از پنل حذف شده - وضعیت به deleted تغییر کرد")        
+            logger.info(f"🗑 Config #{order['order_id']} deleted from the panel - status changed to deleted")        
         save_all()
-        logger.info("✅ دیتابیس با موفقیت ذخیره شد")
+        logger.info('✅ Database saved successfully')
         logger.info("=" * 60)
-        logger.info(f"📊 نتیجه همگام‌سازی:")
-        logger.info(f"  🟢 فعال: {stats['approved']}")
-        logger.info(f"  🔴 غیرفعال: {stats['inactive']}")
-        logger.info(f"  🆕 جدید: {stats['new']}")
-        logger.info(f"  🗑 حذف شده: {stats['deleted']}")
-        logger.info(f"  📋 کل: {stats['total_checked']}")
+        logger.info(f"📊 Synchronization result:")
+        logger.info(f"  🟢 Active: {stats['approved']}")
+        logger.info(f"  🔴 Inactive: {stats['inactive']}")
+        logger.info(f"  🆕 New: {stats['new']}")
+        logger.info(f"  🗑 Deleted: {stats['deleted']}")
+        logger.info(f"  📋 Total: {stats['total_checked']}")
         logger.info("=" * 60)
         
         return stats
         
     except Exception as e:
-        logger.error(f"❌ خطا در همگام‌سازی: {e}", exc_info=True)
+        logger.error(f"❌ Error during synchronization: {e}", exc_info=True)
         return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
 
 
@@ -35177,7 +35181,7 @@ async def sync_user_configs(user_id: int) -> dict:
     # ─── 2. دریافت اینباندها (با force_refresh) ───
     inbounds = await xui_get_inbounds(force_refresh=True)
     if not inbounds:
-        logger.error(f"❌ [sync_user_configs] user={user_id}: هیچ اینباندی یافت نشد")
+        logger.error(f"❌ [sync_user_configs] user={user_id}: No inbounds found")
         return {'approved': 0, 'inactive': 0, 'deleted': 0, 'new': 0, 'total_checked': 0}
 
     # ─── 3. جمع‌آوری فقط کلاینت‌های همین کاربر ───
@@ -35257,7 +35261,7 @@ async def sync_user_configs(user_id: int) -> dict:
             })
 
     clients = list(clients_dict.values())
-    logger.info(f"📊 [sync_user_configs] user={user_id}: {len(clients)} کلاینت در پنل")
+    logger.info(f"📊 [sync_user_configs] user={user_id}: {len(clients)} client in panel")
 
     # ─── 4. آپدیت has_purchased ───
     if user_has_configs and uid_str in users:
@@ -35351,7 +35355,7 @@ async def sync_user_configs(user_id: int) -> dict:
             status = 'approved' if is_active else 'inactive'
             stats[status] += 1
             stats['new'] += 1
-            logger.info(f"🆕 [sync_user_configs] سفارش جدید #{order_id} برای کاربر {user_id} - {email}")
+            logger.info(f"🆕 [sync_user_configs] New order #{order_id} for user {user_id} - {email}")
 
         orders[str(order_id)] = {
             'order_id': order_id,
@@ -35404,7 +35408,7 @@ async def sync_user_configs(user_id: int) -> dict:
         if order.get('status') in ['approved', 'inactive'] and email and email not in clients_dict:
             orders[str(order['order_id'])]['status'] = 'deleted'
             stats['deleted'] += 1
-            logger.info(f"🗑 [sync_user_configs] سفارش #{order['order_id']} (کاربر {user_id}) → deleted")
+            logger.info(f"🗑 [sync_user_configs] Order #{order['order_id']} (user {user_id}) → deleted")
 
     # ─── 9. ذخیره ───
     save_all()
@@ -35427,7 +35431,7 @@ async def add_new_config(message: Message):
                     await message.reply(f"✅ کانفیگ #{cid} اضافه شد\n📦 {vol}GB / {days} روز\n📊 موجودی مخزن: {get_available_configs_count()} عدد")
                 else:
                     await message.reply(f"✅ Config #{cid} added\n📦 {vol}GB / {days} days\n📊 Available configs: {get_available_configs_count()}")
-                logger.info(f"کانفیگ جدید #{cid} توسط ادمین اضافه شد")
+                logger.info(f"New config #{cid} added by admin")
             else:
                 if lang == "fa":
                     await message.reply("❌ حجم (1-100) یا روز (30-365) نامعتبر")
@@ -35439,7 +35443,7 @@ async def add_new_config(message: Message):
             else:
                 await message.reply("❌ Invalid format\nFormat: `volume|days|link`", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        logger.error(f"خطا در اضافه کردن کانفیگ جدید: {e}")
+        logger.error(f"Error adding new configuration: {e}")
         if lang == "fa":
             await message.reply("❌ خطا در پردازش")
         else:
@@ -35459,8 +35463,8 @@ async def add_balance_manual(message: Message):
     target_coupon_discount = full_state.get('target_coupon_discount')
     target_coupon_applied = full_state.get('target_coupon_applied', False)
     
-    logger.info(f"🔍 [add_balance_manual] شروع - target={target_id}, action={action}")
-    logger.info(f"🔍 [add_balance_manual] کوپن کاربر از state ادمین: code={target_coupon_code}, applied={target_coupon_applied}")
+    logger.info(f"🔍 [add_balance_manual] starting - target={target_id}, action={action}")
+    logger.info(f"🔍 [add_balance_manual] user coupon from admin state: code={target_coupon_code}, applied={target_coupon_applied}")
     
     if not target_id:
         await message.reply("❌ خطا: کاربر هدف یافت نشد")
@@ -35506,7 +35510,7 @@ async def add_balance_manual(message: Message):
                     admin_id=admin_id
                 )
             CustomLogger.log_event('BALANCE_REDUCE', 
-                f'کاهش موجودی کاربر {target_id}: {amount:,} تومان - موجودی جدید: {new_balance:,}', 
+                f'Balance decreased for user {target_id}: {amount:,} Toman - new balance: {new_balance:,}', 
                 target_id)
             target_lang = get_user(target_id).get('lang', 'fa')
             try:
@@ -35523,7 +35527,7 @@ async def add_balance_manual(message: Message):
                         f"💰 New balance: {new_balance:,} Toman{coupon_msg}"
                     )
             except Exception as e:
-                logger.error(f"خطا در ارسال پیام به کاربر {target_id}: {e}")
+                logger.error(f"Error sending message to user {target_id}: {e}")
             if lang == "fa":
                 await message.reply(
                     f"✅ مبلغ {amount:,} تومان از حساب کاربر {target_name_escaped} (ID: {target_id}) کسر شد\n"
@@ -35537,7 +35541,7 @@ async def add_balance_manual(message: Message):
                     f"💰 New balance: {new_balance:,} Toman"
                 )
             
-            logger.info(f"ادمین مبلغ {amount} از حساب کاربر {target_id} کسر کرد")
+            logger.info(f"Admin deducted/added amount {amount} from user account {target_id} deducted")
             
         else:
             new_balance = add_balance(target_id, amount)
@@ -35550,7 +35554,7 @@ async def add_balance_manual(message: Message):
                     admin_id=admin_id
                 )
             CustomLogger.log_event('BALANCE_ADD', 
-                f'افزایش موجودی کاربر {target_id}: {amount:,} تومان - موجودی جدید: {new_balance:,}', 
+                f'Balance increased for user {target_id}: {amount:,} Toman - new balance: {new_balance:,}', 
                 target_id)
             target_lang = get_user(target_id).get('lang', 'fa')
             try:
@@ -35567,7 +35571,7 @@ async def add_balance_manual(message: Message):
                         f"💰 New balance: {new_balance:,} Toman{coupon_msg}"
                     )
             except Exception as e:
-                logger.error(f"خطا در ارسال پیام به کاربر {target_id}: {e}")
+                logger.error(f"Error sending message to user {target_id}: {e}")
             if lang == "fa":
                 await message.reply(
                     f"✅ مبلغ {amount:,} تومان به حساب کاربر {target_name_escaped} (ID: {target_id}) اضافه شد\n"
@@ -35579,7 +35583,7 @@ async def add_balance_manual(message: Message):
                     f"💰 New balance: {new_balance:,} Toman"
                 )
             
-            logger.info(f"ادمین مبلغ {amount} به حساب کاربر {target_id} اضافه کرد")
+            logger.info(f"Admin deducted/added amount {amount} to user account {target_id} added")
         if target_coupon_applied and target_coupon_code:
             coupon = COUPONS.get(target_coupon_code)
             if coupon and coupon.get('status') == 'active':
@@ -35590,32 +35594,32 @@ async def add_balance_manual(message: Message):
                         'coupon_discount': target_coupon_discount if target_coupon_discount else 0
                     }
                     save_coupon_to_user_db(target_id)
-                    logger.info(f"🏷️ [add_balance_manual] کوپن {target_coupon_code} برای کاربر {target_id} در دیتابیس ذخیره شد")
+                    logger.info(f"🏷️ [add_balance_manual] Coupon {target_coupon_code} for user {target_id} saved in the database")
                 else:
-                    logger.warning(f"⚠️ [add_balance_manual] کوپن {target_coupon_code} قبلاً توسط کاربر {target_id} مصرف شده است")
+                    logger.warning(f"⚠️ [add_balance_manual] Coupon {target_coupon_code} already used by user {target_id} has been used")
                     clear_coupon_from_user_db(target_id)
                     if target_id in user_states:
                         user_states[target_id].pop('coupon_code', None)
                         user_states[target_id].pop('coupon_discount', None)
                         user_states[target_id].pop('coupon_applied', None)
             else:
-                logger.warning(f"⚠️ [add_balance_manual] کوپن {target_coupon_code} نامعتبر است")
+                logger.warning(f"⚠️ [add_balance_manual] Coupon {target_coupon_code} is invalid")
                 clear_coupon_from_user_db(target_id)
                 if target_id in user_states:
                     user_states[target_id].pop('coupon_code', None)
                     user_states[target_id].pop('coupon_discount', None)
                     user_states[target_id].pop('coupon_applied', None)
         else:
-            logger.info(f"ℹ️ [add_balance_manual] کاربر {target_id} کوپن فعالی ندارد")
+            logger.info(f"ℹ️ [add_balance_manual] User {target_id} has no active coupon")
             clear_coupon_from_user_db(target_id)
         if log_system:
             await log_system.log_admin_action(
                 admin_id=admin_id,
-                action=f"{'کاهش' if action == 'reduce' else 'افزایش'} موجودی",
-                details=f"کاربر: {target_id} - مبلغ: {amount:,} تومان"
+                action=f"{'Decrease' if action == 'reduce' else 'Increase'} balance",
+                details=f"User: {target_id} - Amount: {amount:,} Toman"
             )
         final_state = user_states.get(target_id, {})
-        logger.info(f"🔍 [add_balance_manual] وضعیت نهایی کاربر {target_id}: {final_state}")
+        logger.info(f"🔍 [add_balance_manual] Final status of user {target_id}: {final_state}")
         user_states.pop(admin_id, None)
         
     except ValueError:
@@ -35624,11 +35628,11 @@ async def add_balance_manual(message: Message):
         else:
             await message.reply(f"❌ Please enter a valid number\nInput: {html.escape(message.text)}")
     except Exception as e:
-        logger.error(f"خطا در add_balance_manual: {e}", exc_info=True)
+        logger.error(f"Error in add_balance_manual: {e}", exc_info=True)
         
         if log_system:
             await log_system.log_error(e, "add_balance_manual", target_id if 'target_id' in locals() else None)
-        CustomLogger.log_event('ERROR', f'خطا در add_balance_manual: {e}', admin_id)
+        CustomLogger.log_event('ERROR', f'Error in add_balance_manual: {e}', admin_id)
         
         await message.reply(f"❌ خطای غیرمنتظره: {html.escape(str(e))}")
         user_states.pop(admin_id, None)
@@ -35653,7 +35657,7 @@ async def rebuild_sub_links_in_database():
     """
     current_sub_base = await ensure_sub_base_url()
     if not current_sub_base:
-        logger.error("❌ آدرس سابسکریپشن مشخص نیست (نه در config.py و نه در پنل)!")
+        logger.error('❌ Subscription URL is not specified (neither in config.py nor in the panel)!')
         return {
             'success': False,
             'error': 'SENAI_SUB_URL not configured',
@@ -35661,7 +35665,7 @@ async def rebuild_sub_links_in_database():
             'updated_orders': []
         }
 
-    logger.info(f"🔄 شروع بازسازی لینک‌های ساب با آدرس جدید: {current_sub_base}")
+    logger.info(f"🔄 starting subscription link rebuild with new address: {current_sub_base}")
     
     updated_orders = []
     failed_orders = []
@@ -35670,7 +35674,7 @@ async def rebuild_sub_links_in_database():
     valid_orders = get_valid_orders()
     
     if not valid_orders:
-        logger.info("📭 هیچ سفارشی در دیتابیس وجود ندارد")
+        logger.info('📭 No orders found in the database')
         return {
             'success': True,
             'updated_count': 0,
@@ -35678,7 +35682,7 @@ async def rebuild_sub_links_in_database():
             'message': 'No orders found'
         }
     
-    logger.info(f"📊 تعداد کل سفارشات: {len(valid_orders)}")
+    logger.info(f"📊 total orders: {len(valid_orders)}")
     
     for order_id, order in valid_orders.items():
         try:
@@ -35734,7 +35738,7 @@ async def rebuild_sub_links_in_database():
                                 new_link += f"?{query}"
                             return new_link
                 except Exception as e:
-                    logger.warning(f"⚠️ خطا در parsing لینک: {e}")
+                    logger.warning(f"⚠️ Error parsing link: {e}")
                 if is_valid_link(link):
                     try:
                         parts = link.rstrip('/').split('/')
@@ -35750,9 +35754,9 @@ async def rebuild_sub_links_in_database():
                 if is_valid_link(config_link):
                     new_config_link = rebuild_link(config_link)
                     if new_config_link:
-                        logger.info(f"📝 config_link سفارش #{order_id} بازسازی شد")
+                        logger.info(f"📝 config_link for order #{order_id} was rebuilt")
                     else:
-                        logger.warning(f"⚠️ config_link سفارش #{order_id} بازسازی نشد")
+                        logger.warning(f"⚠️ config_link for order #{order_id} was not rebuilt")
                         failed_orders.append({
                             'order_id': order_id,
                             'old_link': config_link,
@@ -35764,14 +35768,14 @@ async def rebuild_sub_links_in_database():
                         'link': config_link,
                         'reason': 'Invalid link (skipped)'
                     })
-                    logger.info(f"⏭️ config_link سفارش #{order_id} نامعتبر است و دست‌نخورده ماند")
+                    logger.info(f"⏭️ config_link for order #{order_id} is invalid and was left unchanged")
             if sub_link:
                 if is_valid_link(sub_link):
                     new_sub_link = rebuild_link(sub_link)
                     if new_sub_link:
-                        logger.info(f"📝 sub_link سفارش #{order_id} بازسازی شد")
+                        logger.info(f"📝 sub_link for order #{order_id} was rebuilt")
                     else:
-                        logger.warning(f"⚠️ sub_link سفارش #{order_id} بازسازی نشد")
+                        logger.warning(f"⚠️ sub_link for order #{order_id} was not rebuilt")
                         failed_orders.append({
                             'order_id': order_id,
                             'old_link': sub_link,
@@ -35783,7 +35787,7 @@ async def rebuild_sub_links_in_database():
                         'link': sub_link,
                         'reason': 'Invalid link (skipped)'
                     })
-                    logger.info(f"⏭️ sub_link سفارش #{order_id} نامعتبر است و دست‌نخورده ماند")
+                    logger.info(f"⏭️ sub_link for order #{order_id} is invalid and was left unchanged")
             update_data = {}
             if new_config_link and new_config_link != config_link:
                 update_data['config_link'] = new_config_link
@@ -35803,7 +35807,7 @@ async def rebuild_sub_links_in_database():
                     'old_sub_link': sub_link,
                     'new_sub_link': new_sub_link
                 })
-                logger.info(f"✅ سفارش #{order_id} بروزرسانی شد")
+                logger.info(f"✅ Order #{order_id} was updated")
             else:
                 if config_link and sub_link:
                     skipped_orders.append({
@@ -35817,7 +35821,7 @@ async def rebuild_sub_links_in_database():
                     })
                 
         except Exception as e:
-            logger.error(f"❌ خطا در بروزرسانی سفارش #{order_id}: {e}")
+            logger.error(f"❌ Error updating order #{order_id}: {e}")
             failed_orders.append({
                 'order_id': order_id,
                 'error': str(e)
@@ -35837,13 +35841,13 @@ async def rebuild_sub_links_in_database():
     }
 
     logger.info("=" * 60)
-    logger.info(f"✅ بازسازی لینک‌های ساب کامل شد!")
-    logger.info(f"📊 کل سفارشات: {result['total_orders']}")
-    logger.info(f"✅ بروزرسانی شده: {result['updated_count']}")
-    logger.info(f"❌ خطا: {result['failed_count']}")
-    logger.info(f"⏭️ بدون تغییر: {result['skipped_count']}")
-    logger.info(f"⏭️ لینک‌های نامعتبر دست نخورده: {result['invalid_links_skipped']}")
-    logger.info(f"🌐 آدرس جدید: {get_sub_base_url()}")
+    logger.info(f"✅ subscription link rebuild complete!")
+    logger.info(f"📊 total orders: {result['total_orders']}")
+    logger.info(f"✅ updated: {result['updated_count']}")
+    logger.info(f"❌ error: {result['failed_count']}")
+    logger.info(f"⏭️ no change: {result['skipped_count']}")
+    logger.info(f"⏭️ invalid links untouched: {result['invalid_links_skipped']}")
+    logger.info(f"🌐 new address: {get_sub_base_url()}")
     logger.info("=" * 60)
     
     return result
@@ -36023,7 +36027,7 @@ async def cmd_rebuild_links(message: Message):
                 parse_mode=ParseMode.HTML
             )
             
-            logger.info(f"✅ بازسازی لینک‌ها توسط ادمین {message.from_user.id} انجام شد")
+            logger.info(f"✅ Links rebuilt by admin {message.from_user.id} completed")
             
         else:
             await status_msg.edit_text(
@@ -36034,7 +36038,7 @@ async def cmd_rebuild_links(message: Message):
             )
             
     except Exception as e:
-        logger.error(f"خطا در بازسازی لینک‌ها: {e}", exc_info=True)
+        logger.error(f"Error rebuilding links: {e}", exc_info=True)
         await status_msg.edit_text(
             f"❌ خطا: {str(e)}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -36339,7 +36343,7 @@ async def handle_text_messages(message: Message):
         )
         if handled:
             return
-    CustomLogger.log_event('MESSAGE', f'پیام: {message.text[:50]}', user_id)
+    CustomLogger.log_event('MESSAGE', f'Message: {message.text[:50]}', user_id)
     if user_state.get('ai_chat_mode'):
         await process_ai_chat_message(message)
         return
@@ -36395,10 +36399,10 @@ async def handle_text_messages(message: Message):
         if is_ai_question(message.text) and len(message.text.strip()) >= 5:
             can_use, remaining, limit_msg = check_ai_limit(user_id)
             if can_use:
-                logger.info(f"🤖 پاسخ خودکار AI به سوال کاربر {user_id}")
+                logger.info(f"🤖 AI automatic response to user question {user_id}")
                 await auto_ai_response(message)
                 return
-    logger.debug(f"پیام بدون وضعیت از کاربر {user_id}: {message.text[:50]}")
+    logger.debug(f"status-less message from user {user_id}: {message.text[:50]}")
     
 
 # ✅ لیست کلمات نامناسب فارسی و انگلیسی
@@ -36993,13 +36997,13 @@ def choose_ai_recommended_package(
     if selected_package_id:
         selected_key = str(selected_package_id).strip()
         if selected_key in eligible:
-            logger.info("🤖 پیشنهاد هوش مصنوعی تایید و اعمال شد: %s", selected_key)
+            logger.info('🤖 AI suggestion approved and applied: %s', selected_key)
             return eligible[selected_key]
         if selected_key in package_map:
             cat, pkg = package_map[selected_key]
             pkg_price = int(pkg.get('price', 0) or 0)
             if budget is None or pkg_price <= budget:
-                logger.info("🤖 پیشنهاد هوش مصنوعی از کاتالوگ فعال تایید شد: %s", selected_key)
+                logger.info('🤖 AI suggestion from the active catalog approved: %s', selected_key)
                 return cat, pkg
 
     # ─── ۲. منطق پشتیبان لوکال (در صورتی که هوش مصنوعی در دسترس نبود) ───
@@ -37275,7 +37279,7 @@ def save_ai_purchase_advisor_result(
     user['ai_purchase_advisor_result'] = result
     saved = save_json(DB_FILES['users'], users)
     if not saved:
-        logger.error("❌ انتخاب هوشمند کاربر %s ذخیره نشد", user_id)
+        logger.error('❌ Smart choice for user %s was not saved', user_id)
     return saved
 
 
@@ -38771,9 +38775,9 @@ async def get_gemini_prompt_cache(session: aiohttp.ClientSession, system_prompt:
                             "retry_after": 0.0,
                             "disabled": False,
                         })
-                        logger.info("✅ حافظه‌ی سروری prompt اصلی Gemini فعال شد")
+                        logger.info('✅ Server-side caching for the main Gemini prompt enabled')
                         return cache_name
-                    logger.warning("⚠️ Gemini cache ساخته شد اما شناسه‌ی cache در پاسخ نبود")
+                    logger.warning('⚠️ Gemini cache was created, but the response contained no cache ID')
                     GEMINI_PROMPT_CACHE.update({
                         "fingerprint": fingerprint,
                         "name": None,
@@ -38783,8 +38787,7 @@ async def get_gemini_prompt_cache(session: aiohttp.ClientSession, system_prompt:
                     })
                 else:
                     logger.warning(
-                        "⚠️ ساخت cache prompt در Gemini ناموفق بود (HTTP %s)؛ "
-                        "این درخواست با prompt معمولی ادامه می‌یابد",
+                        '⚠️ Failed to create Gemini prompt cache (HTTP %s); continuing this request with a regular prompt',
                         response.status,
                     )
                     GEMINI_PROMPT_CACHE.update({
@@ -38795,7 +38798,7 @@ async def get_gemini_prompt_cache(session: aiohttp.ClientSession, system_prompt:
                         "disabled": response.status in (400, 401, 403, 404, 422),
                     })
         except (asyncio.TimeoutError, aiohttp.ClientError, json.JSONDecodeError) as error:
-            logger.warning("⚠️ ساخت cache prompt با خطا مواجه شد: %s", error)
+            logger.warning('⚠️ Failed to create prompt cache: %s', error)
             GEMINI_PROMPT_CACHE.update({
                 "fingerprint": fingerprint,
                 "name": None,
@@ -38821,7 +38824,7 @@ async def get_ai_response(
     """دریافت پاسخ کامل از AI؛ پاسخ‌های قطع‌شده به کاربر تحویل داده نمی‌شوند."""
     if gemini_client:
         try:
-            logger.info(f"🎯 استفاده از Gemini: {message_text[:50]}...")
+            logger.info(f"🎯 Using Gemini: {message_text[:50]}...")
             max_tokens = (
                 max(512, min(max_output_tokens, 4096))
                 if max_output_tokens is not None
@@ -38934,7 +38937,7 @@ async def get_ai_response(
                         ):
                             retry_tokens = min(max_tokens * 2, 4096)
                             logger.warning(
-                                "⚠️ پاسخ Gemini به سقف خروجی رسید؛ تلاش مجدد با %s توکن",
+                                '⚠️ Gemini response reached the output limit; retrying with %s tokens',
                                 retry_tokens,
                             )
                             payload["generationConfig"]["maxOutputTokens"] = retry_tokens
@@ -38945,7 +38948,7 @@ async def get_ai_response(
                             ) as retry_response:
                                 if retry_response.status != 200:
                                     logger.warning(
-                                        "⚠️ تلاش مجدد Gemini ناموفق بود؛ HTTP %s",
+                                        '⚠️ Gemini retry failed; HTTP %s',
                                         retry_response.status,
                                     )
                                     return "⚠️ پاسخ کامل تولید نشد؛ لطفاً دوباره تلاش کنید."
@@ -38956,8 +38959,8 @@ async def get_ai_response(
                             finish_reason = candidates[0].get('finishReason', '')
                             if finish_reason != "STOP":
                                 logger.warning(
-                                    "⚠️ پاسخ Gemini کامل نبود؛ finish reason: %s",
-                                    finish_reason or "نامشخص",
+                                    '⚠️ Gemini response was incomplete; finish reason: %s',
+                                    finish_reason or "Unknown",
                                 )
                                 return "⚠️ پاسخ کامل تولید نشد؛ لطفاً دوباره تلاش کنید."
 
@@ -39008,7 +39011,7 @@ async def get_ai_response(
                                 
                                 # ✅ اطمینان از فارسی بودن
                                 if not any('\u0600' <= c <= '\u06FF' for c in reply):
-                                    logger.warning("⚠️ پاسخ Gemini فارسی نبود؛ برای جلوگیری از درخواست تکراری همان پاسخ استفاده می‌شود")
+                                    logger.warning('⚠️ Gemini response was not in Persian; reusing the same response to avoid a duplicate request')
                                 
                                 if not reply:
                                     return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
@@ -39021,7 +39024,7 @@ async def get_ai_response(
                                         )
                                     conversation_memory.add_message(user_id, 'assistant', memory_reply)
                                 
-                                logger.info(f"✅ پاسخ Gemini دریافت شد - طول: {len(reply)} کاراکتر")
+                                logger.info(f"✅ Gemini response received - length: {len(reply)} characters")
                                 return reply
                             
                             return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
@@ -39032,11 +39035,11 @@ async def get_ai_response(
                         return "⚠️ محدودیت درخواست. لطفاً چند لحظه صبر کنید."
                     
                     elif response.status == 403:
-                        logger.error("❌ Gemini 403 - کلید نامعتبر")
+                        logger.error('❌ Gemini 403 - Invalid key')
                         return "❌ خطای احراز هویت. لطفاً کلید API را بررسی کنید."
                     
                     elif response.status == 503:
-                        logger.warning("⚠️ Gemini 503 - سرویس در دسترس نیست")
+                        logger.warning('⚠️ Gemini 503 - Service unavailable')
                         return "⚠️ سرویس شلوغ است. لطفاً چند لحظه صبر کنید."
                     
                     else:
@@ -39045,15 +39048,15 @@ async def get_ai_response(
                         return f"❌ خطا در ارتباط با هوش مصنوعی. کد: {response.status}"
                         
         except asyncio.TimeoutError:
-            logger.error("⏰ تایم‌اوت در Gemini")
+            logger.error('⏰ Gemini timeout')
             return "⏰ زمان پاسخگویی به پایان رسید. لطفاً دوباره تلاش کنید."
             
         except aiohttp.ClientError as e:
-            logger.error(f"🌐 خطای شبکه در Gemini: {e}")
+            logger.error(f"🌐 Gemini network error: {e}")
             return f"❌ خطای شبکه: {str(e)[:100]}"
             
         except Exception as e:
-            logger.error(f"❌ خطای غیرمنتظره در Gemini: {e}")
+            logger.error(f"❌ Unexpected Gemini error: {e}")
             import traceback
             traceback.print_exc()
             return f"❌ خطا: {str(e)[:100]}"
@@ -39130,7 +39133,7 @@ async def process_ai_chat_message(message: Message):
     user_id = message.from_user.id
     lang = get_user(user_id).get('lang', 'fa')
     
-    logger.info(f"🤖 پردازش پیام AI از کاربر {user_id}: {message.text[:50]}...")
+    logger.info(f"🤖 AI message processing from user {user_id}: {message.text[:50]}...")
     
     if message.text.strip() == '/cancel':
         user_state = user_states.get(user_id, {})
@@ -39144,7 +39147,7 @@ async def process_ai_chat_message(message: Message):
                 'coupon_discount': coupon_discount,
                 'coupon_applied': True
             }
-            logger.info(f"🏷️ [process_ai_chat_message] کوپن {coupon_code} حفظ شد")
+            logger.info(f"🏷️ [process_ai_chat_message] Coupon {coupon_code} preserved")
         
         
         
@@ -39158,7 +39161,7 @@ async def process_ai_chat_message(message: Message):
     has_bad_word, bad_word, bad_lang = contains_bad_words(message.text)
     
     if has_bad_word:
-        logger.warning(f"⛔ کاربر {user_id} پیام نامناسب ارسال کرد: {bad_word} ({bad_lang})")
+        logger.warning(f"⛔ User {user_id} sent inappropriate content: {bad_word} ({bad_lang})")
         
         if lang == 'fa':
             await message.reply(
@@ -39178,8 +39181,8 @@ async def process_ai_chat_message(message: Message):
         if log_system:
             await log_system.log_user_action(
                 user_id,
-                "پیام نامناسب در چت AI",
-                f"کلمه: {bad_word} ({bad_lang})"
+                "Inappropriate message in AI chat",
+                f"Word: {bad_word} ({bad_lang})"
             )
         
         return
@@ -39250,7 +39253,7 @@ async def process_ai_chat_message(message: Message):
         is_incomplete = is_incomplete or "پاسخ کامل تولید نشد" in answer
         
         if is_real_error:
-            logger.warning(f"⚠️ پاسخ خطای واقعی بود، محدودیت کاهش نیافت: {answer[:50]}...")
+            logger.warning(f"⚠️ The response was a genuine error; the limit was not reduced: {answer[:50]}...")
             await processing_msg.edit_text(
                 f"{answer}\n\n💡 محدودیت شما کاهش نیافت. لطفاً دوباره تلاش کنید." if lang == "fa" else f"{answer}\n\n💡 Your limit was not reduced. Please try again.",
                 parse_mode=ParseMode.HTML
@@ -39258,7 +39261,7 @@ async def process_ai_chat_message(message: Message):
             return
         
         if is_incomplete:
-            logger.warning(f"⚠️ پاسخ ناقص است، محدودیت کاهش نیافت")
+            logger.warning(f"⚠️ The response is incomplete; the limit was not reduced")
             await processing_msg.edit_text(
                 "⚠️ پاسخ کامل آماده نشد و متن ناقصی ارسال نشد. لطفاً دوباره تلاش کنید.\n\n💡 محدودیت شما کاهش نیافت." if lang == "fa" else "⚠️ A complete response was not ready, so no partial text was sent. Please try again.\n\n💡 Your limit was not reduced.",
                 parse_mode=ParseMode.HTML
@@ -39308,17 +39311,17 @@ async def process_ai_chat_message(message: Message):
             reply_markup=reply_keyboard,
         )
         
-        logger.info(f"✅ پاسخ کامل AI برای کاربر {user_id} ارسال شد - طول: {len(answer)} کاراکتر")
+        logger.info(f"✅ Full AI response sent to user {user_id} - length: {len(answer)} characters")
         
     except asyncio.TimeoutError:
-        logger.error(f"⏰ تایم‌اوت در AI Chat برای کاربر {user_id}")
+        logger.error(f"⏰ AI Chat timeout for user {user_id}")
         await processing_msg.edit_text(
             "⏰ زمان پاسخگویی به پایان رسید. لطفاً سوال خود را کوتاه‌تر بپرسید یا دوباره تلاش کنید.\n\n💡 محدودیت شما کاهش نیافت." if lang == "fa" else "⏰ Response timeout. Please ask a shorter question or try again.\n\n💡 Your limit was not reduced.",
             parse_mode=ParseMode.HTML
         )
         
     except Exception as e:
-        logger.error(f"❌ خطا در AI Chat: {e}", exc_info=True)
+        logger.error(f"❌ Error in AI Chat: {e}", exc_info=True)
         await processing_msg.edit_text(
             "❌ خطا در پردازش. لطفاً بعداً تلاش کنید.\n\n💡 محدودیت شما کاهش نیافت." if lang == "fa" else "❌ Error. Please try again later.\n\n💡 Your limit was not reduced.",
             parse_mode=ParseMode.HTML
@@ -39636,7 +39639,7 @@ async def handle_admin_special_states(message: Message, user_state: dict):
     elif user_state.get('awaiting_coupon_create'):
         await admin_coupon_create_process(message)
     else:
-        logger.debug(f"ادمین - پیام نادیده گرفته شد: {message.text}")
+        logger.debug(f"Admin - message ignored: {message.text}")
 
 
 async def auto_ai_response(message: Message):
@@ -39648,7 +39651,7 @@ async def auto_ai_response(message: Message):
     has_bad_word, bad_word, bad_lang = contains_bad_words(message.text)
     
     if has_bad_word:
-        logger.warning(f"⛔ کاربر {user_id} پیام نامناسب ارسال کرد: {bad_word} ({bad_lang})")
+        logger.warning(f"⛔ User {user_id} sent inappropriate content: {bad_word} ({bad_lang})")
         # ✅ بدون ارسال به AI - فقط پیام هشدار
         if lang == 'fa':
             await message.reply(
@@ -39664,8 +39667,8 @@ async def auto_ai_response(message: Message):
         if log_system:
             await log_system.log_user_action(
                 user_id,
-                "پیام نامناسب",
-                f"کلمه: {bad_word} ({bad_lang})"
+                "Inappropriate message",
+                f"Word: {bad_word} ({bad_lang})"
             )
         
         return
@@ -39696,7 +39699,7 @@ async def auto_ai_response(message: Message):
         is_error = any(kw in answer for kw in error_keywords)
         
         if is_error:
-            logger.warning(f"⚠️ پاسخ خودکار AI خطا بود، محدودیت کاهش نیافت: {answer[:50]}...")
+            logger.warning(f"⚠️ The automatic AI response was an error; the limit was not reduced: {answer[:50]}...")
             await processing_msg.edit_text(
                 f"{answer}\n\n💡 محدودیت شما کاهش نیافت. لطفاً دوباره تلاش کنید." if lang == "fa" else f"{answer}\n\n💡 Your limit was not reduced. Please try again.",
                 parse_mode=ParseMode.HTML
@@ -39742,7 +39745,7 @@ async def auto_ai_response(message: Message):
         )
         
     except Exception as e:
-        logger.error(f"خطا در auto AI: {e}")
+        logger.error(f"Error in auto AI: {e}")
         await processing_msg.delete()
 
 
@@ -39750,12 +39753,12 @@ async def auto_ai_response(message: Message):
 async def admin_panel(callback: CallbackQuery):
     version = "v1.7.46"
     if callback.from_user.id != ADMIN_ID_INT:
-        logger.warning(f"دسترسی غیرمجاز به پنل ادمین از کاربر {callback.from_user.id}")
+        logger.warning(f"Unauthorized access to the admin panel by user {callback.from_user.id}")
         await callback.answer("⛔ دسترسی محدود!", show_alert=True)
         return
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    logger.info("ادمین وارد پنل مدیریت شد")
+    logger.info('admin entered panel management')
     
     
     panel_text = f"{premium_emoji('admin', '👑')} {'پنل ادمین' if lang=='fa' else 'Admin Panel'} {version}"
@@ -39784,7 +39787,7 @@ async def admin_panel(callback: CallbackQuery):
                 reply_markup=get_admin_keyboard(lang)
             )
         else:
-            logger.error(f"خطا در admin_panel: {e}")
+            logger.error(f"Error in admin_panel: {e}")
             await callback.answer("❌ خطا در نمایش پنل", show_alert=True)
             raise
     
@@ -39812,7 +39815,7 @@ async def admin_orders(callback: CallbackQuery):
                        and o.get('status') == 'pending_balance_charge']
     total_pending = len(pending_purchase) + len(pending_ready_package) + len(pending_balance)
     
-    logger.info(f"ادمین لیست سفارشات را مشاهده می‌کند - خرید: {len(pending_purchase)}, بسته آماده: {len(pending_ready_package)}, شارژ: {len(pending_balance)}")
+    logger.info(f"admin views order list - purchases: {len(pending_purchase)}, ready packages: {len(pending_ready_package)}, recharge: {len(pending_balance)}")
     
     if total_pending == 0:
         text = "✅ هیچ سفارش در انتظاری وجود ندارد" if lang=="fa" else "✅ No pending orders"
@@ -39880,10 +39883,10 @@ def get_backup_list() -> list:
     """دریافت لیست تمام فایل‌های بکاپ موجود"""
     backup_dir = os.path.join(DATA_DIR, 'backups')
     
-    logger.info(f"🔍 جستجوی بکاپ در: {os.path.abspath(backup_dir)}")
+    logger.info(f"🔍 backup search in: {os.path.abspath(backup_dir)}")
     
     if not os.path.exists(backup_dir):
-        logger.warning(f"⚠️ پوشه بکاپ وجود ندارد: {backup_dir}")
+        logger.warning(f"⚠️ Backup folder does not exist: {backup_dir}")
         os.makedirs(backup_dir, exist_ok=True)
         return []
     
@@ -39891,7 +39894,7 @@ def get_backup_list() -> list:
     for f in os.listdir(backup_dir):
         if f.endswith('.json') or f.endswith('.backup'):
             file_path = os.path.join(backup_dir, f)
-            logger.info(f"📁 پیدا شد: {f}")
+            logger.info(f"📁 Found: {f}")
             timestamp_str = ""
             if f.startswith('full_backup_'):
                 timestamp_str = f.replace('full_backup_', '').replace('.json', '')
@@ -39928,7 +39931,7 @@ def get_backup_list() -> list:
             })
     backups.sort(key=lambda x: x['date'], reverse=True)
     
-    logger.info(f"📊 تعداد بکاپ‌های یافت شده: {len(backups)}")
+    logger.info(f"📊 found backup count: {len(backups)}")
     for b in backups[:5]:
         logger.info(f"  - {b['filename']} ({b['type']}) - {b['date'].strftime('%Y-%m-%d %H:%M:%S')}")
     
@@ -39963,7 +39966,7 @@ def get_backup_info(backup_file: str) -> Optional[dict]:
             'version': backup_info.get('version', '1.0')
         }
     except Exception as e:
-        logger.error(f"خطا در خواندن اطلاعات بکاپ {backup_file}: {e}")
+        logger.error(f"Error reading backup information {backup_file}: {e}")
         return None
 
 
@@ -39980,26 +39983,26 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
     }
     
     logger.info("=" * 60)
-    logger.info("🔄 شروع فرآیند ریستور بکاپ")
-    logger.info(f"📁 فایل بکاپ: {backup_file}")
+    logger.info('🔄 starting backup restore process')
+    logger.info(f"📁 backup file: {backup_file}")
     
     try:
-        logger.info("📂 در حال بارگذاری فایل بکاپ...")
+        logger.info('📂 Loading backup file...')
         data = load_json(backup_file, use_cache=False)
         
         if not data:
             result['errors'].append("فایل بکاپ نامعتبر است یا خالی می‌باشد")
-            logger.error("❌ فایل بکاپ نامعتبر است")
+            logger.error('❌ Invalid backup file')
             return result
         
-        logger.info("📊 محتویات فایل بکاپ:")
-        logger.info(f"  - users: {len(data.get('users', {}))} کاربر")
-        logger.info(f"  - orders: {len(data.get('orders', {}))} سفارش")
-        logger.info(f"  - referrals: {len(data.get('referrals', {}))} رفرال")
-        logger.info(f"  - configs: {len(data.get('configs', {}).get('configs', []))} کانفیگ")
-        logger.info(f"  - ready_packages: {len(data.get('ready_packages', {}).get('categories', []))} دسته")
+        logger.info('📊 Backup file contents:')
+        logger.info(f"  - users: {len(data.get('users', {}))} user")
+        logger.info(f"  - orders: {len(data.get('orders', {}))} orders")
+        logger.info(f"  - referrals: {len(data.get('referrals', {}))} referrals")
+        logger.info(f"  - configs: {len(data.get('configs', {}).get('configs', []))} configs")
+        logger.info(f"  - ready_packages: {len(data.get('ready_packages', {}).get('categories', []))} category")
         logger.info(f"  - test_service: {data.get('test_service', {}).get('inbound_ids', [])}")
-        logger.info("💾 گرفتن بکاپ از وضعیت فعلی قبل از ریستور...")
+        logger.info('💾 Backing up the current state before restore...')
         current_backup = os.path.join(DATA_DIR, 'backups', f'before_restore_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
         daily_usage_before = {}
         try:
@@ -40029,127 +40032,127 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         }
         
         if save_json(current_backup, full_backup):
-            logger.info(f"✅ بکاپ از وضعیت فعلی ذخیره شد: {current_backup}")
+            logger.info(f"✅ Backup of current state saved: {current_backup}")
         else:
-            logger.warning(f"⚠️ خطا در ذخیره بکاپ وضعیت فعلی")
-        logger.info("👥 در حال بازگردانی کاربران...")
+            logger.warning(f"⚠️ Error saving backup of current state")
+        logger.info('👥 Restoring users...')
         backup_users = data.get('users', {})
         result['restored_users'] = len(backup_users)
         users.clear()
         users.update(backup_users)
-        logger.info(f"✅ {result['restored_users']} کاربر بازگردانی شد")
-        logger.info("📋 در حال بازگردانی سفارشات...")
+        logger.info(f"✅ {result['restored_users']} user restored")
+        logger.info('📋 Restoring orders...')
         backup_orders = data.get('orders', {})
         for oid, order_data in backup_orders.items():
             if isinstance(order_data, dict):
                 if 'ip_limit' not in order_data:
                     order_data['ip_limit'] = 0
-                    logger.info(f"📝 فیلد ip_limit با مقدار 0 به سفارش {oid} اضافه شد")
+                    logger.info(f"📝 Added ip_limit field with value 0 to order {oid} added")
         
         result['restored_orders'] = len(backup_orders)
         orders.clear()
         orders.update(backup_orders)
-        logger.info(f"✅ {result['restored_orders']} سفارش بازگردانی شد")
-        logger.info("🎁 در حال بازگردانی رفرال‌ها...")
+        logger.info(f"✅ {result['restored_orders']} order restored")
+        logger.info('🎁 Restoring referrals...')
         backup_referrals = data.get('referrals', {})
         referrals.clear()
         referrals.update(backup_referrals)
-        logger.info(f"✅ {len(backup_referrals)} رفرال بازگردانی شد")
-        logger.info("📦 در حال بازگردانی کانفیگ‌ها و تنظیمات...")
+        logger.info(f"✅ {len(backup_referrals)} referral restored")
+        logger.info('📦 Restoring configs and settings...')
         backup_configs = data.get('configs', {})
         result['restored_configs'] = len(backup_configs.get('configs', []))
         
         configs_pool.clear()
         configs_pool.update(backup_configs)
-        logger.info(f"✅ {result['restored_configs']} کانفیگ بازگردانی شد")
-        logger.info("📦 در حال بازگردانی بسته‌های آماده...")
+        logger.info(f"✅ {result['restored_configs']} config restored")
+        logger.info('📦 Restoring ready-made packages...')
         backup_ready = data.get('ready_packages', {})
         if backup_ready and backup_ready.get('categories'):
             READY_PACKAGES.clear()
             READY_PACKAGES.update(backup_ready)
             result['restored_packages'] = len(READY_PACKAGES.get('categories', []))
-            logger.info(f"✅ {result['restored_packages']} دسته بسته آماده بازگردانی شد")
+            logger.info(f"✅ {result['restored_packages']} ready-package category restored")
             
             for cat in READY_PACKAGES.get('categories', []):
                 inbound_ids = cat.get('inbound_ids', [])
-                logger.info(f"  📡 {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
+                logger.info(f"  📡 {cat.get('name')}: inbounds = {inbound_ids if inbound_ids else 'default'}")
         else:
-            logger.warning("⚠️ هیچ بسته آماده‌ای در بکاپ یافت نشد")
-        logger.info("🧪 در حال بازگردانی تنظیمات تست...")
+            logger.warning('⚠️ No ready packages found in the backup')
+        logger.info('🧪 Restoring test settings...')
         backup_test = data.get('test_service', {})
         if backup_test:
             TEST_SERVICE_STATUS.clear()
             TEST_SERVICE_STATUS.update(backup_test)
             result['restored_test_settings'] = True
-            logger.info(f"✅ تنظیمات تست بازگردانی شد: اینباندها = {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
+            logger.info(f"✅ Test settings restored: inbounds = {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
         else:
-            logger.warning("⚠️ تنظیمات تست در بکاپ یافت نشد")
-        logger.info("📡 در حال بازگردانی انتخاب‌های اینباند کاربران...")
+            logger.warning('⚠️ Test settings not found in the backup')
+        logger.info("📡 Restoring users' inbound selections...")
         backup_inbound_selection = data.get('user_inbound_selection', {})
         if backup_inbound_selection:
             USER_INBOUND_SELECTION.clear()
             USER_INBOUND_SELECTION.update(backup_inbound_selection)
-            logger.info(f"✅ انتخاب‌های اینباند {len(USER_INBOUND_SELECTION)} کاربر بازگردانی شد")
-        logger.info("🧪 در حال بازگردانی تست کاربران...")
+            logger.info(f"✅ Inbound selections {len(USER_INBOUND_SELECTION)} user restored")
+        logger.info('🧪 Restoring user tests...')
         backup_test_usage = data.get('user_test_usage', {})
         if backup_test_usage:
             USER_TEST_USAGE.clear()
             USER_TEST_USAGE.update(backup_test_usage)
-            logger.info(f"✅ تست {len(USER_TEST_USAGE)} کاربر بازگردانی شد")
-        logger.info("🛒 در حال بازگردانی وضعیت فروش...")
+            logger.info(f"✅ Test {len(USER_TEST_USAGE)} user restored")
+        logger.info('🛒 Restoring sales status...')
         backup_shop = data.get('shop_status', {})
         if backup_shop:
             SHOP_STATUS.clear()
             SHOP_STATUS.update(backup_shop)
-            logger.info(f"✅ وضعیت فروش بازگردانی شد: {'باز' if SHOP_STATUS.get('open') else 'بسته'}")
-        logger.info("📝 در حال بازگردانی بازخوردها...")
+            logger.info(f"✅ Sales status restored: {'open' if SHOP_STATUS.get('open') else 'closed'}")
+        logger.info('📝 Restoring feedback...')
         backup_feedbacks = data.get('feedback', {})
         feedbacks.clear()
         feedbacks.update(backup_feedbacks)
-        logger.info(f"✅ {len(backup_feedbacks)} بازخورد بازگردانی شد")
-        logger.info("💬 در حال بازگردانی چت‌ها...")
+        logger.info(f"✅ {len(backup_feedbacks)} feedback restored")
+        logger.info('💬 Restoring chats...')
         backup_chats = data.get('chats', {})
         chats.clear()
         chats.update(backup_chats)
-        logger.info(f"✅ {len(backup_chats)} چت بازگردانی شد")
-        logger.info("🚫 در حال بازگردانی لیست سیاه...")
+        logger.info(f"✅ {len(backup_chats)} chat restored")
+        logger.info('🚫 Restoring blacklist...')
         backup_blacklist = data.get('blacklist', {})
         BLACKLIST.clear()
         BLACKLIST.update(set(backup_blacklist.get('users', [])))
-        logger.info(f"✅ {len(BLACKLIST)} کاربر در لیست سیاه بازگردانی شد")
+        logger.info(f"✅ {len(BLACKLIST)} user restored to the blacklist")
         
-        logger.info("📊 در حال بازگردانی آمار مصرف روزانه...")
+        logger.info('📊 Restoring daily usage statistics...')
         backup_daily_usage = data.get('daily_usage', {})
         if backup_daily_usage:
             try:
                 usage_store.import_backup_data(backup_daily_usage)
-                logger.info("✅ آمار مصرف روزانه با موفقیت از فایل بکاپ بازگردانی شد")
+                logger.info('✅ Daily usage statistics successfully restored from backup file')
             except Exception as ex_du:
-                logger.error(f"❌ خطا در بازگردانی آمار مصرف روزانه: {ex_du}")
+                logger.error(f"❌ Error restoring daily usage statistics: {ex_du}")
         
-        logger.info("💾 ذخیره نهایی دیتابیس...")
+        logger.info('💾 Final database save...')
         
         configs_pool['ready_packages'] = READY_PACKAGES
         configs_pool['test_service'] = TEST_SERVICE_STATUS
         configs_pool['shop_status'] = SHOP_STATUS
         
         save_all()
-        logger.info("✅ دیتابیس ذخیره شد")
-        logger.info("🔍 تأیید نهایی:")
-        logger.info(f"  - بسته‌های آماده: {len(READY_PACKAGES.get('categories', []))} دسته")
+        logger.info('✅ Database saved')
+        logger.info('🔍 Final verification:')
+        logger.info(f"  - Ready-made packages: {len(READY_PACKAGES.get('categories', []))} category")
         for cat in READY_PACKAGES.get('categories', []):
             inbound_ids = cat.get('inbound_ids', [])
-            logger.info(f"    📡 {cat.get('name')}: اینباندها = {inbound_ids if inbound_ids else 'پیش‌فرض'}")
-        logger.info(f"  - تنظیمات تست: اینباندها = {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
+            logger.info(f"    📡 {cat.get('name')}: inbounds = {inbound_ids if inbound_ids else 'default'}")
+        logger.info(f"  - Test settings: inbounds = {TEST_SERVICE_STATUS.get('inbound_ids', [])}")
         
         result['success'] = True
         logger.info("=" * 60)
-        logger.info(f"✅ ریستور بکاپ با موفقیت انجام شد!")
-        logger.info(f"  📊 کاربران: {result['restored_users']}")
-        logger.info(f"  📋 سفارشات: {result['restored_orders']}")
-        logger.info(f"  📦 کانفیگ‌ها: {result['restored_configs']}")
-        logger.info(f"  📦 بسته‌های آماده: {result['restored_packages']}")
-        logger.info(f"  🧪 تنظیمات تست: {'بازگردانی شد' if result['restored_test_settings'] else 'یافت نشد'}")
+        logger.info(f"✅ Backup restored successfully!")
+        logger.info(f"  📊 Users: {result['restored_users']}")
+        logger.info(f"  📋 Orders: {result['restored_orders']}")
+        logger.info(f"  📦 Configs: {result['restored_configs']}")
+        logger.info(f"  📦 Ready-made packages: {result['restored_packages']}")
+        logger.info(f"  🧪 Test settings: {'restored' if result['restored_test_settings'] else 'not found'}")
         logger.info("=" * 60)
         
         result['warning'] = "⚠️ فقط دیتابیس ربات بازگردانی شد. کانفیگ‌های پنل به قوت خود باقی هستند."
@@ -40157,17 +40160,17 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
         return result
         
     except FileNotFoundError as e:
-        logger.error(f"❌ فایل بکاپ یافت نشد: {e}")
+        logger.error(f"❌ Backup file not found: {e}")
         result['errors'].append(f"فایل بکاپ یافت نشد: {str(e)}")
         return result
         
     except json.JSONDecodeError as e:
-        logger.error(f"❌ خطا در دیکد JSON: {e}")
+        logger.error(f"❌ Error decoding JSON: {e}")
         result['errors'].append(f"فایل بکاپ خراب است: {str(e)}")
         return result
         
     except Exception as e:
-        logger.error(f"❌ خطا در ریستور بکاپ: {e}", exc_info=True)
+        logger.error(f"❌ Error restoring backup: {e}", exc_info=True)
         result['errors'].append(str(e))
         return result
     
@@ -40551,7 +40554,7 @@ async def restore_details(callback: CallbackQuery):
         )
         
     except Exception as e:
-        logger.error(f"خطا در نمایش جزئیات بکاپ: {e}")
+        logger.error(f"Error displaying backup details: {e}")
         await callback.answer("❌ خطا در نمایش جزئیات" if lang == "fa" else "❌ Error showing details", show_alert=True)
     
     try:
@@ -40901,17 +40904,17 @@ async def admin_delete_all_backups_execute(callback: CallbackQuery):
             os.remove(backup['path'])
             deleted_count += 1
             total_freed_size += size
-            logger.info(f"🗑 بکاپ حذف شد: {backup['filename']}")
+            logger.info(f"🗑 Backup deleted: {backup['filename']}")
         except Exception as e:
             failed_count += 1
-            logger.error(f"❌ خطا در حذف بکاپ {backup['filename']}: {e}")
+            logger.error(f"❌ Error deleting backup {backup['filename']}: {e}")
     
     total_freed_str = format_size(total_freed_size)
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            "حذف همه بکاپ‌ها" if lang=="fa" else "Delete all backups",
-            details=f"تعداد حذف شده: {deleted_count} | حجم آزاد شده: {total_freed_str}" if lang=="fa" else f"Deleted: {deleted_count} | Freed space: {total_freed_str}"
+            "Deleted all backups",
+            details=f"Deleted: {deleted_count} | Freed space: {total_freed_str}"
         )
     
     if lang == "fa":
@@ -40976,8 +40979,8 @@ async def admin_delete_single_backup(callback: CallbackQuery):
         if log_system:
             await log_system.log_admin_action(
                 callback.from_user.id,
-                "حذف بکاپ تکی" if lang=="fa" else "Delete single backup",
-                details=f"فایل: {backup['filename']} | حجم: {size_str}" if lang=="fa" else f"File: {backup['filename']} | Size: {size_str}"
+                "Deleted single backup",
+                details=f"File: {backup['filename']} | Size: {size_str}"
             )
         
         await callback.answer(
@@ -41016,15 +41019,15 @@ async def admin_delete_old_backups(callback: CallbackQuery):
                 deleted_count += 1
                 total_freed_mb += size_mb
                 deleted_files.append(backup['filename'])
-                logger.info(f"🗑 بکاپ قدیمی حذف شد: {backup['filename']}")
+                logger.info(f"🗑 Old backup deleted: {backup['filename']}")
             except Exception as e:
                 failed_count += 1
-                logger.error(f"❌ خطا در حذف بکاپ {backup['filename']}: {e}")
+                logger.error(f"❌ Error deleting backup {backup['filename']}: {e}")
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            "حذف بکاپ‌های قدیمی",
-            details=f"تعداد: {deleted_count} | حجم آزاد شده: {total_freed_mb:.1f} MB"
+            "Deleted old backups",
+            details=f"Deleted: {deleted_count} | Space freed: {total_freed_mb:.1f} MB"
         )
     
     if lang == "fa":
@@ -41081,7 +41084,7 @@ async def view_order(callback: CallbackQuery):
     order = orders.get(str(order_id))
     
     if not order:
-        logger.warning(f"سفارش #{order_id} یافت نشد")
+        logger.warning(f"Order #{order_id} not found")
         await callback.answer("❌ سفارش یافت نشد" if lang == 'fa' else "❌ Order not found", show_alert=True)
         return
     
@@ -41093,7 +41096,7 @@ async def view_order(callback: CallbackQuery):
         uname = "کاربر" if lang == 'fa' else "User"
         username = ""
     
-    logger.info(f"ادمین در حال مشاهده سفارش #{order_id}")
+    logger.info(f"admin viewing order #{order_id}")
     
     # ✅ اطلاعات پایه
     ip_limit = order.get('ip_limit', 0)
@@ -41107,7 +41110,7 @@ async def view_order(callback: CallbackQuery):
             try:
                 backfill_order_category(order_id)
             except Exception as e:
-                logger.warning(f"خطا در backfill category: {e}")
+                logger.warning(f"Error backfilling category: {e}")
     category_id = order.get('category_id')
     package_id = order.get('package_id')
     payment_method = order.get('payment_method', '')
@@ -41531,7 +41534,7 @@ async def view_order(callback: CallbackQuery):
                 parse_mode=ParseMode.HTML
             )
         else:
-            logger.error(f"خطا در نمایش سفارش: {e}")
+            logger.error(f"Error displaying order: {e}")
             await callback.answer("❌ خطا در نمایش سفارش" if lang == 'fa' else "❌ Error viewing order", show_alert=True)
     
     try:
@@ -41581,7 +41584,7 @@ async def request_receipt(callback: CallbackQuery):
         await callback.answer("✅ پیام درخواست فیش ارسال شد" if lang == "fa" else "✅ Receipt request sent")
         
     except Exception as e:
-        logger.error(f"خطا در ارسال درخواست فیش به کاربر {user_id}: {e}")
+        logger.error(f"Error sending receipt request to user {user_id}: {e}")
         await callback.answer("❌ خطا در ارسال پیام", show_alert=True)
     
     await view_order(callback)
@@ -41619,7 +41622,7 @@ async def view_receipt(callback: CallbackQuery):
         )
         await callback.answer()
     except Exception as e:
-        logger.error(f"خطا در ارسال فیش: {e}")
+        logger.error(f"Error sending receipt: {e}")
         await callback.answer("❌ خطا در نمایش فیش", show_alert=True)
         
 @dp.callback_query(F.data.startswith("cancel_order_admin_"))
@@ -41745,28 +41748,28 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
     if old_status == 'approved':
         should_refund = True
         refund_amount = price
-        logger.info(f"💰 سفارش #{order_id} تایید شده بود - برگشت {price:,} تومان")
+        logger.info(f"💰 Order #{order_id} had been approved - returned {price:,}tomans")
     
     elif old_status == 'pending':
         should_refund = True
         refund_amount = price
-        logger.info(f"💰 سفارش #{order_id} در انتظار تایید (فیش ارسال شده) - برگشت {price:,} تومان")
+        logger.info(f"💰 Order #{order_id} awaiting approval (receipt sent) - refunded {price:,}tomans")
     
     elif old_status == 'pending_balance_charge':
         should_refund = True
         refund_amount = price
-        logger.info(f"💰 سفارش #{order_id} درخواست شارژ - برگشت {price:,} تومان")
+        logger.info(f"💰 Order #{order_id} top-up request - refund {price:,}tomans")
     elif old_status == 'awaiting_payment':
         should_refund = False
         refund_amount = 0
-        logger.info(f"ℹ️ سفارش #{order_id} در انتظار پرداخت است - هیچ موجودی برگشت داده نمی‌شود")
+        logger.info(f"ℹ️ Order #{order_id} is awaiting payment - no balance will be refunded")
     update_order(order_id, status='cancelled')
     
-    logger.info(f"🗑 سفارش #{order_id} توسط ادمین {callback.from_user.id} لغو شد (وضعیت قبلی: {old_status})")
+    logger.info(f"🗑 order #{order_id} cleared by admin {callback.from_user.id} cancelled (previous status: {old_status})")
     if should_refund and refund_amount > 0:
         old_balance = get_user(user_id).get('balance', 0)
         new_balance = add_balance(user_id, refund_amount)
-        logger.info(f"💰 موجودی کاربر {user_id} برگشت داده شد: {old_balance} -> {new_balance} ({refund_amount:,} تومان)")
+        logger.info(f"💰 User {user_id} balance refunded: {old_balance} -> {new_balance} ({refund_amount:,} toman)")
         if log_system:
             await log_system.log_balance_change(
                 user_id=user_id,
@@ -41774,11 +41777,11 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
                 new_balance=new_balance,
                 action="add",
                 admin_id=callback.from_user.id,
-                details=f"برگشت موجودی به دلیل لغو سفارش #{order_id} توسط ادمین (وضعیت قبلی: {old_status})"
+                details=f"Balance refunded because admin cancelled order #{order_id} (previous status: {old_status})"
             )
     else:
         if old_status == 'awaiting_payment':
-            logger.info(f"ℹ️ سفارش #{order_id} در انتظار پرداخت بود - موجودی برگشت داده نشد")
+            logger.info(f"ℹ️ Order #{order_id} was awaiting payment - balance was not refunded")
     if coupon_applied and coupon_code:
         coupon = COUPONS.get(coupon_code)
         coupon_consumed = False
@@ -41788,11 +41791,11 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
         if not coupon_consumed:
             coupon_released = release_coupon_on_cancel(user_id)
             if coupon_released:
-                logger.info(f"🏷️ کوپن {coupon_code} برای کاربر {user_id} آزاد شد (لغو سفارش توسط ادمین)")
+                logger.info(f"🏷️ coupon {coupon_code} for user {user_id} released (order canceled by admin)")
             else:
-                logger.warning(f"⚠️ کوپن {coupon_code} برای کاربر {user_id} آزاد نشد")
+                logger.warning(f"⚠️ Coupon {coupon_code} for user {user_id} was not released")
         else:
-            logger.info(f"ℹ️ کوپن {coupon_code} قبلاً توسط کاربر {user_id} مصرف شده بود")
+            logger.info(f"ℹ️ Coupon {coupon_code} already used by user {user_id} had been used")
     try:
         user_lang = get_user(user_id).get('lang', 'fa')
         if old_status == 'awaiting_payment':
@@ -41835,19 +41838,19 @@ async def confirm_cancel_order_admin(callback: CallbackQuery):
                     f"{coupon_text}"
                 )
         
-        logger.info(f"📨 پیام لغو سفارش به کاربر {user_id} ارسال شد")
+        logger.info(f"📨 Order cancellation message sent to user {user_id} sent")
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام لغو سفارش به کاربر {user_id}: {e}")
+        logger.error(f"Error sending order-cancellation message to user {user_id}: {e}")
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            f"لغو سفارش #{order_id}",
+            f"Cancelled order #{order_id}",
             target_user=user_id,
-            details=f"حجم: {volume}GB | مدت: {days} روز | قیمت: {price:,} تومان | وضعیت قبلی: {old_status} | برگشت موجودی: {'بله' if should_refund else 'خیر'}"
+            details=f"Volume: {volume}GB | Duration: {days} days | Price: {price:,} Toman | Previous status: {old_status} | Balance refunded: {'yes' if should_refund else 'no'}"
         )
     
     CustomLogger.log_event('ORDER_CANCELLED_BY_ADMIN', 
-        f'سفارش #{order_id} توسط ادمین لغو شد - کاربر: {user_name_escaped} ({user_id}) - وضعیت قبلی: {old_status} - برگشت موجودی: {should_refund}', 
+        f'Order #{order_id} cancelled by admin - user: {user_name_escaped} ({user_id}) - previous status: {old_status} - balance refunded: {should_refund}', 
         user_id)
     if old_status == 'awaiting_payment':
         refund_status = "❌ کاربر هنوز پرداختی انجام نداده بود - موجودی برگشت داده نشد"
@@ -41918,7 +41921,7 @@ async def fulfill_vpn_order(
 
     # جلوگیری قطعی از تایید مجدد
     if order.get("status") == "approved":
-        logger.warning(f"⚠️ سفارش #{order_id} قبلاً تایید شده است؛ عملیات تکراری نادیده گرفته شد.")
+        logger.warning(f"⚠️ Order #{order_id} was already approved; duplicate operation ignored.")
         return "fulfilled", "Already approved"
 
     user_id = order.get("user_id")
@@ -41941,7 +41944,7 @@ async def fulfill_vpn_order(
 
     # ۲. بررسی وضعیت پنل سنایی
     if not SENAI_PANEL_ENABLED:
-        logger.info(f"ℹ️ پنل سنایی غیرفعال است؛ سفارش #{order_id} نیازمند تحویل دستی است.")
+        logger.info(f"ℹ️ Sanaei panel is disabled; order #{order_id} requires manual fulfillment.")
         return "manual_fulfillment_required", "Sanaei panel is disabled; manual fulfillment required"
 
     # ۳. ساخت کلاینت در پنل سنایی به صورت ایدم‌پوتنت
@@ -41967,7 +41970,7 @@ async def fulfill_vpn_order(
             pass
         return "fulfilled", ""
     else:
-        logger.error(f"❌ خطا در ساخت کلاینت در پنل برای سفارش #{order_id}؛ پرداخت تایید شده و آماده retry است.")
+        logger.error(f"❌ Error creating client in the panel for order #{order_id}; payment is approved and ready to retry.")
         return "failed_pending_retry", "Failed to create client in Sanaei panel"
 
 
@@ -41980,7 +41983,7 @@ async def approve_order(callback: CallbackQuery):
     order = orders.get(str(order_id))
 
     if not order:
-        logger.error(f"سفارش #{order_id} برای تایید یافت نشد")
+        logger.error(f"Order #{order_id} not found for approval")
         await callback.answer("سفارش یافت نشد", show_alert=True)
         return
 
@@ -41996,7 +41999,7 @@ async def approve_order(callback: CallbackQuery):
     user_name = user_info.get('name', f'کاربر_{user_id}')
     lang = user_info.get('lang', 'fa')
 
-    logger.info(f"ادمین تایید سفارش #{order_id} را شروع کرد")
+    logger.info(f"admin approved order #{order_id} started")
     await callback.message.edit_text(f"⏳ در حال پردازش سفارش #{order_id}...")
 
     status_result, err_msg = await fulfill_vpn_order(order_id, approved_by="admin", payment_method="card")
@@ -42051,9 +42054,9 @@ async def reject_order(callback: CallbackQuery):
         try:
             await bot.send_message(order['user_id'], 
                 f"{premium_emoji('fail', '❌')} {'سفارش #{order_id} شما رد شد' if user_lang == 'fa' else f'Order #{order_id} has been rejected'}")
-            logger.info(f"سفارش #{order_id} رد شد - پیام به کاربر ارسال شد")
+            logger.info(f"Order #{order_id} rejected - message sent to user")
         except Exception as e:
-            logger.error(f"خطا در ارسال پیام رد سفارش: {e}")
+            logger.error(f"Error sending order rejection message: {e}")
         await callback.answer("✅ سفارش رد شد" if lang == 'fa' else "✅ Order rejected", show_alert=True)
     await admin_orders(callback)
 
@@ -42201,7 +42204,7 @@ async def delete_config_handler(callback: CallbackQuery):
     config_id = int(callback.data.split("_")[2])
     if delete_config(config_id):
         await callback.answer("✅ کانفیگ حذف شد" if lang == 'fa' else "✅ Config deleted", show_alert=True)
-        logger.info(f"کانفیگ #{config_id} توسط ادمین حذف شد")
+        logger.info(f"Config #{config_id} deleted by admin")
     else:
         await callback.answer("❌ خطا در حذف" if lang == 'fa' else "❌ Error deleting", show_alert=True)
     await admin_list_configs(callback)
@@ -42426,7 +42429,7 @@ async def admin_apply_order_category(callback: CallbackQuery):
         updated_callback = callback.model_copy(update={"data": f"view_order_{order_id}"})
         await view_order(updated_callback)
     except Exception as e:
-        logger.error(f"خطا در رندر مجدد سفارش #{order_id}: {e}")
+        logger.error(f"Error re-rendering order #{order_id}: {e}")
     
 @dp.callback_query(F.data.startswith("admin_add_blacklist_"))
 async def admin_add_user_to_blacklist(callback: CallbackQuery):
@@ -42466,13 +42469,13 @@ async def admin_add_user_to_blacklist(callback: CallbackQuery):
         )
 
     target_name = html.escape(get_user(target_id).get('name', f'کاربر_{target_id}'))
-    CustomLogger.log_event('BLACKLIST_ADD', f'کاربر {target_id} از صفحه جزئیات به بلک‌لیست اضافه شد', target_id)
+    CustomLogger.log_event('BLACKLIST_ADD', f'User {target_id} was added to the blacklist from the detail page', target_id)
     if log_system:
         await log_system.log_admin_action(
             callback.from_user.id,
-            "افزودن کاربر به لیست سیاه",
+            "Added user to blacklist",
             target_user=target_id,
-            details=f"نام: {target_name}",
+            details=f"Name: {target_name}",
         )
 
     await callback.message.edit_text(
@@ -42521,7 +42524,7 @@ async def admin_user_refresh_sync(callback: CallbackQuery):
     try:
         stats = await sync_user_configs(target_id)
     except Exception as e:
-        logger.error("همگام‌سازی کاربر %s ناموفق بود: %s", target_id, e, exc_info=True)
+        logger.error('Failed to synchronize user %s: %s', target_id, e, exc_info=True)
         error_text = "❌ همگام‌سازی ناموفق بود." if lang == "fa" else "❌ Config sync failed."
         await callback.message.edit_text(
             error_text,
@@ -42781,7 +42784,7 @@ async def admin_user_detail(callback: CallbackQuery):
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
     except Exception as e:
         if "message is not modified" not in str(e):
-            logger.error(f"خطا در ویرایش پیام: {e}")
+            logger.error(f"Error editing message: {e}")
             try:
                 await callback.message.delete()
             except:
@@ -42895,7 +42898,7 @@ async def confirm_delete_cancelled_orders(callback: CallbackQuery):
             deleted_ids.append(o.get('order_id'))
             del orders[oid]
             deleted_count += 1
-            logger.info(f"🗑 سفارش #{o.get('order_id')} (لغو/رد شده) حذف شد")
+            logger.info(f"🗑 order #{o.get('order_id')} (canceled/rejected) deleted")
     save_json(DB_FILES['orders'], orders)
     if lang == "fa":
         text = f"""
@@ -42954,7 +42957,7 @@ async def admin_add_balance_cmd(callback: CallbackQuery):
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
     
-    logger.info(f"🔍 [admin_add_balance_cmd] کوپن کاربر {target_id}: code={coupon_code}, applied={coupon_applied}")
+    logger.info(f"🔍 [admin_add_balance_cmd] user coupon {target_id}: code={coupon_code}, applied={coupon_applied}")
     user_states[callback.from_user.id] = {
         'awaiting_manual_balance': True, 
         'manual_balance_target': target_id,
@@ -42964,7 +42967,7 @@ async def admin_add_balance_cmd(callback: CallbackQuery):
         'target_coupon_applied': coupon_applied
     }
     
-    logger.info(f"🔍 [admin_add_balance_cmd] state ادمین ذخیره شد: {user_states[callback.from_user.id]}")
+    logger.info(f"🔍 [admin_add_balance_cmd] admin state saved: {user_states[callback.from_user.id]}")
     
     if lang == "fa":
         await callback.message.answer(f"💰 لطفا مبلغ مورد نظر برای کاربر {target_name_escaped} را وارد کنید:")
@@ -43080,7 +43083,7 @@ async def admin_stats(callback: CallbackQuery):
                                 up = int(client_stat.get('up', 0) or 0)
                                 down = int(client_stat.get('down', 0) or 0)
                             except (TypeError, ValueError):
-                                logger.warning("آمار ترافیک نامعتبر کلاینت در پنل نادیده گرفته شد")
+                                logger.warning('Invalid client traffic statistics in the panel were ignored')
                                 continue
                             traffic_by_email[str(email)] = (
                                 traffic_by_email.get(str(email), 0) + up + down
@@ -43094,12 +43097,12 @@ async def admin_stats(callback: CallbackQuery):
             active_configs_count = len(actual_clients)
             for client in actual_clients.values():
                 if client.get('totalGB') is None:
-                    logger.warning("محدودیت حجم کلاینت در پنل موجود نیست")
+                    logger.warning('Client volume limit is not available in the panel')
                     continue
                 try:
                     total_bytes = int(client.get('totalGB') or 0)
                 except (TypeError, ValueError):
-                    logger.warning("حجم نامعتبر کلاینت در آمار پنل نادیده گرفته شد")
+                    logger.warning('Invalid client volume ignored in panel statistics')
                     continue
                 if total_bytes == 0:
                     unlimited_configs_count += 1
@@ -43112,7 +43115,7 @@ async def admin_stats(callback: CallbackQuery):
                 if client.get('totalGB')
             ) / (1024 ** 3)
         except Exception as e:
-            logger.error(f"خطا در دریافت آمار پنل: {e}", exc_info=True)
+            logger.error(f"Error retrieving panel statistics: {e}", exc_info=True)
             panel_stats_available = False
 
     category_lines_fa = [
@@ -43342,7 +43345,7 @@ async def confirm_reset_db_only(callback: CallbackQuery):
     )
     
     try:
-        logger.info("💾 گرفتن بکاپ قبل از ریست دیتابیس...")
+        logger.info('💾 Backing up before database reset...')
         await callback.message.edit_text("💾 گرفتن بکاپ...")
         backup_database()
         active_configs_before = []
@@ -43358,7 +43361,7 @@ async def confirm_reset_db_only(callback: CallbackQuery):
                         'user_id': o.get('user_id'),
                         'order_id': o.get('order_id')
                     })
-            logger.info(f"📊 تعداد کانفیگ‌های فعال قبل از ریست: {len(active_configs_before)}")
+            logger.info(f"📊 Number of active configurations before reset: {len(active_configs_before)}")
         saved_price_settings = configs_pool.get('price_settings', {})
         saved_force_join_settings = configs_pool.get('force_join_settings', {})
         saved_ai_settings = configs_pool.get('ai_settings', {})
@@ -43394,8 +43397,8 @@ async def confirm_reset_db_only(callback: CallbackQuery):
         await callback.message.edit_text("💾 ذخیره دیتابیس...")
         save_all()
         
-        logger.info(f"✅ دیتابیس ریست شد - کانفیگ‌های پنل دست نخورده باقی ماندند")
-        logger.info(f"📊 کانفیگ‌های فعال در پنل: {len(active_configs_before)} عدد")
+        logger.info(f"✅ Database reset - panel configs were left untouched")
+        logger.info(f"📊 Active configs in the panel: {len(active_configs_before)} number")
         if lang == "fa":
             text = f"""
 ✅ <b>دیتابیس با موفقیت ریست شد!</b>
@@ -43483,10 +43486,10 @@ Active panel configs count: {len(active_configs_before)}
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
         )
         
-        logger.info(f"✅ دیتابیس توسط ادمین {callback.from_user.id} ریست شد")
+        logger.info(f"✅ Database by admin {callback.from_user.id} reset")
         
     except Exception as e:
-        logger.error(f"❌ خطا در ریست دیتابیس: {e}", exc_info=True)
+        logger.error(f"❌ Error resetting database: {e}", exc_info=True)
         
         if lang == "fa":
             text = f"❌ خطا در ریست دیتابیس:\n{str(e)}"
@@ -43629,7 +43632,7 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                         'inbound_remark': client['inbound_remark']
                     })
                 
-                logger.info(f"📊 تعداد کل کلاینت‌های یکتا: {len(clients_by_email)}")
+                logger.info(f"📊 Total number of unique clients: {len(clients_by_email)}")
                 for email, data in clients_by_email.items():
                     is_bot_client = False
                     if email.startswith('test_'):
@@ -43644,11 +43647,11 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                         total_bot_clients += 1
                         client_list.append(email)
                         unique_emails.add(email)
-                        logger.info(f"🤖 کلاینت ربات: {email} - {len(data['inbounds'])} اینباند")
+                        logger.info(f"🤖 Bot client: {email} - {len(data['inbounds'])} inbound")
                     else:
                         total_personal_clients += 1
                         skipped_personal += 1
-                        logger.info(f"⏭️ کلاینت شخصی حفظ شد: {email} - {len(data['inbounds'])} اینباند")
+                        logger.info(f"⏭️ Personal client preserved: {email} - {len(data['inbounds'])} inbound")
                 
                 await callback.message.edit_text(
                     f"🗑 در حال حذف {total_bot_clients} کلاینت ربات از پنل...\n"
@@ -43660,13 +43663,13 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                         success = await xui_delete_client(email)
                         if success:
                             deleted_clients += 1
-                            logger.info(f"🗑 کلاینت ربات حذف شد: {email}")
+                            logger.info(f"🗑 Bot client deleted: {email}")
                         else:
                             failed_clients += 1
-                            logger.error(f"❌ خطا در حذف کلاینت: {email}")
+                            logger.error(f"❌ Error deleting client: {email}")
                     except Exception as e:
                         failed_clients += 1
-                        logger.error(f"❌ خطا در حذف کلاینت {email}: {e}")
+                        logger.error(f"❌ Error deleting client {email}: {e}")
                     
                     if (i + 1) % 5 == 0:
                         await callback.message.edit_text(
@@ -43675,14 +43678,14 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                     
                     await asyncio.sleep(0.3)
                 
-                logger.info(f"✅ {deleted_clients} کلاینت ربات از پنل حذف شد")
-                logger.info(f"⏭️ {skipped_personal} کلاینت شخصی حفظ شد")
-                logger.info(f"❌ {failed_clients} کلاینت ربات حذف نشد")
-                logger.info(f"📊 مجموع کلاینت‌های یکتا: {len(clients_by_email)}")
+                logger.info(f"✅ {deleted_clients} bot client deleted from panel")
+                logger.info(f"⏭️ {skipped_personal} personal client preserved")
+                logger.info(f"❌ {failed_clients} bot client was not deleted")
+                logger.info(f"📊 Total unique clients: {len(clients_by_email)}")
             else:
-                logger.info("📭 هیچ اینباندی در پنل یافت نشد")
+                logger.info('📭 No inbounds found in the panel')
         else:
-            logger.info("📴 پنل غیرفعال است - حذف کانفیگ‌ها انجام نشد")
+            logger.info('📴 Panel is inactive - configurations were not deleted')
         saved_price_settings = configs_pool.get('price_settings', {})
         saved_force_join_settings = configs_pool.get('force_join_settings', {})
         saved_ai_settings = configs_pool.get('ai_settings', {})
@@ -43718,10 +43721,10 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
         await callback.message.edit_text("💾 ذخیره دیتابیس...")
         save_all()
         
-        logger.info(f"✅ دیتابیس ریست شد")
-        logger.info(f"   - {deleted_clients} کانفیگ ربات از پنل حذف شد")
-        logger.info(f"   - {skipped_personal} کانفیگ شخصی حفظ شد")
-        logger.info(f"   - {failed_clients} کانفیگ ربات حذف نشد")
+        logger.info(f"✅ Database reset")
+        logger.info(f"   - {deleted_clients} bot config deleted from the panel")
+        logger.info(f"   - {skipped_personal} personal config preserved")
+        logger.info(f"   - {failed_clients} bot config was not deleted")
         if lang == "fa":
             text = f"""
 🔴 <b>ریست کامل انجام شد!</b>
@@ -43803,10 +43806,10 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
         )
         
-        logger.warning(f"🚨 ریست کامل (حفظ کانفیگ‌های شخصی) توسط ادمین {callback.from_user.id} انجام شد")
+        logger.warning(f"🚨 Full reset (personal configs preserved) by admin {callback.from_user.id} completed")
         
     except Exception as e:
-        logger.error(f"❌ خطا در ریست کامل: {e}", exc_info=True)
+        logger.error(f"❌ Error during full reset: {e}", exc_info=True)
         
         if lang == "fa":
             text = f"❌ خطا در ریست کامل:\n{str(e)}"
@@ -43978,7 +43981,7 @@ async def confirm_delete_user(callback: CallbackQuery):
                 success = await xui_delete_client(email)
                 if success:
                     deleted_configs += 1
-                    logger.info(f"🗑 کانفیگ {email} از پنل حذف شد")
+                    logger.info(f"🗑 Config {email} deleted from the panel")
     uid = str(target_id)
     if uid in users:
         del users[uid]
@@ -44087,7 +44090,7 @@ async def get_panel_status() -> Optional[dict]:
                         }
                 return None
     except Exception as e:
-        logger.error(f"❌ خطا در دریافت وضعیت پنل: {e}")
+        logger.error(f"❌ Error retrieving panel status: {e}")
         return None
 
 
@@ -44264,10 +44267,10 @@ async def init_ai():
     gemini_client = None
 
     logger.info("=" * 70)
-    logger.info("🤖 راه‌اندازی هوش مصنوعی...")
+    logger.info('🤖 initializing AI...')
     logger.info("-" * 70)
 
-    logger.info("📡 بررسی سرویس Google Gemini:")
+    logger.info('📡 checking Google Gemini service:')
     logger.info(f"   ├─ GEMINI_ENABLED: {GEMINI_ENABLED}")
     logger.info(f"   ├─ GEMINI_API_KEY: {GEMINI_API_KEY[:15] if GEMINI_API_KEY and len(GEMINI_API_KEY) > 10 else 'NOT SET'}...")
     logger.info(f"   ├─ GEMINI_MODEL: {GEMINI_MODEL}")
@@ -44279,18 +44282,18 @@ async def init_ai():
         if not GEMINI_API_KEY or GEMINI_API_KEY == "AIzaSyDxxxxxxxxxxxxxxxxxx" or len(GEMINI_API_KEY) < 30:
             gemini_error_message = "❌ کلید API در config.py تنظیم نشده یا نامعتبر است"
             logger.error(f"   ❌ {gemini_error_message}")
-            logger.info("   💡 راه‌حل: از https://aistudio.google.com/apikey یک کلید جدید بگیرید")
+            logger.info('   💡 Solution: get a new key from https://aistudio.google.com/apikey')
         else:
-            logger.info("   ✅ کلید API وجود دارد (در حال تست اتصال...)")
+            logger.info('   ✅ API key exists (testing connection...)')
 
             try:
                 test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-                logger.info(f"   🌐 ارسال درخواست تست به: {test_url[:60]}...")
+                logger.info(f"   🌐 Sending test request to: {test_url[:60]}...")
 
                 async with aiohttp.ClientSession() as session:
                     async with session.get(test_url, timeout=aiohttp.ClientTimeout(total=15)) as response:
                         response_text = await response.text()
-                        logger.info(f"   📥 پاسخ دریافت شد - Status: {response.status}")
+                        logger.info(f"   📥 Response received - Status: {response.status}")
 
                         if response.status == 200:
                             try:
@@ -44298,14 +44301,14 @@ async def init_ai():
                                 models = data.get('models', [])
                                 gemini_models = [m['name'].split('/')[-1] for m in models if 'gemini' in m['name']]
 
-                                logger.info(f"   ✅ اتصال به Gemini برقرار است!")
-                                logger.info(f"   📋 مدل‌های موجود: {gemini_models}")
+                                logger.info(f"   ✅ Connected to Gemini!")
+                                logger.info(f"   📋 Available models: {gemini_models}")
 
                                 if GEMINI_MODEL in gemini_models:
-                                    logger.info(f"   ✅ مدل '{GEMINI_MODEL}' در دسترس است")
+                                    logger.info(f"   ✅ Model \'{GEMINI_MODEL}\' is available")
                                     gemini_client = GeminiClient(GEMINI_API_KEY, GEMINI_MODEL)
                                     gemini_error_message = None
-                                    logger.info("   🎉 Gemini با موفقیت راه‌اندازی شد!")
+                                    logger.info('   🎉 Gemini started successfully!')
                                 else:
                                     suggested_models = [m for m in gemini_models if 'flash' in m or 'pro' in m]
                                     if not suggested_models:
@@ -44318,7 +44321,7 @@ async def init_ai():
                             except json.JSONDecodeError as e:
                                 gemini_error_message = f"❌ پاسخ JSON نامعتبر: {str(e)[:50]}"
                                 logger.error(f"   ❌ {gemini_error_message}")
-                                logger.error(f"   📄 پاسخ: {response_text[:200]}")
+                                logger.error(f"   📄 Response: {response_text[:200]}")
                                 gemini_client = None
 
                         elif response.status == 400:
@@ -44336,7 +44339,7 @@ async def init_ai():
                                     gemini_error_message = f"❌ خطای 400: {error_msg[:100]}"
 
                                 logger.error(f"   ❌ {gemini_error_message}")
-                                logger.error(f"   📄 پاسخ کامل: {response_text[:300]}")
+                                logger.error(f"   📄 Full response: {response_text[:300]}")
 
                             except:
                                 gemini_error_message = f"❌ خطای 400: {response_text[:100]}"
@@ -44346,13 +44349,13 @@ async def init_ai():
                         elif response.status == 403:
                             gemini_error_message = "❌ دسترسی ممنوع (403) - کلید API نامعتبر یا پروژه فعال نیست"
                             logger.error(f"   ❌ {gemini_error_message}")
-                            logger.info("   💡 راه‌حل: در Google Cloud Console API را فعال کنید")
+                            logger.info('   💡 Solution: Enable the API in Google Cloud Console')
                             gemini_client = None
 
                         elif response.status == 404:
                             gemini_error_message = f"❌ مدل '{GEMINI_MODEL}' یافت نشد (404)"
                             logger.error(f"   ❌ {gemini_error_message}")
-                            logger.info("   💡 راه‌حل: مدل معتبر مانند gemini-1.5-flash را امتحان کنید")
+                            logger.info('   💡 Solution: Try a valid model such as gemini-1.5-flash')
                             gemini_client = None
 
                         elif response.status == 429:
@@ -44368,13 +44371,13 @@ async def init_ai():
             except asyncio.TimeoutError:
                 gemini_error_message = "⏰ زمان اتصال به Google API به پایان رسید (Timeout)"
                 logger.error(f"   ❌ {gemini_error_message}")
-                logger.info("   💡 راه‌حل: اتصال اینترنت سرور را بررسی کنید")
+                logger.info("   💡 Solution: Check the server's internet connection")
                 gemini_client = None
 
             except aiohttp.ClientConnectorError as e:
                 gemini_error_message = f"🌐 خطای اتصال شبکه: {str(e)[:80]}"
                 logger.error(f"   ❌ {gemini_error_message}")
-                logger.info("   💡 راه‌حل: DNS یا اتصال اینترنت سرور را بررسی کنید")
+                logger.info("   💡 Solution: Check DNS or the server's internet connection")
                 gemini_client = None
 
             except aiohttp.ClientError as e:
@@ -44393,23 +44396,23 @@ async def init_ai():
         logger.info(f"   ℹ️ {gemini_error_message}")
 
     logger.info("-" * 70)
-    logger.info("📊 جمع‌بندی نهایی:")
+    logger.info('📊 final summary:')
 
     if gemini_client:
-        logger.info("   ✅ Google Gemini: فعال")
-        logger.info(f"      └─ مدل: {GEMINI_MODEL}")
-        logger.info("   🎉 سرویس هوش مصنوعی با موفقیت راه‌اندازی شد!")
-        logger.info("   📌 سرویس فعال: Google Gemini")
+        logger.info('   ✅ Google Gemini: Enabled')
+        logger.info(f"      └─ Model: {GEMINI_MODEL}")
+        logger.info('   🎉 AI service started successfully!')
+        logger.info('   📌 Active service: Google Gemini')
     else:
-        logger.info("   ❌ Google Gemini: غیرفعال")
+        logger.info('   ❌ Google Gemini: Disabled')
         if gemini_error_message:
-            logger.info(f"      └─ دلیل: {gemini_error_message}")
-        logger.error("   ❌ هیچ سرویس هوش مصنوعی فعال نشد!")
-        logger.info("   💡 راه‌حل‌های پیشنهادی:")
-        logger.info("      1. کلید API را از https://aistudio.google.com/apikey دریافت کنید")
-        logger.info("      2. در config.py مدل را به gemini-1.5-flash یا gemini-2.5-flash تغییر دهید")
-        logger.info("      3. اتصال اینترنت سرور و DNS را بررسی کنید")
-        logger.info("      4. در صورت خطای Location، VPN روی سرور تنظیم کنید")
+            logger.info(f"      └─ Reason: {gemini_error_message}")
+        logger.error('   ❌ No AI service was activated!')
+        logger.info('   💡 Suggested solutions:')
+        logger.info('      1. Get an API key from https://aistudio.google.com/apikey')
+        logger.info('      2. Change the model in config.py to gemini-1.5-flash or gemini-2.5-flash')
+        logger.info("      3. Check the server's internet connection and DNS")
+        logger.info('      4. If a Location error occurs, configure a VPN on the server')
 
     logger.info("=" * 70)
 
@@ -44446,62 +44449,62 @@ async def main():
     logger.info("✅ SMS Payment handlers registered successfully")
     await init_ai()
     logger.info("=" * 60)
-    logger.info("در حال راه‌اندازی ربات...")
-    logger.info("دیتابیس با موفقیت بارگذاری شد")
+    logger.info('initializing bot...')
+    logger.info('database loaded successfully')
     logger.info("=" * 60)
-    logger.info("🔍 بررسی فایل‌های دیتابیس پس از بارگذاری:")
+    logger.info('🔍 checking database files after loading:')
     for name, path in DB_FILES.items():
         if os.path.exists(path):
             size = os.path.getsize(path)
             logger.info(f"  ✅ {name}: {size:,} bytes - {os.path.abspath(path)}")
         else:
-            logger.info(f"  ❌ {name}: وجود ندارد!")
+            logger.info(f"  ❌ {name}: does not exist!")
         logger.info("=" * 60)
     
     try:
         import sys
         sys.setrecursionlimit(10000)
-        logger.info("Recursion limit به 10000 افزایش یافت")
+        logger.info('Recursion limit increased to 10000')
         
         blacklist_count = load_blacklist()
-        logger.info(f"لیست سیاه بارگذاری شد: {blacklist_count} کاربر")
+        logger.info(f"Blacklist loaded: {blacklist_count} user")
         
-        logger.info("در حال راه‌اندازی سیستم لاگ خارجی...")
+        logger.info('Starting external logging system...')
         try:
             if LOG_BOT_TOKEN and LOG_CHANNEL_ID:
                 from logger_system import init_logger
                 log_system = await init_logger()
                 if log_system:
-                    logger.info("✅ سیستم لاگ خارجی راه‌اندازی شد")
+                    logger.info('✅ External logging system started')
                 else:
-                    logger.warning("⚠️ سیستم لاگ خارجی راه‌اندازی نشد - مقدار بازگشتی None")
+                    logger.warning('⚠️ External logging system did not start - return value was None')
                     log_system = None
             else:
-                logger.warning(f"⚠️ سیستم لاگ خارجی تنظیم نشده است (LOG_BOT_TOKEN: {bool(LOG_BOT_TOKEN)}, LOG_CHANNEL_ID: {bool(LOG_CHANNEL_ID)})")
+                logger.warning(f"⚠️ External logging system is not configured (LOG_BOT_TOKEN: {bool(LOG_BOT_TOKEN)}, LOG_CHANNEL_ID: {bool(LOG_CHANNEL_ID)})")
                 log_system = None
         except ImportError as e:
-            logger.warning(f"⚠️ ماژول logger_system یافت نشد: {e}")
+            logger.warning(f"⚠️ logger_system module not found: {e}")
             log_system = None
         except Exception as e:
-            logger.error(f"❌ خطا در راه‌اندازی سیستم لاگ: {e}", exc_info=True)
+            logger.error(f"❌ Error starting logging system: {e}", exc_info=True)
             log_system = None
         
-        logger.info("دریافت اطلاعات ربات از Telegram API...")
+        logger.info('Fetching bot information from Telegram API...')
         bot_info = await bot.get_me()
-        logger.info(f"اطلاعات ربات دریافت شد: {bot_info.first_name} (@{bot_info.username})")
-        logger.info("🧪 راه‌اندازی سیستم هشدار...")
+        logger.info(f"Bot information received: {bot_info.first_name} (@{bot_info.username})")
+        logger.info('🧪 Starting alert system...')
         await init_alert_system()
         if alert_system and log_system:
             alert_system.log_system = log_system
-            logger.info("✅ سیستم لاگ به سیستم هشدار متصل شد")
+            logger.info('✅ Logging system connected to alert system')
         elif alert_system and not log_system:
-            logger.warning("⚠️ سیستم لاگ در دسترس نیست، هشدارها لاگ نمیشوند")
+            logger.warning('⚠️ Logging system is unavailable; warnings will not be logged')
         if log_system:
             try:
                 await log_system.log_bot_start(bot_info, ADMIN_ID_INT)
-                logger.info("لاگ استارت در سیستم خارجی ثبت شد")
+                logger.info('Startup log recorded in external system')
             except Exception as e:
-                logger.error(f"خطا در ارسال لاگ استارت به سیستم خارجی: {e}", exc_info=True)
+                logger.error(f"Error sending startup log to external system: {e}", exc_info=True)
         
         total_users = len(users)
         active_configs = get_available_configs_count()
@@ -44510,16 +44513,16 @@ async def main():
         db_size = get_database_size()
         db_total_mb = db_size.get('total', 0) / (1024 * 1024)
         
-        logger.info(f"✅ ربات {bot_info.first_name} (@{bot_info.username}) راه‌اندازی شد!")
-        logger.info(f"👑 ادمین: {ADMIN_ID_INT}")
-        logger.info(f"📦 کانفیگ‌های موجود در مخزن: {active_configs}")
-        logger.info(f"👥 تعداد کاربران: {total_users}")
-        logger.info(f"📋 کل سفارشات: {total_orders}")
-        logger.info(f"🧠 وضعیت‌های فعال: {states_count}")
-        logger.info(f"💾 حجم دیتابیس: {db_total_mb:.1f} MB")
-        logger.info(f"🔒 سیستم امنیتی فعال است")
+        logger.info(f"✅ Bot {bot_info.first_name} (@{bot_info.username}) started!")
+        logger.info(f"👑 Admin: {ADMIN_ID_INT}")
+        logger.info(f"📦 Configs available in the repository: {active_configs}")
+        logger.info(f"👥 Number of users: {total_users}")
+        logger.info(f"📋 Total orders: {total_orders}")
+        logger.info(f"🧠 Active states: {states_count}")
+        logger.info(f"💾 Database size: {db_total_mb:.1f} MB")
+        logger.info(f"🔒 Security system is active")
         logger.info("=" * 60)
-        logger.info("🚀 ربات آماده به کار است!")
+        logger.info('🚀 Bot is ready!')
         
         startup_message = f"""
 🚀 <b>ربات راه‌اندازی شد!</b>
@@ -44540,15 +44543,15 @@ async def main():
 """
         try:
             await bot.send_message(ADMIN_ID_INT, startup_message, parse_mode=ParseMode.HTML)
-            logger.info("پیام استارت به ادمین ارسال شد")
+            logger.info('Startup message sent to admin')
         except Exception as e:
-            logger.warning(f"نتوانست پیام استارت به ادمین ارسال کند: {e}")
+            logger.warning(f"Failed to send startup message to admin: {e}")
         
-        logger.info("در حال راه‌اندازی تسک‌های پس‌زمینه...")
+        logger.info('Starting background tasks...')
         
         async def cleanup_expired_states_task():
             """پاکسازی خودکار وضعیت‌های منقضی شده کاربران"""
-            logger.info("تسک پاکسازی وضعیت‌ها راه‌اندازی شد (هر 30 دقیقه)")
+            logger.info('Status cleanup task started (every 30 minutes)')
             await asyncio.sleep(10)  
             
             while True:
@@ -44556,37 +44559,37 @@ async def main():
                     await asyncio.sleep(1800)  # هر 30 دقیقه
                     cleaned = cleanup_expired_states()
                     if cleaned > 0:
-                        logger.info(f"🧹 پاکسازی خودکار: {cleaned} وضعیت منقضی حذف شد")
+                        logger.info(f"🧹 Automatic cleanup: {cleaned} expired status deleted")
                     else:
-                        logger.debug("پاکسازی خودکار: هیچ وضعیت منقضی یافت نشد")
+                        logger.debug('Automatic cleanup: no expired statuses found')
                 except asyncio.CancelledError:
-                    logger.info("تسک پاکسازی وضعیت‌ها لغو شد")
+                    logger.info('Status cleanup task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در تسک پاکسازی وضعیت‌ها: {e}", exc_info=True)
+                    logger.error(f"Error in status cleanup task: {e}", exc_info=True)
                     await asyncio.sleep(60)
         
         async def sync_deleted_configs_task():
             """همگام‌سازی کانفیگ‌های حذف شده از پنل"""
-            logger.info("تسک همگام‌سازی کانفیگ‌ها راه‌اندازی شد (هر 6 ساعت)")
+            logger.info('Configuration synchronization task started (every 6 hours)')
             await asyncio.sleep(60)  # تاخیر اولیه
             
             while True:
                 try:
                     await asyncio.sleep(21600)  # هر 6 ساعت
                     if SENAI_PANEL_ENABLED:
-                        logger.info("شروع همگام‌سازی کانفیگ‌های حذف شده...")
+                        logger.info('Starting synchronization of deleted configs...')
                         sync_result = await sync_deleted_configs(batch_size=20)
                         deleted = sync_result.get('deleted', 0) if isinstance(sync_result, dict) else (sync_result if isinstance(sync_result, int) else 0)
                         if deleted > 0:
-                            logger.info(f"🗑 همگام‌سازی: {deleted} کانفیگ حذف شده همگام‌سازی شد")
+                            logger.info(f"🗑 Synchronization: {deleted} deleted config synchronized")
                         else:
-                            logger.debug("همگام‌سازی: هیچ کانفیگ حذف شده‌ای یافت نشد")
+                            logger.debug('Synchronization: no deleted configs found')
                 except asyncio.CancelledError:
-                    logger.info("تسک همگام‌سازی کانفیگ‌ها لغو شد")
+                    logger.info('Config synchronization task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در تسک همگام‌سازی کانفیگ‌ها: {e}", exc_info=True)
+                    logger.error(f"Error in config synchronization task: {e}", exc_info=True)
                     await asyncio.sleep(3600)
                     
 
@@ -44596,18 +44599,18 @@ async def main():
         async def weekly_cleanup():
             """پاکسازی هفتگی دیتابیس (هر یکشنبه ساعت 00:00)"""
             nonlocal weekly_cleanup_running
-            logger.info("تسک پاکسازی هفتگی راه‌اندازی شد (هر یکشنبه 00:00)")
+            logger.info('Weekly cleanup task started (every Sunday at 00:00)')
             await asyncio.sleep(30)
             
             while True:
                 try:
                     if weekly_cleanup_running:
-                        logger.warning("⚠️ پاکسازی هفتگی در حال اجراست، اجرای مجدد لغو شد")
+                        logger.warning('⚠️ Weekly cleanup is already running; duplicate run canceled')
                         await asyncio.sleep(3600)
                         continue
                     
                     weekly_cleanup_running = True
-                    logger.info("پاکسازی هفتگی: در حال محاسبه زمان تا یکشنبه بعدی...")
+                    logger.info('Weekly cleanup: calculating time until next Sunday...')
                     
                     now = datetime.now()
                     days_until_sunday = (6 - now.weekday()) % 7
@@ -44622,16 +44625,16 @@ async def main():
                     
                     if wait_seconds < 3600:
                         wait_seconds = 3600
-                        logger.info("زمان تا اجرا کمتر از 1 ساعت است، حداقل 1 ساعت صبر می‌کنیم")
+                        logger.info('Time until execution is less than 1 hour; waiting at least 1 hour')
                     
-                    logger.info(f"⏳ زمان تا پاکسازی هفتگی: {wait_seconds / 3600:.1f} ساعت")
+                    logger.info(f"⏳ Time until weekly cleanup: {wait_seconds / 3600:.1f} hours")
                     await asyncio.sleep(wait_seconds)
                     
                     await asyncio.sleep(5)
-                    logger.info("شروع پاکسازی هفتگی دیتابیس...")
+                    logger.info('Starting weekly database cleanup...')
                     
                     cleaned = optimize_storage()
-                    logger.info(f"🧹 پاکسازی هفتگی دیتابیس انجام شد - {cleaned} رکورد حذف شد")
+                    logger.info(f"🧹 Weekly database cleanup completed - {cleaned} records deleted")
                     
                     try:
                         import shutil
@@ -44641,10 +44644,10 @@ async def main():
                         used_gb = used / (1024**3)
                         disk_percent = (used / total) * 100
                         
-                        logger.info(f"💾 فضای دیسک: کل={total_gb:.1f}GB, استفاده={used_gb:.1f}GB, خالی={free_gb:.1f}GB ({disk_percent:.1f}%)")
+                        logger.info(f"💾 Disk space: total={total_gb:.1f}GB, used={used_gb:.1f}GB, free={free_gb:.1f}GB ({disk_percent:.1f}%)")
                         
                         if free_gb < 1.0:
-                            logger.warning(f"⚠️ فضای خالی دیسک کم است: {free_gb:.1f} GB")
+                            logger.warning(f"⚠️ Low disk space: {free_gb:.1f} GB")
                             
                             large_files = []
                             try:
@@ -44675,22 +44678,22 @@ async def main():
                                 warning_msg,
                                 parse_mode=ParseMode.HTML
                             )
-                            logger.info("پیام هشدار فضای دیسک به ادمین ارسال شد")
+                            logger.info('Disk space warning sent to admin')
                             
                     except Exception as e:
-                        logger.error(f"خطا در بررسی فضای دیسک: {e}", exc_info=True)
+                        logger.error(f"Error checking disk space: {e}", exc_info=True)
                     
                     if log_system:
                         try:
                             await asyncio.sleep(2)
                             await log_system.log_admin_action(
                                 ADMIN_ID_INT,
-                                "پاکسازی هفتگی خودکار دیتابیس",
-                                details=f"{cleaned} رکورد حذف شد"
+                                "Automatic weekly database cleanup",
+                                details=f"Deleted {cleaned} records"
                             )
-                            logger.info("لاگ پاکسازی هفتگی در سیستم خارجی ثبت شد")
+                            logger.info('Weekly cleanup log recorded in external system')
                         except Exception as e:
-                            logger.warning(f"خطا در ارسال لاگ پاکسازی به سیستم خارجی: {e}")
+                            logger.warning(f"Error sending cleanup log to external system: {e}")
                     
                     try:
                         backup_dir = os.path.join(DATA_DIR, 'backups')
@@ -44704,59 +44707,59 @@ async def main():
                                         os.remove(file_path)
                                         deleted_count += 1
                             if deleted_count > 0:
-                                logger.info(f"🗑 {deleted_count} بکاپ قدیمی حذف شد")
+                                logger.info(f"🗑 {deleted_count} old backup deleted")
                     except Exception as e:
-                        logger.error(f"خطا در پاکسازی بکاپ‌ها: {e}")
+                        logger.error(f"Error cleaning up backups: {e}")
                     
                     try:
                         mem = get_memory_usage()
                         if mem.get('rss_mb', 0) > 400:
-                            logger.warning(f"⚠️ مصرف حافظه بالا: {mem.get('rss_mb', 0):.1f} MB")
+                            logger.warning(f"⚠️ High memory usage: {mem.get('rss_mb', 0):.1f} MB")
                             _db_cache.clear()
                             _db_modified.clear()
-                            logger.info("🧹 کش دیتابیس پاکسازی شد")
+                            logger.info('🧹 Database cache cleared')
                     except Exception as e:
-                        logger.error(f"خطا در بررسی حافظه: {e}")
+                        logger.error(f"Error checking memory: {e}")
                     
                     weekly_cleanup_running = False
-                    logger.info("پاکسازی هفتگی به پایان رسید")
+                    logger.info('Weekly cleanup finished')
                     await asyncio.sleep(86400)
                     
                 except asyncio.CancelledError:
-                    logger.info("❌ تسک پاکسازی هفتگی لغو شد")
+                    logger.info('❌ Weekly cleanup task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در پاکسازی هفتگی: {e}", exc_info=True)
+                    logger.error(f"Error during weekly cleanup: {e}", exc_info=True)
                     if log_system:
                         try:
                             await log_system.log_error(e, "weekly_cleanup")
-                            logger.info("خطای پاکسازی هفتگی در سیستم خارجی ثبت شد")
+                            logger.info('Weekly cleanup error recorded in external system')
                         except Exception as log_err:
-                            logger.error(f"خطا در ثبت لاگ خطا: {log_err}")
+                            logger.error(f"Error recording error log: {log_err}")
                     weekly_cleanup_running = False
                     await asyncio.sleep(3600)
 
         async def health_monitor():
             """مانیتورینگ سلامت ربات و ارسال گزارش هر 8 ساعت"""
-            logger.info("تسک مانیتورینگ سلامت راه‌اندازی شد (هر 8 ساعت)")
+            logger.info('Health monitoring task started (every 8 hours)')
             
             while True:
                 try:
                     await asyncio.sleep(16 * 3600)  # هر 16 ساعت
-                    logger.info("شروع مانیتورینگ سلامت...")
+                    logger.info('Starting health monitoring...')
                     await send_health_report(ADMIN_ID_INT)
                     
                 except asyncio.CancelledError:
-                    logger.info("تسک مانیتورینگ سلامت لغو شد")
+                    logger.info('Health monitoring task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در مانیتورینگ سلامت: {e}", exc_info=True)
+                    logger.error(f"Error in health monitoring: {e}", exc_info=True)
                     await asyncio.sleep(3600)
 
 
         async def disk_space_monitor():
             """هشدار فضای دیسک هر 48 ساعت (فقط در صورت کم بودن فضا)"""
-            logger.info("تسک هشدار فضای دیسک راه‌اندازی شد (هر 48 ساعت)")
+            logger.info('Disk space alert task started (every 48 hours)')
             
             await asyncio.sleep(300)
             
@@ -44768,22 +44771,22 @@ async def main():
                     
                     if free_gb < 1.0:
                         await send_disk_warning(ADMIN_ID_INT)  # ← اینجا صدا زده می‌شود
-                        logger.info(f"هشدار فضای دیسک ارسال شد (فضای خالی: {free_gb:.1f} GB)")
+                        logger.info(f"Disk space warning sent (free space: {free_gb:.1f} GB)")
                     else:
-                        logger.info(f"فضای دیسک کافی است: {free_gb:.1f} GB")
+                        logger.info(f"Disk space is sufficient: {free_gb:.1f} GB")
                     
                     await asyncio.sleep(48 * 3600)
                     
                 except asyncio.CancelledError:
-                    logger.info("تسک هشدار فضای دیسک لغو شد")
+                    logger.info('Disk space alert task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در هشدار فضای دیسک: {e}", exc_info=True)
+                    logger.error(f"Error in disk space alert: {e}", exc_info=True)
                     await asyncio.sleep(3600)
 
         async def weekly_detailed_report_task():
             """گزارش کامل هفتگی دقیقاً ساعت ۰۰:۰۰ یکشنبه - فقط یک بار در هفته"""
-            logger.info("📅 تسک گزارش هفتگی راه‌اندازی شد (هر یکشنبه ۰۰:۰۰)")
+            logger.info('📅 Weekly report task started (every Sunday at 00:00)')
             
             last_report_week = None
             
@@ -44805,11 +44808,11 @@ async def main():
                     
                     if wait_seconds < 3600:
                         wait_seconds = 3600
-                        logger.info(f"⏳ زمان کمتر از ۱ ساعت، تنظیم به ۱ ساعت")
+                        logger.info(f"⏳ Less than 1 hour remaining; setting to 1 hour")
                     
                     current_week_key = f"{now.isocalendar()[0]}-{now.isocalendar()[1]}"
-                    logger.info(f"⏳ زمان تا گزارش هفتگی: {wait_seconds / 3600:.1f} ساعت")
-                    logger.info(f"📅 یکشنبه بعدی: {next_sunday.strftime('%Y-%m-%d %H:%M:%S')} - هفته {current_week_key}")
+                    logger.info(f"⏳ Time until weekly report: {wait_seconds / 3600:.1f} hours")
+                    logger.info(f"📅 Next Sunday: {next_sunday.strftime('%Y-%m-%d %H:%M:%S')} - week {current_week_key}")
                     
                     await asyncio.sleep(wait_seconds)
                     
@@ -44817,13 +44820,13 @@ async def main():
                     current_week_key = f"{now.isocalendar()[0]}-{now.isocalendar()[1]}"
                     
                     if last_report_week == current_week_key:
-                        logger.info(f"⏳ گزارش هفته {current_week_key} قبلاً ارسال شده است، ۲۴ ساعت صبر می‌کنم...")
+                        logger.info(f"⏳ Report for week {current_week_key} was already sent; waiting 24 hours...")
                         await asyncio.sleep(86400)
                         continue
                     
-                    logger.info(f"📊 شروع ارسال گزارش هفتگی - هفته {current_week_key}")
+                    logger.info(f"📊 Starting weekly report delivery - week {current_week_key}")
                     await send_weekly_detailed_report(ADMIN_ID_INT)
-                    logger.info("✅ گزارش هفتگی ارسال شد")
+                    logger.info('✅ Weekly report sent')
                     
                     last_report_week = current_week_key
                     
@@ -44831,20 +44834,20 @@ async def main():
                         try:
                             await log_system.log_admin_action(
                                 ADMIN_ID_INT,
-                                "گزارش سلامت هفتگی",
-                                details=f"هفته: {current_week_key} | کاربران: {len(users)}, سفارشات: {len(get_valid_orders())}"
+                                "Weekly health report",
+                                details=f"Week: {current_week_key} | Users: {len(users)}, Orders: {len(get_valid_orders())}"
                             )
                         except Exception as e:
-                            logger.warning(f"خطا در ثبت لاگ گزارش هفتگی: {e}")
+                            logger.warning(f"Error recording weekly report log: {e}")
                     
-                    logger.info("⏳ صبر ۲۴ ساعت برای جلوگیری از ارسال مجدد...")
+                    logger.info('⏳ Waiting 24 hours to prevent duplicate delivery...')
                     await asyncio.sleep(86400)
                     
                 except asyncio.CancelledError:
-                    logger.info("❌ تسک گزارش هفتگی لغو شد")
+                    logger.info('❌ Weekly report task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"❌ خطا در گزارش هفتگی: {e}", exc_info=True)
+                    logger.error(f"❌ Error in weekly report: {e}", exc_info=True)
                     await asyncio.sleep(3600)
                 
                     
@@ -44853,7 +44856,7 @@ async def main():
         
         async def config_pool_monitor():
             """بررسی مخزن کانفیگ و هشدار در صورت کمبود"""
-            logger.info("تسک مانیتورینگ مخزن کانفیگ راه‌اندازی شد (هر 1 ساعت)")
+            logger.info('Configuration repository monitoring task started (every 1 hour)')
             await asyncio.sleep(300)  
             
             while True:
@@ -44862,10 +44865,10 @@ async def main():
                     
                     if not SENAI_PANEL_ENABLED:
                         available = get_available_configs_count()
-                        logger.info(f"بررسی مخزن کانفیگ: {available} کانفیگ موجود")
+                        logger.info(f"Checking config repository: {available} configs available")
                         
                         if available < 10:
-                            logger.warning(f"⚠️ کمبود کانفیگ در مخزن: {available} عدد")
+                            logger.warning(f"⚠️ Too few configs in repository: {available} number")
                             await bot.send_message(
                                 ADMIN_ID_INT,
                                 f"⚠️ <b>هشدار: کمبود کانفیگ در مخزن!</b>\n\n"
@@ -44874,22 +44877,22 @@ async def main():
                                 parse_mode=ParseMode.HTML
                             )
                         else:
-                            logger.debug(f"مخزن کانفیگ وضعیت مناسبی دارد: {available} عدد")
+                            logger.debug(f"Config repository is in good condition: {available} number")
                     
                 except asyncio.CancelledError:
-                    logger.info("تسک مانیتورینگ مخزن کانفیگ لغو شد")
+                    logger.info('Config repository monitoring task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در مانیتورینگ مخزن: {e}", exc_info=True)
+                    logger.error(f"Error in repository monitoring: {e}", exc_info=True)
                     await asyncio.sleep(3600)
         async def log_rotation():
             """چرخش خودکار لاگ‌ها هر 7 روز"""
-            logger.info("تسک چرخش لاگ‌ها راه‌اندازی شد (هر 7 روز)")
+            logger.info('Log rotation task started (every 7 days)')
             
             while True:
                 try:
                     await asyncio.sleep(7 * 24 * 3600)  # هر 7 روز
-                    logger.info("شروع چرخش لاگ‌ها...")
+                    logger.info('Starting log rotation...')
                     
                     log_files = ['bot_debug.log', 'events.log', 'bot_error.log']
                     rotated_count = 0
@@ -44899,7 +44902,7 @@ async def main():
                         if os.path.exists(log_file):
                             size = os.path.getsize(log_file)
                             size_mb = size / (1024 * 1024)
-                            logger.info(f"بررسی فایل لاگ {log_file}: {size_mb:.1f} MB")
+                            logger.info(f"Checking log file {log_file}: {size_mb:.1f} MB")
                             
                             if size > 50 * 1024 * 1024:  # 50 MB
                                 backup_name = f"{log_file}.{datetime.now().strftime('%Y%m%d_%H%M%S')}.old"
@@ -44911,7 +44914,7 @@ async def main():
                                     with open(log_file, 'w', encoding='utf-8') as f:
                                         pass
                                 rotated_count += 1
-                                logger.info(f"🔄 چرخش لاگ: {log_file} -> {backup_name}")
+                                logger.info(f"🔄 Log rotation: {log_file} -> {backup_name}")
                                 
                                 for old_file in os.listdir('.'):
                                     if old_file.startswith(log_file) and old_file.endswith('.old'):
@@ -44921,71 +44924,71 @@ async def main():
                                             try:
                                                 os.remove(file_path)
                                                 deleted_count += 1
-                                                logger.debug(f"🗑 حذف فایل لاگ قدیمی: {old_file} (age: {file_age / 86400:.1f} days)")
+                                                logger.debug(f"🗑 Deleting old log file: {old_file} (age: {file_age / 86400:.1f} days)")
                                             except Exception as rm_err:
-                                                logger.warning(f"نتوانست فایل لاگ قدیمی {old_file} را حذف کند: {rm_err}")
+                                                logger.warning(f"Failed to delete old log file {old_file} : {rm_err}")
                     
-                    logger.info(f"چرخش لاگ‌ها کامل شد: {rotated_count} فایل چرخش، {deleted_count} فایل قدیمی حذف شد")
+                    logger.info(f"Log rotation completed: {rotated_count} rotated files, {deleted_count} old files deleted")
                     
                 except asyncio.CancelledError:
-                    logger.info("تسک چرخش لاگ‌ها لغو شد")
+                    logger.info('Log rotation task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در چرخش لاگ: {e}", exc_info=True)
+                    logger.error(f"Error during log rotation: {e}", exc_info=True)
                     await asyncio.sleep(24 * 3600)
         
         async def panel_limits_reset():
             """ریست خودکار محدودیت‌های پنل هر 24 ساعت"""
-            logger.info("تسک ریست محدودیت‌های پنل راه‌اندازی شد (هر 24 ساعت)")
+            logger.info('Panel limits reset task started (every 24 hours)')
             
             while True:
                 try:
                     await asyncio.sleep(24 * 3600)  # هر 24 ساعت
-                    logger.info("شروع ریست محدودیت‌های پنل...")
+                    logger.info('Starting panel rate-limit reset...')
                     
                     if callable(globals().get('reset_panel_rate_limits')):
                         await reset_panel_rate_limits()
-                        logger.info("🔄 محدودیت‌های پنل با موفقیت ریست شدند")
+                        logger.info('🔄 Panel rate limits successfully reset')
                     else:
-                        logger.warning("تابع reset_panel_rate_limits در دسترس نیست")
+                        logger.warning('Function reset_panel_rate_limits is unavailable')
                     
                 except asyncio.CancelledError:
-                    logger.info("تسک ریست محدودیت‌های پنل لغو شد")
+                    logger.info('Panel rate-limit reset task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در ریست محدودیت‌های پنل: {e}", exc_info=True)
+                    logger.error(f"Error resetting panel rate limits: {e}", exc_info=True)
                     await asyncio.sleep(3600)
         
         async def memory_monitor():
             """بررسی مصرف حافظه و پاکسازی در صورت نیاز"""
-            logger.info("تسک مانیتورینگ حافظه راه‌اندازی شد (هر 15 دقیقه)")
+            logger.info('Memory monitoring task started (every 15 minutes)')
             await asyncio.sleep(60)  # تاخیر اولیه
             
             while True:
                 try:
                     await asyncio.sleep(900) # هر 15 دقیقه
                     mem = get_memory_usage()
-                    logger.debug(f"مصرف حافظه: {mem['rss_mb']:.1f} MB ({mem['percent']:.1f}%)")
+                    logger.debug(f"Memory usage: {mem['rss_mb']:.1f} MB ({mem['percent']:.1f}%)")
                     
                     if mem['rss_mb'] > 500:
-                        logger.warning(f"⚠️ مصرف حافظه بالا: {mem['rss_mb']:.1f} MB - در حال پاکسازی...")
+                        logger.warning(f"⚠️ High memory usage: {mem['rss_mb']:.1f} MB - cleaning up...")
                         cache_size_before = len(_db_cache)
                         _db_cache.clear()
                         _db_modified.clear()
                         cleaned = cleanup_expired_states()
                         
                         mem_after = get_memory_usage()
-                        logger.info(f"✅ پاکسازی حافظه: کش {cache_size_before} -> 0، وضعیت‌های پاک شده: {cleaned}")
-                        logger.info(f"مصرف حافظه پس از پاکسازی: {mem_after['rss_mb']:.1f} MB (کاهش {mem['rss_mb'] - mem_after['rss_mb']:.1f} MB)")
+                        logger.info(f"✅ Memory cleanup: cache {cache_size_before} -> 0, statuses cleared: {cleaned}")
+                        logger.info(f"Memory usage after cleanup: {mem_after['rss_mb']:.1f} MB (reduced by {mem['rss_mb'] - mem_after['rss_mb']:.1f} MB)")
                     
                 except asyncio.CancelledError:
-                    logger.info("تسک مانیتورینگ حافظه لغو شد")
+                    logger.info('Memory monitoring task canceled')
                     break
                 except Exception as e:
-                    logger.error(f"خطا در مانیتورینگ حافظه: {e}", exc_info=True)
+                    logger.error(f"Error in memory monitoring: {e}", exc_info=True)
                     await asyncio.sleep(300)
         
-        logger.info("در حال ایجاد تسک‌های پس‌زمینه...")
+        logger.info('Creating background tasks...')
         
         async def daily_usage_collector_worker():
             def _get_approved_emails():
@@ -45019,13 +45022,13 @@ async def main():
             asyncio.create_task(daily_usage_collector_worker(), name="daily_usage_collector"),
         ]
         
-        logger.info(f"✅ {len(tasks)} تسک پس‌زمینه ایجاد شد:")
+        logger.info(f"✅ {len(tasks)} Background task created:")
         for task in tasks:
             logger.info(f"  - {task.get_name()}")
         
-        logger.info("شروع مهاجرت داده‌های قدیمی...")
+        logger.info('Starting migration of old data...')
         migrate_old_data()
-        logger.info("مهاجرت داده‌های قدیمی کامل شد")
+        logger.info('Migration of old data completed')
         
         shared_connector = aiohttp.TCPConnector(
             ssl=False,
@@ -45033,7 +45036,7 @@ async def main():
             limit_per_host=10,
             ttl_dns_cache=300
         )
-        logger.info("✅ shared connector برای aiohttp ایجاد شد (limit=20, limit_per_host=10, ttl_dns_cache=300)")
+        logger.info('✅ shared connector created for aiohttp (limit=20, limit_per_host=10, ttl_dns_cache=300)')
         
         if sms_payment_manager.is_enabled():
             try:
@@ -45042,14 +45045,14 @@ async def main():
                     port=sms_payment_manager.get_webhook_port()
                 )
             except Exception as e:
-                logger.error(f"❌ خطا در راه‌اندازی سرور وب‌هوک پیامک: {e}")
+                logger.error(f"❌ Error starting SMS webhook server: {e}")
 
-        logger.info("🚀 شروع polling...")
+        logger.info('🚀 Starting polling...')
         logger.info("=" * 60)
         await dp.start_polling(bot, close_bot_session=False)
         
     except asyncio.CancelledError:
-        logger.info("اجرای اصلی ربات لغو شد")
+        logger.info('Main bot task was canceled')
         raise
     except Exception as e:
         error_msg = f"خطای بحرانی در راه‌اندازی: {e}"
@@ -45062,16 +45065,16 @@ async def main():
                 f"📝 <b>تریس کامل:</b>\n<code>{traceback.format_exc()[:1000]}</code>",
                 parse_mode=ParseMode.HTML
             )
-            logger.info("پیام خطای بحرانی به ادمین ارسال شد")
+            logger.info('Critical error message sent to admin')
         except Exception as send_err:
-            logger.error(f"نتوانست پیام خطا به ادمین ارسال کند: {send_err}")
+            logger.error(f"Failed to send error message to admin: {send_err}")
         
         if log_system:
             try:
                 await log_system.log_error(e, "main")
-                logger.info("خطای بحرانی در سیستم لاگ خارجی ثبت شد")
+                logger.info('Critical error recorded in external logging system')
             except Exception as log_err:
-                logger.error(f"خطا در ثبت خطا در سیستم لاگ خارجی: {log_err}")
+                logger.error(f"Error recording error in external logging system: {log_err}")
         
         raise
 
@@ -45079,7 +45082,7 @@ def cleanup_expired_states():
     """پاک کردن وضعیت‌های منقضی شده کاربران با نگهداری آمار"""
     global user_states
     
-    logger.debug("شروع پاکسازی وضعیت‌های منقضی...")
+    logger.debug('starting cleanup of expired statuses...')
     now = datetime.now()
     expired = []
     expired_count = 0
@@ -45108,16 +45111,16 @@ def cleanup_expired_states():
                 if age_seconds > 1800:
                     should_delete = True
                     expired_count += 1
-                    logger.debug(f"وضعیت کاربر {user_id} منقضی شده (نوع: {state_type}، سن: {age_seconds:.0f} ثانیه)")
+                    logger.debug(f"User status {user_id} expired (type: {state_type}, age: {age_seconds:.0f} seconds)")
             except (ValueError, TypeError) as e:
                 should_delete = True
                 expired_count += 1
-                logger.debug(f"timestamp نامعتبر برای کاربر {user_id}: {state.get('timestamp')} - خطا: {e}")
+                logger.debug(f"Invalid timestamp for user {user_id}: {state.get('timestamp')} - Error: {e}")
         elif len(state) > 0:
             # دادن فرصت به وضعیت‌هایی که timestamp ندارند تا در میانه کار کاربر حذف نشوند
             state['timestamp'] = now.isoformat()
             no_timestamp_count += 1
-            logger.debug(f"وضعیت بدون timestamp برای کاربر {user_id} نشانه‌گذاری شد (نوع: {state_type})")
+            logger.debug(f"Status without timestamp for user {user_id} was marked (type: {state_type})")
         
         if should_delete:
             expired.append(user_id)
@@ -45127,43 +45130,43 @@ def cleanup_expired_states():
         user_states.pop(user_id, None)
     
     if expired_count > 0 or no_timestamp_count > 0:
-        logger.info(f"🧹 پاکسازی وضعیت‌ها: {expired_count} با timestamp منقضی | {no_timestamp_count} بدون timestamp - مجموع: {len(expired)}")
+        logger.info(f"🧹 Cleaning up states: {expired_count} with expired timestamps | {no_timestamp_count} without timestamps - total: {len(expired)}")
         if expired_types:
-            logger.info(f"   انواع پاک شده: {expired_types}")
+            logger.info(f"   Types cleared: {expired_types}")
     else:
-        logger.debug("پاکسازی وضعیت‌ها: هیچ وضعیت منقضی یافت نشد")
+        logger.debug('State cleanup: no expired states found')
     
     return len(expired)
 
 
 async def shutdown(dispatcher: Dispatcher, bot: Bot):
     """خاموش کردن graceful ربات با بستن کامل اتصالات"""
-    logger.info("🛑 شروع فرآیند توقف ربات...")
+    logger.info('🛑 stopping bot process...')
     
     shutdown_start = datetime.now()
     
     try:
-        logger.info("💾 ذخیره نهایی دیتابیس...")
+        logger.info('💾 Final database save...')
         save_all()
-        logger.info("✅ دیتابیس با موفقیت ذخیره شد")
+        logger.info('✅ Database saved successfully')
         
-        logger.info("🧹 پاکسازی وضعیت‌های باقیمانده...")
+        logger.info('🧹 Cleaning up remaining states...')
         cleaned = cleanup_expired_states()
         if cleaned > 0:
-            logger.info(f"🧹 {cleaned} وضعیت منقضی پاک شد")
+            logger.info(f"🧹 {cleaned} expired status cleared")
 
         try:
             await sms_payment_manager.server.stop()
         except Exception as e:
-            logger.warning(f"⚠️ خطا در توقف وب‌سرور پیامک: {e}")
+            logger.warning(f"⚠️ Error stopping SMS web server: {e}")
 
         if log_system:
             try:
                 await log_system.log_bot_stop(ADMIN_ID_INT)
-                logger.info("✅ لاگ توقف در سیستم خارجی ثبت شد")
+                logger.info('✅ Shutdown log recorded in external system')
                 await asyncio.sleep(0.5)
             except Exception as e:
-                logger.warning(f"⚠️ خطا در بستن سیستم لاگ: {e}")
+                logger.warning(f"⚠️ Error closing logging system: {e}")
         
         try:
             uptime = datetime.now() - shutdown_start
@@ -45177,9 +45180,9 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
 🔌 اتصالات در حال بسته‌شدن هستند
 """
             await bot.send_message(ADMIN_ID_INT, shutdown_msg, parse_mode=ParseMode.HTML)
-            logger.info("✅ پیام توقف به ادمین ارسال شد")
+            logger.info('✅ Shutdown message sent to admin')
         except Exception as e:
-            logger.warning(f"⚠️ نتواست پیام توقف به ادمین ارسال کند: {e}")
+            logger.warning(f"⚠️ Failed to send shutdown message to admin: {e}")
         
         await asyncio.sleep(0.5)
         
@@ -45194,25 +45197,25 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
                 if pending:
                     for task in pending:
                         task.cancel()
-                    logger.info(f"⏳ منتظر لغو {len(pending)} تسک باقیمانده...")
+                    logger.info(f"⏳ Waiting to cancel {len(pending)} remaining tasks...")
                     await asyncio.wait(pending, timeout=2.0)
         except Exception as e:
-            logger.warning(f"⚠️ خطا در بستن event loop: {e}")
+            logger.warning(f"⚠️ Error closing event loop: {e}")
         
     except Exception as e:
-        logger.error(f"❌ خطا در فرآیند توقف ربات: {e}", exc_info=True)
+        logger.error(f"❌ Error during bot shutdown: {e}", exc_info=True)
         raise
     finally:
-        logger.info("🔌 بستن اتصالات باقیمانده...")
+        logger.info('🔌 Closing remaining connections...')
         cleanup_errors = []
 
         async def close_resource(name, close):
             try:
                 await close()
-                logger.info(f"✅ {name} بسته شد")
+                logger.info(f"✅ {name} closed")
             except Exception as e:
                 cleanup_errors.append(name)
-                logger.warning(f"⚠️ خطا در بستن {name}: {e}")
+                logger.warning(f"⚠️ Error closing {name}: {e}")
 
         await close_resource("HTTP session", close_http_session)
 
@@ -45226,10 +45229,10 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         if log_system:
             await close_resource("سیستم لاگ خارجی", log_system.close)
         if cleanup_errors:
-            logger.error(f"توقف ربات با خطا در بستن این منابع پایان یافت: {', '.join(cleanup_errors)}")
+            logger.error(f"Bot shutdown completed with errors while closing these resources: {', '.join(cleanup_errors)}")
         else:
-            logger.info("✅ ربات با موفقیت متوقف شد")
-        logger.info(f"⏱ کل زمان فرآیند توقف: {(datetime.now() - shutdown_start).total_seconds():.1f} ثانیه")
+            logger.info('✅ Bot stopped successfully')
+        logger.info(f"⏱ Total shutdown time: {(datetime.now() - shutdown_start).total_seconds():.1f} seconds")
 
 def get_memory_usage() -> dict:
     """دریافت میزان استفاده از حافظه"""
@@ -45241,7 +45244,7 @@ def get_memory_usage() -> dict:
         vms_mb = memory_info.vms / (1024 * 1024)
         percent = process.memory_percent()
         
-        logger.debug(f"مصرف حافظه: RSS={rss_mb:.1f}MB, VMS={vms_mb:.1f}MB, Percent={percent:.1f}%")
+        logger.debug(f"Memory usage: RSS={rss_mb:.1f}MB, VMS={vms_mb:.1f}MB, Percent={percent:.1f}%")
         
         return {
             'rss_mb': rss_mb,
@@ -45251,7 +45254,7 @@ def get_memory_usage() -> dict:
             'user_states_size': len(user_states)
         }
     except ImportError:
-        logger.debug("ماژول psutil نصب نیست، آمار حافظه در دسترس نیست")
+        logger.debug('The psutil module is not installed; memory statistics are unavailable')
         return {
             'rss_mb': 0,
             'vms_mb': 0,
@@ -45260,7 +45263,7 @@ def get_memory_usage() -> dict:
             'user_states_size': len(user_states)
         }
     except Exception as e:
-        logger.error(f"خطا در دریافت آمار حافظه: {e}")
+        logger.error(f"Error retrieving memory statistics: {e}")
         return {
             'rss_mb': 0,
             'vms_mb': 0,
@@ -45273,10 +45276,10 @@ def get_memory_usage() -> dict:
 async def cmd_stats(message: Message):
     """دستور نمایش آمار (فقط ادمین)"""
     if message.from_user.id != ADMIN_ID_INT:
-        logger.warning(f"کاربر {message.from_user.id} تلاش کرد از دستور /stats استفاده کند")
+        logger.warning(f"User {message.from_user.id} attempted to use the /stats command")
         return
     
-    logger.info(f"ادمین ({ADMIN_ID_INT}) درخواست آمار کرد")
+    logger.info(f"admin ({ADMIN_ID_INT}) requested statistics")
     
     total_users = len(users)
     total_orders = len(get_valid_orders())
@@ -45289,7 +45292,7 @@ async def cmd_stats(message: Message):
     states_count = len(user_states)
     cache_size = len(_db_cache)
     
-    logger.debug(f"آمار جمع‌آوری شد: کاربران={total_users}, سفارشات={total_orders}, کانفیگ={available_configs}")
+    logger.debug(f"statistics collected: users={total_users}, orders={total_orders}, configs={available_configs}")
     
     stats_text = f"""
 📊 <b>آمار ربات</b>
@@ -45310,9 +45313,9 @@ async def cmd_stats(message: Message):
     
     try:
         await message.reply(stats_text, parse_mode=ParseMode.HTML)
-        logger.info("پاسخ آمار به ادمین ارسال شد")
+        logger.info('Stats response sent to admin')
     except Exception as e:
-        logger.error(f"خطا در ارسال آمار به ادمین: {e}", exc_info=True)
+        logger.error(f"Error sending statistics to admin: {e}", exc_info=True)
 
 from alert_system import AlertSystem
 
@@ -45333,14 +45336,14 @@ async def init_alert_system():
     global alert_system, alert_system_settings, log_system
     
     try:
-        logger.info("🧪 راه‌اندازی سیستم هشدار سرویس...")
+        logger.info('🧪 Starting service alert system...')
         
         if 'alert_settings' in configs_pool and isinstance(configs_pool['alert_settings'], dict):
             saved_settings = configs_pool['alert_settings']
             alert_system_settings.update(saved_settings)
-            logger.info(f"⚙️ تنظیمات هشدار از دیتابیس بارگذاری شد: {alert_system_settings}")
+            logger.info(f"⚙️ Alert settings loaded from the database: {alert_system_settings}")
         else:
-            logger.info("⚙️ استفاده از تنظیمات پیشفرض هشدار")
+            logger.info('⚙️ Using default alert settings')
         
         cache_file = os.path.join(DATA_DIR, 'alert_cache.json')
         alert_system = AlertSystem(
@@ -45356,15 +45359,15 @@ async def init_alert_system():
         alert_system.update_settings(alert_system_settings)
         asyncio.create_task(alert_system.run_alert_worker())
         
-        logger.info("✅ سیستم هشدار با موفقیت راه‌اندازی شد")
-        logger.info(f"📊 آستانه‌های حجم: {alert_system.volume_thresholds}٪ + اتمام خودکار")
-        logger.info(f"📅 آستانه‌های انقضا: {alert_system.expiry_warnings} روز + انقضای خودکار")
-        logger.info(f"🔍 resolve email: {'✅ فعال' if alert_system.find_email_by_sub_id else '❌ غیرفعال'}")
+        logger.info('✅ Alert system started successfully')
+        logger.info(f"📊 Volume thresholds: {alert_system.volume_thresholds}% + automatic expiration")
+        logger.info(f"📅 Expiration thresholds: {alert_system.expiry_warnings} days + automatic expiration")
+        logger.info(f"🔍 Resolve email: {'✅ enabled' if alert_system.find_email_by_sub_id else '❌ disabled'}")
         
         return alert_system
         
     except Exception as e:
-        logger.error(f"❌ خطا در راه‌اندازی سیستم هشدار: {e}", exc_info=True)
+        logger.error(f"❌ Error starting the alert system: {e}", exc_info=True)
         return None
 
 @dp.message(Command("check_alerts"))
@@ -45411,27 +45414,27 @@ if __name__ == "__main__":
     async def run():
         """تابع اجرای اصلی با مدیریت خطا"""
         logger.info("=" * 60)
-        logger.info("شروع اجرای ربات...")
-        logger.info(f"زمان شروع: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info('Starting bot...')
+        logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         try:
             await main()
         except KeyboardInterrupt:
-            logger.info("🛑 دریافت سیگنال توقف از کاربر (KeyboardInterrupt)")
+            logger.info('🛑 Received shutdown signal from user (KeyboardInterrupt)')
         except asyncio.CancelledError:
-            logger.info("اجرای ربات لغو شد (CancelledError)")
+            logger.info('Bot execution canceled (CancelledError)')
         except Exception as e:
-            logger.critical(f"❌ خطای بحرانی در اجرای اصلی: {e}", exc_info=True)
+            logger.critical(f"❌ Critical error in main execution: {e}", exc_info=True)
             raise
         finally:
             await shutdown(dp, bot)
     
     try:
         asyncio.run(run())
-        logger.info("ربات با موفقیت به پایان رسید")
+        logger.info('Bot shut down successfully')
     except KeyboardInterrupt:
-        logger.info("ربات توسط کاربر متوقف شد (KeyboardInterrupt)")
+        logger.info('Bot stopped by user (KeyboardInterrupt)')
     except Exception as e:
-        logger.critical(f"خطای غیرمنتظره در سطح asyncio.run: {e}", exc_info=True)
+        logger.critical(f"Unexpected error at asyncio.run level: {e}", exc_info=True)
     finally:
-        logger.info(f"پایان اجرا - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Execution ended - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
