@@ -1017,6 +1017,7 @@ class SMSPaymentManager:
             )
 
             if fulfillment_status == "fulfilled":
+                await self._update_user_payment_message(reservation)
                 await self._notify_admin_approved(parsed, reservation)
             elif fulfillment_status == "failed_pending_retry":
                 await self._notify_admin_fulfillment_failed(parsed, reservation, tx_id, err_msg)
@@ -1094,6 +1095,31 @@ class SMSPaymentManager:
             await self._main.bot.send_message(admin_id, text, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.warning(f"Failed to send test notification to admin: {e}")
+
+    async def _update_user_payment_message(self, reservation: dict):
+        if not self._main or not hasattr(self._main, "bot"):
+            return
+
+        order = self._main.orders.get(str(reservation["order_id"]))
+        if not order:
+            return
+        message_id = order.get("payment_message_id")
+        if not message_id:
+            return
+
+        user_id = order.get("user_id")
+        lang = self._main.get_user(user_id).get("lang", "fa")
+        text = self._main.build_receipt_text(order, lang, mode="paid")
+        try:
+            await self._main.bot.edit_message_text(
+                chat_id=user_id,
+                message_id=message_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=None,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update payment message for order #{reservation['order_id']}: {e}")
 
     async def _notify_admin_approved(self, parsed: dict, reservation: dict):
         if not self._main or not hasattr(self._main, "bot"):

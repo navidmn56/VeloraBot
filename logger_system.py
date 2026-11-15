@@ -107,7 +107,6 @@ class LogSystem:
     
     async def send_log(self, message: str, parse_mode: str = "HTML"):
         """ارسال پیام لاگ به کانال با استفاده از صف"""
-        # اضافه کردن timestamp به ابتدای پیام
         timestamp = datetime.now().strftime('%H:%M:%S')
         formatted_message = f"<code>[{timestamp}]</code>\n{message}"
         
@@ -362,14 +361,14 @@ class LogSystem:
         await self.send_log(text)
     
     async def log_force_join_toggle(self, admin_id: int, enabled: bool):
-        """ثبت فعال/غیرفعال کردن عضویت اجباری"""
-        status = "فعال" if enabled else "غیرفعال"
+        """Log required-membership status changes"""
+        status = "Enabled" if enabled else "Disabled"
         emoji = "🟢" if enabled else "🔴"
         text = f"""
-{emoji} <b>تغییر وضعیت عضویت اجباری</b>
-🕐 <b>زمان:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
-👑 <b>ادمین:</b> <code>{admin_id}</code>
-⚙️ <b>وضعیت جدید:</b> {status}
+{emoji} <b>Required Membership Status Updated</b>
+🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+👑 <b>Admin:</b> <code>{admin_id}</code>
+⚙️ <b>New Status:</b> {status}
 """
         await self.send_log(text)
     

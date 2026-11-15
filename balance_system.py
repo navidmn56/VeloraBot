@@ -550,7 +550,8 @@ async def quick_amount_selected(callback: CallbackQuery):
     except Exception:
         pass
 
-    await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    payment_message = await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    _main.update_order(order_id, payment_message_id=payment_message.message_id)
 
     # ─── state ───
     _main.user_states[user_id] = {
@@ -789,7 +790,8 @@ async def process_balance_amount(message: Message):
                 )]
             ])
 
-            await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            payment_message = await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            _main.update_order(order_id, payment_message_id=payment_message.message_id)
 
             _main.user_states[user_id] = {
                 'awaiting_receipt': True,
