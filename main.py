@@ -258,7 +258,9 @@ if console_handler is None:
     console_handler = logging.StreamHandler()
     root_logger.addHandler(console_handler)
 console_handler.setLevel(logging.DEBUG)
-console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_formatter.converter = lambda timestamp: datetime.fromtimestamp(timestamp, ZoneInfo("Asia/Tehran")).timetuple()
+console_handler.setFormatter(console_formatter)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML), timeout=15)
@@ -1116,7 +1118,20 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
                     category_name = cat.get('name') or ''
                 break
     is_balance_charge = (order_type == 'balance_charge')
-    
+
+    if mode == "paid":
+        if lang == "fa":
+            return (
+                f"{RLM}✅ <b>پرداخت موفق بود</b>\n\n"
+                f"{RLM}{premium_emoji('id', '🆔')} سفارش: <code>#{order_id}</code>\n"
+                f"{RLM}پرداخت شما با موفقیت به‌صورت خودکار تأیید شد."
+            )
+        return (
+            f"✅ <b>Payment successful</b>\n\n"
+            f"{premium_emoji('id', '🆔')} Order: <code>#{order_id}</code>\n"
+            "Your payment was automatically verified."
+        )
+
     icon = "📦"
     if category_id:
         for cat in READY_PACKAGES.get('categories', []):
@@ -1150,14 +1165,16 @@ def build_receipt_text(order: dict, lang: str = "fa", mode: str = "reminder") ->
         tips_block = (
             f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
             f"{RLM}1. مبلغ دقیق سفارش را واریز کنید.\n"
-            f"{RLM}2. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید."
+            f"{RLM}2. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n"
+            f"{RLM}3. اگر پرداخت خودکار تأیید نشد، فیش خود را ارسال کنید."
         )
         final_line = f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
     else:
         tips_block = (
             f"{note_emoji} <b>Important Notes:</b>\n"
             f"1. Transfer the exact order amount.\n"
-            f"2. Keep order <code>#{order_id}</code> until payment is confirmed."
+            f"2. Keep order <code>#{order_id}</code> until payment is confirmed.\n"
+            "3. If automatic payment verification fails, send your receipt."
         )
         final_line = f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
     if mode == "waiting":
@@ -19901,8 +19918,8 @@ async def admin_alert_toggle(callback: CallbackQuery):
     if alert_system and alert_system.log_system:
         await alert_system.log_system.log_admin_action(
             callback.from_user.id,
-            f"{'فعال' if new_status else 'غیرفعال'} کردن سیستم هشدار",
-            details=f"وضعیت جدید: {'فعال' if new_status else 'غیرفعال'}"
+            f"{'Enabled' if new_status else 'Disabled'} alert system",
+            details=f"New status: {'Enabled' if new_status else 'Disabled'}"
         )
     
     await callback.answer(
@@ -20008,8 +20025,8 @@ async def alert_volume_set(callback: CallbackQuery):
     if alert_system and alert_system.log_system:
         await alert_system.log_system.log_admin_action(
             callback.from_user.id,
-            "تغییر آستانه‌های حجم",
-            details=f"آستانه‌های جدید: {thresholds}% + اتمام خودکار"
+            "Changed volume alert thresholds",
+            details=f"New thresholds: {thresholds}% + auto exhaust"
         )
     
     await callback.answer(
@@ -20111,8 +20128,8 @@ async def alert_expiry_set(callback: CallbackQuery):
     if alert_system and alert_system.log_system:
         await alert_system.log_system.log_admin_action(
             callback.from_user.id,
-            "تغییر آستانه‌های انقضا",
-            details=f"آستانه‌های جدید: {thresholds} روز + انقضای خودکار"
+            "Changed expiry alert thresholds",
+            details=f"New thresholds: {thresholds} days + auto expire"
         )
     
     await callback.answer(
@@ -20160,8 +20177,8 @@ async def admin_check_alerts(callback: CallbackQuery):
         if alert_system.log_system:
             await alert_system.log_system.log_admin_action(
                 callback.from_user.id,
-                "بررسی دستی هشدارها",
-                details="اجرای دستی بررسی سرویس‌ها"
+                "Manual alert check",
+                details="Manual execution of service check"
             )
         
         # به‌روزرسانی پیام موقت
@@ -20213,8 +20230,8 @@ async def admin_clear_alert_cache(callback: CallbackQuery):
         if alert_system.log_system:
             await alert_system.log_system.log_admin_action(
                 callback.from_user.id,
-                "پاک کردن کش موقت هشدارها",
-                details="تاریخچه کامل حفظ شد"
+                "Cleared alert temp cache",
+                details="History preserved"
             )
         
         await callback.answer(
@@ -20318,8 +20335,8 @@ async def admin_confirm_clear_history(callback: CallbackQuery):
     if alert_system.log_system:
         await alert_system.log_system.log_admin_action(
             callback.from_user.id,
-            "پاک کردن کامل تاریخچه هشدارها",
-            details="تمام تاریخچه و کش پاک شد"
+            "Cleared alert history",
+            details="All history and cache cleared"
         )
     
     await callback.answer(
@@ -25296,8 +25313,9 @@ async def pay_card(callback: CallbackQuery):
         )]
     ])
     
-    await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-    
+    payment_message = await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    update_order(order_id, payment_message_id=payment_message.message_id)
+
     try:
         await callback.message.delete()
     except:
