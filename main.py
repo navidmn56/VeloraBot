@@ -25,16 +25,41 @@ from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Union, Tuple
-import unicodedata
-import qrcode
-try:
-    from qrcode.image.styledpil import StyledPilImage
-    from qrcode.image.styles.moduledrawers import RoundedModuleDrawer
-    from qrcode.image.styles.colormasks import SolidFillColorMask
-except ImportError:
-    StyledPilImage = None
-    RoundedModuleDrawer = None
-    SolidFillColorMask = None
+from qr_file_system import (
+    DOWNLOADED_FILES,
+    delete_downloaded_files as _delete_downloaded_files_impl,
+    generate_qr_code as _generate_qr_code,
+    track_downloaded_file,
+)
+from ping_utils import smart_ping
+from emoji_sticker_system import (
+    PREMIUM_EMOJI_IDS,
+    STICKER_IDS,
+    premium_emoji as _premium_emoji,
+    send_sticker as _send_sticker,
+)
+
+
+def premium_emoji(name: str, fallback: str = "📌") -> str:
+    return _premium_emoji(name, fallback)
+
+
+async def send_sticker(
+    chat_id: int,
+    sticker_key: str,
+    fallback_emoji: str = "📌",
+    reply_markup: Any = None,
+) -> bool:
+    return await _send_sticker(
+        bot,
+        chat_id,
+        sticker_key,
+        fallback_emoji,
+        reply_markup,
+        logger,
+    )
+
+
 from yarl import URL
 from wireguard_system import build_wireguard_config
 from dynamic_phrases import format_start_greeting
@@ -72,9 +97,19 @@ import config as app_config
 from daily_usage_system import (
     gregorian_to_jalali,
     handle_daily_usage_request,
-    to_persian_digits,
     usage_collector,
     usage_store,
+)
+from text_utils import (
+    clean_username,
+    extract_numeric_id,
+    format_size,
+    format_traffic_info as _format_traffic_info,
+    normalize_text,
+    progress_bar,
+    safe_str,
+    strip_decorations,
+    to_persian_digits,
 )
 
 gemini_client = None
@@ -87,80 +122,6 @@ GEMINI_PROMPT_CACHE = {
     "disabled": False,
 }
 GEMINI_PROMPT_CACHE_LOCK = asyncio.Lock()
-
-async def real_ping_tcp(host: str, port: int = 443, timeout: int = 3) -> Optional[float]:
-
-    try:
-        import socket
-        start = time.time()
-        
-        
-        try:
-            ip = socket.gethostbyname(host)
-        except:
-            ip = host
-        
-        
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(ip, port),
-            timeout=timeout
-        )
-        
-        elapsed = (time.time() - start) * 1000
-        writer.close()
-        await writer.wait_closed()
-        
-        return elapsed
-        
-    except asyncio.TimeoutError:
-        return None
-    except Exception:
-        return None
-
-
-async def real_ping_icmp(host: str, timeout: int = 3) -> Optional[float]:
-    
-    try:
-        import shutil
-        if not shutil.which("ping"):
-            return None
-        
-        process = await asyncio.create_subprocess_exec(
-            "ping", "-c", "1", "-W", str(timeout), host,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, _ = await asyncio.wait_for(
-            process.communicate(),
-            timeout=timeout + 1
-        )
-        
-        if process.returncode != 0:
-            return None
-        
-        output = stdout.decode()
-        match = re.search(r"time[=<]([\d.]+)", output)
-        
-        if match:
-            return float(match.group(1))
-        
-        return None
-        
-    except Exception:
-        return None
-
-
-async def smart_ping(host: str, timeout: int = 3) -> Optional[float]:
-    
-    
-    tcp_result = await real_ping_tcp(host, timeout=timeout)
-    if tcp_result is not None:
-        return tcp_result
-    
-    
-    icmp_result = await real_ping_icmp(host, timeout=timeout)
-    return icmp_result
 
 SENAI_PANEL_ENABLED = True
 TEMP_INBOUND_SELECTION = {}
@@ -283,138 +244,10 @@ SHOP_STATUS = {
     'last_updated': datetime.now().isoformat()
 }
 USER_INBOUND_SELECTION = {}
-PREMIUM_EMOJI_IDS = {
-    # ─── وضعیت‌ها و هشدارها (Status & Alerts) ───
-    'warning': 5447644880824181073,        # ⚠️ هشدار
-    'danger': 5420323339723881652,         # ❌ اخطار / خطا
-    'success': 5048892927288280410,        # ✅ عملیات موفق
-    'fail': 5974083768233760323,           # ❌ ناموفق / رد شده
-    'cancel': 5974083768233760323,         # ❌ لغو / انصراف
-    'check': 6269163801178804220,          # ✔️ تایید شده
-    'access_denied': 5445350865776941647,  # 🚫 عدم دسترسی
-    'info': 6203791465471022369,           # ℹ️ اطلاعات
-
-    # ─── مالی و پرداخت (Financial & Payments) ───
-    'wallet': 5215420556089776398,         # 💰 کیف پول
-    'money': 5375296873982604963,          # 💵 پول / موجودی
-    'card': 5974575468974705730,           # 💳 کارت به کارت
-    'receipt': 5444856076954520455,        # 🧾 رسید پرداخت
-    'shopping_cart': 5431499171045581032,  # 🛒 سبد خرید
-    'discount': 6098435638527266289,       # 🏷️ تخفیف
-    'label': 5296348778012361146,          # 🏷️ برچسب
-
-    # ─── کانفیگ و سرویس‌ها (Config & Services) ───
-    'config': 5431736674147114227,         # 📁 کانفیگ
-    'box': 5472335930549347896,            # 📦 پکیج / حجم
-    'link': 5271604874419647061,           # 🔗 لینک اتصال
-    'qr': 5443021125191739647,             # 📱 بارکد QR
-
-    # ─── کاربران و حساب‌ها (Users & Identity) ───
-    'user': 5440764424820377609,           # 👤 کاربر
-    'user1': 5262690351969215936,          # 👤 کاربر ۲
-    'users': 5453957997418004470,          # 👥 گروه کاربران / رفرال
-    'invite': 5251601734253421368,         # 👥 دعوت دوستان
-    'id': 5965485570124681987,             # 🆔 شناسه کاربری
-    'order_id': 6323600780783781848,       # 🆔 شناسه سفارش
-
-    # ─── زمان و تاریخ (Time & Date) ───
-    'time': 5451732530048802485,           # ⏱ زمان / ساعت
-    'timer': 5413704112220949842,          # ⏱ تایمر / روز / آپ‌تایم
-    'calendar': 5834822129425584578,       # 📅 تقویم / تاریخ
-    'hourglass': 6071317996704370355,      # ⏳ انتظار
-    'loading': 5334675996714999970,        # 🔄 لودینگ
-    'reload': 5408891085969700325,         # 🔄 بارگذاری مجدد
-
-    # ─── سخت‌افزار و سرور (Hardware & System Status) ───
-    'cpu': 5431376038628171216,            # 💻 پردازنده
-    'ram': 5237799019329105246,            # 🧠 رم
-    'disk': 5462956611033117422,           # 💾 دیسک
-    'net_up': 5449683594425410231,         # ⬆️ آپلود شبکه
-    'net_down': 5451675802120764617,       # ⬇️ دانلود شبکه
-    'upload': 5783105032350076195,         # ⬆️ آپلود
-    'download': 5443127283898405358,       # ⬇️ دانلود
-
-    # ─── تعامل و قابلیت‌ها (Interaction & Features) ───
-    'note': 5334882760735598374,           # 📝 یادداشت / فرم
-    'chat': 5440889232275036277,           # 💬 چت / دیدگاه
-    'hint': 5472146462362048818,           # 💡 راهنما / نکته
-    'light': 5328175963144466763,          # 💡 ایده / روشن
-    'star': 5451636889717062286,           # ⭐ امتیاز / ستاره
-    'rocket': 5445284980978621387,         # 🚀 موشک / شروع
-    'gift': 5199749070830197566,           # 🎁 هدیه / پاداش
-    'globe': 5447410659077661506,          # 🌐 اینترنت / جهان
-    'language': 4974345716802519903,       # 🌐 تغییر زبان
-    'robot': 5310170944843579391,          # 🤖 ربات / AI
-    'test': 5411512278740640309,           # 🧪 تست
-    'amar': 5231200819986047254,           # 📊 آمار
-    'cubes': 5226513232549664618,          # 🎲 مکعب / شمارش
-    'count': 5226702984204797593,          # 🔢 شمارش
-    'email': 5253742260054409879,          # 📧 ایمیل
-    'anime': 5382310787505221582,          # ✨ انیمه
-
-    # ─── کلیدهای اختیاری / رزرو (Placeholders) ───
-    'primary': None,
-    'admin': None,
-    'back': None,
-    'plus': None,
-    'minus': None,
-    'next': None,
-    'previous': None,
-}
-
-STICKER_IDS = {
-    'welcome': 'CAACAgQAAxkBAAERYvFqLYSw1e7mqt0LreZQ5iAXYLYgwQACmRIAAnZ5WVFtqjwTk98wTTwE',      # استیکر خوش آمدید
-    'halloween': 'CAACAgIAAxkBAAESI_Jq5i2BFCUOaY6qP7yuNzGyTU7Y7gACQAEAAladvQps6VtALEnWJT0E',
-    'success': 'CAACAgIAAxkBAAERYvNqLYUtRvn80WovxY4pmS_w0Gl4IAAC_gADVp29CtoEYTAu-df_PAQ',      # استیکر موفقیت
-    'error': 'CAACAgIAAxkBAAEB',   
-    'payment': 'CAACAgQAAxkBAAERYvVqLYW--BzhGTmOkLiUrL0Nqi0IewAC9BMAAkziGVLzMxdaDdc2ojwE',      # استیکر پرداخت
-    'config': 'CAACAgEAAxkBAAERYxpqLZ_BdzW1SHvfF8lclSlkQ2bkDwACEgAD-wn4TyfquP1sDazXPAQ',       # استیکر کانفیگ
-    'balance_insufficient': 'CAACAgIAAxkBAAERYxhqLZ-DqmtKnvuOezC6qxlmw3JxrgACQxgAArbIKUh1S6tFvSw1WDwE',  # استیکر موجودی ناکافی
-    'balance_added': 'CAACAgQAAxkBAAERYv9qLYkLt5qnysZ7WfDLVK6xvYZvjwACZBEAAtZJ0FFLoFGBKZ7uXzwE',        # استیکر شارژ موفق
-    'order_created': 'CAACAgIAAxkBAAEB',      
-    'order_approved': 'CAACAgIAAxkBAAERYvNqLYUtRvn80WovxY4pmS_w0Gl4IAAC_gADVp29CtoEYTAu-df_PAQ',       # استیکر تایید سفارش
-    'order_rejected': 'CAACAgIAAxkBAAERYtdqLYNgjzOUQi8uRFj-ZxHiOhEZvwACRh4AAvyUOEnTIzZfgD7FIDwE',       # استیکر رد سفارش
-    'referral': 'CAACAgQAAxkBAAERYvtqLYdkDe9oPhYCCzd5jRmj9eo-tgAC6xQAAndYgVIvZzhm7RBW9jwE',             # استیکر دعوت
-    'warning': 'CAACAgIAAxkBAAEB',             
-    'gift': 'CAACAgIAAxkBAAEB',
-    'robot': 'CAACAgQAAxkBAAER3Odqnd93G152g-w4Q6ydGd74vbHRegACyxQAAn7WaFEz_uHI6TxiXz0E',# استیکر هدیه
-    'money': 'CAACAgQAAxkBAAERYv1qLYg2VGtarsPxg7UUuJE5cJwsxgACbRIAAkMYUVBj6dJT6kRbJjwE',                # استیکر پول
-    'cart': 'CAACAgIAAxkBAAEB',             
-}
-
-async def send_sticker(chat_id: int, sticker_key: str, fallback_emoji: str = "📌", reply_markup: Any = None):
-    sticker_id = STICKER_IDS.get(sticker_key)
-    
-    if sticker_id:
-        try:
-            if reply_markup is not None:
-                await bot.send_sticker(chat_id, sticker_id, reply_markup=reply_markup)
-            else:
-                await bot.send_sticker(chat_id, sticker_id)
-            return True
-        except Exception as e:
-            logger.warning(f"Error sending sticker {sticker_key}: {e}")
-    
-
-    if reply_markup is not None:
-        await bot.send_message(chat_id, fallback_emoji, reply_markup=reply_markup)
-    else:
-        await bot.send_message(chat_id, fallback_emoji)
-    return False
-
-
 DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
     logger.info(f"Created data folder {DATA_DIR}")
-
-
-
-def premium_emoji(name: str, fallback: str = "📌") -> str:
-    emoji_id = PREMIUM_EMOJI_IDS.get(name)
-    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>' if emoji_id else fallback
-
-
 
 
 DB_FILES = {
@@ -458,6 +291,10 @@ USER_TEST_USAGE = {}
 USER_TEST_SETTINGS = {}  
 
 
+
+
+def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") -> str:
+    return _format_traffic_info(client, traffic, lang, premium_emoji)
 
 def ensure_data_directory():
     if not os.path.exists(DATA_DIR):
@@ -8471,128 +8308,6 @@ SEARCH_RESULTS_CACHE: Dict[int, Dict[str, Any]] = {}
 # ============================================================
 
 # نگاشت اعداد فارسی/عربی به انگلیسی
-_DIGIT_MAP = str.maketrans({
-    '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
-    '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
-    '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
-    '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
-})
-
-# نگاشت حروف عربی به فارسی
-_LETTER_MAP = str.maketrans({
-    'ي': 'ی', 'ى': 'ی', 'ﻯ': 'ی', 'ﻰ': 'ی',
-    'ك': 'ک', 'ﻙ': 'ک', 'ﻚ': 'ک',
-    'ة': 'ه', 'ۀ': 'ه',
-})
-
-# حذف اعراب و علائم ترکیبی
-_DIACRITICS_RE = re.compile(r'[\u064B-\u065F\u0670\u06D6-\u06ED]')
-
-
-def normalize_text(text: Any) -> str:
-    """
-    نرمال‌سازی کامل متن:
-    - اعداد فارسی/عربی به انگلیسی
-    - ي/ى→ی  ك→ک  ة→ه
-    - حذف اعراب
-    - NFKC normalization
-    - حذف نیم‌فاصله (تبدیل به فاصله)
-    - یکسان‌سازی فاصله‌ها
-    """
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        text = str(text)
-
-    # NFKC برای یکسان‌سازی کاراکترهای ترکیبی
-    text = unicodedata.normalize("NFKC", text)
-
-    # تبدیل اعداد
-    text = text.translate(_DIGIT_MAP)
-
-    # تبدیل حروف
-    text = text.translate(_LETTER_MAP)
-
-    # حذف اعراب
-    text = _DIACRITICS_RE.sub("", text)
-
-    # نیم‌فاصله → فاصله
-    text = text.replace("\u200c", " ").replace("\u200f", "").replace("\u200e", "")
-
-    # یکسان‌سازی فاصله‌ها
-    text = " ".join(text.split())
-
-    return text.strip()
-
-
-def strip_decorations(text: str) -> str:
-    """
-    حذف تزئینات یونیکد از نام، بدون آسیب به حروف فارسی/عربی/لاتین و اعداد.
-    """
-    if not text:
-        return ""
-
-    # کاراکترهای مجاز: حروف لاتین، اعداد، _، فاصله، حروف فارسی/عربی
-    cleaned = re.sub(
-        r"[^\w\s\u0600-\u06FF\u200c]",
-        "",
-        text,
-        flags=re.UNICODE,
-    )
-
-    # حذف `_` چون بخشی از تزئینات رایج در نام‌هاست
-    cleaned = cleaned.replace("_", " ")
-
-    # یکسان‌سازی فاصله‌ها
-    cleaned = " ".join(cleaned.split())
-
-    return cleaned.strip()
-
-
-
-def clean_username(raw: Any) -> str:
-    """حذف @ و کاراکترهای غیرمجاز از username."""
-    if raw is None:
-        return ""
-    s = str(raw).strip()
-    if s.startswith("@"):
-        s = s[1:]
-    # فقط حروف، اعداد و _
-    s = re.sub(r"[^\w]", "", s, flags=re.UNICODE)
-    return s
-
-
-def safe_str(value: Any) -> str:
-    """تبدیل امن به رشته."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    return str(value)
-
-
-# ============================================================
-# استخراج آیدی عددی
-# ============================================================
-
-def extract_numeric_id(query: str) -> Optional[int]:
-    """
-    استخراج آیدی عددی از query (پس از نرمال‌سازی اعداد).
-    فقط اگر query *کاملاً* عدد باشد (بدون حروف دیگر) ID برمی‌گرداند.
-    برای جستجوی partial در مرحله بعد از str(user_id) استفاده می‌شود.
-    """
-    normalized = normalize_text(query)
-    if not normalized:
-        return None
-    # اگر کل query عدد است
-    if normalized.isdigit():
-        try:
-            return int(normalized)
-        except ValueError:
-            return None
-    return None
-
-
 # ============================================================
 # هسته اصلی سرچ
 # ============================================================
@@ -9386,37 +9101,6 @@ def register_search_handlers(dp, admin_id_int: int, get_user_func, get_lang_func
         "new": admin_search_new,
         "result": admin_search_result,
     }
-    
-    
-def format_size(size_bytes: Union[int, float]) -> str:
-    # ─── اعتبارسنجی ورودی ───
-    if size_bytes is None or size_bytes == 0:
-        return "0 B"
-    
-    try:
-        size = float(size_bytes)
-    except (TypeError, ValueError):
-        return "0 B"
-    
-    if size < 0:
-        return "0 B"
-    
-    # ─── واحدها به ترتیب صعودی ───
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-    
-    for unit in units:
-        if size < 1024:
-            # برای B عدد صحیح، برای بقیه ۱ یا ۲ رقم اعشار
-            if unit == 'B':
-                return f"{int(size)} {unit}"
-            elif unit == 'KB':
-                return f"{size:.1f} {unit}"
-            else:
-                return f"{size:.2f} {unit}"
-        size /= 1024
-    
-    # fallback برای مقادیر غیرعادی بزرگ
-    return f"{size:.2f} PB"
     
     
 def get_database_size() -> dict:
@@ -12068,159 +11752,8 @@ async def xui_get_client_traffic(email: str) -> Optional[dict]:
         return None
 
 
-PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
-
-def to_persian_digits(text) -> str:
-    """تبدیل اعداد انگلیسی به فارسی"""
-    return "".join(
-        PERSIAN_DIGITS[int(ch)] if ch.isdigit() else ch
-        for ch in str(text)
-    )
-def progress_bar(percent: float, length: int = 10) -> str:
-    """نوار پیشرفت با کاراکتر بلوک"""
-    percent = max(0, min(100, percent))
-    filled = round(length * percent / 100)
-    empty = length - filled
-    return "█" * filled + "░" * empty
-
-
-def format_traffic_info(client: dict, traffic: dict = None, lang: str = "fa") -> str:
-    """نمایش ترافیک به ترتیب: نوار → مصرف → اعتبار"""
-    
-    if not client:
-        return ""
-    
-    total_bytes = client.get("totalGB", 0)
-    expiry = client.get("expiryTime", 0)
-    email = client.get("email", "")
-    is_test = email.startswith("test_")
-    
-    # ─── ایموجی‌های پرمیوم ───
-    stats_emoji = premium_emoji('amar', '📊')
-    time_emoji = premium_emoji('hourglass', '⏳')
-    download_emoji = premium_emoji('download', '📥')
-    
-    # ─── محاسبه زمان باقی‌مانده ───
-    time_left_text = "نامحدود" if lang == "fa" else "Unlimited"
-    if expiry > 0:
-        try:
-            expire_dt = datetime.fromtimestamp(expiry / 1000)
-            delta = expire_dt - datetime.now()
-            total_seconds = int(delta.total_seconds())
-            
-            if total_seconds <= 0:
-                time_left_text = "منقضی شده" if lang == "fa" else "Expired"
-            else:
-                days = total_seconds // 86400
-                hours = (total_seconds % 86400) // 3600
-                minutes = (total_seconds % 3600) // 60
-                
-                if lang == "fa":
-                    if days > 0 and hours > 0:
-                        time_left_text = f"{to_persian_digits(days)} روز و {to_persian_digits(hours)} ساعت دیگه"
-                    elif days > 0:
-                        time_left_text = f"{to_persian_digits(days)} روز دیگه"
-                    elif hours > 0:
-                        if minutes > 0:
-                            time_left_text = f"{to_persian_digits(hours)} ساعت و {to_persian_digits(minutes)} دقیقه دیگه"
-                        else:
-                            time_left_text = f"{to_persian_digits(hours)} ساعت دیگه"
-                    else:
-                        time_left_text = f"{to_persian_digits(minutes)} دقیقه دیگه"
-                else:
-                    if days > 0 and hours > 0:
-                        time_left_text = f"{days}d {hours}h left"
-                    elif days > 0:
-                        time_left_text = f"{days} days left"
-                    elif hours > 0:
-                        if minutes > 0:
-                            time_left_text = f"{hours}h {minutes}m left"
-                        else:
-                            time_left_text = f"{hours}h left"
-                    else:
-                        time_left_text = f"{minutes}min left"
-        except Exception:
-            pass
-    
-    # ─── حجم نامحدود ───
-    if total_bytes == 0:
-        if lang == "fa":
-            return f"\n\n{time_emoji} اعتبار: {time_left_text}"
-        else:
-            return f"\n\n{time_emoji} Expiry: {time_left_text}"
-    
-    # ─── محاسبه مصرف ───
-    total_gb = total_bytes / (1024 ** 3)
-    
-    up = 0
-    down = 0
-    if traffic:
-        up = traffic.get("up", 0) / (1024 ** 3)
-        down = traffic.get("down", 0) / (1024 ** 3)
-    
-    used_gb = up + down
-    percent = (used_gb / total_gb * 100) if total_gb > 0 else 0
-    percent = min(percent, 100)
-    percent_int = int(round(percent))
-    
-    # ─── نوار پیشرفت ───
-    bar = progress_bar(percent, length=10)
-    
-    # ─── فرمت مصرف ───
-    def fmt_size(gb_val):
-        if lang == "fa":
-            if gb_val >= 1:
-                val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
-                return f"{val} گیگ"
-            else:
-                mb = gb_val * 1024
-                return f"{mb:.0f} مگ"
-        else:
-            if gb_val >= 1:
-                val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
-                return f"{val} GB"
-            else:
-                mb = gb_val * 1024
-                return f"{mb:.0f} MB"
-    
-    used_str = fmt_size(used_gb)
-    total_str = fmt_size(total_gb)
-    
-    # ─── خروجی به ترتیب: نوار → مصرف → اعتبار ───
-    if lang == "fa":
-        percent_str = to_persian_digits(f"{percent_int}٪")
-        return (
-            f"\n\n{stats_emoji} {bar} {percent_str}\n"
-            f"\n"
-            f"{download_emoji} مصرف: {used_str} از {total_str}\n"
-            f"{time_emoji} اعتبار: {time_left_text}"
-        )
-    else:
-        return (
-            f"\n\n{stats_emoji} {bar} {percent_int}%\n"
-            f"\n"
-            f"{download_emoji} Used: {used_str} of {total_str}\n"
-            f"{time_emoji} Expiry: {time_left_text}"
-        )
-
-
 def generate_qr_code(data: str, order_id: int):
-    """ساخت QR Code و برگردوندن به فرمت مناسب aiogram 3.x"""
-    logger.debug(f"QR Code generation for order #{order_id}")
-    qr = qrcode.QRCode(
-        version=5,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=14,
-        border=2
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color="#000000", back_color="#FFFFFF").convert('RGB')
-    bio = BytesIO()
-    bio.name = f'qrcode_{order_id}.png'
-    qr_img.save(bio, 'PNG', quality=95)
-    bio.seek(0)
-    return BufferedInputFile(bio.read(), filename=f'qrcode_{order_id}.png')
+    return _generate_qr_code(data, order_id, logger)
 
 
 from wireguard_card_generator import (
@@ -24079,25 +23612,9 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
     }
     return links, email
 
-DOWNLOADED_FILES = {}
 async def _delete_downloaded_files(user_id: int, chat_id: int = None):
-    """پاک کردن همه فایل‌های ارسال‌شده به کاربر"""
-    if user_id not in DOWNLOADED_FILES:
-        return
-    
-    for item in list(DOWNLOADED_FILES[user_id]):
-        try:
-            await bot.delete_message(
-                chat_id=item.get('chat_id', chat_id),
-                message_id=item['message_id']
-            )
-            logger.info(f"🗑 Download file for user {user_id} deleted (msg_id: {item['message_id']})")
-        except Exception as e:
-            logger.debug(f"Error deleting file: {e}")
-    
-    DOWNLOADED_FILES[user_id].clear()
-    del DOWNLOADED_FILES[user_id]
-    
+    await _delete_downloaded_files_impl(user_id, chat_id, bot, logger)
+
 
 async def _render_config_page(callback: CallbackQuery, order_id: int, page: int = 0):
     """نمایش صفحه‌بندی‌شده کانفیگ - بدون هدر و بدون دکمه بروزرسانی"""
@@ -24430,12 +23947,7 @@ async def copy_all_links_file(callback: CallbackQuery):
         )
 
         # ✅ ذخیره message_id برای پاک کردن بعدی
-        if user_id not in DOWNLOADED_FILES:
-            DOWNLOADED_FILES[user_id] = []
-        DOWNLOADED_FILES[user_id].append({
-            'message_id': sent_msg.message_id,
-            'chat_id': user_id
-        })
+        track_downloaded_file(user_id, sent_msg.message_id, user_id)
 
         logger.info(f"📥 Links file (order #{order_id}) sent to user {user_id} sent")
         await callback.answer("✅ فایل ارسال شد" if lang == "fa" else "✅ File sent")
