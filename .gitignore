@@ -36,3 +36,5 @@ test/
 backups_pre_sms/
 graphify-out/
 .claude/
+.agents/
+skills-lock.json
