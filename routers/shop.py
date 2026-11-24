@@ -584,7 +584,17 @@ async def show_ready_categories(callback: CallbackQuery):
                 style="primary"
             )
         ])
-    
+
+    # ✅ دکمه انتخاب هوشمند (فقط در حالت خرید، نه تمدید)
+    if not is_extend:
+        buttons.append([
+            InlineKeyboardButton(
+                text=t('smart_choice_5bfca9c5d9', lang),
+                callback_data="ai_purchase_advisor_start",
+                style="primary"
+            )
+        ])
+
     # ─── دکمه بازگشت / انصراف ───
     if is_extend and extend_order_id:
         back_text = f"🔙 {t('cancel_extension_904323bdf2', lang)}"

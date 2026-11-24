@@ -1,3 +1,7 @@
+import sys
+if __name__ == "__main__":
+    sys.modules.setdefault("main", sys.modules[__name__])
+
 user_ai_requests = {}
 from strings import t
 import asyncio
@@ -1727,7 +1731,7 @@ async def blacklist_middleware_callback(handler, event: CallbackQuery, data: dic
             return await handler(event, data)
         await notify_blacklisted_user(user.id)
         lang = get_user(user.id).get('lang', 'fa')
-        await safe_answer(event, t('access_blocked_96a5fa848b', lang), show_alert=True)
+        await safe_answer(event, t('access_blocked_96a5fa848b', lang), alert=True)
         return
     return await handler(event, data)
 

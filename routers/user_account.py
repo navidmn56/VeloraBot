@@ -34,7 +34,7 @@ from utils.helpers import (
     premium_emoji,
 )
 from daily_usage_system import gregorian_to_jalali, to_persian_digits
-from emoji_sticker_system import send_sticker
+from emoji_sticker_system import send_sticker as _send_sticker_impl
 from logger_system import logger
 from routers.admin_packages import log_system
 from routers.admin_packages import get_language_keyboard
@@ -57,6 +57,25 @@ def get_bot() -> Optional[Bot]:
     if main_mod and hasattr(main_mod, "bot"):
         return getattr(main_mod, "bot")
     return None
+
+
+async def send_sticker(
+    chat_id: int,
+    sticker_key: str,
+    fallback_emoji: str = "📌",
+    reply_markup: Any = None,
+) -> bool:
+    bot_inst = get_bot()
+    if bot_inst is None:
+        return False
+    return await _send_sticker_impl(
+        bot_inst,
+        chat_id,
+        sticker_key,
+        fallback_emoji,
+        reply_markup,
+        logger,
+    )
 
 
 def _resolve_main_handler(name: str):

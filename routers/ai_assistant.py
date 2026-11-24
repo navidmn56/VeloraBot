@@ -1668,6 +1668,7 @@ async def start_ai_support_chat(callback: CallbackQuery):
         welcome_text,
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t('smart_choice_5bfca9c5d9', lang), callback_data="ai_purchase_advisor_start", style="success")],
             [InlineKeyboardButton(text=t('clear_memory_d5ce7659f2', lang), callback_data="clear_ai_memory", style="primary")],
             [InlineKeyboardButton(text=t('exit_ai_chat_485827e746', lang), callback_data="exit_ai_chat", style="danger")]
         ])

@@ -45,7 +45,7 @@ from qr_file_system import (
 )
 from wireguard_system import build_wireguard_config
 from wireguard_card_generator import generate_wireguard_qr_code
-from emoji_sticker_system import send_sticker
+from emoji_sticker_system import send_sticker as _send_sticker_impl
 from logger_system import logger
 from routers.admin_packages import log_system
 from routers.admin_packages import format_volume
@@ -73,6 +73,26 @@ def get_bot() -> Optional[Bot]:
     main_mod = sys.modules.get("main")
     if main_mod and hasattr(main_mod, "bot"):
         return getattr(main_mod, "bot")
+    return None
+
+
+async def send_sticker(
+    chat_id: int,
+    sticker_key: str,
+    fallback_emoji: str = "📌",
+    reply_markup: Any = None,
+) -> bool:
+    bot_inst = get_bot()
+    if bot_inst is None:
+        return False
+    return await _send_sticker_impl(
+        bot_inst,
+        chat_id,
+        sticker_key,
+        fallback_emoji,
+        reply_markup,
+        logger,
+    )
     return None
 
 
@@ -1213,7 +1233,7 @@ async def show_wireguard_config(callback: CallbackQuery):
 
     bot = get_bot()
     if bot:
-        qr_img = generate_wireguard_qr_code(config_text)
+        qr_img = generate_wireguard_qr_code(config_text, order_id, order_data={'lang': lang})
         await bot.send_photo(
             callback.message.chat.id,
             qr_img,
@@ -1340,7 +1360,7 @@ async def show_single_qr(callback: CallbackQuery):
 
     try:
         if target_link.strip().startswith("[Interface]"):
-            qr_img = generate_wireguard_qr_code(target_link)
+            qr_img = generate_wireguard_qr_code(target_link, order_id, order_data={'lang': lang})
         else:
             qr_img = generate_qr_code(target_link, order_id)
 
