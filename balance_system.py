@@ -5,9 +5,12 @@ balance_system.py
 بر اساس ارزان‌ترین بسته هر دسته
 """
 
+from strings import t
 import html as html_module
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
+
+from database import TEHRAN_TZ, now_tehran, now_tehran_iso
 
 from aiogram import F
 from aiogram.types import (
@@ -19,12 +22,18 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 from aiogram.enums import ParseMode
+from utils.guards import admin_only
+from utils.helpers import safe_answer
 
 
 # ─────────────────────────────────────────────────────
 # Context - ماژول اصلی از طریق register تزریق می‌شود
 # ─────────────────────────────────────────────────────
 _main: Any = None
+
+
+def _get_current_admin_id() -> int:
+    return getattr(_main, "ADMIN_ID_INT", 0)
 
 
 def register_balance_handlers(dp, main_module):
@@ -113,7 +122,7 @@ def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: st
     
     order_id = order.get('order_id', '?')
     amount = order.get('amount', 0) or order.get('price', 0)
-    amount_display = f"{amount:,} تومان" if lang == "fa" else f"{amount:,} Toman"
+    amount_display = t('toman_287614cf02', lang, fa_parts=lambda: (f'{amount:,}',), en_parts=lambda: (f'{amount:,}',))
     
     premium_emoji = getattr(_main, 'premium_emoji', lambda n, f: f)
     card_emoji = premium_emoji('card', '💳')
@@ -138,56 +147,10 @@ def _build_balance_receipt_text_fallback(order: dict, lang: str = "fa", mode: st
     card_num = ' '.join([bank_card_number[i:i+4] for i in range(0, 16, 4)])
     
     if mode == "reminder":
-        if lang == "fa":
-            return (
-                f"{RLM}{receipt_emoji} <b>درخواست ارسال فیش شارژ</b>\n\n"
-                f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
-                f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
-                f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
-                f"{RLM}1. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
-                f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
-            )
-        else:
-            return (
-                f"{receipt_emoji} <b>Top-Up Receipt Request</b>\n\n"
-                f"{id_emoji} Order: <code>#{order_id}</code>\n"
-                f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
-                f"{note_emoji} <b>Important Notes:</b>\n"
-                f"1. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
-                f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
-            )
+        return t('b_top_up_receipt_request_b_o_b50eff979a', lang, fa_parts=lambda: (f'{RLM}', f'{receipt_emoji}', f'{RLM}', f'{id_emoji}', f'{order_id}', f'{RLM}', f'{money_emoji}', f'{amount_display}', f'{RLM}', f'{note_emoji}', f'{RLM}', f'{order_id}', f'{RLM}', f'{receipt_emoji}'), en_parts=lambda: (f'{receipt_emoji}', f'{id_emoji}', f'{order_id}', f'{money_emoji}', f'{amount_display}', f'{note_emoji}', f'{order_id}', f'{receipt_emoji}'))
     
     # mode == "card"
-    if lang == "fa":
-        return (
-            f"{RLM}{wallet_emoji} <b>پرداخت افزایش موجودی</b>\n\n"
-            f"{RLM}{id_emoji} سفارش: <code>#{order_id}</code>\n"
-            f"{RLM}{money_emoji} مبلغ شارژ: <b>{amount_display}</b>\n\n"
-            f"{RLM}{card_emoji} <b>شماره کارت</b>\n"
-            f"{RLM}<code>{card_num}</code>\n"
-            f"{RLM}{user_emoji} به نام: {bank_card_holder}\n"
-            f"{RLM}{star_emoji} بانک: {bank_name}\n"
-            f"{RLM}{info_emoji} پشتیبانی: {support_display}\n\n"
-            f"{RLM}{note_emoji} <b>نکات مهم:</b>\n"
-            f"{RLM}1. مبلغ دقیق سفارش را واریز کنید.\n"
-            f"{RLM}2. شماره سفارش <code>#{order_id}</code> را تا زمان تأیید پرداخت نگه دارید.\n\n"
-            f"{RLM}{receipt_emoji} <b>لطفاً پس از واریز، تصویر رسید پرداخت را همین‌جا ارسال کنید.</b>"
-        )
-    else:
-        return (
-            f"{wallet_emoji} <b>Balance Top-Up Payment</b>\n\n"
-            f"{id_emoji} Order: <code>#{order_id}</code>\n"
-            f"{money_emoji} Amount: <b>{amount_display}</b>\n\n"
-            f"{card_emoji} <b>Card Number</b>\n"
-            f"<code>{card_num}</code>\n"
-            f"{user_emoji} Holder: {bank_card_holder_en}\n"
-            f"{star_emoji} Bank: {bank_name_en}\n"
-            f"{info_emoji} Support: {support_display}\n\n"
-            f"{note_emoji} <b>Important Notes:</b>\n"
-            f"1. Transfer the exact order amount.\n"
-            f"2. Keep order <code>#{order_id}</code> until payment is confirmed.\n\n"
-            f"{receipt_emoji} <b>After payment, please send the receipt right here.</b>"
-        )
+    return t('b_balance_top_up_payment_b_o_ade33a7207', lang, fa_parts=lambda: (f'{RLM}', f'{wallet_emoji}', f'{RLM}', f'{id_emoji}', f'{order_id}', f'{RLM}', f'{money_emoji}', f'{amount_display}', f'{RLM}', f'{card_emoji}', f'{RLM}', f'{card_num}', f'{RLM}', f'{user_emoji}', f'{bank_card_holder}', f'{RLM}', f'{star_emoji}', f'{bank_name}', f'{RLM}', f'{info_emoji}', f'{support_display}', f'{RLM}', f'{note_emoji}', f'{RLM}', f'{RLM}', f'{order_id}', f'{RLM}', f'{receipt_emoji}'), en_parts=lambda: (f'{wallet_emoji}', f'{id_emoji}', f'{order_id}', f'{money_emoji}', f'{amount_display}', f'{card_emoji}', f'{card_num}', f'{user_emoji}', f'{bank_card_holder_en}', f'{star_emoji}', f'{bank_name_en}', f'{info_emoji}', f'{support_display}', f'{note_emoji}', f'{order_id}', f'{receipt_emoji}'))
 
 
 def get_balance_quick_amounts() -> List[Dict[str, Any]]:
@@ -263,7 +226,7 @@ def create_balance_order(user_id: int, amount: int) -> int:
         return 0
 
     orders = _main.orders
-    now = datetime.now()
+    now = now_tehran()
 
     max_id = max(
         [o.get('order_id', 0) for o in orders.values() if isinstance(o, dict)],
@@ -310,8 +273,8 @@ def create_balance_order(user_id: int, amount: int) -> int:
         'email': None,
         'payment_method': 'card',
         'rejected_reason': '',
-        'created_at': now.isoformat(),
-        'updated_at': now.isoformat()
+        'created_at': now_tehran_iso(),
+        'updated_at': now_tehran_iso()
     }
 
     _main.save_json(_main.DB_FILES['orders'], orders)
@@ -330,7 +293,7 @@ def create_balance_order(user_id: int, amount: int) -> int:
 async def increase_balance(callback: CallbackQuery):
     """نمایش صفحه افزایش موجودی با مبالغ پیشنهادی"""
     if _main is None:
-        await callback.answer("❌ خطا در سیستم", show_alert=True)
+        await callback.answer(t('i18n_system_error', 'fa'), show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -338,7 +301,7 @@ async def increase_balance(callback: CallbackQuery):
     # ─── چک لیست سیاه ───
     if user_id in _main.BLACKLIST:
         await _main.notify_blacklisted_user(user_id)
-        await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
+        await callback.answer(t('access_blocked_96a5fa848b', _main.get_user(user_id).get('lang', 'fa')), show_alert=True)
         return
 
     # ─── چک تایید کاربر ───
@@ -347,7 +310,7 @@ async def increase_balance(callback: CallbackQuery):
         lang = _main.get_user(user_id).get('lang', 'fa')
         await callback.answer(
             msg if lang == "fa"
-            else "⚠️ Your account is pending admin approval.",
+            else t('i18n_pending_admin_approval', lang),
             show_alert=True
         )
         return
@@ -356,8 +319,7 @@ async def increase_balance(callback: CallbackQuery):
     if not await _main.check_membership(user_id):
         lang = _main.get_user(user_id).get('lang', 'fa')
         await callback.answer(
-            "❌ لطفاً ابتدا عضویت خود را تأیید کنید!" if lang == "fa"
-            else "❌ Please verify your membership first!",
+            t('please_verify_your_membershi_28b48b1f0b', lang),
             show_alert=True
         )
         return
@@ -391,10 +353,10 @@ async def increase_balance(callback: CallbackQuery):
         # انتخاب نام بر اساس زبان
         if lang == "fa":
             name = item['category_name']
-            btn_text = f"کافی برای {name} · {amount:,} ت"
+            btn_text = t('enough_for_t_8b1a8ebe1b', lang, fa_parts=lambda: (f'{name}', f'{amount:,}'))
         else:
             name = item['category_name_en']
-            btn_text = f"Enough for {name} · {amount:,} T"
+            btn_text = t('enough_for_t_8b1a8ebe1b', lang, en_parts=lambda: (f'{name}', f'{amount:,}'))
 
         buttons.append([InlineKeyboardButton(
             text=btn_text,
@@ -404,10 +366,7 @@ async def increase_balance(callback: CallbackQuery):
 
     # ✅ گران‌ترین بسته
     if max_package_amount > 0 and max_package_amount not in seen_amounts:
-        if lang == "fa":
-            btn_text = f"{max_package_amount:,} تومان"
-        else:
-            btn_text = f"{max_package_amount:,} Toman"
+        btn_text = t('toman_287614cf02', lang, fa_parts=lambda: (f'{max_package_amount:,}',), en_parts=lambda: (f'{max_package_amount:,}',))
 
         buttons.append([InlineKeyboardButton(
             text=btn_text,
@@ -417,31 +376,20 @@ async def increase_balance(callback: CallbackQuery):
 
     # ✅ مبلغ دلخواه
     buttons.append([InlineKeyboardButton(
-        text="✏️ مبلغ دلخواه" if lang == "fa" else "✏️ Custom Amount",
+        text=t('custom_amount_d9e883892b', lang),
         callback_data="custom_amount_input",
         style="primary"
     )])
 
     # ✅ منوی اصلی
     buttons.append([InlineKeyboardButton(
-        text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+        text=t('main_menu_0cdd07a7cc', lang),
         callback_data="back_to_main",
         style="danger"
     )])
 
     # ─── متن پیام ───
-    if lang == "fa":
-        text = (
-            f"{_main.premium_emoji('wallet', '💰')} <b>افزایش موجودی</b>\n\n"
-            f"{_main.premium_emoji('note', '📝')} "
-            f"یکی از مبالغ زیر را انتخاب کنید یا مبلغ دلخواه وارد نمایید:"
-        )
-    else:
-        text = (
-            f"{_main.premium_emoji('wallet', '💰')} <b>Increase Balance</b>\n\n"
-            f"{_main.premium_emoji('note', '📝')} "
-            f"Choose an amount or enter custom:"
-        )
+    text = t('b_increase_balance_b_choose_af9dd9e091', lang, fa_parts=lambda: (f"{_main.premium_emoji('wallet', '💰')}", f"{_main.premium_emoji('note', '📝')}"), en_parts=lambda: (f"{_main.premium_emoji('wallet', '💰')}", f"{_main.premium_emoji('note', '📝')}"))
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -457,36 +405,33 @@ async def increase_balance(callback: CallbackQuery):
     # ─── state با حفظ کوپن ───
     _main.user_states[user_id] = {
         'awaiting_balance_selection': True,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': now_tehran_iso()
     }
     if coupon_applied and coupon_code:
         _main.user_states[user_id]['coupon_code'] = coupon_code
         _main.user_states[user_id]['coupon_discount'] = coupon_discount
         _main.user_states[user_id]['coupon_applied'] = True
 
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+    await safe_answer(callback)
 
 
 async def quick_amount_selected(callback: CallbackQuery):
     """انتخاب مبلغ پیشنهادی از دکمه‌ها"""
     if _main is None:
-        await callback.answer("❌ خطا", show_alert=True)
+        await callback.answer(t('i18n_system_error', 'fa'), show_alert=True)
         return
 
     user_id = callback.from_user.id
 
     if user_id in _main.BLACKLIST:
         await _main.notify_blacklisted_user(user_id)
-        await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
+        await callback.answer(t('access_blocked_96a5fa848b', _main.get_user(user_id).get('lang', 'fa')), show_alert=True)
         return
 
     try:
         amount = int(callback.data.split("_")[2])
     except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        await callback.answer(t('i18n_process_error', _main.get_user(user_id).get('lang', 'fa')), show_alert=True)
         return
 
     lang = _main.get_user(user_id).get('lang', 'fa')
@@ -496,9 +441,7 @@ async def quick_amount_selected(callback: CallbackQuery):
 
     if amount < min_charge or amount > max_charge:
         await callback.answer(
-            f"❌ مبلغ باید بین {min_charge:,} تا {max_charge:,} تومان باشد"
-            if lang == "fa"
-            else f"❌ Amount must be between {min_charge:,} and {max_charge:,} Toman",
+            t('amount_must_be_between_and_t_f29ddc7a2e', lang, fa_parts=lambda: (f'{min_charge:,}', f'{max_charge:,}'), en_parts=lambda: (f'{min_charge:,}', f'{max_charge:,}')),
             show_alert=True
         )
         return
@@ -514,9 +457,7 @@ async def quick_amount_selected(callback: CallbackQuery):
         order_id = create_balance_order(user_id, amount)
     except Exception as e:
         err_msg = (
-            "⚠️ در حال حاضر امکان صدور فاکتور با شناسه پرداخت مقدور نیست. لطفاً دقایقی دیگر تلاش کنید."
-            if lang == "fa"
-            else "⚠️ Unable to issue payment invoice right now. Please try again in a few minutes."
+            t('unable_to_issue_payment_invo_287f5f0d00', lang)
         )
         await callback.answer(err_msg, show_alert=True)
         return
@@ -531,15 +472,15 @@ async def quick_amount_selected(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({payable_num * 10:,})",
+            text=f"📋 {t('copy_amount_in_rial_2426b59317', lang)} ({payable_num * 10:,})",
             copy_text=CopyTextButton(text=str(payable_num * 10))
         )],
         [InlineKeyboardButton(
-            text=f"💳 {'کپی شماره کارت' if lang=='fa' else 'Copy Card Number'}",
+            text=f"💳 {t('copy_card_number_0a73534ca5', lang)}",
             copy_text=CopyTextButton(text=card_num_copy)
         )],
         [InlineKeyboardButton(
-            text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel Payment'}",
+            text=f"❌ {t('cancel_payment_77ac7fd08e', lang)}",
             callback_data=f"cancel_order_{order_id}",
             style="danger"
         )]
@@ -557,30 +498,27 @@ async def quick_amount_selected(callback: CallbackQuery):
     _main.user_states[user_id] = {
         'awaiting_receipt': True,
         'current_order_id': order_id,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': now_tehran_iso()
     }
     if coupon_applied and coupon_code:
         _main.user_states[user_id]['coupon_code'] = coupon_code
         _main.user_states[user_id]['coupon_applied'] = True
         _main.user_states[user_id]['coupon_discount'] = coupon_discount or 0
 
-    try:
-        await callback.answer("✅ سفارش ایجاد شد" if lang == "fa" else "✅ Order created")
-    except Exception:
-        pass
+    await safe_answer(callback, t('order_created_56134af734', lang))
 
 
 async def custom_amount_input(callback: CallbackQuery):
     """درخواست مبلغ دلخواه"""
     if _main is None:
-        await callback.answer("❌ خطا", show_alert=True)
+        await callback.answer(t('i18n_system_error', 'fa'), show_alert=True)
         return
 
     user_id = callback.from_user.id
 
     if user_id in _main.BLACKLIST:
         await _main.notify_blacklisted_user(user_id)
-        await callback.answer("⛔ دسترسی مسدود شده", show_alert=True)
+        await callback.answer(t('access_blocked_96a5fa848b', _main.get_user(user_id).get('lang', 'fa')), show_alert=True)
         return
 
     lang = _main.get_user(user_id).get('lang', 'fa')
@@ -593,26 +531,11 @@ async def custom_amount_input(callback: CallbackQuery):
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
 
-    if lang == "fa":
-        text = (
-            f"{_main.premium_emoji('wallet', '💰')} <b>مبلغ دلخواه</b>\n\n"
-            f"{_main.premium_emoji('warning', '⚠️')} "
-            f"حداقل: {min_charge:,} | حداکثر: {max_charge:,}\n\n"
-            f"{_main.premium_emoji('note', '📝')} "
-            f"لطفاً مبلغ را به تومان وارد کنید:"
-        )
-    else:
-        text = (
-            f"{_main.premium_emoji('wallet', '💰')} <b>Custom Amount</b>\n\n"
-            f"{_main.premium_emoji('warning', '⚠️')} "
-            f"Min: {min_charge:,} | Max: {max_charge:,}\n\n"
-            f"{_main.premium_emoji('note', '📝')} "
-            f"Please enter amount in Toman:"
-        )
+    text = t('b_custom_amount_b_min_max_pl_1d56df4786', lang, fa_parts=lambda: (f"{_main.premium_emoji('wallet', '💰')}", f"{_main.premium_emoji('warning', '⚠️')}", f'{min_charge:,}', f'{max_charge:,}', f"{_main.premium_emoji('note', '📝')}"), en_parts=lambda: (f"{_main.premium_emoji('wallet', '💰')}", f"{_main.premium_emoji('warning', '⚠️')}", f'{min_charge:,}', f'{max_charge:,}', f"{_main.premium_emoji('note', '📝')}"))
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="❌ انصراف" if lang == "fa" else "❌ Cancel",
+            text=t('cancel_4197bafba5', lang),
             callback_data="cancel_increase_balance",
             style="danger"
         )]
@@ -627,23 +550,20 @@ async def custom_amount_input(callback: CallbackQuery):
 
     _main.user_states[user_id] = {
         'awaiting_amount': True,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': now_tehran_iso()
     }
     if coupon_applied and coupon_code:
         _main.user_states[user_id]['coupon_code'] = coupon_code
         _main.user_states[user_id]['coupon_discount'] = coupon_discount
         _main.user_states[user_id]['coupon_applied'] = True
 
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+    await safe_answer(callback)
 
 
 async def cancel_increase_balance(callback: CallbackQuery):
     """انصراف از افزایش موجودی - کوپن باقی می‌ماند"""
     if _main is None:
-        await callback.answer("❌ خطا", show_alert=True)
+        await callback.answer(t('i18n_system_error', 'fa'), show_alert=True)
         return
 
     user_id = callback.from_user.id
@@ -675,11 +595,7 @@ async def cancel_increase_balance(callback: CallbackQuery):
     is_admin = (user_id == _main.ADMIN_ID_INT)
 
     # ✅ ساخت متن - خط کوپن فقط اگه واقعاً کوپن داشت
-    if lang == "fa":
-        text = f"{_main.premium_emoji('rocket', '🚀')} منوی اصلی"
-
-    else:
-        text = f"{_main.premium_emoji('rocket', '🚀')} Main Menu"
+    text = t('main_menu_c928863059', lang, fa_parts=lambda: (f"{_main.premium_emoji('rocket', '🚀')}",), en_parts=lambda: (f"{_main.premium_emoji('rocket', '🚀')}",))
 
 
     await callback.message.answer(
@@ -688,10 +604,7 @@ async def cancel_increase_balance(callback: CallbackQuery):
         parse_mode=ParseMode.HTML
     )
 
-    try:
-        await callback.answer("❌ عملیات لغو شد" if lang == "fa" else "❌ Cancelled")
-    except Exception:
-        pass
+    await safe_answer(callback, t('cancelled_8a3eb8aae6', lang))
 
 
 async def process_balance_amount(message: Message):
@@ -711,7 +624,7 @@ async def process_balance_amount(message: Message):
     coupon_discount = user_state.get('coupon_discount')
     coupon_applied = user_state.get('coupon_applied', False)
 
-    cancel_text = "❌ انصراف" if lang == "fa" else "❌ Cancel"
+    cancel_text = t('cancel_4197bafba5', lang)
 
     # ─── انصراف ───
     if message.text == cancel_text:
@@ -726,14 +639,14 @@ async def process_balance_amount(message: Message):
             }
 
         await message.reply(
-            "❌ عملیات لغو شد" if lang == "fa" else "❌ Operation cancelled",
+            t('operation_cancelled_718e864eca', lang),
             reply_markup=ReplyKeyboardRemove()
         )
 
         is_admin = (user_id == _main.ADMIN_ID_INT)
         await message.answer(
             f"{_main.premium_emoji('rocket', '🚀')} "
-            f"{'منوی اصلی' if lang=='fa' else 'Main Menu'}",
+            f"{t('main_menu_9ae3456442', lang)}",
             reply_markup=_main.get_main_keyboard(is_admin, lang, user_id)
         )
         return
@@ -759,9 +672,7 @@ async def process_balance_amount(message: Message):
                 order_id = create_balance_order(user_id, amount)
             except Exception as e:
                 err_msg = (
-                    "⚠️ در حال حاضر امکان صدور فاکتور با شناسه پرداخت مقدور نیست. لطفاً دقایقی دیگر تلاش کنید."
-                    if lang == "fa"
-                    else "⚠️ Unable to issue payment invoice right now. Please try again in a few minutes."
+                    t('unable_to_issue_payment_invo_287f5f0d00', lang)
                 )
                 await message.reply(err_msg)
                 return
@@ -776,15 +687,15 @@ async def process_balance_amount(message: Message):
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=f"📋 {'کپی مبلغ به ریال' if lang=='fa' else 'Copy Amount in Rial'} ({payable_num * 10:,})",
+                    text=f"📋 {t('copy_amount_in_rial_2426b59317', lang)} ({payable_num * 10:,})",
                     copy_text=CopyTextButton(text=str(payable_num * 10))
                 )],
                 [InlineKeyboardButton(
-                    text=f"💳 {'کپی شماره کارت' if lang=='fa' else 'Copy Card Number'}",
+                    text=f"💳 {t('copy_card_number_0a73534ca5', lang)}",
                     copy_text=CopyTextButton(text=card_num_copy)
                 )],
                 [InlineKeyboardButton(
-                    text=f"❌ {'انصراف از پرداخت' if lang=='fa' else 'Cancel payment'}",
+                    text=f"❌ {t('cancel_payment_cfa1dce634', lang)}",
                     callback_data=f"cancel_order_{order_id}",
                     style="danger"
                 )]
@@ -796,7 +707,7 @@ async def process_balance_amount(message: Message):
             _main.user_states[user_id] = {
                 'awaiting_receipt': True,
                 'current_order_id': order_id,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': now_tehran_iso()
             }
             if coupon_applied and coupon_code:
                 _main.user_states[user_id]['coupon_code'] = coupon_code
@@ -806,20 +717,14 @@ async def process_balance_amount(message: Message):
         else:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=f"❌ {'انصراف از شارژ' if lang=='fa' else 'Cancel Charge'}",
+                    text=f"❌ {t('cancel_charge_bb568a81be', lang)}",
                     callback_data="cancel_increase_balance",
                     style="danger"
                 )]
             ])
 
             await message.reply(
-                f"{_main.premium_emoji('danger', '❌')} "
-                f"مبلغ باید بین {min_charge:,} تا {max_charge:,} تومان باشد\n\n"
-                f"{_main.premium_emoji('note', '📝')} لطفاً مجدداً مبلغ را وارد کنید:"
-                if lang == "fa"
-                else f"{_main.premium_emoji('danger', '❌')} "
-                     f"Amount must be between {min_charge:,} and {max_charge:,} Toman\n\n"
-                     f"{_main.premium_emoji('note', '📝')} Please enter again:",
+                t('amount_must_be_between_and_t_2da2e919b7', lang, fa_parts=lambda: (f"{_main.premium_emoji('danger', '❌')}", f'{min_charge:,}', f'{max_charge:,}', f"{_main.premium_emoji('note', '📝')}"), en_parts=lambda: (f"{_main.premium_emoji('danger', '❌')}", f'{min_charge:,}', f'{max_charge:,}', f"{_main.premium_emoji('note', '📝')}")),
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
@@ -827,18 +732,14 @@ async def process_balance_amount(message: Message):
     except ValueError:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=f"❌ {'انصراف از شارژ' if lang=='fa' else 'Cancel Charge'}",
+                text=f"❌ {t('cancel_charge_bb568a81be', lang)}",
                 callback_data="cancel_increase_balance",
                 style="danger"
             )]
         ])
 
         await message.reply(
-            f"❌ لطفاً یک عدد معتبر وارد کنید\n\n"
-            f"{_main.premium_emoji('note', '📝')} مثال: 50000"
-            if lang == "fa"
-            else f"❌ Please enter a valid number\n\n"
-                 f"{_main.premium_emoji('note', '📝')} Example: 50000",
+            t('please_enter_a_valid_number_aea53232ee', lang, fa_parts=lambda: (f"{_main.premium_emoji('note', '📝')}",), en_parts=lambda: (f"{_main.premium_emoji('note', '📝')}",)),
             reply_markup=keyboard,
             parse_mode=ParseMode.HTML
         )
@@ -848,11 +749,10 @@ async def process_balance_amount(message: Message):
 # هندلرهای ادمین
 # ─────────────────────────────────────────────────────
 
+@admin_only(answer_on_denied=False, admin_id_getter=_get_current_admin_id)
 async def admin_balance(callback: CallbackQuery):
     """لیست درخواست‌های شارژ برای ادمین"""
     if _main is None:
-        return
-    if callback.from_user.id != _main.ADMIN_ID_INT:
         return
 
     lang = _main.get_user(callback.from_user.id).get('lang', 'fa')
@@ -865,15 +765,11 @@ async def admin_balance(callback: CallbackQuery):
     ]
 
     if not pending:
-        text = "✅ هیچ درخواست شارژی وجود ندارد" if lang == "fa" \
-            else "✅ No pending balance requests"
+        text = t('no_pending_balance_requests_17586ef2d6', lang)
         await callback.message.edit_text(
             text, reply_markup=_main.get_admin_keyboard(lang)
         )
-        try:
-            await callback.answer()
-        except Exception:
-            pass
+        await safe_answer(callback)
         return
 
     buttons = []
@@ -891,25 +787,21 @@ async def admin_balance(callback: CallbackQuery):
         )])
 
     buttons.append([InlineKeyboardButton(
-        text=f"🔙 {'برگشت' if lang=='fa' else 'Back'}",
+        text=f"🔙 {t('back_d35a19b459', lang)}",
         callback_data="admin_panel"
     )])
 
-    text = "💰 درخواست‌های شارژ" if lang == "fa" else "💰 Balance Requests"
+    text = t('balance_requests_0db0f10b74', lang)
     await callback.message.edit_text(
         text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+    await safe_answer(callback)
 
 
+@admin_only(answer_on_denied=False, admin_id_getter=_get_current_admin_id)
 async def view_balance(callback: CallbackQuery):
     """مشاهده درخواست شارژ"""
     if _main is None:
-        return
-    if callback.from_user.id != _main.ADMIN_ID_INT:
         return
 
     lang = _main.get_user(callback.from_user.id).get('lang', 'fa')
@@ -918,61 +810,44 @@ async def view_balance(callback: CallbackQuery):
         parts = callback.data.split("_")
         order_id = int(parts[2])
     except (ValueError, IndexError):
-        await callback.answer("❌ خطا در پردازش", show_alert=True)
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
         return
 
     order = _main.orders.get(str(order_id))
     if not order:
-        await callback.answer("❌ سفارش یافت نشد", show_alert=True)
+        await callback.answer(t('i18n_order_not_found', lang), show_alert=True)
         return
 
     try:
         u = await _main.bot.get_chat(order['user_id'])
-        uname = u.first_name or "کاربر"
+        uname = u.first_name or t('user_392d8d9d46', lang)
         uname_escaped = html_module.escape(uname)
     except Exception:
-        uname_escaped = "کاربر" if lang == 'fa' else "User"
+        uname_escaped = t('user_392d8d9d46', lang)
 
-    date_escaped = html_module.escape(order.get('date', 'نامشخص'))
+    date_escaped = html_module.escape(order.get('date', t('i18n_unknown', lang)))
     amount = order.get('amount', 0)
     status = order.get('status', 'unknown')
 
-    if lang == "fa":
-        text = f"""
-💰 <b>درخواست شارژ #{order_id}</b>
-
-👤 کاربر: {uname_escaped} (ID: {order['user_id']})
-💰 مبلغ: {amount:,} تومان
-📅 تاریخ: {date_escaped}
-📊 وضعیت: {status}
-"""
-    else:
-        text = f"""
-💰 <b>Balance Request #{order_id}</b>
-
-👤 User: {uname_escaped} (ID: {order['user_id']})
-💰 Amount: {amount:,} Toman
-📅 Date: {date_escaped}
-📊 Status: {status}
-"""
+    text = t('b_balance_request_b_user_id_1f8586653d', lang, fa_parts=lambda: (f'{order_id}', f'{uname_escaped}', f"{order['user_id']}", f'{amount:,}', f'{date_escaped}', f'{status}'), en_parts=lambda: (f'{order_id}', f'{uname_escaped}', f"{order['user_id']}", f'{amount:,}', f'{date_escaped}', f'{status}'))
 
     buttons = []
     if status in ['pending_balance_charge', 'pending']:
         buttons.append([
             InlineKeyboardButton(
-                text="✅ تایید" if lang == 'fa' else "✅ Approve",
+                text=t('approve_8e35ad3e33', lang),
                 callback_data=f"approve_balance_{order_id}",
                 style="success"
             ),
             InlineKeyboardButton(
-                text="❌ رد" if lang == 'fa' else "❌ Reject",
+                text=t('reject_6ed3999c19', lang),
                 callback_data=f"reject_balance_{order_id}",
                 style="danger"
             )
         ])
         buttons.append([
             InlineKeyboardButton(
-                text="💰 پرداخت دلخواه" if lang == 'fa' else "💰 Custom Payment",
+                text=t('custom_payment_36f7f89c87', lang),
                 callback_data=f"custom_payment_receipt_{order_id}",
                 style="primary"
             )
@@ -980,7 +855,7 @@ async def view_balance(callback: CallbackQuery):
         if order.get('receipt_photo_id'):
             buttons.append([
                 InlineKeyboardButton(
-                    text="📸 مشاهده فیش" if lang == 'fa' else "📸 View Receipt",
+                    text=t('view_receipt_575648cc06', lang),
                     callback_data=f"view_receipt_{order_id}",
                     style="primary"
                 )
@@ -988,7 +863,7 @@ async def view_balance(callback: CallbackQuery):
 
     buttons.append([
         InlineKeyboardButton(
-            text=f"🔙 {'برگشت' if lang=='fa' else 'Back'}",
+            text=f"🔙 {t('back_d35a19b459', lang)}",
             callback_data="admin_balance"
         )
     ])
@@ -997,10 +872,7 @@ async def view_balance(callback: CallbackQuery):
         text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         parse_mode=ParseMode.HTML
     )
-    try:
-        await callback.answer()
-    except Exception:
-        pass
+    await safe_answer(callback)
 
 
 async def fulfill_balance_order(
@@ -1051,7 +923,7 @@ async def fulfill_balance_order(
         _main.update_order(
             order_id,
             status='approved',
-            approved_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            approved_date=now_tehran().strftime("%Y-%m-%d %H:%M:%S"),
             payment_method=payment_method,
             payment_verified=True,
         )
@@ -1099,17 +971,17 @@ async def fulfill_balance_order(
             await _main.bot.send_message(
                 user_id,
                 f"{_main.premium_emoji('success', '✅')} "
-                f"{'درخواست شارژ شما تایید شد!' if user_lang == 'fa' else 'Balance request approved!'}\n"
+                f"{t('balance_request_approved_7d3ee8eb96', user_lang)}\n"
                 f"{_main.premium_emoji('wallet', '💰')} {amount:,} "
-                f"{'تومان اضافه شد' if user_lang == 'fa' else 'Toman added'}\n"
+                f"{t('toman_added_ad20fe0868', user_lang)}\n"
                 f"{_main.premium_emoji('wallet', '💰')} "
-                f"{'موجودی جدید' if user_lang == 'fa' else 'New balance'}: "
-                f"{new_balance:,} {'تومان' if user_lang == 'fa' else 'Toman'}"
+                f"{t('new_balance_2b9f0edb74', user_lang)}: "
+                f"{new_balance:,} {t('toman_94d5eb7aad', user_lang)}"
                 f"{coupon_msg}",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                     InlineKeyboardButton(
-                        text="🏠 منوی اصلی" if user_lang == 'fa' else "🏠 Main Menu",
+                        text=t('main_menu_0cdd07a7cc', user_lang),
                         callback_data="back_to_main",
                     )
                 ]]),
@@ -1137,11 +1009,10 @@ async def fulfill_balance_order(
         return False, str(e)
 
 
+@admin_only(answer_on_denied=False, admin_id_getter=_get_current_admin_id)
 async def approve_balance(callback: CallbackQuery, order_id: int = None):
     """تایید شارژ حساب (قابل فراخوانی از ادمین در تلگرام)"""
     if _main is None:
-        return
-    if callback.from_user.id != _main.ADMIN_ID_INT:
         return
 
     lang = _main.get_user(callback.from_user.id).get('lang', 'fa')
@@ -1150,16 +1021,16 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
         try:
             order_id = int(callback.data.split("_")[2])
         except (ValueError, IndexError):
-            await callback.answer("❌ خطا در پردازش سفارش", show_alert=True)
+            await callback.answer(t('i18n_order_process_error', lang), show_alert=True)
             return
 
     order = _main.orders.get(str(order_id))
     if not order:
-        await callback.answer("❌ سفارش یافت نشد", show_alert=True)
+        await callback.answer(t('i18n_order_not_found', lang), show_alert=True)
         return
 
     if order.get('status') == 'approved':
-        await callback.answer("⚠️ این سفارش قبلاً تایید شده است!", show_alert=True)
+        await callback.answer(t('i18n_order_already_approved', lang), show_alert=True)
         try:
             await callback.message.delete()
         except Exception:
@@ -1167,7 +1038,7 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
         return
 
     if order.get('status') in ['rejected', 'cancelled', 'deleted']:
-        await callback.answer("⚠️ این سفارش قبلاً رد یا لغو شده است!", show_alert=True)
+        await callback.answer(t('i18n_order_already_rejected', lang), show_alert=True)
         try:
             await callback.message.delete()
         except Exception:
@@ -1180,21 +1051,14 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
     success, msg = await fulfill_balance_order(order_id, approved_by="admin", payment_method="card")
 
     if not success:
-        await callback.answer(f"❌ خطا در تایید شارژ: {msg[:40]}", show_alert=True)
+        await callback.answer(t('i18n_balance_approve_error', lang, fa_parts=lambda: (f'{msg[:40]}',), en_parts=lambda: (f'{msg[:40]}',)), show_alert=True)
         return
 
     # ─── ویرایش پیام ادمین ───
     user_info = _main.get_user(user_id)
     new_balance = user_info.get('balance', 0)
     try:
-        success_text = (
-            f"✅ <b>شارژ حساب #{order_id} تایید شد!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 مبلغ: {amount:,} تومان\n"
-            f"👤 کاربر: {user_id}\n"
-            f"💰 موجودی جدید: {new_balance:,} تومان\n"
-            f"🕐 زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        success_text = t('i18n_balance_approved_admin', lang, fa_parts=lambda: (f'{order_id}', f'{amount:,}', f'{user_id}', f'{new_balance:,}', now_tehran().strftime('%Y-%m-%d %H:%M:%S')), en_parts=lambda: (f'{order_id}', f'{amount:,}', f'{user_id}', f'{new_balance:,}', now_tehran().strftime('%Y-%m-%d %H:%M:%S')))
 
         if callback.message.photo:
             await callback.message.edit_caption(
@@ -1223,16 +1087,15 @@ async def approve_balance(callback: CallbackQuery, order_id: int = None):
             pass
 
     await callback.answer(
-        "✅ شارژ انجام شد" if lang == 'fa' else "✅ Balance added",
+        t('balance_added_34c9e9c47c', lang),
         show_alert=True
     )
 
 
+@admin_only(answer_on_denied=False, admin_id_getter=_get_current_admin_id)
 async def reject_balance(callback: CallbackQuery):
     """رد درخواست شارژ"""
     if _main is None:
-        return
-    if callback.from_user.id != _main.ADMIN_ID_INT:
         return
 
     lang = _main.get_user(callback.from_user.id).get('lang', 'fa')
@@ -1241,12 +1104,12 @@ async def reject_balance(callback: CallbackQuery):
         parts = callback.data.split("_")
         order_id = int(parts[2])
     except (ValueError, IndexError):
-        await callback.answer("❌ فرمت کالبک نامعتبر", show_alert=True)
+        await callback.answer(t('i18n_invalid_callback_format', lang), show_alert=True)
         return
 
     order = _main.orders.get(str(order_id))
     if not order:
-        await callback.answer("❌ سفارش یافت نشد", show_alert=True)
+        await callback.answer(t('i18n_order_not_found', lang), show_alert=True)
         return
 
     _main.update_order(order_id, status='rejected')
@@ -1255,20 +1118,10 @@ async def reject_balance(callback: CallbackQuery):
         user_lang = _main.get_user(order['user_id']).get('lang', 'fa')
         amount = order.get('amount', 0)
 
-        if user_lang == "fa":
-            await _main.bot.send_message(
-                order['user_id'],
-                f"{_main.premium_emoji('fail', '❌')} <b>درخواست شارژ شما رد شد!</b>\n\n"
-                f"{_main.premium_emoji('id', '🆔')} سفارش: #{order_id}\n"
-                f"{_main.premium_emoji('wallet', '💰')} مبلغ: {amount:,} تومان"
-            )
-        else:
-            await _main.bot.send_message(
-                order['user_id'],
-                f"{_main.premium_emoji('fail', '❌')} <b>Your balance request was rejected!</b>\n\n"
-                f"{_main.premium_emoji('id', '🆔')} Order: #{order_id}\n"
-                f"{_main.premium_emoji('wallet', '💰')} Amount: {amount:,} Toman"
-            )
+        await _main.bot.send_message(
+            order['user_id'],
+            t('b_your_balance_request_was_r_14ccca2768', user_lang, fa_parts=lambda: (f"{_main.premium_emoji('fail', '❌')}", f"{_main.premium_emoji('id', '🆔')}", f'{order_id}', f"{_main.premium_emoji('wallet', '💰')}", f'{amount:,}'), en_parts=lambda: (f"{_main.premium_emoji('fail', '❌')}", f"{_main.premium_emoji('id', '🆔')}", f'{order_id}', f"{_main.premium_emoji('wallet', '💰')}", f'{amount:,}'))
+        )
     except Exception as e:
         logger = getattr(_main, 'logger', None)
         if logger:
@@ -1296,7 +1149,7 @@ async def reject_balance(callback: CallbackQuery):
         pass
 
     await callback.answer(
-        "✅ درخواست شارژ رد شد" if lang == 'fa' else "✅ Balance request rejected",
+        t('balance_request_rejected_41a1cb90f2', lang),
         show_alert=True
     )
 

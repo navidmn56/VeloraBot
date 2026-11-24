@@ -42,6 +42,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 from aiogram.enums import ParseMode
+from utils.guards import admin_only
+from strings import t
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -893,7 +895,7 @@ class SMSPaymentManager:
         cfg.setdefault("window_minutes", 30)
         cfg.setdefault("webhook_port", 8088)
         cfg.setdefault("webhook_host", "127.0.0.1")
-        cfg.setdefault("public_url", "https://sms.example.com/api/sms-webhook")
+        cfg.setdefault("public_url", os.getenv("SMS_WEBHOOK_PUBLIC_URL", "").strip())
         cfg.setdefault("allowed_senders", DEFAULT_ALLOWED_SENDERS)
         if not cfg.get("secret_token"):
             cfg["secret_token"] = secrets.token_hex(24)
@@ -922,7 +924,7 @@ class SMSPaymentManager:
         return str(self._get_settings().get("webhook_host", "127.0.0.1"))
 
     def get_public_url(self) -> str:
-        return str(self._get_settings().get("public_url", "https://sms.example.com/api/sms-webhook"))
+        return str(self._get_settings().get("public_url", ""))
 
     def get_allowed_senders(self) -> List[str]:
         saved = self._get_settings().get("allowed_senders", [])
@@ -1231,21 +1233,25 @@ def get_admin_sms_settings_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
     test_mode = sms_payment_manager.is_test_mode()
     window = sms_payment_manager.get_window_minutes()
 
-    status_btn = "🟢 وضعیت: فعال" if enabled else "🔴 وضعیت: غیرفعال"
-    mode_btn = "🧪 حالت کاری: تست (شبیه‌سازی)" if test_mode else "⚡ حالت کاری: تایید خودکار واقعی"
+    status_btn = t(
+        'i18n_sms_status_line', lang,
+        fa_parts=lambda: (t('i18n_status_active' if enabled else 'i18n_status_inactive', lang),),
+        en_parts=lambda: (t('i18n_status_active' if enabled else 'i18n_status_inactive', lang),),
+    )
+    mode_btn = t('i18n_sms_mode_test' if test_mode else 'i18n_sms_mode_live', lang)
 
     buttons = [
         [InlineKeyboardButton(text=status_btn, callback_data="sms_toggle_enabled")],
         [InlineKeyboardButton(text=mode_btn, callback_data="sms_toggle_test_mode")],
         [
-            InlineKeyboardButton(text=f"⏱ پنجره انقضا: {window} دقیقه", callback_data="sms_cycle_window"),
-            InlineKeyboardButton(text="🔑 توکن وب‌هوک", callback_data="sms_view_token")
+            InlineKeyboardButton(text=t('i18n_sms_expiry_window', lang, fa_parts=lambda: (f'{window}',), en_parts=lambda: (f'{window}',)), callback_data="sms_cycle_window"),
+            InlineKeyboardButton(text=t('i18n_sms_webhook_token', lang), callback_data="sms_view_token")
         ],
         [
-            InlineKeyboardButton(text="📋 تاریخچه تمام پیامک‌ها", callback_data="sms_view_logs"),
-            InlineKeyboardButton(text="📱 راهنمای تنظیم اپلیکیشن", callback_data="sms_view_guide")
+            InlineKeyboardButton(text=t('i18n_sms_message_history', lang), callback_data="sms_view_logs"),
+            InlineKeyboardButton(text=t('i18n_sms_setup_guide', lang), callback_data="sms_view_guide")
         ],
-        [InlineKeyboardButton(text="🔙 بازگشت به پنل ادمین", callback_data="admin_panel")]
+        [InlineKeyboardButton(text=t('i18n_sms_back_to_admin', lang), callback_data="admin_panel")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -1253,10 +1259,12 @@ def get_admin_sms_settings_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
 def register_sms_payment_handlers(dp, main_module):
     sms_payment_manager.set_main_module(main_module)
 
+    def get_admin_id():
+        return main_module.ADMIN_ID_INT
+
     @dp.callback_query(F.data == "admin_sms_payment")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def admin_sms_payment_menu(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         lang = main_module.get_user(callback.from_user.id).get("lang", "fa")
         public_url = sms_payment_manager.get_public_url()
         token = sms_payment_manager.get_secret_token()
@@ -1290,9 +1298,8 @@ def register_sms_payment_handlers(dp, main_module):
         await callback.answer()
 
     @dp.callback_query(F.data == "sms_toggle_enabled")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def toggle_sms_enabled(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         cfg = sms_payment_manager._get_settings()
         cfg["enabled"] = not cfg.get("enabled", False)
         sms_payment_manager._save_settings()
@@ -1314,18 +1321,16 @@ def register_sms_payment_handlers(dp, main_module):
         await admin_sms_payment_menu(callback)
 
     @dp.callback_query(F.data == "sms_toggle_test_mode")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def toggle_sms_test_mode(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         cfg = sms_payment_manager._get_settings()
         cfg["test_mode"] = not cfg.get("test_mode", True)
         sms_payment_manager._save_settings()
         await admin_sms_payment_menu(callback)
 
     @dp.callback_query(F.data == "sms_cycle_window")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def cycle_sms_window(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         cfg = sms_payment_manager._get_settings()
         current = cfg.get("window_minutes", 30)
         windows = [15, 20, 30, 45, 60]
@@ -1339,9 +1344,8 @@ def register_sms_payment_handlers(dp, main_module):
         await admin_sms_payment_menu(callback)
 
     @dp.callback_query(F.data == "sms_view_token")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def view_sms_token(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         token = sms_payment_manager.get_secret_token()
         text = f"""🔑 <b>توکن امنیتی وب‌هوک پیامک</b>
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -1358,53 +1362,61 @@ def register_sms_payment_handlers(dp, main_module):
         await callback.answer()
 
     @dp.callback_query(F.data == "sms_regenerate_token")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def regenerate_sms_token(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         cfg = sms_payment_manager._get_settings()
         cfg["secret_token"] = secrets.token_hex(24)
         sms_payment_manager._save_settings()
         await view_sms_token(callback)
 
     @dp.callback_query(F.data == "sms_view_guide")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def view_sms_guide(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
-        public_url = sms_payment_manager.get_public_url()
-        token = sms_payment_manager.get_secret_token()
-
-        text = f"""📱 <b>راهنمای جامع راه‌اندازی کارت‌به‌کارت خودکار (بلوبانک)</b>
+        lang = main_module.get_user(callback.from_user.id).get("lang", "fa")
+        if lang == "en":
+            text = """📱 <b>SMS Forwarder Setup Guide</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>۱. زیرساخت سرور (Cloudflare Tunnel):</b>
-<code>ingress:</code>
-<code>  - hostname: sms.example.com</code>
-<code>    service: http://127.0.0.1:8088</code>
-<code>  - service: http_status:404</code>
+<b>1. Private server setup:</b>
+Configure your tunnel or reverse proxy using your private deployment settings. Keep hostnames and server configuration out of this public repository.
 
-<b>۲. تنظیمات اپلیکیشن SMS Forwarder در گوشی:</b>
-- <b>URL مقصد:</b>
-<code>{public_url}</code>
+<b>2. SMS Forwarder app:</b>
+- <b>Request URL:</b> Copy it from your private deployment settings. Do not post or commit it.
+- <b>Method:</b> POST
 - <b>Headers:</b>
-<code>X-Secret-Token: {token}</code>
+<code>X-Secret-Token: YOUR_PRIVATE_TOKEN</code>
 <code>Content-Type: application/json</code>
 - <b>Payload / Body Template:</b>
-<code>{{"sender":"[from]","message":"[msg]","received_at":"[receive_time]"}}</code>
+<code>{"sender":"[from]","message":"[msg]","received_at":"[receive_time]"}</code>
 
-<b>۳. مشاهده زنده تمام پیامک‌های دریافتی در سرور:</b>
-برای دیدن لحظه‌ای تمام پیامک‌هایی که از گوشی به سرور می‌رسند، این دستور را در ترمینال سرور بزنید:
-<code>tail -f data/sms_webhook_raw.log</code>
+Use the private token configured for your deployment. Never include real URLs or tokens in public documentation, screenshots, or source control.
+━━━━━━━━━━━━━━━━━━━━━━"""
+        else:
+            text = """📱 <b>راهنمای تنظیم SMS Forwarder</b>
+━━━━━━━━━━━━━━━━━━━━━━
+<b>۱. تنظیم خصوصی سرور:</b>
+تونل یا پراکسی معکوس را با تنظیمات خصوصی استقرار خود پیکربندی کنید. نام میزبان و تنظیمات سرور را در این مخزن عمومی قرار ندهید.
+
+<b>۲. تنظیم اپلیکیشن SMS Forwarder:</b>
+- <b>آدرس درخواست:</b> آن را از تنظیمات خصوصی استقرار بردارید؛ منتشر یا commit نکنید.
+- <b>روش:</b> POST
+- <b>Headers:</b>
+<code>X-Secret-Token: YOUR_PRIVATE_TOKEN</code>
+<code>Content-Type: application/json</code>
+- <b>Payload / Body Template:</b>
+<code>{"sender":"[from]","message":"[msg]","received_at":"[receive_time]"}</code>
+
+از توکن خصوصی تنظیم‌شده برای استقرار خود استفاده کنید. URL یا توکن واقعی را در مستندات عمومی، تصویر صفحه یا مخزن کد قرار ندهید.
 ━━━━━━━━━━━━━━━━━━━━━━"""
 
         markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="admin_sms_payment")]
+            [InlineKeyboardButton(text=main_module.t('back_14968ad63f', lang), callback_data="admin_sms_payment")]
         ])
         await callback.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
         await callback.answer()
 
     @dp.callback_query(F.data == "sms_view_logs")
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def view_sms_logs(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         recent = await asyncio.to_thread(sms_payment_manager.db.get_recent_transactions, limit=8)
         if not recent:
             msg = "📭 تاکنون هیچ پیامکی ثبت نشده است."
@@ -1443,9 +1455,8 @@ def register_sms_payment_handlers(dp, main_module):
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("sms_retry_"))
+    @admin_only(answer_on_denied=False, admin_id_getter=get_admin_id)
     async def retry_sms_fulfillment(callback: CallbackQuery):
-        if callback.from_user.id != main_module.ADMIN_ID_INT:
-            return
         parts = callback.data.split("_")
         try:
             order_id = int(parts[2])

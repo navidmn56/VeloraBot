@@ -19,6 +19,11 @@ CONFIGS_FILE = os.path.join(DATA_DIR, "configs.json")
 # These settings MUST be filled for the bot to work properly
 BOT_TOKEN = "Main_bot_token"  # Get from @BotFather
 ADMIN_ID = "YOUR_TELEGRAM_USER_ID"  # Your Telegram ID (get from @myidbot)
+try:
+    ADMIN_ID_INT = int(ADMIN_ID)
+except (ValueError, TypeError):
+    ADMIN_ID_INT = 0
+
 BANK_CARD_NUMBER = "1234567812345678"  # Your bank card number (Only 16 digits)
 BANK_CARD_HOLDER = "Navid"  # Card holder's full name
 BANK_CARD_HOLDER_EN = ""  # (Optional) Card holder's full name in English (fallback to BANK_CARD_HOLDER if empty)
@@ -29,6 +34,26 @@ SENAI_PANEL_USERNAME = "Panel_username"
 SENAI_PANEL_PASSWORD = "Panel_password"
 # Optional: Set to "auto" to automatically fetch subscription link from Sanaei panel, or set a custom URL (e.g. "https://sub.Domain.com:2083/sub")
 SENAI_SUB_URL = "auto"
+SENAI_PANEL_ENABLED = True
+
+
+def is_senai_panel_enabled() -> bool:
+    """Return current Sanaei panel enabled state."""
+    return bool(SENAI_PANEL_ENABLED)
+
+
+def set_senai_panel_enabled(enabled: bool) -> bool:
+    """Update Sanaei panel enabled state across config and loaded runtime modules."""
+    global SENAI_PANEL_ENABLED
+    SENAI_PANEL_ENABLED = bool(enabled)
+    import sys
+    for mod_name in ("main", "routers.admin_tools"):
+        mod = sys.modules.get(mod_name)
+        if mod is not None and hasattr(mod, "SENAI_PANEL_ENABLED"):
+            setattr(mod, "SENAI_PANEL_ENABLED", SENAI_PANEL_ENABLED)
+    return SENAI_PANEL_ENABLED
+
+
 SUPPORT_USERNAME = "@your_username_here"
 
 # =============== 🟡 OPTIONAL: REACTION SETTINGS ===============

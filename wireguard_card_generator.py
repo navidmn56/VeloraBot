@@ -6,6 +6,7 @@ with dark cyberpunk styling, glowing neon red accents (#FF1744),
 full Persian & English bilingual support, and verified 100% scannability.
 """
 
+from strings import t
 import os
 import sys
 import glob
@@ -316,23 +317,23 @@ def create_premium_background(
     pill_y = 35
     draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=18, fill=(35, 12, 20, 255), outline=NEON_RED, width=1)
     tag_font = _load_font(15, bold=True)
-    tag_text = reshape_persian('⚡ وایرگارد VPN') if lang == 'fa' else '⚡ WIREGUARD VPN'
+    tag_text = t('wireguard_vpn_63caae258a', lang, fa_transform=reshape_persian)
     draw.text((width // 2, pill_y + pill_h // 2), tag_text, fill='#ff2a55', font=tag_font, anchor='mm')
 
     title_font = _load_font(42 if lang == 'fa' else 36, bold=True)
-    title_text = reshape_persian('تونل پرسرعت') if lang == 'fa' else 'HIGH SPEED TUNNEL'
+    title_text = t('high_speed_tunnel_7bb255683e', lang, fa_transform=reshape_persian)
     draw.text((width // 2, pill_y + pill_h + 38), title_text, fill='#ffffff', font=title_font, anchor='mm')
 
     # برچسب ثابت سفارش در پس‌زمینه (در صورت عدم وجود فایل تمپلیت)
     lbl_font = _load_font(17, bold=True)
     if lang == 'fa':
-        lbl_text = reshape_persian('سفارش')
+        lbl_text = t('order_e6c6e22516', lang, fa_transform=reshape_persian)
         draw.text((428, 190), lbl_text, fill='#e2e8f0', font=lbl_font, anchor='lm')
         bbox_l = draw.textbbox((428, 190), lbl_text, font=lbl_font, anchor='lm')
         lw = bbox_l[2] - bbox_l[0]
         draw.line([(428 + lw + 14, 190), (428 + lw + 14 + 80, 190)], fill='#475569', width=1)
     else:
-        lbl_text = 'Order'
+        lbl_text = t('order_e6c6e22516', lang)
         draw.text((418, 187), lbl_text, fill='#e2e8f0', font=lbl_font, anchor='rm')
         bbox_l = draw.textbbox((418, 187), lbl_text, font=lbl_font, anchor='rm')
         ow = bbox_l[2] - bbox_l[0]
@@ -344,11 +345,11 @@ def create_premium_background(
     foot_y = 800
     draw.rounded_rectangle((foot_x, foot_y, foot_x + foot_w, foot_y + foot_h), radius=18, fill=(13, 16, 24, 255), outline=NEON_RED, width=1)
     f_title = _load_font(20 if lang == 'fa' else 17, bold=True)
-    scan_text = reshape_persian('برای وارد کردن، کد را با اپلیکیشن WireGuard اسکن کنید') if lang == 'fa' else 'Scan this code with the WireGuard App to Import'
+    scan_text = t('scan_this_code_with_the_wire_1ec85ead19', lang, fa_transform=reshape_persian)
     draw.text((width // 2, foot_y + 24), scan_text, fill='#ffffff', font=f_title, anchor='mm')
 
     f_sub = _load_font(14, bold=False)
-    sub_text = reshape_persian('اتصال سریع  •  رمزنگاری سرتاسری') if lang == 'fa' else 'Fast Connection  •  End-to-End Encryption'
+    sub_text = t('fast_connection_end_to_end_e_0869931aa6', lang, fa_transform=reshape_persian)
     draw.text((width // 2, foot_y + 50), sub_text, fill='#94a3b8', font=f_sub, anchor='mm')
 
     _TEMPLATE_CACHE[lang] = bg

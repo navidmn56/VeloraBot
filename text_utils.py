@@ -1,3 +1,4 @@
+from strings import t
 import re
 import unicodedata
 from datetime import datetime
@@ -119,46 +120,44 @@ def format_traffic_info(
     time_emoji = premium_emoji_fn('hourglass', '⏳') if premium_emoji_fn else '⏳'
     download_emoji = premium_emoji_fn('download', '📥') if premium_emoji_fn else '📥'
 
-    time_left_text = "نامحدود" if lang == "fa" else "Unlimited"
+    time_left_text = t('unlimited_0d936642fc', lang)
     if expiry > 0:
         try:
             expire_dt = datetime.fromtimestamp(expiry / 1000)
             total_seconds = int((expire_dt - datetime.now()).total_seconds())
             if total_seconds <= 0:
-                time_left_text = "منقضی شده" if lang == "fa" else "Expired"
+                time_left_text = t('expired_756d905f6f', lang)
             else:
                 days = total_seconds // 86400
                 hours = (total_seconds % 86400) // 3600
                 minutes = (total_seconds % 3600) // 60
                 if lang == "fa":
                     if days > 0 and hours > 0:
-                        time_left_text = f"{to_persian_digits(days)} روز و {to_persian_digits(hours)} ساعت دیگه"
+                        time_left_text = t('d_h_left_067f2f1432', lang, fa_parts=lambda: (f'{to_persian_digits(days)}', f'{to_persian_digits(hours)}'))
                     elif days > 0:
-                        time_left_text = f"{to_persian_digits(days)} روز دیگه"
+                        time_left_text = t('days_left_0d58551cd3', lang, fa_parts=lambda: (f'{to_persian_digits(days)}',))
                     elif hours > 0 and minutes > 0:
-                        time_left_text = f"{to_persian_digits(hours)} ساعت و {to_persian_digits(minutes)} دقیقه دیگه"
+                        time_left_text = t('h_m_left_ae486da160', lang, fa_parts=lambda: (f'{to_persian_digits(hours)}', f'{to_persian_digits(minutes)}'))
                     elif hours > 0:
-                        time_left_text = f"{to_persian_digits(hours)} ساعت دیگه"
+                        time_left_text = t('h_left_1472acfd59', lang, fa_parts=lambda: (f'{to_persian_digits(hours)}',))
                     else:
-                        time_left_text = f"{to_persian_digits(minutes)} دقیقه دیگه"
+                        time_left_text = t('min_left_38e6b3a2ae', lang, fa_parts=lambda: (f'{to_persian_digits(minutes)}',))
                 elif days > 0 and hours > 0:
-                    time_left_text = f"{days}d {hours}h left"
+                    time_left_text = t('d_h_left_067f2f1432', lang, en_parts=lambda: (f'{days}', f'{hours}'))
                 elif days > 0:
-                    time_left_text = f"{days} days left"
+                    time_left_text = t('days_left_0d58551cd3', lang, en_parts=lambda: (f'{days}',))
                 elif hours > 0:
                     if minutes > 0:
-                        time_left_text = f"{hours}h {minutes}m left"
+                        time_left_text = t('h_m_left_ae486da160', lang, en_parts=lambda: (f'{hours}', f'{minutes}'))
                     else:
-                        time_left_text = f"{hours}h left"
+                        time_left_text = t('h_left_1472acfd59', lang, en_parts=lambda: (f'{hours}',))
                 else:
-                    time_left_text = f"{minutes}min left"
+                    time_left_text = t('min_left_38e6b3a2ae', lang, en_parts=lambda: (f'{minutes}',))
         except Exception:
             pass
 
     if total_bytes == 0:
-        if lang == "fa":
-            return f"\n\n{time_emoji} اعتبار: {time_left_text}"
-        return f"\n\n{time_emoji} Expiry: {time_left_text}"
+        return t('expiry_cfd17e0b09', lang, fa_parts=lambda: (f'{time_emoji}', f'{time_left_text}'), en_parts=lambda: (f'{time_emoji}', f'{time_left_text}'))
 
     total_gb = total_bytes / (1024 ** 3)
     up = traffic.get("up", 0) / (1024 ** 3) if traffic else 0
@@ -170,29 +169,20 @@ def format_traffic_info(
     bar = progress_bar(percent, length=10)
 
     def fmt_size(gb_val):
-        if lang == "fa":
-            if gb_val >= 1:
-                val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
-                return f"{val} گیگ"
-            return f"{gb_val * 1024:.0f} مگ"
         if gb_val >= 1:
             val = f"{gb_val:.1f}".rstrip('0').rstrip('.')
-            return f"{val} GB"
-        return f"{gb_val * 1024:.0f} MB"
+            return t("i18n_volume_gig_format", lang, fa_parts=lambda: (val,), en_parts=lambda: (val,))
+        value = f"{gb_val * 1024:.0f}"
+        return t("i18n_volume_mb_format", lang, fa_parts=lambda: (value,), en_parts=lambda: (value,))
 
     used_str = fmt_size(used_gb)
     total_str = fmt_size(total_gb)
+    percent_str = f"{percent_int}{t('i18n_percent_sign', lang)}"
     if lang == "fa":
-        percent_str = to_persian_digits(f"{percent_int}٪")
-        return (
-            f"\n\n{stats_emoji} {bar} {percent_str}\n"
-            f"\n"
-            f"{download_emoji} مصرف: {used_str} از {total_str}\n"
-            f"{time_emoji} اعتبار: {time_left_text}"
-        )
-    return (
-        f"\n\n{stats_emoji} {bar} {percent_int}%\n"
-        f"\n"
-        f"{download_emoji} Used: {used_str} of {total_str}\n"
-        f"{time_emoji} Expiry: {time_left_text}"
+        percent_str = to_persian_digits(percent_str)
+    return t(
+        "i18n_usage_progress_summary",
+        lang,
+        fa_format_args=lambda: ((stats_emoji, bar, percent_str, download_emoji, used_str, total_str, time_emoji, time_left_text), {}),
+        en_format_args=lambda: ((stats_emoji, bar, percent_str, download_emoji, used_str, total_str, time_emoji, time_left_text), {}),
     )

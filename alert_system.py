@@ -1,11 +1,15 @@
 # alert_system.py
+from strings import t
 import asyncio
 import logging
 import json
+import math
 import os
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Callable, Awaitable
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+from database import TEHRAN_TZ, now_tehran, now_tehran_iso
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +59,7 @@ class AlertSystem:
         
         # ✅ آستانه‌ها
         self.volume_thresholds = [10, 5]
-        self.expiry_warnings = [3, 1]
+        self.expiry_warnings = [7, 3, 1]
         self.test_volume_thresholds = [30]
         self.test_expiry_warnings = [0.25]
         
@@ -115,7 +119,7 @@ class AlertSystem:
                 },
                 'history': self.sent_alerts_history,
                 'service_info': self.service_info_cache,
-                'last_updated': datetime.now().isoformat()
+                'last_updated': now_tehran_iso()
             }
             
             temp_file = f"{self.cache_file}.tmp"
@@ -225,7 +229,7 @@ class AlertSystem:
             
             text = f"""
 {emoji} <b>{title}</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 🆔 <b>Order:</b> #{order_id}
 {type_emoji} <b>Type:</b> {type_text}
@@ -273,12 +277,19 @@ class AlertSystem:
                 if not valid_orders:
                     return
                 
-                # ✅ فقط config_link و user_id لازم است
+                # بررسی تمام سفارش‌های سرویس فعال/تایید شده (بدون سفارش‌های لغوشده، ردشده، مالی یا تمدیدی)
                 approved_orders = [
-                    o for o in valid_orders.values() 
-                    if isinstance(o, dict) 
-                    and o.get('config_link')
+                    o for o in valid_orders.values()
+                    if isinstance(o, dict)
                     and o.get('user_id')
+                    and o.get('status') not in (
+                        'cancelled', 'rejected', 'deleted',
+                        'pending', 'awaiting_payment', 'pending_balance_charge'
+                    )
+                    and o.get('type') not in ('balance', 'extend')
+                    and not o.get('is_extend')
+                    and not o.get('parent_order_id')
+                    and (o.get('config_link') or o.get('status') == 'approved')
                 ]
                 
                 logger.debug(f"Checking {len(approved_orders)} services")
@@ -291,38 +302,39 @@ class AlertSystem:
                         continue
                     
                     try:
-                        # ✅ استفاده از تابع جدید برای دریافت email
                         email = await self._resolve_email(order)
-                        
-                        if not email:
-                            logger.debug(
-                                f"Order #{order_id}: email could not be resolved, skipping"
-                            )
-                            continue
+                        client_info = None
 
-                        # ✅ import توی تابع (به خاطر circular import)
-                        from main import xui_get_client_info, xui_get_client_traffic
+                        if email:
+                            try:
+                                from services.panel_api import xui_get_client_info, xui_get_client_traffic
+                            except ImportError:
+                                from main import xui_get_client_info, xui_get_client_traffic
 
-                        client_info = await xui_get_client_info(email)
+                            try:
+                                client_info = await xui_get_client_info(email)
+                            except Exception as client_err:
+                                logger.warning(f"Order #{order_id}: error retrieving client_info for {email}: {client_err}")
 
-                        if not client_info or not isinstance(client_info, dict):
-                            logger.debug(
-                                f"Order #{order_id}: client_info not found for {email}"
-                            )
-                            continue
-                        
-                        # ✅ تشخیص تمدید
-                        await self._check_service_renewal(order, client_info)
-                        
-                        # ✅ دریافت ترافیک
-                        traffic_data = await xui_get_client_traffic(email)
-                        
-                        if traffic_data and not isinstance(traffic_data, dict):
+                        if client_info and isinstance(client_info, dict):
+                            # تشخیص تمدید
+                            await self._check_service_renewal(order, client_info, email)
+                            
+                            # دریافت ترافیک
                             traffic_data = None
-                        
-                        # ✅ بررسی حجم و انقضا
-                        await self._check_volume_alert(order, client_info, traffic_data)
-                        await self._check_expiry_alert(order, client_info)
+                            try:
+                                traffic_data = await xui_get_client_traffic(email)
+                                if traffic_data and not isinstance(traffic_data, dict):
+                                    traffic_data = None
+                            except Exception:
+                                pass
+                            
+                            # بررسی حجم و انقضا بر اساس داده‌های دقیق پنل
+                            await self._check_volume_alert(order, client_info, traffic_data)
+                            await self._check_expiry_alert(order, client_info)
+                        else:
+                            # فال‌بک: در صورتی که کلاینت در پنل نبود یا ایمیل ست نشده بود، بررسی انقضا از طریق دیتابیس سفارش
+                            await self._check_fallback_order_expiry(order)
                         
                     except Exception as e:
                         logger.error(
@@ -332,82 +344,197 @@ class AlertSystem:
                         
             except Exception as e:
                 logger.error(f"Error in check_all_services: {e}", exc_info=True)
+
+    async def _check_fallback_order_expiry(self, order: dict):
+        """بررسی فال‌بک انقضای سفارش از روی تاریخ انقضا یا تاریخ تایید و مدت پکیج در صورت عدم دسترسی به پنل"""
+        order_id = order.get('order_id')
+        user_id = order.get('user_id')
+        if not order_id or not user_id:
+            return
+
+        expire_str = order.get('expire_date')
+        if expire_str:
+            try:
+                exp_val = str(expire_str).strip().replace('Z', '+00:00')
+                expiry_dt = datetime.fromisoformat(exp_val) if 'T' in exp_val else datetime.strptime(exp_val, "%Y-%m-%d %H:%M:%S")
+                if expiry_dt.tzinfo is None:
+                    expiry_dt = expiry_dt.replace(tzinfo=TEHRAN_TZ)
+                expiry_ms = int(expiry_dt.timestamp() * 1000)
+                await self._check_expiry_alert(order, {'expiryTime': expiry_ms})
+                return
+            except Exception:
+                pass
+
+        approved_str = order.get('approved_date') or order.get('date') or order.get('created_at')
+        days = int(order.get('days') or 0)
+        if not approved_str or days <= 0:
+            return
+
+        try:
+            str_val = str(approved_str).strip()
+            if 'T' in str_val:
+                approved_dt = datetime.fromisoformat(str_val)
+            else:
+                approved_dt = datetime.strptime(str_val, "%Y-%m-%d %H:%M:%S")
+
+            if approved_dt.tzinfo is None:
+                approved_dt = approved_dt.replace(tzinfo=TEHRAN_TZ)
+
+            expiry_dt = approved_dt + timedelta(days=days)
+            expiry_ms = int(expiry_dt.timestamp() * 1000)
+            await self._check_expiry_alert(order, {'expiryTime': expiry_ms})
+        except Exception as e:
+            logger.debug(f"Order #{order_id}: fallback expiry calculation skipped: {e}")
     
     # ═══════════════════════════════════════════
     # تشخیص تمدید
     # ═══════════════════════════════════════════
     
-    async def _check_service_renewal(self, order: dict, client_info: dict):
-        """تشخیص تمدید سرویس"""
+    def _is_bot_owned_service(self, order: dict, email: str) -> bool:
+        user_id = str(order.get('user_id', '')).strip()
+        email = str(email or '').strip().lower()
+        if not user_id or not email:
+            return False
+
+        order_email = str(order.get('email') or '').strip().lower()
+        if order_email == email:
+            return True
+
+        prefixes = (
+            f"user{user_id}_",
+            f"u{user_id}_",
+            f"test_{user_id}_",
+        )
+        return any(
+            email.startswith(prefix) and email[len(prefix):]
+            for prefix in prefixes
+        )
+
+    def _service_cache_key(self, email: str) -> str:
+        return f"email:{email.strip().lower()}"
+
+    async def _record_service_renewal(
+        self, order: dict, email: str, previous: dict, current: dict,
+        allow_non_increase: bool = False, require_bot_owned: bool = True
+    ) -> bool:
+        if require_bot_owned and not self._is_bot_owned_service(order, email):
+            return False
+
         order_id = order.get('order_id')
-        
-        current_total = client_info.get('totalGB', 0)
-        current_expiry = client_info.get('expiryTime', 0)
-        
-        previous = self.service_info_cache.get(str(order_id))
-        
-        if not previous:
-            self.service_info_cache[str(order_id)] = {
-                'totalGB': current_total,
-                'expiryTime': current_expiry,
-                'first_seen': datetime.now().isoformat(),
-                'last_updated': datetime.now().isoformat()
-            }
-            self._save_cache_to_disk()
-            return
-        
-        prev_total = previous.get('totalGB', 0)
-        prev_expiry = previous.get('expiryTime', 0)
-        
-        is_volume_increased = current_total > prev_total
-        is_expiry_extended = current_expiry > prev_expiry
-        
-        if is_volume_increased or is_expiry_extended:
-            changes = []
-            
-            if is_volume_increased:
-                changes.append(
-                    f"📦 Volume: {self._format_bytes(prev_total)} → "
-                    f"{self._format_bytes(current_total)}"
-                )
-            
-            if is_expiry_extended:
-                prev_date = self._format_timestamp(prev_expiry)
-                current_date = self._format_timestamp(current_expiry)
-                changes.append(f"⏱ Expiry: {prev_date} → {current_date}")
-            
-            changes_text = "\n".join(changes)
-            
-            logger.info(f"Service #{order_id} renewed:\n{changes_text}")
-            
-            if self.log_system:
-                text = f"""
+        cache_key = self._service_cache_key(email)
+        cached = self.service_info_cache.get(cache_key, {})
+        current_total = current.get('totalGB', 0)
+        current_expiry = current.get('expiryTime', 0)
+
+        if (
+            cached.get('last_renewal')
+            and cached.get('totalGB') == current_total
+            and cached.get('expiryTime') == current_expiry
+        ):
+            return False
+
+        changes = []
+        previous_total = previous.get('totalGB', 0)
+        previous_expiry = previous.get('expiryTime', 0)
+        volume_increased = previous_total > 0 and (
+            current_total == 0 or current_total > previous_total
+        )
+        expiry_extended = current_expiry > previous_expiry
+        if not allow_non_increase and not (volume_increased or expiry_extended):
+            return False
+
+        if current_total != previous_total:
+            changes.append(
+                f"📦 Volume: {self._format_bytes(previous_total)} → "
+                f"{self._format_bytes(current_total)}"
+            )
+        if current_expiry != previous_expiry:
+            changes.append(
+                f"⏱ Expiry: {self._format_timestamp(previous_expiry)} → "
+                f"{self._format_timestamp(current_expiry)}"
+            )
+
+        changes_text = "\n".join(changes)
+        logger.info(f"Service #{order_id} renewed:\n{changes_text}")
+
+        if self.log_system:
+            text = f"""
 🔄 <b>Service Renewed</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{order.get('user_id')}</code>
 🆔 <b>Order:</b> #{order_id}
 {changes_text}
 """
-                await self.log_system.send_log(text)
-            
-            # پاک کردن کش هشدارها برای این سفارش (چون سرویس تجدید شد)
-            self._clear_order_cache(order_id)
-            
-            self.service_info_cache[str(order_id)] = {
-                'totalGB': current_total,
-                'expiryTime': current_expiry,
-                'last_updated': datetime.now().isoformat(),
-                'last_renewal': datetime.now().isoformat()
+            await self.log_system.send_log(text)
+
+        self.volume_alert_cache = {
+            key: value for key, value in self.volume_alert_cache.items()
+            if not key.startswith(f"vol_{order_id}_")
+        }
+        self.expiry_alert_cache = {
+            key: value for key, value in self.expiry_alert_cache.items()
+            if not key.startswith(f"exp_{order_id}_")
+        }
+        self.sent_alerts_history = {
+            key: value for key, value in self.sent_alerts_history.items()
+            if not key.startswith(f"vol_{order_id}_")
+            and not key.startswith(f"exp_{order_id}_")
+        }
+        now = now_tehran_iso()
+        self.service_info_cache[cache_key] = {
+            'totalGB': current_total,
+            'expiryTime': current_expiry,
+            'email': email,
+            'last_updated': now,
+            'last_renewal': now
+        }
+        self._save_cache_to_disk()
+        return True
+
+    async def record_service_renewal(
+        self, order: dict, email: str, previous: dict, current: dict
+    ) -> bool:
+        async with self._lock:
+            return await self._record_service_renewal(
+                order, email, previous, current,
+                allow_non_increase=True, require_bot_owned=False
+            )
+
+    async def _check_service_renewal(self, order: dict, client_info: dict, email: str):
+        """تشخیص تمدید سرویس"""
+        if not self._is_bot_owned_service(order, email):
+            return
+
+        cache_key = self._service_cache_key(email)
+        current = {
+            'totalGB': client_info.get('totalGB', 0),
+            'expiryTime': client_info.get('expiryTime', 0)
+        }
+        previous = self.service_info_cache.get(cache_key)
+
+        if not previous:
+            self.service_info_cache[cache_key] = {
+                **current,
+                'email': email,
+                'first_seen': now_tehran_iso(),
+                'last_updated': now_tehran_iso()
             }
-            
             self._save_cache_to_disk()
+            return
+
+        previous_total = previous.get('totalGB', 0)
+        previous_expiry = previous.get('expiryTime', 0)
+        is_volume_increased = previous_total > 0 and (
+            current['totalGB'] == 0 or current['totalGB'] > previous_total
+        )
+        is_expiry_extended = current['expiryTime'] > previous_expiry
+
+        if is_volume_increased or is_expiry_extended:
+            await self._record_service_renewal(order, email, previous, current)
         else:
-            self.service_info_cache[str(order_id)] = {
-                'totalGB': current_total,
-                'expiryTime': current_expiry,
-                'last_updated': datetime.now().isoformat()
-            }
-            
+            previous.update(current)
+            previous['email'] = email
+            previous['last_updated'] = now_tehran_iso()
             self._save_cache_to_disk()
     
     # ═══════════════════════════════════════════
@@ -440,16 +567,12 @@ class AlertSystem:
     def _format_volume(self, gb: float, lang: str = "fa") -> str:
         """فرمت حجم"""
         if gb >= 1:
-            if lang == "fa":
-                return f"{to_persian_number(f'{gb:.2f}')} گیگ"
-            return f"{gb:.2f} GB"
+            return t('gb_b755d45a80', lang, fa_parts=lambda: (f"{to_persian_number(f'{gb:.2f}')}",), en_parts=lambda: (f'{gb:.2f}',))
         elif gb >= 0.001:
             mb = gb * 1024
-            if lang == "fa":
-                return f"{to_persian_number(f'{mb:.0f}')} مگ"
-            return f"{mb:.0f} MB"
+            return t('mb_4062381407', lang, fa_parts=lambda: (f"{to_persian_number(f'{mb:.0f}')}",), en_parts=lambda: (f'{mb:.0f}',))
         else:
-            return f"{to_persian_number('0')} مگ" if lang == "fa" else "0 MB"
+            return t('0_mb_b7659fbfbd', lang, fa_parts=lambda: (f"{to_persian_number('0')}",))
     
     # ═══════════════════════════════════════════
     # Cache Management
@@ -490,7 +613,7 @@ class AlertSystem:
     
     def _record_alert(self, cache_key: str, cache: dict, alert_type: str, order_id: int):
         """ثبت هشدار"""
-        now = datetime.now()
+        now = now_tehran()
         
         cache[cache_key] = now
         
@@ -536,17 +659,17 @@ class AlertSystem:
         
         try:
             if expiry_time > 10000000000:
-                expiry_date = datetime.fromtimestamp(expiry_time / 1000)
+                expiry_date = datetime.fromtimestamp(expiry_time / 1000, TEHRAN_TZ)
             else:
-                expiry_date = datetime.fromtimestamp(expiry_time)
+                expiry_date = datetime.fromtimestamp(expiry_time, TEHRAN_TZ)
         except Exception:
             return
         
-        now = datetime.now()
+        now = now_tehran()
         time_left = expiry_date - now
         hours_left = time_left.total_seconds() / 3600
         
-        days_left = time_left.days
+        days_left = int(math.ceil(hours_left / 24)) if hours_left > 24 else 0
         
         label = None
         alert_type = 'expiry'
@@ -558,9 +681,13 @@ class AlertSystem:
             if hours_left <= 6:
                 label = "6h"
         else:
+            order_days = int(order.get('days') or 0)
             thresholds_sorted = sorted(self.expiry_warnings)
             
             for threshold in thresholds_sorted:
+                # برای پکیج‌های کوتاه‌مدت (مثلاً ۳ یا ۷ روزه)، هشدار بلافاصله پس از خرید ارسال نمی‌شود
+                if order_days > 0 and threshold >= order_days:
+                    continue
                 threshold_hours = threshold * 24
                 if hours_left <= threshold_hours:
                     label = f"{int(threshold)}d"
@@ -674,21 +801,21 @@ class AlertSystem:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=(
-                    "🛒 خرید سرویس" if lang == 'fa' else "🛒 Buy Service"
+                    t('buy_service_21bce537d0', lang)
                 ) if is_test else (
-                    "🔄 تمدید همین سرویس" if lang == 'fa' else "🔄 Renew This Service"
+                    t('renew_this_service_36501ac148', lang)
                 ),
                 callback_data="buy_service" if is_test else f"extend_service_{order_id}",
                 style="success",
             )],
             [
                 InlineKeyboardButton(
-                    text="📁 مشاهده کانفیگ" if lang == 'fa' else "📁 View Config",
+                    text=t('view_config_ad93d47d82', lang),
                     callback_data=f"view_config_{order_id}",
                     style="primary",
                 ),
                 InlineKeyboardButton(
-                    text="🏠 منوی اصلی" if lang == 'fa' else "🏠 Main Menu",
+                    text=t('main_menu_0cdd07a7cc', lang),
                     callback_data="back_to_main",
                     style="danger",
                 ),
@@ -719,82 +846,24 @@ class AlertSystem:
         service_name = "سرویس خوشامد" if is_test else "سرویس"
         service_name_en = "welcome service" if is_test else "service"
 
-        if lang == 'fa':
-            if exhausted:
-                if is_test:
-                    text = (
-                        f"{RLM}❌ <b>حجم سرویس خوشامد به پایان رسیده است</b>\n\n"
-                        f"{RLM}🎁 حجم سرویس خوشامد شما به‌طور کامل مصرف شده است.\n\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
-                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n\n"
-                        f"{RLM}برای ادامه استفاده، سرویس اصلی را از بخش خرید تهیه کنید."
-                    )
-                else:
-                    text = (
-                        f"{RLM}❌ <b>حجم سرویس به پایان رسیده است</b>\n\n"
-                        f"{RLM}📡 حجم {service_name} شما به‌طور کامل مصرف شده است.\n\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
-                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n"
-                        f"{RLM}📉 حجم باقی‌مانده: {remaining_display}\n\n"
-                        f"{RLM}برای ادامه استفاده، کانفیگ را مشاهده کنید یا سرویس خود را تمدید کنید."
-                    )
+        if exhausted:
+            if is_test:
+                text = (
+                    t('b_welcome_service_data_allow_a1a6e1056d', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}', f'{used_display}', f'{total_display}', f'{RLM}'), en_parts=lambda: (f'{order_id}', f'{used_display}', f'{total_display}'))
+                )
             else:
-                if is_test:
-                    text = (
-                        f"{RLM}⚠️ <b>حجم سرویس خوشامد رو به اتمام است</b>\n\n"
-                        f"{RLM}🎁 بخش عمده‌ای از حجم سرویس خوشامد شما مصرف شده است.\n\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
-                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n"
-                        f"{RLM}📉 حجم باقی‌مانده: {remaining_display} ({to_persian_number(f'{remaining_percent:.1f}')}٪)\n\n"
-                        f"{RLM}برای ادامه، سرویس اصلی را خریداری کنید."
-                    )
-                else:
-                    text = (
-                        f"{RLM}⚠️ <b>حجم سرویس رو به اتمام است</b>\n\n"
-                        f"{RLM}📡 بخش عمده‌ای از حجم {service_name} شما مصرف شده است.\n\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n"
-                        f"{RLM}📊 میزان مصرف: {used_display} از {total_display}\n"
-                        f"{RLM}📉 حجم باقی‌مانده: {remaining_display} ({to_persian_number(f'{remaining_percent:.1f}')}٪)\n\n"
-                        f"{RLM}برای جلوگیری از وقفه، وضعیت کانفیگ را بررسی و در صورت نیاز آن را تمدید کنید."
-                    )
+                text = (
+                    t('b_service_data_allowance_exh_68f27342d0', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{service_name}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}', f'{used_display}', f'{total_display}', f'{RLM}', f'{remaining_display}', f'{RLM}'), en_parts=lambda: (f'{service_name_en}', f'{order_id}', f'{used_display}', f'{total_display}', f'{remaining_display}'))
+                )
         else:
-            if exhausted:
-                if is_test:
-                    text = (
-                        f"❌ <b>Welcome service data allowance exhausted</b>\n\n"
-                        f"🎁 Your welcome-service data allowance has been fully used.\n\n"
-                        f"🆔 Order: #{order_id}\n"
-                        f"📊 Used: {used_display} of {total_display}\n\n"
-                        f"Purchase a full service to continue."
-                    )
-                else:
-                    text = (
-                        f"❌ <b>Service data allowance exhausted</b>\n\n"
-                        f"📡 Your {service_name_en} has used its full data allowance.\n\n"
-                        f"🆔 Order: #{order_id}\n"
-                        f"📊 Used: {used_display} of {total_display}\n"
-                        f"📉 Remaining: {remaining_display}\n\n"
-                        f"View your config or renew the service to continue."
-                    )
+            if is_test:
+                text = (
+                    t('b_welcome_service_data_is_ru_d59f4522e3', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}', f'{used_display}', f'{total_display}', f'{RLM}', f'{remaining_display}', f"{to_persian_number(f'{remaining_percent:.1f}')}", f'{RLM}'), en_parts=lambda: (f'{order_id}', f'{used_display}', f'{total_display}', f'{remaining_display}', f'{remaining_percent:.1f}'))
+                )
             else:
-                if is_test:
-                    text = (
-                        f"⚠️ <b>Welcome service data is running low</b>\n\n"
-                        f"🎁 Most of your welcome-service data allowance has been used.\n\n"
-                        f"🆔 Order: #{order_id}\n"
-                        f"📊 Used: {used_display} of {total_display}\n"
-                        f"📉 Remaining: {remaining_display} ({remaining_percent:.1f}%)\n\n"
-                        f"Purchase a full service when you are ready to continue."
-                    )
-                else:
-                    text = (
-                        f"⚠️ <b>Service data is running low</b>\n\n"
-                        f"📡 Most of the data allowance for your {service_name_en} has been used.\n\n"
-                        f"🆔 Order: #{order_id}\n"
-                        f"📊 Used: {used_display} of {total_display}\n"
-                        f"📉 Remaining: {remaining_display} ({remaining_percent:.1f}%)\n\n"
-                        f"Review your config and renew the service if needed to avoid interruption."
-                    )
+                text = (
+                    t('b_service_data_is_running_lo_4da6da21d9', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{service_name}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}', f'{used_display}', f'{total_display}', f'{RLM}', f'{remaining_display}', f"{to_persian_number(f'{remaining_percent:.1f}')}", f'{RLM}'), en_parts=lambda: (f'{service_name_en}', f'{order_id}', f'{used_display}', f'{total_display}', f'{remaining_display}', f'{remaining_percent:.1f}'))
+                )
         
         keyboard = self._build_alert_keyboard(order_id, lang, is_test)
 
@@ -824,83 +893,38 @@ class AlertSystem:
         lang = user.get('lang', 'fa') if user else 'fa'
 
         if notify_label == "expired":
-            time_left = "منقضی شده" if lang == 'fa' else "Expired"
+            time_left = t('expired_756d905f6f', lang)
         elif days_left > 0:
-            time_left = f"{to_persian_number(days_left)} روز" if lang == 'fa' else f"{days_left} days"
+            time_left = t('days_a6a4667661', lang, fa_parts=lambda: (f'{to_persian_number(days_left)}',), en_parts=lambda: (f'{days_left}',))
         elif hours_left >= 1:
-            time_left = f"{to_persian_number(int(hours_left))} ساعت" if lang == 'fa' else f"{int(hours_left)} hours"
+            display_hours = int(round(hours_left))
+            time_left = t('hours_d0eee7cbea', lang, fa_parts=lambda: (f'{to_persian_number(display_hours)}',), en_parts=lambda: (f'{display_hours}',))
         else:
-            minutes_left = max(0, int(hours_left * 60))
-            time_left = f"{to_persian_number(minutes_left)} دقیقه" if lang == 'fa' else f"{minutes_left} minutes"
+            minutes_left = max(1, int(round(hours_left * 60)))
+            time_left = t('minutes_e0868f9f26', lang, fa_parts=lambda: (f'{to_persian_number(minutes_left)}',), en_parts=lambda: (f'{minutes_left}',))
 
         service_name = "سرویس خوشامد" if is_test else "سرویس"
         service_name_en = "welcome service" if is_test else "service"
         expired = notify_label == "expired"
 
-        if lang == 'fa':
-            if expired:
-                if is_test:
-                    text = (
-                        f"{RLM}❌ <b>مهلت سرویس خوشامد به پایان رسیده است</b>\n\n"
-                        f"{RLM}🎁 زمان استفاده از سرویس خوشامد شما تمام شده است.\n\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
-                        f"{RLM}برای ادامه، یک سرویس اصلی خریداری کنید."
-                    )
-                else:
-                    text = (
-                        f"{RLM}❌ <b>مهلت استفاده از سرویس به پایان رسیده است</b>\n\n"
-                        f"{RLM}📡 اعتبار زمانی {service_name} شما منقضی شده است.\n\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
-                        f"{RLM}برای استفادهٔ دوباره، کانفیگ را بررسی کنید و در صورت نیاز سرویس را تمدید کنید."
-                    )
+        if expired:
+            if is_test:
+                text = (
+                    t('b_your_welcome_service_has_e_40a46438c1', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}'), en_parts=lambda: (f'{order_id}',))
+                )
             else:
-                if is_test:
-                    text = (
-                        f"{RLM}⚠️ <b>سرویس خوشامد شما به‌زودی منقضی می‌شود</b>\n\n"
-                        f"{RLM}🎁 زمان باقی‌مانده: {time_left}\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
-                        f"{RLM}برای استفاده بدون وقفه، سرویس اصلی را خریداری کنید."
-                    )
-                else:
-                    text = (
-                        f"{RLM}⚠️ <b>هشدار نزدیک‌شدن به انقضای سرویس</b>\n\n"
-                        f"{RLM}📡 اعتبار زمانی {service_name} شما به‌زودی به پایان می‌رسد.\n\n"
-                        f"{RLM}⏱ زمان باقی‌مانده: {time_left}\n"
-                        f"{RLM}🆔 شماره سفارش: #{to_persian_number(order_id)}\n\n"
-                        f"{RLM}برای جلوگیری از قطع دسترسی، وضعیت سرویس را بررسی و در صورت نیاز آن را تمدید کنید."
-                    )
+                text = (
+                    t('b_service_validity_has_expir_a2a1ec3bc8', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{service_name}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}'), en_parts=lambda: (f'{service_name_en}', f'{order_id}'))
+                )
         else:
-            if expired:
-                if is_test:
-                    text = (
-                        f"❌ <b>Your welcome service has expired</b>\n\n"
-                        f"🎁 Your welcome-service period has ended.\n\n"
-                        f"🆔 Order: #{order_id}\n\n"
-                        f"Purchase a full service to continue."
-                    )
-                else:
-                    text = (
-                        f"❌ <b>Service validity has expired</b>\n\n"
-                        f"📡 The validity period for your {service_name_en} has ended.\n\n"
-                        f"🆔 Order: #{order_id}\n\n"
-                        f"Review your config and renew the service if you would like to continue."
-                    )
+            if is_test:
+                text = (
+                    t('b_your_welcome_service_will_e6fde0f50b', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{time_left}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}'), en_parts=lambda: (f'{time_left}', f'{order_id}'))
+                )
             else:
-                if is_test:
-                    text = (
-                        f"⚠️ <b>Your welcome service will expire soon</b>\n\n"
-                        f"🎁 Time remaining: {time_left}\n"
-                        f"🆔 Order: #{order_id}\n\n"
-                        f"Purchase a full service for uninterrupted access."
-                    )
-                else:
-                    text = (
-                        f"⚠️ <b>Service expiry reminder</b>\n\n"
-                        f"📡 The validity period for your {service_name_en} will end soon.\n\n"
-                        f"⏱ Time remaining: {time_left}\n"
-                        f"🆔 Order: #{order_id}\n\n"
-                        f"Review your service and renew it if needed to avoid an interruption."
-                    )
+                text = (
+                    t('b_service_expiry_reminder_b_78e205572a', lang, fa_parts=lambda: (f'{RLM}', f'{RLM}', f'{service_name}', f'{RLM}', f'{time_left}', f'{RLM}', f'{to_persian_number(order_id)}', f'{RLM}'), en_parts=lambda: (f'{service_name_en}', f'{time_left}', f'{order_id}'))
+                )
 
         keyboard = self._build_alert_keyboard(order_id, lang, is_test)
         

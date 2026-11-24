@@ -19,6 +19,7 @@ Features:
 - Transparent notification when history is limited (showing Shamsi start date).
 """
 
+from strings import t
 import os
 import io
 import re
@@ -185,24 +186,14 @@ def format_traffic_auto(bytes_val: int, lang: str = "fa") -> str:
     gb_val = bytes_val / (1024 ** 3)
     mb_val = bytes_val / (1024 ** 2)
 
-    if lang == "fa":
-        if gb_val >= 1.0:
-            return f"{to_persian_digits(f'{gb_val:.2f}')} گیگابایت"
-        elif mb_val >= 1.0:
-            return f"{to_persian_digits(f'{mb_val:.1f}')} مگابایت"
-        elif bytes_val > 0:
-            return f"{to_persian_digits(f'{mb_val:.2f}')} مگابایت"
-        else:
-            return "۰ مگابایت"
+    if gb_val >= 1.0:
+        return t('gb_54bdf61bdb', lang, fa_parts=lambda: (f"{to_persian_digits(f'{gb_val:.2f}')}",), en_parts=lambda: (f'{gb_val:.2f}',))
+    elif mb_val >= 1.0:
+        return t('mb_98be6acea4', lang, fa_parts=lambda: (f"{to_persian_digits(f'{mb_val:.1f}')}",), en_parts=lambda: (f'{mb_val:.1f}',))
+    elif bytes_val > 0:
+        return t('mb_98be6acea4', lang, fa_parts=lambda: (f"{to_persian_digits(f'{mb_val:.2f}')}",), en_parts=lambda: (f'{mb_val:.2f}',))
     else:
-        if gb_val >= 1.0:
-            return f"{gb_val:.2f} GB"
-        elif mb_val >= 1.0:
-            return f"{mb_val:.1f} MB"
-        elif bytes_val > 0:
-            return f"{mb_val:.2f} MB"
-        else:
-            return "0 MB"
+        return t('0_mb_6164e7d16c', lang)
 
 
 _reshaper_instance = None
@@ -925,7 +916,7 @@ class DailyUsageStore:
         if not first_date:
             has_sufficient_history = False
             effective_days = 1
-            history_note = "ثبت آمار این سرویس به تازگی آغاز شده است." if lang == "fa" else "Stats collection just started for this service."
+            history_note = t('stats_collection_just_starte_faa92129a8', lang)
         else:
             first_dt = datetime.strptime(first_date, "%Y-%m-%d").date()
             recorded_span_days = max(1, (today - first_dt).days + 1)
@@ -939,60 +930,32 @@ class DailyUsageStore:
             ):
                 has_sufficient_history = False
                 shamsi_start = format_date_persian(first_date) if lang == "fa" else first_date
-                if lang == "fa":
-                    history_parts = [
-                        f"آمار از {shamsi_start} شروع شده و "
-                        f"{to_persian_digits(total_historical_days)} روز سابقهٔ مشاهده دارد. "
-                    ]
-                    if complete_history_days < total_historical_days:
-                        history_parts.append(
-                            f"بعضی کانفیگ‌ها فقط {to_persian_digits(complete_history_days)} "
-                            "روز سابقهٔ کامل دارند. "
-                        )
+                history_parts = [
+                    t('collection_has_been_observed_ea983ad0bf', lang, fa_parts=lambda: (f'{shamsi_start}', f'{to_persian_digits(total_historical_days)}'), en_parts=lambda: (f'{total_historical_days}', f'{first_date}'))
+                ]
+                if complete_history_days < total_historical_days:
                     history_parts.append(
-                        "مصرف تجمعی اولین نمونه به همان روز نسبت داده شده و "
-                        "تفکیک دقیق روزهای قبل در دسترس نیست."
+                        t('some_configurations_have_onl_251b9450ce', lang, fa_parts=lambda: (f'{to_persian_digits(complete_history_days)}',), en_parts=lambda: (f'{complete_history_days}',))
                     )
-                else:
-                    history_parts = [
-                        f"Collection has been observed for {total_historical_days} days "
-                        f"(started: {first_date}). "
-                    ]
-                    if complete_history_days < total_historical_days:
-                        history_parts.append(
-                            f"Some configurations have only {complete_history_days} "
-                            "days of complete history. "
-                        )
-                    history_parts.append(
-                        "The initial cumulative counter is assigned to that date; "
-                        "earlier daily breakdown is unavailable."
-                    )
+                history_parts.append(
+                    t('the_initial_cumulative_count_d4ca9fc276', lang)
+                )
                 history_note = "".join(history_parts)
 
         avg_gb = total_gb / effective_days if effective_days > 0 else 0.0
         avg_bytes = int(round(total_bytes / effective_days)) if effective_days > 0 else 0
         sampling_note = (
-            "اگر فاصلهٔ دو نمونه از نیمه‌شب بگذرد، تقسیم مصرف بین روزها تقریبی است."
-            if lang == "fa" else
-            "If a sample interval crosses midnight, its daily split is estimated."
+            t('if_a_sample_interval_crosses_4ef7c45f59', lang)
         )
         history_note = f"{history_note} {sampling_note}".strip()
         if integrity_issue_count:
             integrity_note = (
-                f"هشدار: {to_persian_digits(integrity_issue_count)} ردیف تاریخی با جمع آپلود/دانلود سازگار نیست؛ "
-                "ارقام آن‌ها قابل تأیید نیست."
-                if lang == "fa" else
-                f"Warning: {integrity_issue_count} historical row(s) disagree with upload + download; "
-                "their values cannot be verified."
+                t('warning_historical_row_s_dis_66799788ba', lang, fa_parts=lambda: (f'{to_persian_digits(integrity_issue_count)}',), en_parts=lambda: (f'{integrity_issue_count}',))
             )
             history_note = f"{history_note}\n{integrity_note}"
         if unverified_collection_days:
             coverage_note = (
-                f"هشدار: ثبت پیوستهٔ همهٔ کانفیگ‌ها در {to_persian_digits(unverified_collection_days)} "
-                "روز قابل تأیید نیست؛ روز بدون داده لزوماً به معنی مصرف صفر نیست."
-                if lang == "fa" else
-                f"Warning: continuous collection for all configurations could not be verified on "
-                f"{unverified_collection_days} day(s); a blank day does not necessarily mean zero usage."
+                t('warning_continuous_collectio_9bcb7ccd1f', lang, fa_parts=lambda: (f'{to_persian_digits(unverified_collection_days)}',), en_parts=lambda: (f'{unverified_collection_days}',))
             )
             history_note = f"{history_note}\n{coverage_note}"
 
@@ -1512,13 +1475,13 @@ async def handle_daily_usage_request(
     order = get_order_func(str(order_id))
     if not order or order.get('user_id') != user_id:
         await callback.answer(
-            "❌ سفارش یافت نشد" if lang == "fa" else "❌ Order not found",
+            t('order_not_found_075d800b08', lang),
             show_alert=True
         )
         return
 
     await callback.answer(
-        "📊 در حال تحلیل و آماده‌سازی آمار مصرف..." if lang == "fa" else "📊 Generating daily usage chart...",
+        t('generating_daily_usage_chart_0074b17db6', lang),
         show_alert=False
     )
 
@@ -1576,30 +1539,16 @@ async def handle_daily_usage_request(
     if lang == "fa":
         tot_text = format_traffic_auto(total_bytes, lang="fa")
         avg_text = format_traffic_auto(avg_bytes, lang="fa")
-        peak_text = f"{format_traffic_auto(peak_bytes, lang='fa')} ({peak_day})" if peak_bytes > 0 else "ثبت نشده"
+        peak_text = f"{format_traffic_auto(peak_bytes, lang='fa')} ({peak_day})" if peak_bytes > 0 else t('none_ea28e8d98b', lang)
         
         # استفاده از نشانگر یونیکد RLM (\u200f) در ابتدای هر خط برای تضمین رندر راست‌به‌چپ در تلگرام
-        caption = f"""\u200f📊 <b>گزارش مصرف روزانه اینترنت</b>
-
-\u200f📦 <b>مجموع مصرف:</b> {tot_text}
-\u200f📈 <b>میانگین روزانه:</b> {avg_text}
-\u200f🔥 <b>بیشترین مصرف:</b> {peak_text}
-
-\u200f🗓 <b>بازه:</b> ۷ روز گذشته
-"""
+        caption = t('b_daily_internet_usage_repor_e03b988112', lang, fa_parts=lambda: (f'{tot_text}', f'{avg_text}', f'{peak_text}'))
     else:
         tot_text = format_traffic_auto(total_bytes, lang="en")
         avg_text = format_traffic_auto(avg_bytes, lang="en")
-        peak_text = f"{format_traffic_auto(peak_bytes, lang='en')} ({peak_day})" if peak_bytes > 0 else "None"
+        peak_text = f"{format_traffic_auto(peak_bytes, lang='en')} ({peak_day})" if peak_bytes > 0 else t('none_ea28e8d98b', lang)
 
-        caption = f"""📊 <b>Daily Internet Usage Report</b>
-
-📦 <b>Total Usage:</b> {tot_text}
-📈 <b>Daily Average:</b> {avg_text}
-🔥 <b>Peak Usage:</b> {peak_text}
-
-🗓 <b>Period:</b> Last 7 days
-"""
+        caption = t('b_daily_internet_usage_repor_e03b988112', lang, en_parts=lambda: (f'{tot_text}', f'{avg_text}', f'{peak_text}'))
 
     # ساخت کیبورد بازگشت
     back_callback = f"view_config_{order_id}" if from_view != 2 else f"show_text_{order_id}"
@@ -1607,14 +1556,14 @@ async def handle_daily_usage_request(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔙 بازگشت به کانفیگ" if lang == "fa" else "🔙 Back to Config",
+                    text=t('back_to_config_f15bf8e1cd', lang),
                     callback_data=back_callback,
                     style="primary"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="🏠 منوی اصلی" if lang == "fa" else "🏠 Main Menu",
+                    text=t('main_menu_0cdd07a7cc', lang),
                     callback_data="back_to_main",
                     style="danger"
                 )

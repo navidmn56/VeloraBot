@@ -6,6 +6,8 @@ from aiogram import Bot
 import html
 import re
 
+from database import TEHRAN_TZ, now_tehran
+
 logger = logging.getLogger(__name__)
 
 
@@ -107,7 +109,7 @@ class LogSystem:
     
     async def send_log(self, message: str, parse_mode: str = "HTML"):
         """ارسال پیام لاگ به کانال با استفاده از صف"""
-        timestamp = datetime.now().strftime('%H:%M:%S')
+        timestamp = now_tehran().strftime('%H:%M:%S')
         formatted_message = f"<code>[{timestamp}]</code>\n{message}"
         
         # اضافه کردن به صف
@@ -123,7 +125,7 @@ class LogSystem:
         """ثبت استارت ربات"""
         text = f"""
 🚀 <b>Bot Started</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 🤖 <b>Name:</b> {self._safe(bot_info.first_name)}
 📛 <b>Username:</b> @{self._safe(bot_info.username)}
 🆔 <b>ID:</b> <code>{bot_info.id}</code>
@@ -135,7 +137,7 @@ class LogSystem:
         """ثبت توقف ربات"""
         text = f"""
 🛑 <b>Bot Stopped</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>Admin:</b> <code>{admin_id}</code>
 """
         await self.send_log(text)
@@ -145,7 +147,7 @@ class LogSystem:
         target_text = f"\n🎯 <b>Target User:</b> <code>{target_user}</code>" if target_user else ""
         text = f"""
 👑 <b>Admin Action</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>Admin:</b> <code>{admin_id}</code>
 ⚡ <b>Action:</b> {self._safe(action)}{target_text}
 📄 <b>Details:</b> {self._safe(details)}
@@ -156,7 +158,7 @@ class LogSystem:
         """ثبت اقدامات کاربران عادی"""
         text = f"""
 📝 <b>User Action</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 ⚡ <b>Action:</b> {self._safe(action)}
 📄 <b>Details:</b> {self._safe(details)}
@@ -167,7 +169,7 @@ class LogSystem:
         """ثبت ثبت‌نام کاربر جدید"""
         text = f"""
 🆕 <b>New User</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>Name:</b> {self._safe(user_name)}
 🆔 <b>ID:</b> <code>{user_id}</code>
 📛 <b>Username:</b> @{self._safe(username) if username else 'N/A'}
@@ -178,7 +180,7 @@ class LogSystem:
         """ثبت خرید جدید"""
         text = f"""
 🛒 <b>New Purchase</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 🆔 <b>Order:</b> #{order_id}
 📦 <b>Volume:</b> {volume} GB
@@ -192,7 +194,7 @@ class LogSystem:
         """ثبت درخواست شارژ حساب"""
         text = f"""
 💰 <b>Balance Top-Up Request</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 🆔 <b>Order:</b> #{order_id}
 💵 <b>Amount:</b> {amount:,} Toman
@@ -203,7 +205,7 @@ class LogSystem:
         """ثبت تایید شارژ حساب"""
         text = f"""
 ✅ <b>Balance Top-Up Approved</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 🆔 <b>Order:</b> #{order_id}
 👤 <b>User:</b> <code>{user_id}</code>
 💵 <b>Amount:</b> {amount:,} Toman
@@ -214,7 +216,7 @@ class LogSystem:
         """ثبت تایید سفارش"""
         text = f"""
 ✅ <b>Order Approved</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 🆔 <b>Order:</b> #{order_id}
 👤 <b>User:</b> <code>{user_id}</code>
 📦 <b>Volume:</b> {volume} GB
@@ -227,7 +229,7 @@ class LogSystem:
         """ثبت رد سفارش"""
         text = f"""
 ❌ <b>Order Rejected</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 🆔 <b>Order:</b> #{order_id}
 👤 <b>User:</b> <code>{user_id}</code>
 📄 <b>Reason:</b> {self._safe(reason) if reason else 'Unspecified'}
@@ -244,7 +246,7 @@ class LogSystem:
 
         text = f"""
 {emoji} <b>Balance Change</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 ⚡ <b>Type:</b> {action_text}
 💰 <b>Amount:</b> {amount_abs:,} Toman
@@ -256,7 +258,7 @@ class LogSystem:
         """ثبت ساخت کانفیگ در پنل"""
         text = f"""
 📡 <b>Configuration Created in Panel</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 🆔 <b>Order:</b> #{order_id}
 📧 <b>Email:</b> <code>{self._safe(email)}</code>
@@ -269,7 +271,7 @@ class LogSystem:
         """ثبت مشاهده کانفیگ"""
         text = f"""
 👁️ <b>Configuration Viewed</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 🆔 <b>Order:</b> #{order_id}
 📱 <b>View Type:</b> {self._safe(view_type)}
@@ -280,7 +282,7 @@ class LogSystem:
         """ثبت بازخورد کاربر"""
         text = f"""
 ⭐ <b>New Feedback</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>User:</b> <code>{user_id}</code>
 🆔 <b>Order:</b> #{order_id}
 🎯 <b>Rating:</b> {self._safe(rating)}
@@ -294,7 +296,7 @@ class LogSystem:
         emoji = "💬" if sender == "user" else "👑"
         text = f"""
 {emoji} <b>Support Chat Message</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👤 <b>Sender:</b> {sender_text} (<code>{user_id}</code>)
 🆔 <b>Chat:</b> #{chat_id}
 📝 <b>Text:</b> {self._safe(message[:200])}
@@ -306,7 +308,7 @@ class LogSystem:
         closer = "User" if closed_by == "user" else "Admin"
         text = f"""
 🔒 <b>Chat Closed</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 🆔 <b>Chat:</b> #{chat_id}
 👤 <b>User:</b> <code>{user_id}</code>
 🔚 <b>Closed By:</b> {closer}
@@ -317,7 +319,7 @@ class LogSystem:
         """ثبت حذف کاربر"""
         text = f"""
 🗑️ <b>User Deleted</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>Admin:</b> <code>{admin_id}</code>
 👤 <b>Deleted User:</b> {self._safe(user_name)} (<code>{user_id}</code>)
 """
@@ -327,7 +329,7 @@ class LogSystem:
         """ثبت تغییر تنظیمات قیمت"""
         text = f"""
 ⚙️ <b>Price Settings Updated</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>Admin:</b> <code>{admin_id}</code>
 📊 <b>Setting:</b> {self._safe(setting_key)}
 📉 <b>Previous Value:</b> {old_value:,} Toman
@@ -340,7 +342,7 @@ class LogSystem:
         user_text = f"\n👤 <b>User:</b> <code>{user_id}</code>" if user_id else ""
         text = f"""
 ⚠️ <b>System Error</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 📁 <b>Function:</b> {self._safe(function_name)}
 ❌ <b>Error:</b> {self._safe(str(error)[:200])}{user_text}
 """
@@ -352,7 +354,7 @@ class LogSystem:
         emoji = "➕" if action == "add" else "➖"
         text = f"""
 {emoji} <b>Required Membership Channel Updated</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>Admin:</b> <code>{admin_id}</code>
 ⚡ <b>Action:</b> {action_text}
 📢 <b>Channel:</b> {self._safe(channel_name)}
@@ -366,7 +368,7 @@ class LogSystem:
         emoji = "🟢" if enabled else "🔴"
         text = f"""
 {emoji} <b>Required Membership Status Updated</b>
-🕐 <b>Time:</b> <code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>
+🕐 <b>Time:</b> <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>
 👑 <b>Admin:</b> <code>{admin_id}</code>
 ⚙️ <b>New Status:</b> {status}
 """
@@ -382,7 +384,7 @@ class LogSystem:
         
         try:
             await self.bot.session.close()
-        except:
+        except Exception:
             pass
 
 

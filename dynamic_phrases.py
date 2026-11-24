@@ -4,6 +4,7 @@
 Dynamic and random phrases for the main menu and greeting
 """
 
+from strings import t
 import random
 
 # ۱۰۰ عبارت کوتاه، جذاب و خودمانی فارسی برای منوی اصلی (بدون ایموجی‌های اضافه و رندوم)
@@ -229,9 +230,7 @@ def format_start_greeting(user_name: str, lang: str = "fa", rocket_emoji: str = 
     {عبارت داینامیک}
     """
     phrase = get_random_menu_phrase(lang)
-    if lang == "fa":
-        return f"{rocket_emoji} سلام {user_name}! خوش آمدید\n{phrase}"
-    return f"{rocket_emoji} Hello {user_name}! Welcome\n{phrase}"
+    return t('hello_welcome_c7eb288d40', lang, fa_parts=lambda: (f'{rocket_emoji}', f'{user_name}', f'{phrase}'), en_parts=lambda: (f'{rocket_emoji}', f'{user_name}', f'{phrase}'))
 
 
 def format_main_menu_title(lang: str = "fa", rocket_emoji: str = "🚀") -> str:
@@ -241,6 +240,4 @@ def format_main_menu_title(lang: str = "fa", rocket_emoji: str = "🚀") -> str:
     🚀 منوی اصلی
     """
     phrase = get_random_menu_phrase(lang)
-    if lang == "fa":
-        return f"{phrase}\n{rocket_emoji} منوی اصلی"
-    return f"{phrase}\n{rocket_emoji} Main Menu"
+    return t('main_menu_35809edca3', lang, fa_parts=lambda: (f'{phrase}', f'{rocket_emoji}'), en_parts=lambda: (f'{phrase}', f'{rocket_emoji}'))
