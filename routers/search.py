@@ -714,7 +714,7 @@ def register_search_handlers(dp, admin_id_int: Optional[int] = None, get_user_fu
     """
     تابع سازگاری backward-compatible برای ثبت router روی dispatcher
     """
-    if hasattr(dp, "include_router") and dp != router:
+    if hasattr(dp, "include_router") and dp != router and getattr(router, "parent_router", None) is None:
         dp.include_router(router)
     return {
         "start": admin_search_start,

@@ -255,6 +255,7 @@ from core.state_stores import (
 )
 
 log_system = None
+shared_connector = None
 
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
