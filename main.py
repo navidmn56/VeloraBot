@@ -145,6 +145,7 @@ from database import (
     READY_PACKAGES,
     USER_TEST_USAGE,
     TEST_SERVICE_STATUS,
+    get_test_service_display,
     reset_database_collections,
     get_valid_orders,
     update_order,
@@ -2654,14 +2655,16 @@ def backup_database(backup_type: str = 'full_backup'):
         'user_inbound_selection': USER_INBOUND_SELECTION,
         'user_test_usage': USER_TEST_USAGE,
         'shop_status': SHOP_STATUS,
+        'coupons': dict(COUPONS),
         'daily_usage': daily_usage_backup,
+        'sms_payments': sms_payment_manager.db.export_backup_data(),
         'alert_cache': alert_cache,
         'alert_settings': alert_settings,  # ✅ اضافه کردن alert_settings جداگانه
         'backup_info': {
             'timestamp': timestamp,
             'date': now_tehran_iso(),
             'stats': stats,
-            'version': '3.2'  # ✅ نسخه جدید
+            'version': '3.3'  # ✅ شامل تمام فایل‌های data
         }
     }
     
@@ -2670,14 +2673,15 @@ def backup_database(backup_type: str = 'full_backup'):
     if save_json(backup_file, full_backup):
         logger.info(f"✅ complete backup in {backup_file} saved")
         
-        # کپی فایل فیزیکی دیتابیس مصرف روزانه در صورت وجود
-        db_path = os.path.join(DATA_DIR, 'daily_usage.db')
-        if os.path.exists(db_path):
-            try:
-                shutil.copy2(db_path, os.path.join(backup_dir, f'daily_usage_{timestamp}.db'))
-                logger.info('✅ Physical copy of daily_usage.db saved in backup')
-            except Exception as e_cp:
-                logger.warning(f"⚠️ Error copying database daily_usage.db: {e_cp}")
+        # کپی فایل‌های فیزیکی دیتابیس SQLite در صورت وجود
+        for db_filename, bk_prefix in (('daily_usage.db', 'daily_usage'), ('sms_payments.db', 'sms_payments')):
+            db_path = os.path.join(DATA_DIR, db_filename)
+            if os.path.exists(db_path):
+                try:
+                    shutil.copy2(db_path, os.path.join(backup_dir, f'{bk_prefix}_{timestamp}.db'))
+                    logger.info(f'✅ Physical copy of {db_filename} saved in backup')
+                except Exception as e_cp:
+                    logger.warning(f"⚠️ Error copying database {db_filename}: {e_cp}")
         
         # ==================== 9. بررسی فایل بکاپ ذخیره شده ====================
         try:
@@ -3139,16 +3143,28 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         ]
         buttons.append(row_4)
         
-        # ─── ردیف ۵: کانفیگ خوش‌آمد (فقط اگه تست باقی مونده) ───
+        test_emoji, test_name = get_test_service_display(lang)
+        # ─── ردیف ۵: سرویس تست / خوش‌آمد (فقط اگه تست باقی مونده) ───
         if TEST_SERVICE_STATUS.get('enabled', False) and can_take_test:
             buttons.append([
-                InlineKeyboardButton(text=t('welcome_config_cd57f5c024', lang), callback_data="get_test_service", style="primary")
+                InlineKeyboardButton(text=f"{test_emoji} {test_name}", callback_data="get_test_service", style="primary")
             ])
         
         # ─── ردیف ۶: تغییر زبان ───
         buttons.append([
             InlineKeyboardButton(text=t('change_language_d5c2ea5f9d', lang), callback_data="change_language")
         ])
+
+        opt_ch = (configs_pool.get('force_join_settings', {}) or {}).get('optional_channel', {}) or {}
+        if opt_ch.get('enabled') and opt_ch.get('url'):
+            opt_style = opt_ch.get('style') if opt_ch.get('style') in (None, 'primary', 'success', 'danger') else None
+            buttons.append([
+                InlineKeyboardButton(
+                    text=str(opt_ch.get('title') or "📣 عضویت در کانال"),
+                    url=str(opt_ch['url']),
+                    style=opt_style,
+                )
+            ])
     
     else:
         buttons = []
@@ -3192,16 +3208,28 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
         ]
         buttons.append(row_4)
         
-        # ─── ردیف ۵: کانفیگ خوش‌آمد (فقط اگه تست باقی مونده) ───
+        test_emoji, test_name = get_test_service_display(lang)
+        # ─── ردیف ۵: سرویس تست / خوش‌آمد (فقط اگه تست باقی مونده) ───
         if TEST_SERVICE_STATUS.get('enabled', False) and can_take_test:
             buttons.append([
-                InlineKeyboardButton(text=t('welcome_config_cd57f5c024', lang), callback_data="get_test_service", style="primary")
+                InlineKeyboardButton(text=f"{test_emoji} {test_name}", callback_data="get_test_service", style="primary")
             ])
         
         # ─── ردیف ۶: تغییر زبان ───
         buttons.append([
             InlineKeyboardButton(text=t('change_language_d5c2ea5f9d', lang), callback_data="change_language")
         ])
+
+        opt_ch = (configs_pool.get('force_join_settings', {}) or {}).get('optional_channel', {}) or {}
+        if opt_ch.get('enabled') and opt_ch.get('url'):
+            opt_style = opt_ch.get('style') if opt_ch.get('style') in (None, 'primary', 'success', 'danger') else None
+            buttons.append([
+                InlineKeyboardButton(
+                    text=str(opt_ch.get('title') or "📣 Join Channel"),
+                    url=str(opt_ch['url']),
+                    style=opt_style,
+                )
+            ])
     
     # ─── ردیف آخر: پنل ادمین (فقط ادمین) ───
     if is_admin:
@@ -3614,6 +3642,7 @@ async def emergency_backup_from_panel():
             "purchase_count": purchase_count,
             "skipped_clients": skipped_clients,
             "total_clients": bot_clients,
+            "clients_count": bot_clients,
             "users_with_configs": len(users_with_configs),
             "users_without_configs": len(users) - len(users_with_configs),
             "new_users": new_users,
@@ -3982,9 +4011,7 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text=t('coupon_management_3cfb4152e7', lang), callback_data="admin_coupons"),
-            InlineKeyboardButton(text=t('coupon_status_4cd69b975e', lang), callback_data="admin_coupons_stats"),
             InlineKeyboardButton(text=t('alert_settings_d80975e965', lang), callback_data="admin_alert_settings")
-            
         ],
         [
             InlineKeyboardButton(text=t('stats_f28df125ad', lang), callback_data="admin_stats"),
@@ -4012,6 +4039,7 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=t('reset_db_b47c0e1750', lang), callback_data="admin_reset_db")
         ],
         [
+            InlineKeyboardButton(text=t('backup_manager_auto_btn', lang), callback_data="admin_manage_backups", style="primary"),
             InlineKeyboardButton(text=t('emergency_backup_7cf7965fe8', lang), callback_data="admin_emergency_backup", style="danger")
         ],
 
@@ -5686,11 +5714,6 @@ from routers.admin_tools import (
     admin_test_panel,
     sync_deleted_configs,
     sync_user_configs,
-    rebuild_sub_links_in_database,
-    rebuild_single_order_sub_link,
-    cmd_rebuild_links,
-    show_rebuild_results,
-    cmd_rebuild_single,
 )
 
 async def _handle_admin_search_message(message: Message, query: str, lang: str) -> bool:
@@ -7090,6 +7113,25 @@ async def confirm_reset_db_only(callback: CallbackQuery):
         saved_user_test_usage = USER_TEST_USAGE.copy()
         await callback.message.edit_text(t('i18n_cleaning_database', lang))
         reset_database_collections()
+        COUPONS.clear()
+        save_coupons(COUPONS)
+        user_states.clear()
+        save_json(DB_FILES['user_states'], {})
+        try:
+            usage_store.clear_all_data()
+        except Exception as e_du:
+            logger.warning(f"⚠️ Error clearing daily_usage during reset: {e_du}")
+        try:
+            sms_payment_manager.db.clear_all_data()
+        except Exception as e_sms:
+            logger.warning(f"⚠️ Error clearing sms_payments during reset: {e_sms}")
+        try:
+            if 'alert_system' in globals() and alert_system:
+                alert_system.clear_all_history()
+            else:
+                save_json(os.path.join(DATA_DIR, 'alert_cache.json'), {})
+        except Exception as e_ac:
+            logger.warning(f"⚠️ Error clearing alert_cache during reset: {e_ac}")
         USER_INBOUND_SELECTION.clear()
         USER_INBOUND_SELECTION.update(saved_user_inbound_selection)
         
@@ -7237,12 +7279,10 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
                 logger.info(f"📊 Total number of unique clients: {len(clients_by_email)}")
                 for email, data in clients_by_email.items():
                     is_bot_client = False
-                    if email.startswith('test_'):
+                    if email.startswith('test_') or re.match(r'^t\d+_\d+', email):
                         is_bot_client = True
-                    elif email.startswith('user'):
-                        match = re.search(r'user(\d+)', email)
-                        if match:
-                            is_bot_client = True
+                    elif (email.startswith('user') and re.search(r'user(\d+)', email)) or re.match(r'^u\d+_\d+', email):
+                        is_bot_client = True
                     
                     if is_bot_client:
                         total_bot_clients += 1
@@ -7287,9 +7327,27 @@ async def confirm_full_reset_keep_personal(callback: CallbackQuery):
             logger.info('📴 Panel is inactive - configurations were not deleted')
         await callback.message.edit_text(t('i18n_clearing_database', lang))
         reset_database_collections()
+        COUPONS.clear()
+        save_coupons(COUPONS)
         USER_INBOUND_SELECTION.clear()
         USER_TEST_USAGE.clear()
         user_states.clear()
+        save_json(DB_FILES['user_states'], {})
+        try:
+            usage_store.clear_all_data()
+        except Exception as e_du:
+            logger.warning(f"⚠️ Error clearing daily_usage during full reset: {e_du}")
+        try:
+            sms_payment_manager.db.clear_all_data()
+        except Exception as e_sms:
+            logger.warning(f"⚠️ Error clearing sms_payments during full reset: {e_sms}")
+        try:
+            if 'alert_system' in globals() and alert_system:
+                alert_system.clear_all_history()
+            else:
+                save_json(os.path.join(DATA_DIR, 'alert_cache.json'), {})
+        except Exception as e_ac:
+            logger.warning(f"⚠️ Error clearing alert_cache during full reset: {e_ac}")
         _db_cache.clear()
         _db_modified.clear()
         await callback.message.edit_text(t('i18n_saving_database', lang))

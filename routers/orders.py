@@ -12,6 +12,7 @@ routers/orders.py
 """
 
 import math
+import re
 import html
 import json
 import asyncio
@@ -639,10 +640,12 @@ async def extend_service_start(callback: CallbackQuery):
     
     # ✅ جلوگیری از تمدید سرویس تست
     order_type = order.get('type', 'purchase')
+    email_str = str(order.get('email', '') or '')
     is_test = (
         order_type == 'test'
         or order.get('is_test', False)
-        or (order.get('email', '') or '').startswith('test_')
+        or email_str.startswith('test_')
+        or bool(re.match(r'^t\d+_', email_str))
     )
     if is_test:
         await callback.answer(

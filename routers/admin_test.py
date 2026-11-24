@@ -36,6 +36,7 @@ from database import (
     now_tehran_iso,
     TEST_SERVICE_STATUS,
     USER_TEST_USAGE,
+    get_test_service_display,
     save_test_usage,
     READY_PACKAGES,
     BLACKLIST,
@@ -64,7 +65,11 @@ from routers.force_join import check_membership
 async def send_config_with_qr_option(*args, **kwargs):
     from routers.configs_view import send_config_with_qr_option as _send
     return await _send(*args, **kwargs)
-from services.panel_api import xui_create_client_with_inbound, get_user_inbound
+from services.panel_api import (
+    xui_create_client_with_inbound,
+    get_user_inbound,
+    get_inbound_display_names,
+)
 
 async def send_admin_notification(*args, **kwargs):
     import main
@@ -216,6 +221,20 @@ def get_admin_test_service_keyboard(settings: dict, lang: str) -> InlineKeyboard
             text=t('edit_test_message_5ffc2ccadb', lang),
             callback_data="admin_test_edit_message"
         )],
+        [
+            InlineKeyboardButton(
+                text=t('admin_test_edit_name_fa_btn', lang),
+                callback_data="admin_test_edit_name_fa"
+            ),
+            InlineKeyboardButton(
+                text=t('admin_test_edit_name_en_btn', lang),
+                callback_data="admin_test_edit_name_en"
+            ),
+        ],
+        [InlineKeyboardButton(
+            text=t('admin_test_edit_emoji_btn', lang),
+            callback_data="admin_test_edit_emoji"
+        )],
         [InlineKeyboardButton(
             text=t('test_statistics_da55586f6d', lang),
             callback_data="admin_test_stats"
@@ -241,17 +260,21 @@ async def build_admin_test_service_content(lang: str) -> tuple[str, InlineKeyboa
     inbound_ids = settings.get('inbound_ids', [])
     inbound_info = t('i18n_status_default_like_user', lang)
     if inbound_ids:
-        inbounds = await xui_get_inbounds()
+        inbound_map = await get_inbound_display_names(include_disabled=True)
         inbound_names = []
         for ib_id in inbound_ids:
-            for ib in inbounds:
-                if ib.get('id') == ib_id:
-                    inbound_names.append(f"{ib.get('remark', f'ID:{ib_id}')} - {ib.get('protocol', '').upper()}:{ib.get('port', '')}")
-                    break
+            try:
+                norm_id = int(ib_id)
+            except (TypeError, ValueError):
+                norm_id = ib_id
+            if norm_id in inbound_map:
+                inbound_names.append(inbound_map[norm_id])
+            elif not inbound_map:
+                inbound_names.append(f"ID: {ib_id}")
         if inbound_names:
             inbound_info = t('i18n_test_inbounds_title', lang) + "\n".join([f"  • {name}" for name in inbound_names])
         else:
-            inbound_info = t('i18n_selected_inbounds_title', lang, fa_parts=lambda: (f'{inbound_ids}',), en_parts=lambda: (f'{inbound_ids}',))
+            inbound_info = t('i18n_status_default_like_user', lang)
 
     ip_limit = settings.get('ip_limit', 0)
     ip_display = t('i18n_status_unlimited', lang) if ip_limit == 0 else t('i18n_devices_count', lang, fa_parts=lambda: (f'{ip_limit}',), en_parts=lambda: (f'{ip_limit}',))
@@ -264,6 +287,12 @@ async def build_admin_test_service_content(lang: str) -> tuple[str, InlineKeyboa
         volume_display = f"{volume_gb:.1f} GB ({volume_mb:,} MB)"
 
     text = t('b_test_service_management_b_9634473ed2', lang, fa_parts=lambda: (f'{status_text}', f'{volume_display}', f"{settings.get('days', 3)}", f'{ip_display}', f"{settings.get('max_tests', 1)}", f'{inbound_info}', f"{premium_emoji('note', '📝')}", f"{settings.get('message', '')}", f"{settings.get('last_updated', 'N/A')}"), en_parts=lambda: (f'{status_text}', f'{volume_display}', f"{settings.get('days', 3)}", f'{ip_display}', f"{settings.get('max_tests', 1)}", f'{inbound_info}', f"{premium_emoji('note', '📝')}", f"{settings.get('message', '')}", f"{settings.get('last_updated', 'N/A')}"))
+    t_emoji, t_name_fa = get_test_service_display('fa')
+    _, t_name_en = get_test_service_display('en')
+    if lang == "fa":
+        text += f"\n🏷️ <b>نام و ایموجی دکمه:</b> {t_emoji} {html.escape(t_name_fa)} / {html.escape(t_name_en)}"
+    else:
+        text += f"\n🏷️ <b>Button Label & Emoji:</b> {t_emoji} {html.escape(t_name_en)} / {html.escape(t_name_fa)}"
 
     kb = get_admin_test_service_keyboard(settings, lang)
     return text, kb
@@ -462,17 +491,17 @@ async def inbound_selectall(callback: CallbackQuery, callback_data: Optional[Inb
     temp_key = f"{prefix}_{callback.from_user.id}"
     lang = get_user(callback.from_user.id).get('lang', 'fa')
 
-    inbounds = await xui_get_inbounds()
+    inbounds = await xui_get_inbounds(force_refresh=True)
     active_inbounds = [i for i in inbounds if i.get('enable', True)]
-    all_ids = [i.get('id') for i in active_inbounds if i.get('id')]
+    all_ids = [int(i.get('id')) for i in active_inbounds if i.get('id') is not None]
 
     if not all_ids:
         await callback.answer(t('i18n_no_active_inbounds_alert', lang), show_alert=True)
         return
 
-    TEMP_INBOUND_SELECTION[temp_key] = all_ids
+    TEMP_INBOUND_SELECTION[temp_key] = list(all_ids)
 
-    await callback.answer(t('i18n_selected_count', lang, fa_parts=lambda: (f'{len(all_ids)}',), en_parts=lambda: (f'{len(all_ids)}',)), show_alert=True)
+    await safe_answer(callback, t('i18n_selected_count', lang, fa_parts=lambda: (f'{len(all_ids)}',), en_parts=lambda: (f'{len(all_ids)}',)), alert=True)
 
     back_key = f"{prefix}_{callback.from_user.id}_back"
     back_info = INBOUND_BACK_DATA.get(back_key, {})
@@ -701,7 +730,7 @@ async def inbound_save(callback: CallbackQuery, callback_data: Optional[InboundC
                         break
                 READY_PACKAGES['last_updated'] = now_tehran_iso()
                 configs_pool['ready_packages'] = READY_PACKAGES
-                schedule_save(2.0)
+                save_all()
                 
                 await go_back_to_category_edit(callback, category_id)
             else:
@@ -872,7 +901,10 @@ async def admin_test_edit_start(callback: CallbackQuery):
         'days': {'key': 'days', 'label': t('test_duration_days_ae3ef9b0c5', lang), 'current': TEST_SERVICE_STATUS.get('days', 3)},
         'max': {'key': 'max_tests', 'label': t('max_tests_per_user_d3e96c46f4', lang), 'current': TEST_SERVICE_STATUS.get('max_tests', 1)},
         'message': {'key': 'message', 'label': t('test_message_c27f747183', lang), 'current': TEST_SERVICE_STATUS.get('message', '')},
-        'ip_limit': {'key': 'ip_limit', 'label': t('ip_limit_4cbb9d738f', lang), 'current': TEST_SERVICE_STATUS.get('ip_limit', 0)}
+        'ip_limit': {'key': 'ip_limit', 'label': t('ip_limit_4cbb9d738f', lang), 'current': TEST_SERVICE_STATUS.get('ip_limit', 0)},
+        'name_fa': {'key': 'display_name_fa', 'label': 'نام فارسی سرویس تست' if lang == 'fa' else 'Test Name (FA)', 'current': TEST_SERVICE_STATUS.get('display_name_fa', 'کانفیگ خوش‌آمد')},
+        'name_en': {'key': 'display_name_en', 'label': 'نام انگلیسی سرویس تست' if lang == 'fa' else 'Test Name (EN)', 'current': TEST_SERVICE_STATUS.get('display_name_en', 'Welcome Config')},
+        'emoji': {'key': 'display_emoji', 'label': 'ایموجی سرویس تست' if lang == 'fa' else 'Test Service Emoji', 'current': TEST_SERVICE_STATUS.get('display_emoji', '🎁')},
     }
     
     if setting_type not in setting_map:
@@ -897,6 +929,12 @@ async def admin_test_edit_start(callback: CallbackQuery):
         hint = t('10_10_mb_0_unlimited_6832c347c0', lang)
     elif setting_type == 'ip_limit':
         hint = t('0_unlimited_1_only_one_devic_22815bc8f3', lang)
+    elif setting_type == 'name_fa':
+        hint = "مثلاً: سرویس تست" if lang == "fa" else "e.g.: سرویس تست"
+    elif setting_type == 'name_en':
+        hint = "مثلاً: Test Service" if lang == "fa" else "e.g.: Test Service"
+    elif setting_type == 'emoji':
+        hint = "مثلاً: 🆓 یا 🧪 یا 🎁" if lang == "fa" else "e.g.: 🆓 or 🧪 or 🎁"
     elif setting_type != 'message':
         hint = t('e_g_10_f1b729efa7', lang)
 
@@ -948,7 +986,10 @@ async def admin_test_edit_save(message: Message):
         'days': 'days',
         'max': 'max_tests',
         'message': 'message',
-        'ip_limit': 'ip_limit'
+        'ip_limit': 'ip_limit',
+        'name_fa': 'display_name_fa',
+        'name_en': 'display_name_en',
+        'emoji': 'display_emoji',
     }
     
     db_key = key_map.get(setting_type)
@@ -958,11 +999,24 @@ async def admin_test_edit_save(message: Message):
         return
     
     try:
-        if setting_type == 'message':
-            new_value = message.text.strip()
+        if setting_type in ('message', 'name_fa', 'name_en', 'emoji'):
+            new_value = (message.text or "").strip()
             if not new_value:
                 await message.reply(t('message_cannot_be_empty_9669d7f21e', lang))
                 return
+            if setting_type in ('name_fa', 'name_en'):
+                new_value = new_value[:40]
+            elif setting_type == 'emoji':
+                new_value = new_value.split()[0][:12]
+            update_test_settings(**{db_key: new_value})
+            save_all()
+            await message.reply(
+                t('settings_updated_new_value_c_f05f1ab6b8', lang, fa_parts=lambda: (f'{html.escape(new_value)}',), en_parts=lambda: (f'{html.escape(new_value)}',)),
+                parse_mode=ParseMode.HTML,
+            )
+            user_states.pop(admin_id, None)
+            await admin_test_service_settings_message(message)
+            return
         
         elif setting_type == 'volume':
             new_value_mb = int(message.text.replace(',', '').replace(' ', '').strip())

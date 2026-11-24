@@ -192,9 +192,12 @@ class GeminiClient:
 
 
 class ConversationMemory:
-    """مدیریت حافظه مکالمه برای هر کاربر"""
-    
+    """مدیریت حافظه مکالمه برای هر کاربر با محدودیت کانتکس"""
+
     STORAGE_KEY = "ai_conversation_memory"
+    MAX_HISTORY_MESSAGES = 4
+    MAX_MESSAGE_CHARS = 350
+    MAX_CONTEXT_CHARS = 1200
 
     def __init__(self):
         self.memories = {}
@@ -211,7 +214,8 @@ class ConversationMemory:
         user = users.get(str(user_id))
         if not isinstance(user, dict):
             user = get_user(user_id)
-        history = self.memories.get(user_id, [])
+        history = self.memories.get(user_id, [])[-20:]
+        self.memories[user_id] = history
         if history:
             user[self.STORAGE_KEY] = history
         else:
@@ -224,11 +228,16 @@ class ConversationMemory:
     def add_message(self, user_id: int, role: str, content: str):
         """اضافه کردن و ذخیره دائمی پیام مکالمه کاربر"""
         history = self._load_history(user_id)
+        trimmed = str(content or "").strip()
+        if len(trimmed) > self.MAX_MESSAGE_CHARS:
+            trimmed = trimmed[:self.MAX_MESSAGE_CHARS - 3].rstrip() + "..."
         history.append({
             'role': role,  # 'user' یا 'assistant'
-            'content': content,
+            'content': trimmed,
             'timestamp': now_tehran_iso()
         })
+        if len(history) > 20:
+            del history[:-20]
         self.last_activity[user_id] = datetime.now()
         self._persist_history(user_id)
     
@@ -245,18 +254,30 @@ class ConversationMemory:
         return history
     
     def get_context(self, user_id: int, max_messages: Optional[int] = None) -> str:
-        """دریافت متن مکالمه برای ارسال به AI"""
+        """دریافت متن کوتاه مکالمه برای ارسال به AI با اولویت جدیدترین پیام‌ها"""
         history = self.get_history(user_id)
         if not history:
             return ""
-        recent = history[-max_messages:] if max_messages else history
-        
-        context = "تاریخچه مکالمه:\n"
-        for msg in recent:
-            role = "کاربر" if msg['role'] == 'user' else "دستیار"
-            context += f"{role}: {msg['content']}\n"
-        
-        return context
+        limit = max_messages if max_messages is not None else self.MAX_HISTORY_MESSAGES
+        recent = history[-limit:] if limit > 0 else history
+
+        header = "تاریخچه مکالمه:"
+        total_len = len(header)
+        selected_rev = []
+        for msg in reversed(recent):
+            role = "کاربر" if msg.get('role') == 'user' else "دستیار"
+            msg_text = str(msg.get('content', '')).strip()
+            if len(msg_text) > self.MAX_MESSAGE_CHARS:
+                msg_text = msg_text[:self.MAX_MESSAGE_CHARS - 3].rstrip() + "..."
+            line = f"{role}: {msg_text}"
+            if selected_rev and total_len + len(line) + 1 > self.MAX_CONTEXT_CHARS:
+                break
+            selected_rev.append(line)
+            total_len += len(line) + 1
+
+        if not selected_rev:
+            return ""
+        return "\n".join([header] + list(reversed(selected_rev)))
     
     def has_history(self, user_id: int) -> bool:
         """آیا کاربر تاریخچه دارد؟"""

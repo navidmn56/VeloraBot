@@ -28,7 +28,14 @@ from aiogram.enums import ParseMode
 
 import config as app_config
 from config import SENAI_PANEL_ENABLED, is_senai_panel_enabled
-from database import orders, READY_PACKAGES, BLACKLIST, get_valid_orders, now_tehran
+from database import (
+    orders,
+    READY_PACKAGES,
+    BLACKLIST,
+    get_valid_orders,
+    get_test_service_display,
+    now_tehran,
+)
 from user_manager import get_user, update_user, user_states
 from strings import t
 from utils.helpers import (
@@ -59,6 +66,21 @@ _bot: Optional[Bot] = None
 
 CONFIG_LINKS_CACHE_TTL = 300
 CONFIG_PAGE_SIZE = 1
+ALL_CONFIGS_PAGE_SIZE = 5
+
+
+def _is_test_order(order: Optional[dict]) -> bool:
+    """تشخیص یکپارچه سرویس تست/خوش‌آمد از روی نوع، پرچم یا پیشوند ایمیل"""
+    if not isinstance(order, dict):
+        return False
+    order_type = order.get("type", "purchase")
+    email = str(order.get("email", "") or "")
+    return bool(
+        order_type == "test"
+        or order.get("is_test", False)
+        or email.startswith("test_")
+        or re.match(r"^t\d+_", email)
+    )
 
 
 def set_bot(bot_instance: Bot):
@@ -353,15 +375,7 @@ def get_config_view_keyboard(
     """ساخت کیبورد نمایش کانفیگ با دکمه‌های پلتفرم"""
 
     order = orders.get(str(order_id))
-    is_test = False
-
-    if order:
-        order_type = order.get('type', 'purchase')
-        is_test = (
-            order_type == 'test'
-            or order.get('is_test', False)
-            or (order.get('email', '') or '').startswith('test_')
-        )
+    is_test = _is_test_order(order)
 
     buttons = []
 
@@ -639,19 +653,18 @@ def get_config_caption(
 ) -> str:
     """ساخت کپشن با اطلاعات کامل + ترافیک"""
     order = orders.get(str(order_id))
-    is_test = False
+    is_test = _is_test_order(order)
     category_name = ""
     category_name_en = ""
 
     if order:
-        is_test = order.get('type') == 'test'
         category_name = order.get('category_name', '') or ''
         category_name_en = order.get('category_name_en', '') or ''
 
     # ─── عنوان ───
     if is_test:
-        title_emoji = premium_emoji('gift', '🎁')
-        title = t('free_welcome_config_200592beaf', lang, fa_parts=lambda: (f'{title_emoji}',), en_parts=lambda: (f'{title_emoji}',))
+        test_emoji, test_name = get_test_service_display(lang)
+        title = f"{test_emoji} {html.escape(test_name)}"
     elif category_name or category_name_en:
         title_emoji = premium_emoji('globe', '🌐')
 
@@ -728,12 +741,8 @@ async def send_config_with_qr_option(
     }
 
     order = orders.get(str(order_id))
-    is_test = False
-    email = None
-
-    if order:
-        is_test = order.get('type') == 'test'
-        email = order.get('email')
+    is_test = _is_test_order(order)
+    email = get_order_client_email(order) if order else None
 
     # ─── دریافت اطلاعات ترافیک از پنل ───
     traffic_info = ""
@@ -746,29 +755,22 @@ async def send_config_with_qr_option(
         except Exception as e:
             logger.error(f"Error fetching traffic for caption: {e}")
 
+    wireguard_available = await _order_has_wireguard(order_id)
+    telegram_proxy_url = await _get_order_telegram_proxy(order_id)
+
     # ─── ساخت کپشن ───
     caption = get_config_caption(
-        order_id, volume, days, price, config_link, lang, traffic_info
+        order_id, volume, days, price, config_link, lang, traffic_info,
+        telegram_proxy_url=telegram_proxy_url
     )
 
     # ─── پیام تست ───
     if is_test:
-        gift_emoji = premium_emoji('gift', '🎁')
+        test_emoji, test_name = get_test_service_display(lang)
         light_emoji = premium_emoji('light', '💡')
         home_emoji = premium_emoji('home', '🏠')
-
-        caption += (
-            t('b_this_is_a_welcome_service_1a005543a9', lang, fa_parts=lambda: (f'{gift_emoji}', f'{light_emoji}', f'{home_emoji}'), en_parts=lambda: (f'{gift_emoji}', f'{light_emoji}', f'{home_emoji}'))
-        )
-
-    wireguard_available = await _order_has_wireguard(order_id)
-    telegram_proxy_url = await _get_order_telegram_proxy(order_id)
-
-    if telegram_proxy_url:
-        caption = get_config_caption(
-            order_id, volume, days, price, config_link, lang, traffic_info,
-            telegram_proxy_url=telegram_proxy_url
-        )
+        note_args = (test_emoji, html.escape(test_name), light_emoji, home_emoji)
+        caption += t('test_service_note', lang, fa_parts=lambda: note_args, en_parts=lambda: note_args)
 
     # ─── ارسال ───
     try:
@@ -801,6 +803,95 @@ async def send_config_with_qr_option(
             )
 
 
+async def _render_single_config_text(
+    callback: CallbackQuery,
+    order_id: int,
+    order: dict,
+    lang: str,
+):
+    """نمایش صفحه متنی کانفیگ با ویرایش پیام قبلی (بدون تولید خودکار عکس QR)."""
+    user_id = callback.from_user.id
+    if user_id not in user_states:
+        user_states[user_id] = {}
+    for k in ("is_extend", "extend_order_id", "current_volume", "current_days"):
+        user_states[user_id].pop(k, None)
+
+    volume = order.get("volume", 0)
+    days = order.get("days", 0)
+    price = order.get("price", 0)
+    config_link = order["config_link"]
+
+    user_states[user_id]["current_config"] = {
+        "order_id": order_id,
+        "volume": volume,
+        "days": days,
+        "price": price,
+        "config_link": config_link,
+    }
+
+    traffic_info = ""
+    email = get_order_client_email(order)
+    if email and is_senai_panel_enabled():
+        try:
+            client_info = await xui_get_client_info(email)
+            if client_info:
+                traffic_data = await xui_get_client_traffic(email)
+                traffic_info = format_traffic_info(client_info, traffic_data, lang)
+        except Exception as e:
+            logger.error(f"Error retrieving traffic information for config view: {e}")
+
+    telegram_proxy_url = await _get_order_telegram_proxy(order_id)
+    caption = get_config_caption(
+        order_id,
+        volume,
+        days,
+        price,
+        config_link,
+        lang,
+        traffic_info,
+        telegram_proxy_url=telegram_proxy_url,
+    )
+    if _is_test_order(order):
+        test_emoji, test_name = get_test_service_display(lang)
+        light_emoji = premium_emoji('light', '💡')
+        home_emoji = premium_emoji('home', '🏠')
+        note_args = (test_emoji, html.escape(test_name), light_emoji, home_emoji)
+        caption += t('test_service_note', lang, fa_parts=lambda: note_args, en_parts=lambda: note_args)
+
+    wireguard_available = await _order_has_wireguard(order_id)
+    reply_markup = get_config_view_keyboard(
+        order_id,
+        show_qr=False,
+        lang=lang,
+        wireguard_available=wireguard_available,
+        telegram_proxy_url=telegram_proxy_url,
+    )
+
+    try:
+        await callback.message.edit_text(
+            caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup,
+        )
+    except Exception as e:
+        err = str(e)
+        if "message is not modified" in err:
+            pass
+        else:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            bot = get_bot()
+            if bot:
+                await bot.send_message(
+                    callback.message.chat.id,
+                    caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup,
+                )
+
+
 @router.callback_query(F.data.startswith("platform_back_"))
 async def platform_back_to_config(callback: CallbackQuery):
     """بازسازی صفحهٔ کانفیگ قبلی از روی شناسه و حالت QR/متن."""
@@ -821,12 +912,11 @@ async def platform_back_to_config(callback: CallbackQuery):
         )
         return
 
-    try:
-        await callback.message.delete()
-    except Exception as e:
-        logger.warning(f"Error deleting the guide while returning to the config: {e}")
-
     if show_qr:
+        try:
+            await callback.message.delete()
+        except Exception as e:
+            logger.warning(f"Error deleting the guide while returning to the config: {e}")
         await send_config_with_qr_option(
             callback.message.chat.id,
             order_id,
@@ -837,41 +927,7 @@ async def platform_back_to_config(callback: CallbackQuery):
             lang,
         )
     else:
-        traffic_info = ""
-        email = order.get("email")
-        if email and is_senai_panel_enabled():
-            try:
-                client_info = await xui_get_client_info(email)
-                if client_info:
-                    traffic_data = await xui_get_client_traffic(email)
-                    traffic_info = format_traffic_info(client_info, traffic_data, lang)
-            except Exception as e:
-                logger.error(f"Error retrieving traffic information while reverting to config: {e}")
-
-        telegram_proxy_url = await _get_order_telegram_proxy(order_id)
-        caption = get_config_caption(
-            order_id,
-            order.get("volume", 0),
-            order.get("days", 0),
-            order.get("price", 0),
-            order["config_link"],
-            lang,
-            traffic_info,
-            telegram_proxy_url=telegram_proxy_url,
-        )
-        wireguard_available = await _order_has_wireguard(order_id)
-        bot = get_bot()
-        if bot:
-            await bot.send_message(
-                callback.message.chat.id,
-                caption,
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_config_view_keyboard(
-                    order_id, show_qr=False, lang=lang,
-                    wireguard_available=wireguard_available,
-                    telegram_proxy_url=telegram_proxy_url,
-                ),
-            )
+        await _render_single_config_text(callback, order_id, order, lang)
     await callback.answer()
 
 
@@ -898,7 +954,13 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
     end_idx = min(start_idx + CONFIG_PAGE_SIZE, total_links)
     page_links = links[start_idx:end_idx]
 
-    body = ""
+    if lang == "fa":
+        page_badge = f" ({page + 1}/{total_pages})" if total_pages > 1 else ""
+        body = f"🔗 <b>لینک‌های اتصال{page_badge}</b>\n━━━━━━━━━━━━━━━\n\n"
+    else:
+        page_badge = f" ({page + 1}/{total_pages})" if total_pages > 1 else ""
+        body = f"🔗 <b>Connection Links{page_badge}</b>\n━━━━━━━━━━━━━━━\n\n"
+
     for i, link in enumerate(page_links):
         abs_idx = start_idx + i + 1
         is_wireguard = link.strip().startswith("[Interface]")
@@ -906,26 +968,18 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
 
         if is_wireguard:
             protocol = "WireGuard"
+            proto_icon = "🔴"
         elif is_proxy:
             protocol = "Telegram Proxy"
+            proto_icon = "🔵"
         elif "://" in link:
             protocol = link.split("://")[0].upper()
+            proto_icon = "⚡" if protocol == "VLESS" else ("🌐" if protocol == "VMESS" else "🛡")
         else:
             protocol = "Config"
+            proto_icon = "🔗"
 
-        # تشخیص نوع کانفیگ برای نام‌گذاری
-        is_vmess = link.startswith("vmess://")
-        cat_title = (order.get('category_name') or '').strip()
-        display_email = email or f"config_{order_id}"
-
-        if is_wireguard:
-            display_link = link
-        elif is_proxy:
-            display_link = link
-        elif is_vmess:
-            display_link = link
-        else:
-            display_link = link
+        display_link = link
 
         # پروکسی تلگرام: لینک مستقیم و بدون تگ کد
         if is_proxy:
@@ -938,10 +992,11 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
             code_tag = f"<code>{html.escape(display_link)}</code>"
 
         body += (
-            f"<b>{protocol} {abs_idx}</b>\n"
+            f"{proto_icon} <b>{abs_idx}. {protocol}</b>\n"
             f"{code_tag}\n\n"
         )
 
+    body += "━━━━━━━━━━━━━━━"
     text = body.strip()
 
     # دکمه‌های ناوبری (فقط وقتی بیش از یک صفحه باشد)
@@ -950,16 +1005,16 @@ async def _render_config_page(callback: CallbackQuery, order_id: int, page: int 
         nav_row = []
         if page > 0:
             nav_row.append(InlineKeyboardButton(
-                text="➡️ بعدی" if lang == "fa" else "Next ➡️",
+                text="⬅️ قبلی" if lang == "fa" else "⬅️ Prev",
                 callback_data=f"show_text_page_{order_id}_{page - 1}"
             ))
         nav_row.append(InlineKeyboardButton(
-            text=f"📄 {page + 1}/{total_pages}",
+            text=f"{page + 1}/{total_pages}",
             callback_data="noop"
         ))
         if page < total_pages - 1:
             nav_row.append(InlineKeyboardButton(
-                text="⬅️ قبلی" if lang == "fa" else "⬅️ Prev",
+                text="بعدی ➡️" if lang == "fa" else "Next ➡️",
                 callback_data=f"show_text_page_{order_id}_{page + 1}"
             ))
         buttons.append(nav_row)
@@ -1367,7 +1422,7 @@ async def show_single_qr(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=t('back_to_config_f15bf8e1cd', lang),
+                    text=t('back_to_links', lang),
                     callback_data=f"show_text_page_{order_id}_{link_index // CONFIG_PAGE_SIZE}",
                     style="primary"
                 ),
@@ -1458,6 +1513,7 @@ async def show_subscription_qr(callback: CallbackQuery):
 
 @router.callback_query(F.data == "my_configs")
 async def my_configs(callback: CallbackQuery):
+    """نمایش کانفیگ‌های کاربر با اطلاعات زنده از پنل (بدون دسته‌بندی؛ بازگشت به ظاهر قبلی)"""
     user_id = callback.from_user.id
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
@@ -1465,230 +1521,304 @@ async def my_configs(callback: CallbackQuery):
         return
 
     lang = get_user(user_id).get('lang', 'fa')
+    user_state = user_states.get(user_id, {})
+    for k in ("is_extend", "extend_order_id", "current_volume", "current_days"):
+        user_state.pop(k, None)
 
-    # همگام‌سازی کاربر با پنل قبل از نمایش کانفیگ‌ها
     try:
         await sync_user_configs(user_id)
     except Exception as e:
         logger.warning(f"Error auto-syncing configs for user {user_id}: {e}")
 
-    await send_sticker(user_id, 'config', '📦')
-
-    # فیلتر سفارش‌های معتبر کاربر که config_link دارند
-    valid_orders = [
-        o for o in get_valid_orders().values()
+    valid_orders = get_valid_orders()
+    configs_list = [
+        o for o in valid_orders.values()
         if o.get('user_id') == user_id
-        and o.get('config_link') is not None
-        and o.get('config_link') != ''
-        and o.get('status') in ['approved', 'inactive']
+        and o.get('status') in ("approved", "inactive")
+        and o.get('config_link')
     ]
 
-    valid_orders.sort(key=lambda o: str(o.get('date', '')), reverse=True)
+    if log_system:
+        asyncio.create_task(log_system.log_user_action(
+            user_id, "Viewed configurations", f"Count: {len(configs_list)}"
+        ))
 
-    no_config_buttons = [
-        [InlineKeyboardButton(
-            text=f"🛒 {t('buy_subscription_44cfc4a638', lang)}",
-            callback_data="buy_service",
-            style="primary"
-        )],
-        [InlineKeyboardButton(
-            text=f"🎁 {t('test_service_9e0618bb40', lang)}",
-            callback_data="get_test_service",
-            style="primary"
-        )],
-        [InlineKeyboardButton(
-            text=f"🏠 {t('main_menu_9ae3456442', lang)}",
-            callback_data="back_to_main",
-            style="danger"
-        )]
-    ]
+    RLM = "\u200F"
+    LRM = "\u200E"
+    test_emoji, test_name = get_test_service_display(lang)
 
-    if not valid_orders:
-        text = t('you_have_no_active_configs_4e86fc3538', lang, fa_parts=lambda: (f"{premium_emoji('config', '📦')}",), en_parts=lambda: (f"{premium_emoji('config', '📦')}",))
-        try:
-            await callback.message.delete()
-        except Exception as e:
-            logger.debug(f"Failed to delete the previous message: {e}")
-        bot = get_bot()
-        if bot:
-            await bot.send_message(
-                user_id,
-                text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=no_config_buttons),
-                parse_mode=ParseMode.HTML
-            )
-        await safe_answer(callback)
-        return
-
-    # استخراج دسته‌بندی‌ها
     def get_category_name(order: dict) -> str:
+        if lang == "en":
+            name = order.get('category_name_en')
+            if name and str(name).strip() and not any('\u0600' <= c <= '\u06FF' for c in str(name)):
+                return str(name).strip()
+        else:
+            name = order.get('category_name')
+            if name and str(name).strip():
+                return str(name).strip()
+
         cat_id = order.get('category_id')
         if cat_id:
             for cat in READY_PACKAGES.get('categories', []):
                 if cat.get('id') == cat_id:
                     if lang == "en":
-                        return cat.get('name_en') or cat.get('name') or "سایر"
-                    return cat.get('name') or "سایر"
-        name_en = order.get('category_name_en')
-        name_fa = order.get('category_name')
-        if lang == "en" and name_en and str(name_en).strip():
-            return str(name_en).strip()
-        if name_fa and str(name_fa).strip():
-            return str(name_fa).strip()
-        if name_en and str(name_en).strip():
-            return str(name_en).strip()
-        return "سایر" if lang == "fa" else "Other"
+                        en_name = cat.get('name_en') or ''
+                        if en_name and not any('\u0600' <= c <= '\u06FF' for c in en_name):
+                            return en_name
+                    return cat.get('name') or ""
+        if lang == "en":
+            return order.get('category_name_en') or order.get('category_name') or ""
+        return order.get('category_name') or ""
 
-    def build_category_label(raw_name: str, count: int) -> str:
-        clean_name = raw_name
-        for prefix in ["کانفیگ‌های ", "کانفیگ ", "کانفیگ‌های", "کانفیگ"]:
-            if clean_name.startswith(prefix):
-                clean_name = clean_name[len(prefix):].strip()
-        for prefix in ["Configs ", "Config ", "Configs", "Config"]:
-            if clean_name.startswith(prefix):
-                clean_name = clean_name[len(prefix):].strip()
-        clean_name = clean_name.lstrip(" -—_:").strip()
-        if not clean_name:
-            clean_name = "سرویس" if lang == "fa" else "Service"
-        count_display = f"({count})"
+    def build_category_label(raw_name: str) -> str:
+        name = (raw_name or "").strip()
         if lang == "fa":
-            return f"📁 کانفیگ‌های {clean_name} {count_display}"
+            if name.startswith("کانفیگ"):
+                name = name[len("کانفیگ"):].strip()
+            name = name.lstrip("·-—: ").strip()
+            if name.startswith("اشتراک"):
+                base = name
+            elif not name:
+                base = "اشتراک"
+            else:
+                base = f"اشتراک {name}"
+            if len(base) > 18:
+                base = base[:17].rstrip() + "…"
+            return base
+        if name.lower().startswith("config"):
+            name = name[len("config"):].strip()
+        name = name.lstrip("·-—: ").strip()
+        if name.lower().endswith("sub") or name.lower().endswith("subscription"):
+            base = name
+        elif not name:
+            base = "Subscription"
         else:
-            return f"📁 {clean_name} Configs {count_display}"
+            base = f"{name} Sub"
+        if len(base) > 18:
+            base = base[:17].rstrip() + "…"
+        return base
 
-    categories: Dict[str, list] = {}
-    for o in valid_orders:
-        cat_name = get_category_name(o)
-        if cat_name not in categories:
-            categories[cat_name] = []
-        categories[cat_name].append(o)
+    def format_cfg_volume(vol_gb: float, is_test: bool, is_unlimited: bool) -> str:
+        if (is_unlimited and not is_test) or vol_gb is None or vol_gb == 0:
+            return "∞"
+        mb = vol_gb * 1024
+        if is_test:
+            if mb >= 1024:
+                gb = mb / 1024
+                gb_str = f"{int(gb)}" if gb == int(gb) else f"{gb:.1f}"
+                return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str}GB"
+            mb_str = f"{int(round(mb))}"
+            return f"{mb_str} مگ" if lang == "fa" else f"{mb_str}MB"
+        if vol_gb < 1:
+            mb_str = f"{int(round(mb))}"
+            return f"{mb_str} مگ" if lang == "fa" else f"{mb_str}MB"
+        gb_str = f"{int(vol_gb)}" if vol_gb >= 100 else f"{vol_gb:.0f}"
+        return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str}GB"
 
-    # ساخت متن و دکمه‌ها
-    if lang == "fa":
-        RLM = "\u200F"
-        text = t('b_my_configs_b_select_a_conf_ca787d54df', lang, fa_parts=lambda: (f'{RLM}', f"{premium_emoji('config', '📦')}", f'{RLM}'))
-    else:
-        LRM = "\u200E"
-        text = t('b_my_configs_b_select_a_conf_ca787d54df', lang, en_parts=lambda: (f'{LRM}', f"{premium_emoji('config', '📦')}", f'{LRM}'))
+    def format_time_left(expire_dt: datetime) -> str:
+        delta = expire_dt - datetime.now()
+        secs = int(delta.total_seconds())
+        if secs <= 0:
+            return "منقضی" if lang == "fa" else "Expired"
+        if secs < 60:
+            return f"{secs} ثانیه" if lang == "fa" else f"{secs}s"
+        if secs < 3600:
+            return f"{secs // 60} دقیقه" if lang == "fa" else f"{secs // 60}m"
+        if secs < 86400:
+            return f"{secs // 3600} ساعت" if lang == "fa" else f"{secs // 3600}h"
+        days = secs // 86400
+        return f"{days} روز" if lang == "fa" else f"{days}d"
+
+    if not configs_list:
+        await send_sticker(user_id, 'config', '📦')
+        text = t(
+            'you_have_no_active_configs_4e86fc3538',
+            lang,
+            fa_parts=lambda: (f"{premium_emoji('config', '📦')}",),
+            en_parts=lambda: (f"{premium_emoji('config', '📦')}",),
+        )
+        no_config_buttons = [
+            [InlineKeyboardButton(
+                text=f"🛒 {t('buy_subscription_44cfc4a638', lang)}",
+                callback_data="buy_service",
+                style="success",
+            )],
+            [InlineKeyboardButton(
+                text=f"{test_emoji} {test_name}",
+                callback_data="get_test_service",
+                style="primary",
+            )],
+            [InlineKeyboardButton(
+                text=t('main_menu_0cdd07a7cc', lang),
+                callback_data="back_to_main",
+                style="danger",
+            )],
+        ]
+        kb = InlineKeyboardMarkup(inline_keyboard=no_config_buttons)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        except Exception:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await safe_answer(callback)
+        return
+
+    configs_list.sort(key=lambda x: str(x.get('date', '')), reverse=True)
+
+    async def fetch_one(order: dict) -> dict:
+        email = get_order_client_email(order)
+        is_test = _is_test_order(order)
+        status = order.get('status', 'approved')
+        is_active = (status == 'approved')
+
+        remaining_percent = None
+        time_left_text = None
+        volume_gb = order.get('volume', 0) or 0
+        panel_is_active = None
+        is_unlimited = (volume_gb == 0)
+
+        if email and is_senai_panel_enabled() and is_active:
+            try:
+                client_info = await xui_get_client_info(email)
+                if client_info:
+                    panel_is_active = client_info.get('enable', True)
+                    total_bytes = client_info.get('totalGB', 0)
+                    total_gb = total_bytes / (1024 ** 3) if total_bytes else 0
+                    if total_gb > 0:
+                        volume_gb = total_gb
+                        is_unlimited = False
+                    else:
+                        volume_gb = 0
+                        is_unlimited = True
+
+                    if not is_unlimited:
+                        traffic = await xui_get_client_traffic(email)
+                        up = (traffic.get('up', 0) if traffic else 0) / (1024 ** 3)
+                        down = (traffic.get('down', 0) if traffic else 0) / (1024 ** 3)
+                        used = up + down
+                        if total_gb > 0:
+                            used_pct = min(100, int((used / total_gb) * 100))
+                            remaining_percent = max(0, 100 - used_pct)
+
+                    expiry = client_info.get('expiryTime', 0)
+                    if expiry > 0:
+                        try:
+                            expire_dt = datetime.fromtimestamp(expiry / 1000)
+                            time_left_text = format_time_left(expire_dt)
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"⚠️ Error retrieving information {email}: {e}")
+
+        if time_left_text is None and order.get('days'):
+            d = order['days']
+            time_left_text = f"{d} روز" if lang == "fa" else f"{d}d"
+
+        return {
+            'order': order,
+            'is_test': is_test,
+            'is_active': is_active and (panel_is_active is not False),
+            'remaining_percent': remaining_percent,
+            'time_left_text': time_left_text,
+            'volume_gb': volume_gb,
+            'is_unlimited': is_unlimited,
+        }
+
+    config_data = await asyncio.gather(*[fetch_one(c) for c in configs_list], return_exceptions=False)
 
     buttons = []
+    if len(configs_list) > 1:
+        buttons.append([InlineKeyboardButton(
+            text="نمایش تمام ساب‌ها" if lang == "fa" else "Show All Configs",
+            callback_data="show_all_my_configs",
+            style="primary",
+        )])
 
-    def format_volume(vol_gb: float, is_test: bool, is_unlimited: bool) -> str:
-        if is_unlimited:
-            return "نامحدود" if lang == "fa" else "Unlimited"
-        if is_test:
-            mb = round(vol_gb * 1024)
-            return f"{mb} مگابایت" if lang == "fa" else f"{mb} MB"
-        if vol_gb < 1:
-            mb = round(vol_gb * 1024)
-            return f"{mb} مگابایت" if lang == "fa" else f"{mb} MB"
-        if vol_gb == int(vol_gb):
-            gb_str = str(int(vol_gb))
+    for item in config_data:
+        c = item['order']
+        order_id = c['order_id']
+        is_test = item['is_test']
+        is_active = item['is_active']
+        rem_pct = item['remaining_percent']
+        time_left = item['time_left_text']
+        vol = item['volume_gb']
+        is_unlimited = item['is_unlimited']
+
+        if not is_active:
+            emoji = "🔴"
+        elif is_test:
+            emoji = test_emoji
         else:
-            gb_str = f"{vol_gb:.1f}"
-        return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str} GB"
+            emoji = "💳"
 
-    # دکمه "همه کانفیگ‌ها" در صورت وجود بیش از یک دسته
-    if len(categories) > 1:
-        total_count = len(valid_orders)
-        all_label = f"📋 همه کانفیگ‌ها ({total_count})" if lang == "fa" else f"📋 All Configs ({total_count})"
-        buttons.append([
-            InlineKeyboardButton(
-                text=all_label,
-                callback_data="show_all_my_configs",
-                style="primary"
-            )
-        ])
+        if is_test:
+            label_parts = [test_name]
+        else:
+            cat_name = get_category_name(c)
+            label_parts = [build_category_label(cat_name)]
 
-    # نمایش دسته‌بندی‌ها
-    for cat_name, configs_list in categories.items():
-        cat_label = build_category_label(cat_name, len(configs_list))
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"─── {cat_label} ───",
-                callback_data="noop"
-            )
-        ])
+        label_parts.append(format_cfg_volume(vol, is_test, is_unlimited))
+        if not is_unlimited and rem_pct is not None:
+            label_parts.append(f"{rem_pct}%")
+        if time_left:
+            label_parts.append(time_left)
 
-        for o in configs_list:
-            vol = o.get('volume', 0) or 0
-            is_unlimited = (vol == 0)
-            is_test = (o.get('type') == 'test')
-            is_active = (o.get('status') == 'approved')
-            emoji = "🟢" if is_active else "🔴"
-            vol_str = format_volume(vol, is_test, is_unlimited)
-            days = o.get('days', 0)
-            order_id = o.get('order_id')
+        prefix_dir = RLM if lang == "fa" else LRM
+        label = f"{prefix_dir}{emoji} " + " · ".join(label_parts)
+        if len(label) > 64:
+            label = label[:61] + "…"
 
-            order_cat = o.get('category_name') or ''
-            order_cat_en = o.get('category_name_en') or ''
-            if lang == "en" and order_cat_en:
-                cat_display = order_cat_en
-            elif order_cat:
-                cat_display = order_cat
-            else:
-                cat_display = cat_name
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"view_config_{order_id}",
+            style="success" if is_active else "danger",
+        )])
 
-            for pfx in ["کانفیگ‌های ", "کانفیگ ", "کانفیگ‌های", "کانفیگ", "Configs ", "Config ", "Configs", "Config"]:
-                if cat_display.startswith(pfx):
-                    cat_display = cat_display[len(pfx):].strip()
-            cat_display = cat_display.lstrip(" -—_:").strip()
-            if not cat_display or cat_display in ["سایر", "Other"]:
-                cat_display = "سرویس" if lang == "fa" else "Service"
+    buttons.append([InlineKeyboardButton(
+        text="🛒 خرید سرویس" if lang == "fa" else "🛒 Buy Service",
+        callback_data="buy_service",
+        style="primary",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=t('main_menu_0cdd07a7cc', lang),
+        callback_data="back_to_main",
+        style="danger",
+    )])
 
-            time_left = ""
-            if days:
-                time_left = f"{days} روز" if lang == "fa" else f"{days}d"
-
-            if is_unlimited:
-                label_parts = [p for p in [f"{emoji} {cat_display}", vol_str, time_left, f"#{order_id}"] if p]
-            else:
-                label_parts = [p for p in [f"{emoji} {cat_display}", vol_str, time_left, f"#{order_id}"] if p]
-
-            label = " · ".join(label_parts)
-
-            MAX_LEN = 60
-            if len(label) > MAX_LEN:
-                short_parts = [p for p in [f"{emoji} {cat_display[:10]}", vol_str, time_left, f"#{order_id}"] if p]
-                label = " · ".join(short_parts)
-                if len(label) > MAX_LEN:
-                    label = f"{emoji} {vol_str} · #{order_id}"
-
-            buttons.append([
-                InlineKeyboardButton(
-                    text=label,
-                    callback_data=f"view_config_{order_id}",
-                    style="success" if is_active else "danger"
-                )
-            ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            text=f"🏠 {t('main_menu_9ae3456442', lang)}",
-            callback_data="back_to_main",
-            style="danger"
+    count = len(configs_list)
+    if lang == "fa":
+        text = (
+            f"{premium_emoji('config', '🌐')} <b>کانفیگ‌های من ({count})</b>\n\n"
+            f"روی هرکدوم بزن تا لینک و وضعیتش رو ببینی 👇"
         )
-    ])
+    else:
+        text = (
+            f"{premium_emoji('config', '🌐')} <b>My Configs ({count})</b>\n\n"
+            f"Tap on any config to see the link and status 👇"
+        )
 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     try:
-        await callback.message.delete()
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.debug(f"Failed to delete the previous message: {e}")
+        err = str(e)
+        if "message is not modified" in err:
+            pass
+        else:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
 
-    bot = get_bot()
-    if bot:
-        await bot.send_message(
-            user_id,
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode=ParseMode.HTML
-        )
     await safe_answer(callback)
 
 
-@router.callback_query(F.data == "show_all_my_configs")
-async def show_all_my_configs(callback: CallbackQuery):
-    """نمایش تمام کانفیگ‌های کاربر بدون دسته‌بندی (فلت)"""
+async def _render_all_configs_page(callback: CallbackQuery, page: int = 0):
+    """نمایش تمام کانفیگ‌های کاربر با مشخصات کامل و صفحه‌بندی ۵ تایی"""
     user_id = callback.from_user.id
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
@@ -1696,105 +1826,167 @@ async def show_all_my_configs(callback: CallbackQuery):
         return
 
     lang = get_user(user_id).get('lang', 'fa')
-
-    valid_orders = [
-        o for o in get_valid_orders().values()
+    valid_orders = get_valid_orders()
+    configs_list = [
+        o for o in valid_orders.values()
         if o.get('user_id') == user_id
-        and o.get('config_link') is not None
-        and o.get('config_link') != ''
-        and o.get('status') in ['approved', 'inactive']
+        and o.get('status') in ("approved", "inactive")
+        and o.get('config_link')
     ]
 
-    valid_orders.sort(key=lambda o: str(o.get('date', '')), reverse=True)
-
-    if not valid_orders:
-        await callback.answer("کانفیگی یافت نشد" if lang == "fa" else "No configs found", show_alert=True)
+    if not configs_list:
+        await callback.answer(
+            "❌ شما هیچ کانفیگ فعالی ندارید" if lang == "fa" else "❌ You have no active configs",
+            show_alert=True,
+        )
         return
 
-    def format_volume(vol_gb: float, is_test: bool, is_unlimited: bool) -> str:
-        if is_unlimited:
-            return "نامحدود" if lang == "fa" else "Unlimited"
-        if is_test:
-            mb = round(vol_gb * 1024)
-            return f"{mb} مگابایت" if lang == "fa" else f"{mb} MB"
-        if vol_gb < 1:
-            mb = round(vol_gb * 1024)
-            return f"{mb} مگابایت" if lang == "fa" else f"{mb} MB"
-        if vol_gb == int(vol_gb):
-            gb_str = str(int(vol_gb))
-        else:
-            gb_str = f"{vol_gb:.1f}"
-        return f"{gb_str} گیگ" if lang == "fa" else f"{gb_str} GB"
+    configs_list.sort(key=lambda x: str(x.get('date', '')), reverse=True)
+    total_configs = len(configs_list)
+    total_pages = (total_configs + ALL_CONFIGS_PAGE_SIZE - 1) // ALL_CONFIGS_PAGE_SIZE
+    page = max(0, min(page, total_pages - 1))
+    start_idx = page * ALL_CONFIGS_PAGE_SIZE
+    end_idx = min(start_idx + ALL_CONFIGS_PAGE_SIZE, total_configs)
+    page_configs = configs_list[start_idx:end_idx]
 
-    text = f"📋 <b>{'همه کانفیگ‌های شما' if lang == 'fa' else 'All Your Configs'}</b> ({len(valid_orders)}):\n{'کانفیگ مورد نظر را انتخاب کنید:' if lang == 'fa' else 'Select a config:'}"
+    test_emoji, test_name = get_test_service_display(lang)
+    link_emoji = premium_emoji('link', '🔗')
+
+    async def fetch_traffic_one(c: dict) -> str:
+        email = get_order_client_email(c)
+        if email and is_senai_panel_enabled():
+            try:
+                client_info = await xui_get_client_info(email)
+                if client_info:
+                    traffic_data = await xui_get_client_traffic(email)
+                    return format_traffic_info(client_info, traffic_data, lang)
+            except Exception as e:
+                logger.debug(f"Error fetching traffic for {email}: {e}")
+        return ""
+
+    traffic_results = await asyncio.gather(*[fetch_traffic_one(c) for c in page_configs], return_exceptions=False)
+
+    if total_pages > 1:
+        text = (
+            f"📋 <b>همه کانفیگ‌ها ({start_idx + 1}-{end_idx} از {total_configs})</b>\n\n"
+            if lang == "fa"
+            else f"📋 <b>All Configs ({start_idx + 1}-{end_idx} of {total_configs})</b>\n\n"
+        )
+    else:
+        text = ""
+
+    for c, traffic_info in zip(page_configs, traffic_results):
+        volume = c.get('volume', 0) or 0
+        config_link = c.get('config_link', '')
+        is_test = _is_test_order(c)
+        category_name = (c.get('category_name') or '') if lang == "fa" else (c.get('category_name_en') or c.get('category_name') or '')
+
+        if is_test:
+            title = f"{test_emoji} {html.escape(test_name)}"
+        elif category_name:
+            clean_name = category_name.replace("کانفیگ ", "").strip()
+            title_emoji = premium_emoji('globe', '🌐')
+            title = f"{title_emoji} کانفیگ {html.escape(clean_name)}" if lang == "fa" else f"{title_emoji} {html.escape(category_name)}"
+        else:
+            title_emoji = premium_emoji('config', '📦')
+            title = f"{title_emoji} کانفیگ شما" if lang == "fa" else f"{title_emoji} Your Config"
+
+        if volume == 0:
+            volume_display = "نامحدود" if lang == "fa" else "Unlimited"
+        elif volume < 1:
+            mb = volume * 1024
+            volume_display = f"{mb:.0f} مگ" if lang == "fa" else f"{mb:.0f} MB"
+        else:
+            v = f"{volume:.1f}".rstrip('0').rstrip('.')
+            volume_display = f"{v} گیگ" if lang == "fa" else f"{v} GB"
+
+        link_label = "لینک اشتراک" if lang == "fa" else "Subscription Link"
+        text += (
+            f"{title} ({volume_display}){traffic_info}\n\n"
+            f"{link_emoji} <b>{link_label}</b>\n"
+            f'<a href="{config_link}">{config_link}</a>\n\n'
+            f"   ━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
 
     buttons = []
-    for o in valid_orders:
-        vol = o.get('volume', 0) or 0
-        is_unlimited = (vol == 0)
-        is_test = (o.get('type') == 'test')
-        is_active = (o.get('status') == 'approved')
-        emoji = "🟢" if is_active else "🔴"
-        vol_str = format_volume(vol, is_test, is_unlimited)
-        days = o.get('days', 0)
-        order_id = o.get('order_id')
-
-        cat_display = o.get('category_name') or ''
-        for pfx in ["کانفیگ‌های ", "کانفیگ ", "کانفیگ‌های", "کانفیگ", "Configs ", "Config ", "Configs", "Config"]:
-            if cat_display.startswith(pfx):
-                cat_display = cat_display[len(pfx):].strip()
-        cat_display = cat_display.lstrip(" -—_:").strip()
-        if not cat_display:
-            cat_display = "سرویس" if lang == "fa" else "Service"
-
-        time_left = f"{days} روز" if (days and lang == "fa") else f"{days}d" if days else ""
-        label_parts = [p for p in [f"{emoji} {cat_display[:12]}", vol_str, time_left, f"#{order_id}"] if p]
-        label = " · ".join(label_parts)
-        if len(label) > 60:
-            label = f"{emoji} {vol_str} · #{order_id}"
-
-        buttons.append([
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"view_config_{order_id}",
-                style="success" if is_active else "danger"
-            )
-        ])
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                text="⬅️ قبلی" if lang == "fa" else "⬅️ Prev",
+                callback_data=f"show_all_configs_page_{page - 1}",
+            ))
+        nav_row.append(InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}",
+            callback_data="noop",
+        ))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(
+                text="بعدی ➡️" if lang == "fa" else "Next ➡️",
+                callback_data=f"show_all_configs_page_{page + 1}",
+            ))
+        buttons.append(nav_row)
 
     buttons.append([
         InlineKeyboardButton(
-            text="📁 دسته‌بندی‌ها" if lang == "fa" else "📁 Categories",
+            text="🔙 کانفیگ‌های من" if lang == "fa" else "🔙 My Configs",
             callback_data="my_configs",
-            style="primary"
+            style="primary",
         ),
         InlineKeyboardButton(
-            text=f"🏠 {t('main_menu_9ae3456442', lang)}",
+            text=t('main_menu_0cdd07a7cc', lang),
             callback_data="back_to_main",
-            style="danger"
-        )
+            style="danger",
+        ),
     ])
 
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     try:
         await callback.message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode=ParseMode.HTML
+            text.strip(),
+            reply_markup=keyboard,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
         )
-    except Exception:
-        bot = get_bot()
-        if bot:
-            await bot.send_message(
-                user_id,
-                text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode=ParseMode.HTML
-            )
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            bot = get_bot()
+            if bot:
+                await bot.send_message(
+                    user_id,
+                    text.strip(),
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
     await safe_answer(callback)
+
+
+@router.callback_query(F.data == "show_all_my_configs")
+async def show_all_my_configs(callback: CallbackQuery):
+    """نمایش صفحه اول تمام کانفیگ‌های کاربر"""
+    await _render_all_configs_page(callback, page=0)
+
+
+@router.callback_query(F.data.startswith("show_all_configs_page_"))
+async def show_all_my_configs_page(callback: CallbackQuery):
+    """جابجایی بین صفحات لیست کامل کانفیگ‌ها (۵ تایی)"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        page = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
+        return
+    await _render_all_configs_page(callback, page=page)
 
 
 @router.callback_query(F.data.startswith("view_config_"))
 async def view_single_config(callback: CallbackQuery):
-    """نمایش یک کانفیگ خاص با دکمه‌های کامل"""
+    """نمایش یک کانفیگ خاص با ویرایش پیام (بدون تولید QR خودکار)"""
     user_id = callback.from_user.id
     if user_id in BLACKLIST:
         await notify_blacklisted_user(user_id)
@@ -1814,19 +2006,5 @@ async def view_single_config(callback: CallbackQuery):
         await callback.answer(t('config_not_found_3169491e56', lang), show_alert=True)
         return
 
-    # ارسال کانفیگ با QR و دکمه‌ها
-    try:
-        await callback.message.delete()
-    except Exception as e:
-        logger.debug(f"Failed to delete the previous message: {e}")
-
-    await send_config_with_qr_option(
-        callback.message.chat.id,
-        order_id,
-        order.get('volume', 0),
-        order.get('days', 0),
-        order.get('price', 0),
-        order['config_link'],
-        lang
-    )
+    await _render_single_config_text(callback, order_id, order, lang)
     await safe_answer(callback)

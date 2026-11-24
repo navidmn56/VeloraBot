@@ -692,6 +692,37 @@ async def filter_valid_inbounds(inbound_ids) -> list:
     return valid
 
 
+async def get_inbound_display_names(
+    include_disabled: bool = True,
+    force_refresh: bool = False,
+) -> Dict[int, str]:
+    """Build a mapping of inbound_id -> human-readable 'remark - PROTOCOL:port' label."""
+    inbounds = await xui_get_inbounds(
+        force_refresh=force_refresh,
+        include_disabled=include_disabled,
+    )
+    if not inbounds and include_disabled:
+        inbounds = await xui_get_inbounds(force_refresh=force_refresh, include_disabled=False)
+
+    names: Dict[int, str] = {}
+    for ib in inbounds or []:
+        if not isinstance(ib, dict):
+            continue
+        raw_id = ib.get("id")
+        if raw_id is None:
+            continue
+        try:
+            ib_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        remark = str(ib.get("remark") or f"ID:{ib_id}")
+        protocol = str(ib.get("protocol") or "").upper()
+        port = ib.get("port", "")
+        disabled_tag = "" if ib.get("enable", True) else " (غیرفعال)"
+        names[ib_id] = f"{remark} - {protocol}:{port}{disabled_tag}"
+    return names
+
+
 async def reset_panel_rate_limits() -> bool:
     """ریست کردن محدودیت‌های پنل"""
     global panel_semaphore, panel_rate_limiter
@@ -2152,6 +2183,7 @@ __all__ = [
     # Sub Settings & Inbounds
     "xui_sync_sub_settings",
     "xui_get_inbounds",
+    "get_inbound_display_names",
     "get_user_inbound",
     "filter_valid_inbounds",
     "reset_panel_rate_limits",

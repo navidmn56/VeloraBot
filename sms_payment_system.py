@@ -727,6 +727,59 @@ class SMSPaymentDatabase:
         finally:
             conn.close()
 
+    def export_backup_data(self) -> Dict[str, List[Dict[str, Any]]]:
+        """خروجی گرفتن از تمام جداول پرداخت پیامکی برای بکاپ کامل"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            backup: Dict[str, List[Dict[str, Any]]] = {}
+            for tbl in ("amount_reservations", "sms_transactions"):
+                cursor.execute(f"SELECT * FROM {tbl};")
+                backup[tbl] = [dict(r) for r in cursor.fetchall()]
+            return backup
+        finally:
+            conn.close()
+
+    def import_backup_data(self, backup_dict: Dict[str, Any]) -> bool:
+        """بازگردانی داده‌های پرداخت پیامکی از فایل بکاپ"""
+        if not backup_dict or not isinstance(backup_dict, dict):
+            return False
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            allowed_tables = ("amount_reservations", "sms_transactions")
+            for tbl in allowed_tables:
+                cursor.execute(f"DELETE FROM {tbl};")
+            for tbl in allowed_tables:
+                rows = backup_dict.get(tbl)
+                if not isinstance(rows, list) or not rows:
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict) or not row:
+                        continue
+                    cols = list(row.keys())
+                    placeholders = ",".join("?" for _ in cols)
+                    col_names = ",".join(cols)
+                    cursor.execute(
+                        f"INSERT OR REPLACE INTO {tbl} ({col_names}) VALUES ({placeholders});",
+                        list(row.values()),
+                    )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def clear_all_data(self) -> None:
+        """پاکسازی کامل جداول پرداخت پیامکی در دیتابیس"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            for tbl in ("amount_reservations", "sms_transactions"):
+                cursor.execute(f"DELETE FROM {tbl};")
+            conn.commit()
+        finally:
+            conn.close()
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ۴. سرور وب‌هوک ایمن (Secure Localhost Webhook Server)

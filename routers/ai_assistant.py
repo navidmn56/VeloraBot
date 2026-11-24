@@ -320,7 +320,7 @@ def build_ai_user_database_context(user_id: int, message_text: str = "") -> str:
             if str(order.get('order_id')) == requested_order_id
         ]
     else:
-        user_orders = user_orders[:10]
+        user_orders = user_orders[:4]
     test_settings = get_user_test_settings(user_id)
     test_volume_mb = test_settings.get(
         'volume_mb',
@@ -1286,6 +1286,10 @@ async def handle_ai_menu_action(callback: CallbackQuery):
 # Gemini Chat Core Response
 # ═══════════════════════════════════════════════════════════
 
+AI_MAX_USER_INPUT_CHARS = 500
+AI_MAX_USER_CONTEXT_CHARS = 900
+
+
 async def get_ai_response(
     message_text: str,
     user_id: Optional[int] = None,
@@ -1298,9 +1302,14 @@ async def get_ai_response(
     remember_conversation: bool = True,
     lang: Optional[str] = None,
 ) -> str:
-    """دریافت پاسخ کامل از AI؛ پاسخ‌های قطع‌شده به کاربر تحویل داده نمی‌شوند."""
+    """دریافت پاسخ کامل از AI؛ با محدودیت کم کانتکس برای کنترل هزینه توکن."""
     if gemini_client:
         try:
+            message_text = str(message_text or "").strip()
+            if len(message_text) > AI_MAX_USER_INPUT_CHARS:
+                message_text = message_text[:AI_MAX_USER_INPUT_CHARS]
+            if user_context and len(user_context) > AI_MAX_USER_CONTEXT_CHARS:
+                user_context = user_context[:AI_MAX_USER_CONTEXT_CHARS]
             logger.info(f"🎯 Using Gemini: {message_text[:50]}...")
             max_tokens = (
                 max(512, min(max_output_tokens, 4096))
@@ -1668,7 +1677,6 @@ async def start_ai_support_chat(callback: CallbackQuery):
         welcome_text,
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t('smart_choice_5bfca9c5d9', lang), callback_data="ai_purchase_advisor_start", style="success")],
             [InlineKeyboardButton(text=t('clear_memory_d5ce7659f2', lang), callback_data="clear_ai_memory", style="primary")],
             [InlineKeyboardButton(text=t('exit_ai_chat_485827e746', lang), callback_data="exit_ai_chat", style="danger")]
         ])
@@ -1789,6 +1797,12 @@ async def process_ai_chat_message(message: Message):
     if not gemini_client:
         await message.reply(
             t('ai_is_currently_unavailable_935532215d', lang)
+        )
+        return
+
+    if len(message.text or "") > AI_MAX_USER_INPUT_CHARS:
+        await message.reply(
+            t('ai_message_too_long', lang, fa_parts=lambda: (AI_MAX_USER_INPUT_CHARS,), en_parts=lambda: (AI_MAX_USER_INPUT_CHARS,))
         )
         return
 
@@ -1941,6 +1955,12 @@ async def auto_ai_response(message: Message):
         
         return
     
+    if len(message.text or "") > AI_MAX_USER_INPUT_CHARS:
+        await message.reply(
+            t('ai_message_too_long', lang, fa_parts=lambda: (AI_MAX_USER_INPUT_CHARS,), en_parts=lambda: (AI_MAX_USER_INPUT_CHARS,))
+        )
+        return
+
     daily_limit = GEMINI_DAILY_LIMIT
     can_use, remaining, limit_msg = check_ai_limit(user_id)
     

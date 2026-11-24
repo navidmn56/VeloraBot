@@ -69,6 +69,7 @@ from services.panel_api import (
     get_user_inbound,
     filter_valid_inbounds,
     xui_get_inbounds,
+    get_inbound_display_names,
 )
 from strings import t
 from utils.filters import IsAdmin
@@ -1794,6 +1795,46 @@ async def custom_payment_receipt_manual_days(message: Message):
         await message.reply(t('please_enter_a_valid_number_afbbd0c0b3', lang))
 
 
+async def _build_inbound_summary(uid: int) -> str:
+    """Resolve user/default inbound selection with real names (even if disabled) and prune missing panel IDs."""
+    user_inbounds = get_user_inbound(uid)
+    if isinstance(user_inbounds, list):
+        selected_inbounds = [ib for ib in user_inbounds if ib is not None]
+    elif user_inbounds is not None:
+        selected_inbounds = [user_inbounds]
+    else:
+        selected_inbounds = []
+
+    inbound_names = await get_inbound_display_names(include_disabled=True, force_refresh=False)
+
+    def _format_list(ids: list) -> list[str]:
+        items = []
+        for ib_id in ids:
+            try:
+                norm_id = int(ib_id)
+            except (TypeError, ValueError):
+                norm_id = ib_id
+            if norm_id in inbound_names:
+                items.append(html.escape(inbound_names[norm_id]))
+            elif not inbound_names:
+                # Panel unreachable — show raw ID only when panel list could not be loaded
+                items.append(f"ID: {ib_id}")
+        return items
+
+    if selected_inbounds:
+        resolved = _format_list(selected_inbounds)
+        if resolved:
+            return "✅ اینباندهای انتخاب شده:\n" + "".join(f"  • {name}\n" for name in resolved)
+
+    default_ids = configs_pool.get('default_inbound_ids', [])
+    if default_ids:
+        resolved_def = _format_list(default_ids)
+        if resolved_def:
+            return "📌 اینباندهای پیش‌فرض:\n" + "".join(f"  • {name}\n" for name in resolved_def)
+
+    return "❌ هیچ اینباندی انتخاب نشده - از پیش‌فرض استفاده می‌شود"
+
+
 @router.callback_query(F.data.startswith("approve_receipt_"))
 @admin_only
 async def approve_receipt(callback: CallbackQuery):
@@ -1884,40 +1925,7 @@ async def approve_receipt(callback: CallbackQuery):
         
         logger.info(f"📝 Approving order #{oid} - user: {uid} - {vol}GB/{days}days - amount: {price:,}tomans - renewal: {is_extend}")
         
-        # ✅ مثل بسته‌های آماده: نمایش اینباندهای انتخاب شده فعلی کاربر
-        user_inbounds = get_user_inbound(uid)
-        if isinstance(user_inbounds, list):
-            selected_inbounds = user_inbounds
-        elif user_inbounds:
-            selected_inbounds = [user_inbounds]
-        else:
-            selected_inbounds = []
-        
-        inbounds = await xui_get_inbounds()
-        active_inbounds = [i for i in inbounds if i.get('enable', True)]
-        inbound_names = {}
-        for ib in active_inbounds:
-            inbound_id_ib = ib.get('id')
-            remark = html.escape(ib.get('remark', f'ID:{inbound_id_ib}'))
-            protocol = html.escape(ib.get('protocol', '').upper())
-            port = ib.get('port', '')
-            inbound_names[inbound_id_ib] = f"{remark} - {protocol}:{port}"
-        
-        inbound_display_text = ""
-        if selected_inbounds:
-            inbound_display_text = "✅ اینباندهای انتخاب شده:\n"
-            for ib_id in selected_inbounds:
-                ib_name = inbound_names.get(ib_id, f"ID: {ib_id}")
-                inbound_display_text += f"  • {ib_name}\n"
-        else:
-            default_ids = configs_pool.get('default_inbound_ids', [])
-            if default_ids:
-                inbound_display_text = "📌 اینباندهای پیش‌فرض:\n"
-                for ib_id in default_ids:
-                    ib_name = inbound_names.get(ib_id, f"ID: {ib_id}")
-                    inbound_display_text += f"  • {ib_name}\n"
-            else:
-                inbound_display_text = "❌ هیچ اینباندی انتخاب نشده - از پیش‌فرض استفاده می‌شود"
+        inbound_display_text = await _build_inbound_summary(uid)
         
         buttons = []
         buttons.append([InlineKeyboardButton(
@@ -2079,41 +2087,8 @@ async def approve_receipt(callback: CallbackQuery):
             f"📦 Ready package # approved{oid} - user: {uid} - "
             f"{vol}GB/{days}days - amount: {price:,} tomans - category: {category_name} - renewal: {is_extend}"
         )
-                
-        user_inbounds = get_user_inbound(uid)
-        if user_inbounds:
-            if isinstance(user_inbounds, list):
-                selected_inbounds = user_inbounds
-            else:
-                selected_inbounds = [user_inbounds]
-        else:
-            selected_inbounds = []
-        
-        inbounds = await xui_get_inbounds()
-        active_inbounds = [i for i in inbounds if i.get('enable', True)]
-        inbound_names = {}
-        for ib in active_inbounds:
-            inbound_id_ib = ib.get('id')
-            remark = html.escape(ib.get('remark', f'ID:{inbound_id_ib}'))
-            protocol = html.escape(ib.get('protocol', '').upper())
-            port = ib.get('port', '')
-            inbound_names[inbound_id_ib] = f"{remark} - {protocol}:{port}"
-        
-        inbound_display_text = ""
-        if selected_inbounds:
-            inbound_display_text = "✅ اینباندهای انتخاب شده:\n"
-            for ib_id in selected_inbounds:
-                ib_name = inbound_names.get(ib_id, f"ID: {ib_id}")
-                inbound_display_text += f"  • {ib_name}\n"
-        else:
-            default_ids = configs_pool.get('default_inbound_ids', [])
-            if default_ids:
-                inbound_display_text = "📌 اینباندهای پیش‌فرض:\n"
-                for ib_id in default_ids:
-                    ib_name = inbound_names.get(ib_id, f"ID: {ib_id}")
-                    inbound_display_text += f"  • {ib_name}\n"
-            else:
-                inbound_display_text = "❌ هیچ اینباندی انتخاب نشده - از پیش‌فرض استفاده می‌شود"
+
+        inbound_display_text = await _build_inbound_summary(uid)
         
         buttons = []
         buttons.append([InlineKeyboardButton(
@@ -2922,20 +2897,21 @@ async def select_all_inbounds(callback: CallbackQuery, callback_data: Optional[O
             await callback.answer(t('i18n_process_error', get_user(callback.from_user.id).get('lang', 'fa')), show_alert=True)
             return
     
-    inbounds = await xui_get_inbounds()
+    inbounds = await xui_get_inbounds(force_refresh=True)
     active_inbounds = [i for i in inbounds if i.get('enable', True)]
-    all_ids = [i.get('id') for i in active_inbounds if i.get('id')]
+    all_ids = [int(i.get('id')) for i in active_inbounds if i.get('id') is not None]
     
     if not all_ids:
         await callback.answer("❌ هیچ اینباند فعالی یافت نشد", show_alert=True)
         return
     
     temp_key = f"{uid}_{oid}"
-    TEMP_INBOUND_SELECTION[temp_key] = all_ids
+    TEMP_INBOUND_SELECTION[temp_key] = list(all_ids)
     
-    await callback.answer(
+    await safe_answer(
+        callback,
         f"✅ {len(all_ids)} اینباند انتخاب شد",
-        show_alert=True
+        alert=True
     )
     await show_inbound_selection(
         callback.message, uid, oid, callback.from_user.id,

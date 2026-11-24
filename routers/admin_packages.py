@@ -1471,17 +1471,19 @@ async def admin_category_edit(callback: CallbackQuery):
             category['inbound_id'] = None  # حذف کلید قدیمی
     inbound_info = "❌ پیش‌فرض (همانند کاربر)"
     if inbound_ids:
-        inbounds = await xui_get_inbounds()
-        inbound_names = []
-        for ib_id in inbound_ids:
-            for ib in inbounds:
-                if ib.get('id') == ib_id:
-                    inbound_names.append(f"{ib.get('remark', f'ID:{ib_id}')} - {ib.get('protocol', '').upper()}:{ib.get('port', '')}")
-                    break
+        from services.panel_api import get_inbound_display_names
+        inbound_map = await get_inbound_display_names(include_disabled=True)
+        inbound_names = [
+            inbound_map[int(ib_id)]
+            for ib_id in inbound_ids
+            if str(ib_id).lstrip('-').isdigit() and int(ib_id) in inbound_map
+        ]
         if inbound_names:
-            inbound_info = "📡 اینباندهای اختصاصی:\n" + "\n".join([f"  • {name}" for name in inbound_names])
-        else:
+            inbound_info = "📡 اینباندهای اختصاصی:\n" + "\n".join([f"  • {safe_html(name)}" for name in inbound_names])
+        elif not inbound_map:
             inbound_info = f"📡 اینباندهای انتخاب شده: {inbound_ids}"
+        else:
+            inbound_info = "❌ پیش‌فرض (همانند کاربر)"
     
     text = t('b_edit_category_b_id_persian_c04ea7eccb', lang, fa_parts=lambda: (f"{category.get('name')}", f"{category.get('id')}", f"{category.get('name')}", f"{category.get('name_en')}", f"{category.get('icon', '📦')}", f"{category.get('description', 'ندارد')}", f"{category.get('description_en', 'ندارد')}", f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f'{inbound_info}'), en_parts=lambda: (f"{category.get('name')}", f"{category.get('id')}", f"{category.get('name')}", f"{category.get('name_en')}", f"{category.get('icon', '📦')}", f"{category.get('description', 'None')}", f"{category.get('description_en', 'None')}", f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f'{inbound_info}'))
     

@@ -24,7 +24,15 @@ from aiogram.types import (
 from aiogram.enums import ParseMode
 
 from config import ADMIN_ID
-from database import users, BLACKLIST, now_tehran, now_tehran_iso, configs_pool
+from database import (
+    users,
+    BLACKLIST,
+    now_tehran,
+    now_tehran_iso,
+    configs_pool,
+    save_all,
+    get_test_service_display,
+)
 from user_manager import user_states, get_user, get_admin_id_int
 from strings import t
 from emoji_sticker_system import premium_emoji
@@ -146,6 +154,9 @@ _BROADCAST_ACTIONS = {
 def get_broadcast_actions() -> Dict[str, Tuple[str, str, str]]:
     """دریافت تمامی دکمه‌های ناوبری برودکست به همراه دسته‌بندی‌های کانفیگ"""
     actions = _BROADCAST_ACTIONS.copy()
+    fa_e, fa_n = get_test_service_display('fa')
+    en_e, en_n = get_test_service_display('en')
+    actions["test"] = (f"{fa_e} {fa_n}", f"{en_e} {en_n}", "get_test_service")
     ready_pkgs = _get_ready_packages()
     categories = ready_pkgs.get('categories', []) if isinstance(ready_pkgs, dict) else []
     for cat in categories:
@@ -210,10 +221,18 @@ def _broadcast_recipient_ids() -> list:
     return list(dict.fromkeys(recipient_ids))
 
 
-def _broadcast_keyboard(buttons: list, lang: str, layout: str = "single") -> Optional[InlineKeyboardMarkup]:
+def _broadcast_keyboard(
+    buttons: list,
+    lang: str,
+    layout: str = "single",
+    broadcast_id: Optional[str] = None,
+    view_lang: Optional[str] = None,
+    has_en_version: bool = False,
+) -> Optional[InlineKeyboardMarkup]:
     """Build only registered navigation buttons and validated external links."""
     items = []
     broadcast_actions = get_broadcast_actions()
+    effective_lang = view_lang or lang
     for button in buttons:
         if not isinstance(button, dict):
             continue
@@ -221,11 +240,33 @@ def _broadcast_keyboard(buttons: list, lang: str, layout: str = "single") -> Opt
         style = button.get("style")
         if style not in {None, "primary", "success", "danger"}:
             style = None
+        if action == "translate_fa":
+            # دکمه ترجمه فقط زمانی که پیام انگلیسی موجود باشد و در چرخه EN <-> FA هستیم نمایش داده می‌شود
+            if has_en_version and broadcast_id:
+                if effective_lang == "en":
+                    items.append((
+                        InlineKeyboardButton(
+                            text=t('broadcast_translate_to_fa_btn', 'fa'),
+                            callback_data=f"broadcast_translate:{broadcast_id}:fa",
+                            style=style,
+                        ),
+                        True,
+                    ))
+                elif view_lang == "fa":
+                    items.append((
+                        InlineKeyboardButton(
+                            text=t('broadcast_translate_to_en_btn', 'en'),
+                            callback_data=f"broadcast_translate:{broadcast_id}:en",
+                            style=style,
+                        ),
+                        True,
+                    ))
+            continue
         if action in broadcast_actions:
             fa_text, en_text, callback_data = broadcast_actions[action]
             items.append((
                 InlineKeyboardButton(
-                    text=fa_text if lang == "fa" else en_text,
+                    text=fa_text if effective_lang == "fa" else en_text,
                     callback_data=callback_data,
                     style=style,
                 ),
@@ -273,16 +314,85 @@ def _broadcast_keyboard(buttons: list, lang: str, layout: str = "single") -> Opt
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _ensure_broadcast_translation_record(broadcast_data: dict) -> Optional[str]:
+    """ذخیره متن فارسی/انگلیسی برودکست برای پشتیبانی از دکمه ترجمه کاربران"""
+    if not broadcast_data.get("en_caption"):
+        return None
+    broadcast_id = broadcast_data.get("broadcast_id") or uuid.uuid4().hex[:8]
+    broadcast_data["broadcast_id"] = broadcast_id
+    store = configs_pool.setdefault("broadcast_translations", {})
+    store[broadcast_id] = {
+        "type": broadcast_data.get("type", "text"),
+        "fa_caption": broadcast_data.get("caption") or "",
+        "fa_html": broadcast_data.get("parse_mode") == ParseMode.HTML,
+        "en_caption": broadcast_data.get("en_caption") or "",
+        "en_html": broadcast_data.get("en_parse_mode") == ParseMode.HTML,
+        "buttons": list(broadcast_data.get("buttons", [])),
+        "layout": broadcast_data.get("layout", "single"),
+        "created_at": now_tehran_iso(),
+    }
+    if len(store) > 20:
+        for old_key in list(store.keys())[:-20]:
+            store.pop(old_key, None)
+    return broadcast_id
+
+
 async def _send_broadcast_message(
     chat_id: int,
     broadcast_data: dict,
     lang: str,
 ):
     layout = broadcast_data.get("layout", "single")
-    keyboard = _broadcast_keyboard(broadcast_data.get("buttons", []), lang, layout)
+    has_en = bool(broadcast_data.get("en_caption"))
+    use_en = (lang == "en" and has_en)
+    broadcast_id = _ensure_broadcast_translation_record(broadcast_data) if has_en else None
+    keyboard = _broadcast_keyboard(
+        broadcast_data.get("buttons", []),
+        lang,
+        layout,
+        broadcast_id=broadcast_id,
+        view_lang=("en" if use_en else None),
+        has_en_version=has_en,
+    )
     bot_inst = get_bot()
     if not bot_inst:
         raise RuntimeError("Bot instance is not configured for broadcasting")
+
+    if use_en:
+        caption = str(broadcast_data.get("en_caption") or "")
+        pm = broadcast_data.get("en_parse_mode")
+        broadcast_type = broadcast_data.get("type")
+        if broadcast_type == "text":
+            if pm == ParseMode.HTML:
+                return await bot_inst.send_message(
+                    chat_id, caption, parse_mode=ParseMode.HTML, reply_markup=keyboard
+                )
+            if broadcast_data.get("en_source_chat_id") and broadcast_data.get("en_source_message_id"):
+                return await bot_inst.copy_message(
+                    chat_id,
+                    broadcast_data["en_source_chat_id"],
+                    broadcast_data["en_source_message_id"],
+                    reply_markup=keyboard,
+                )
+            return await bot_inst.send_message(chat_id, caption, reply_markup=keyboard)
+        media = broadcast_data.get("media")
+        if not media:
+            raise ValueError("شناسهٔ رسانهٔ برودکست موجود نیست")
+        if broadcast_type == "photo":
+            return await bot_inst.send_photo(
+                chat_id, media, caption=caption or None, parse_mode=pm, reply_markup=keyboard
+            )
+        if broadcast_type == "file":
+            send_file = bot_inst.send_video if broadcast_data.get("media_kind") == "video" else bot_inst.send_document
+            return await send_file(
+                chat_id, media, caption=caption or None, parse_mode=pm, reply_markup=keyboard
+            )
+        if broadcast_type == "audio":
+            send_audio = bot_inst.send_voice if broadcast_data.get("subtype") == "voice" else bot_inst.send_audio
+            return await send_audio(
+                chat_id, media, caption=caption or None, parse_mode=pm, reply_markup=keyboard
+            )
+        raise ValueError(f"نوع برودکست پشتیبانی نمی‌شود: {broadcast_type}")
 
     if broadcast_data.get("parse_mode") == ParseMode.HTML:
         caption = broadcast_data.get("caption", "")
@@ -325,7 +435,11 @@ async def _send_broadcast_message(
 
 
 def _broadcast_button_setup_markup(
-    buttons: list, lang: str, button_styles: Optional[dict] = None, layout: str = "single"
+    buttons: list,
+    lang: str,
+    button_styles: Optional[dict] = None,
+    layout: str = "single",
+    has_en_version: bool = False,
 ) -> InlineKeyboardMarkup:
     button_styles = button_styles or {}
     selected = {
@@ -386,6 +500,23 @@ def _broadcast_button_setup_markup(
             ),
         ])
 
+    if has_en_version:
+        tr_item = selected.get("translate_fa")
+        tr_style = tr_item.get("style") if tr_item else button_styles.get("translate_fa")
+        if tr_style not in style_labels:
+            tr_style = None
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{'✅ ' if tr_item else ''}{t('broadcast_translate_btn_setup', lang)}",
+                callback_data="broadcast_button_toggle:translate_fa",
+                style=tr_style,
+            ),
+            InlineKeyboardButton(
+                text=style_labels.get(tr_style, style_labels[None]),
+                callback_data="broadcast_button_style:translate_fa",
+            ),
+        ])
+
     layout_toggle_label = (t('2_columns_293ed635ba', lang) if layout == 'double' else t('1_column_d1aafb2e7c', lang))
     rows.extend([
         [
@@ -428,7 +559,8 @@ async def _update_broadcast_setup_message(callback: CallbackQuery, admin_id: int
     layout_name = (t('2_columns_293ed635ba', lang) if layout == 'double' else t('1_column_d1aafb2e7c', lang))
 
     text = t('b_configure_broadcast_button_794d7b35de', lang, fa_parts=lambda: (f'{selected_count}', f'{layout_name}'), en_parts=lambda: (f'{selected_count}', f'{layout_name}'))
-    markup = _broadcast_button_setup_markup(buttons, lang, button_styles, layout)
+    has_en = bool(broadcast_data.get("en_caption"))
+    markup = _broadcast_button_setup_markup(buttons, lang, button_styles, layout, has_en_version=has_en)
     try:
         await callback.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -446,6 +578,7 @@ async def _show_broadcast_button_setup(message: Message, admin_id: int):
     buttons = broadcast_data.setdefault("buttons", [])
     layout = broadcast_data.get("layout", "single")
     button_styles = broadcast_data.setdefault("button_styles", {})
+    has_en = bool(broadcast_data.get("en_caption"))
 
     selected_count = len(buttons)
     layout_name = (t('2_columns_293ed635ba', lang) if layout == 'double' else t('1_column_d1aafb2e7c', lang))
@@ -455,7 +588,7 @@ async def _show_broadcast_button_setup(message: Message, admin_id: int):
         text,
         parse_mode=ParseMode.HTML,
         reply_markup=_broadcast_button_setup_markup(
-            buttons, lang, button_styles, layout
+            buttons, lang, button_styles, layout, has_en_version=has_en
         ),
     )
 
@@ -610,7 +743,8 @@ async def configure_broadcast_buttons(callback: CallbackQuery):
 
     if action.startswith("broadcast_button_toggle:"):
         button_name = action.split(":", 1)[1]
-        if button_name not in get_broadcast_actions():
+        valid_keys = set(get_broadcast_actions().keys()) | {"translate_fa"}
+        if button_name not in valid_keys:
             return await callback.answer(t('invalid_button_24d4583f1c', lang), show_alert=True)
         item = next(
             (button for button in selected
@@ -632,7 +766,8 @@ async def configure_broadcast_buttons(callback: CallbackQuery):
 
     if action.startswith("broadcast_button_style:"):
         button_name = action.split(":", 1)[1]
-        if button_name not in get_broadcast_actions():
+        valid_keys = set(get_broadcast_actions().keys()) | {"translate_fa"}
+        if button_name not in valid_keys:
             return await callback.answer(t('invalid_button_24d4583f1c', lang), show_alert=True)
         styles = [None, "primary", "success", "danger"]
         style_map = broadcast_data.setdefault("button_styles", {})
@@ -763,11 +898,125 @@ async def admin_broadcast_send(message: Message):
     }
     
     user_states[admin_id] = {
-        'awaiting_broadcast_button_setup': True,
+        'awaiting_broadcast_en_choice': True,
         'broadcast_data': broadcast_data,
         'users_count': recipient_count,
     }
+    await message.reply(
+        t('broadcast_ask_en_prompt', lang),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t('broadcast_ask_en_yes', lang), callback_data="broadcast_ask_en_yes", style="primary")],
+            [InlineKeyboardButton(text=t('broadcast_ask_en_no', lang), callback_data="broadcast_ask_en_no", style="success")],
+            [InlineKeyboardButton(text=t('cancel_broadcast_19a887c8b6', lang), callback_data="cancel_broadcast", style="danger")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "broadcast_ask_en_no")
+@admin_only
+async def broadcast_ask_en_no(callback: CallbackQuery):
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get("lang", "fa")
+    state = user_states.get(admin_id, {})
+    if not state.get("broadcast_data"):
+        return await callback.answer(t('broadcast_state_expired_bc67a6d440', lang), show_alert=True)
+    state["awaiting_broadcast_en_choice"] = False
+    state["awaiting_broadcast_en"] = False
+    state["awaiting_broadcast_button_setup"] = True
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await _show_broadcast_button_setup(callback.message, admin_id)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "broadcast_ask_en_yes")
+@admin_only
+async def broadcast_ask_en_yes(callback: CallbackQuery):
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get("lang", "fa")
+    state = user_states.get(admin_id, {})
+    if not state.get("broadcast_data"):
+        return await callback.answer(t('broadcast_state_expired_bc67a6d440', lang), show_alert=True)
+    state["awaiting_broadcast_en_choice"] = False
+    state["awaiting_broadcast_en"] = True
+    await callback.message.edit_text(t('broadcast_send_en_text', lang), parse_mode=ParseMode.HTML)
+    await safe_answer(callback)
+
+
+@router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get("awaiting_broadcast_en"))
+async def admin_broadcast_receive_en(message: Message):
+    admin_id = message.from_user.id
+    lang = get_user(admin_id).get("lang", "fa")
+    state = user_states.get(admin_id, {})
+    broadcast_data = state.get("broadcast_data")
+    if message.text and message.text.strip().lower() == "/cancel":
+        user_states.pop(admin_id, None)
+        await message.reply(t('cancelled_59fa2371a6', lang))
+        return
+    if not isinstance(broadcast_data, dict):
+        user_states.pop(admin_id, None)
+        await message.reply(t('broadcast_state_expired_bc67a6d440', lang))
+        return
+
+    en_caption = message.text or message.caption or ""
+    if not en_caption.strip():
+        await message.reply(t('message_cannot_be_empty_9669d7f21e', lang))
+        return
+
+    entities = message.entities if message.text else message.caption_entities
+    broadcast_data["en_caption"] = en_caption
+    broadcast_data["en_parse_mode"] = None if entities else detect_safe_parse_mode(en_caption)
+    if message.text:
+        broadcast_data["en_source_chat_id"] = message.chat.id
+        broadcast_data["en_source_message_id"] = message.message_id
+
+    state["awaiting_broadcast_en"] = False
+    state["awaiting_broadcast_button_setup"] = True
     await _show_broadcast_button_setup(message, admin_id)
+
+
+@router.callback_query(F.data.startswith("broadcast_translate:"))
+async def broadcast_translate_toggle(callback: CallbackQuery):
+    """تغییر زبان پیام برودکست بین فارسی و انگلیسی هنگام کلیک کاربر روی دکمه ترجمه"""
+    user_id = callback.from_user.id
+    user_lang = get_user(user_id).get("lang", "fa")
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer(t('broadcast_translate_not_found', user_lang), show_alert=True)
+        return
+    _, broadcast_id, target_lang = parts[0], parts[1], parts[2]
+    record = (configs_pool.get("broadcast_translations", {}) or {}).get(broadcast_id)
+    if not isinstance(record, dict):
+        await callback.answer(t('broadcast_translate_not_found', user_lang), show_alert=True)
+        return
+
+    if target_lang == "fa":
+        new_text = record.get("fa_caption") or ""
+        pm = ParseMode.HTML if record.get("fa_html") else None
+    else:
+        new_text = record.get("en_caption") or record.get("fa_caption") or ""
+        pm = ParseMode.HTML if record.get("en_html") else None
+
+    markup = _broadcast_keyboard(
+        record.get("buttons", []),
+        user_lang,
+        record.get("layout", "single"),
+        broadcast_id=broadcast_id,
+        view_lang=target_lang,
+        has_en_version=bool(record.get("en_caption")),
+    )
+    try:
+        if callback.message.text is not None:
+            await callback.message.edit_text(new_text, parse_mode=pm, reply_markup=markup)
+        else:
+            await callback.message.edit_caption(caption=new_text, parse_mode=pm, reply_markup=markup)
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            logger.warning(f"Broadcast translate edit failed: {e}")
+    await safe_answer(callback)
 
 
 @router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get("awaiting_broadcast_url"))
@@ -854,7 +1103,9 @@ async def preview_broadcast(callback: CallbackQuery):
     
     preview_sent = False
     try:
-        await _send_broadcast_message(admin_id, broadcast_data, lang)
+        await _send_broadcast_message(admin_id, broadcast_data, "fa")
+        if broadcast_data.get("en_caption"):
+            await _send_broadcast_message(admin_id, broadcast_data, "en")
         preview_sent = True
         state["broadcast_preview_verified"] = True
     
@@ -984,6 +1235,9 @@ async def confirm_broadcast(callback: CallbackQuery):
         return
         
     state["broadcast_sending"] = True
+    if broadcast_data.get("en_caption"):
+        _ensure_broadcast_translation_record(broadcast_data)
+        save_all()
     logger.info("📢 starting broadcast message:")
     logger.info(f" - type: {broadcast_data.get('type')}")
     logger.info(f" - user count: {len(users)}")

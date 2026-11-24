@@ -44,6 +44,7 @@ from database import (
     now_tehran,
     now_tehran_iso,
 )
+from user_manager import get_user
 from core.state_stores import (
     user_states,
     TEMP_INBOUND_SELECTION,
@@ -345,12 +346,13 @@ def _get_backup_list_safe() -> list:
 
 
 async def send_health_report(chat_id: int, bot: Optional[Bot] = None) -> None:
-    """ارسال گزارش سلامت با نمایش هوشمند حجم"""
+    """ارسال گزارش سلامت با نمایش هوشمند حجم (دو زبانه فارسی/انگلیسی)"""
     b = bot or get_bot()
     if not b:
         logger.error("send_health_report failed: bot instance is not available")
         return
 
+    lang = get_user(chat_id).get('lang', 'fa')
     db_size = get_database_size()
     total_bytes = db_size.get('total', 0)
     total_formatted = format_size(total_bytes)
@@ -360,14 +362,14 @@ async def send_health_report(chat_id: int, bot: Optional[Bot] = None) -> None:
     states_count = len(user_states)
     memory_info = get_memory_usage()
 
-    panel_status = "🔴 غیرفعال"
+    panel_status = ("🔴 Inactive" if lang == "en" else "🔴 غیرفعال")
     if is_senai_panel_enabled():
         try:
             cookie = await xui_login()
             if cookie:
-                panel_status = "🟢 فعال"
+                panel_status = ("🟢 Active" if lang == "en" else "🟢 فعال")
         except Exception:
-            panel_status = "🔴 خطا در اتصال"
+            panel_status = ("🔴 Connection Error" if lang == "en" else "🔴 خطا در اتصال")
 
     total, used, free = shutil.disk_usage(".")
     free_gb = free / (1024**3)
@@ -376,20 +378,64 @@ async def send_health_report(chat_id: int, bot: Optional[Bot] = None) -> None:
     total_balance = sum(int(u.get('balance') or 0) for u in users.values())
     total_revenue = sum(int(o.get('price') or 0) for o in valid_orders.values() if o.get('status') == 'approved')
     backup_count = len(_get_backup_list_safe())
+    now_str = now_tehran().strftime('%Y-%m-%d %H:%M:%S')
+    today_str = now_tehran().strftime('%Y-%m-%d')
 
-    report = f"""
+    if lang == "en":
+        report = f"""
+📊 <b>Bot Health Report</b>
+
+🕐 Time: {now_str}
+
+📁 <b>Database:</b>
+• Total Size: {total_formatted}
+"""
+        for name, size in db_size.items():
+            if name != 'total' and name != 'total_formatted':
+                report += f"  • {name}: {format_size(size)}\n"
+
+        report += f"""
+• Users: {len(users)}
+• Orders: {len(valid_orders)}
+• Pending Approval: {pending}
+
+💰 <b>Financial:</b>
+• Total Balance: {total_balance:,} Toman
+• Total Revenue: {total_revenue:,} Toman
+
+💾 <b>System:</b>
+• Free Disk Space: {free_gb:.2f} GB
+• Used Disk Space: {used_gb:.2f} GB
+• Total Disk Space: {total_gb:.2f} GB
+• Backups Count: {backup_count}
+
+⚙️ <b>Status:</b>
+• Active States: {states_count}
+• DB Cache: {memory_info.get('db_cache_size', 0)} items
+• Panel: {panel_status}
+• Date: {today_str}
+"""
+        if free_gb < 1.0:
+            report += f"""
+
+⚠️ <b>Warning: Low Disk Space!</b>
+💾 Free Space: {free_gb:.2f} GB
+📁 Please clean up old logs and backups.
+"""
+    else:
+        report = f"""
 📊 <b>گزارش سلامت ربات</b>
 
-🕐 زمان: {now_tehran().strftime('%Y-%m-%d %H:%M:%S')}
+🕐 زمان: {now_str}
 
 📁 <b>دیتابیس:</b>
 • حجم کل: {total_formatted}
 """
-    for name, size in db_size.items():
-        if name != 'total' and name != 'total_formatted':
-            report += f"  • {name}: {format_size(size)}\n"
+        for name, size in db_size.items():
+            if name != 'total' and name != 'total_formatted':
+                report += f"  • {name}: {format_size(size)}\n"
 
-    report += f"""
+        report += f"""
 • کاربران: {len(users)}
 • سفارشات: {len(valid_orders)}
 • در انتظار تایید: {pending}
@@ -408,10 +454,10 @@ async def send_health_report(chat_id: int, bot: Optional[Bot] = None) -> None:
 • وضعیت‌های فعال: {states_count}
 • حافظه کش: {memory_info.get('db_cache_size', 0)} آیتم
 • پنل: {panel_status}
-• آخرین بکاپ: {now_tehran().strftime('%Y-%m-%d')}
+• آخرین بکاپ: {today_str}
 """
-    if free_gb < 1.0:
-        report += f"""
+        if free_gb < 1.0:
+            report += f"""
 
 ⚠️ <b>هشدار: فضای خالی دیسک کم است!</b>
 💾 فضای خالی: {free_gb:.2f} GB
@@ -422,12 +468,13 @@ async def send_health_report(chat_id: int, bot: Optional[Bot] = None) -> None:
 
 
 async def send_disk_warning(chat_id: int, bot: Optional[Bot] = None) -> None:
-    """ارسال هشدار دیسک (برای تست)"""
+    """ارسال هشدار دیسک (دو زبانه فارسی/انگلیسی)"""
     b = bot or get_bot()
     if not b:
         logger.error("send_disk_warning failed: bot instance is not available")
         return
 
+    lang = get_user(chat_id).get('lang', 'fa')
     total, used, free = shutil.disk_usage(".")
     free_gb = free / (1024**3)
     used_gb = used / (1024**3)
@@ -439,7 +486,25 @@ async def send_disk_warning(chat_id: int, bot: Optional[Bot] = None) -> None:
             if size_mb > 1:
                 large_files.append(f"• {file}: {size_mb:.1f} MB")
 
-    warning_msg = f"""
+    if lang == "en":
+        warning_msg = f"""
+⚠️ <b>Warning: Low Disk Space!</b>
+
+💾 Free Space: {free_gb:.1f} GB
+📊 Used Space: {used_gb:.1f} GB
+📊 Total Space: {total_gb:.1f} GB
+
+📁 <b>Large Files:</b>
+{chr(10).join(large_files) if large_files else '• No large files found'}
+
+💡 Suggestions:
+• Delete old backups
+• Optimize the database
+
+🕐 Time: {now_tehran().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+    else:
+        warning_msg = f"""
 ⚠️ <b>هشدار: فضای خالی دیسک کم است!</b>
 
 💾 فضای خالی: {free_gb:.1f} GB
@@ -460,12 +525,13 @@ async def send_disk_warning(chat_id: int, bot: Optional[Bot] = None) -> None:
 
 
 async def send_weekly_detailed_report(chat_id: int, bot: Optional[Bot] = None) -> None:
-    """ارسال گزارش هفتگی با جزئیات کامل"""
+    """ارسال گزارش هفتگی با جزئیات کامل (دو زبانه فارسی/انگلیسی)"""
     b = bot or get_bot()
     if not b:
         logger.error("send_weekly_detailed_report failed: bot instance is not available")
         return
 
+    lang = get_user(chat_id).get('lang', 'fa')
     db_size = get_database_size()
     total_mb = db_size.get('total', 0) / (1024 * 1024)
 
@@ -479,7 +545,8 @@ async def send_weekly_detailed_report(chat_id: int, bot: Optional[Bot] = None) -
     blacklist_count = len(BLACKLIST)
     total_balance = sum(int(u.get('balance') or 0) for u in users.values())
     total_revenue = sum(int(o.get('price') or 0) for o in valid_orders.values() if o.get('status') == 'approved')
-    panel_status = "🔴 غیرفعال"
+    panel_active = False
+    panel_status = ("🔴 Inactive" if lang == "en" else "🔴 غیرفعال")
     inbounds_count = 0
     panel_clients = 0
 
@@ -487,7 +554,8 @@ async def send_weekly_detailed_report(chat_id: int, bot: Optional[Bot] = None) -
         try:
             cookie = await xui_login()
             if cookie:
-                panel_status = "🟢 فعال"
+                panel_active = True
+                panel_status = ("🟢 Active" if lang == "en" else "🟢 فعال")
                 inbounds = await xui_get_inbounds()
                 inbounds_count = len(inbounds)
                 for o in valid_orders.values():
@@ -512,7 +580,76 @@ async def send_weekly_detailed_report(chat_id: int, bot: Optional[Bot] = None) -
     total_feedbacks = len(feedbacks)
     available_configs = get_available_configs_count()
 
-    report = f"""
+    if lang == "en":
+        overall_status = '🟢 Excellent' if free_gb > 2 and panel_active else ('🟡 Acceptable' if free_gb > 0.5 else '🔴 Needs Attention')
+        report = f"""
+📊 <b>Weekly Detailed Bot Report</b>
+
+
+🕐 <b>Time:</b> {now_tehran().strftime('%Y-%m-%d %H:%M:%S')}
+📅 <b>Week:</b> {now_tehran().strftime('%W')} (Year {now_tehran().strftime('%Y')})
+
+
+📁 <b>Database:</b>
+• Total Size: {total_mb:.2f} MB
+• Total Users: {total_users}
+• Active Users: {active_users}
+• Verified Users: {verified_users}
+• Blacklist: {blacklist_count}
+
+📋 <b>Orders:</b>
+• Total Orders: {len(valid_orders)}
+• Approved: {approved_orders}
+• Pending: {pending_orders}
+• Rejected: {rejected_orders}
+
+💰 <b>Financial:</b>
+• Total Balance: {total_balance:,} Toman
+• Total Revenue: {total_revenue:,} Toman
+• Average Balance: {total_balance // total_users if total_users > 0 else 0:,} Toman
+
+🎁 <b>Referrals:</b>
+• Total Referrals: {total_referrals}
+• Paid Rewards: {paid_referrals}
+• Pending Rewards: {total_referrals - paid_referrals}
+
+📡 <b>Panel:</b>
+• Status: {panel_status}
+• Inbounds: {inbounds_count}
+• Active Clients: {panel_clients}
+
+💬 <b>Support:</b>
+• Active Chats: {active_chats}
+• Total Chats: {total_chats}
+• Feedbacks: {total_feedbacks}
+
+📦 <b>Configs:</b>
+• Available in Pool: {available_configs}
+• Backups: {backup_count}
+• Backups Size: {backup_total_mb:.1f} MB
+
+💾 <b>System:</b>
+• Free Disk Space: {free_gb:.1f} GB
+• Used Disk Space: {used_gb:.1f} GB
+• Total Disk Space: {total_gb:.1f} GB
+• Usage Percentage: {(used / total * 100):.1f}%
+
+🧠 <b>Memory:</b>
+• RAM Usage: {memory_info.get('rss_mb', 0):.1f} MB
+• RAM Percent: {memory_info.get('percent', 0):.1f}%
+• DB Cache: {memory_info.get('db_cache_size', 0)} items
+• Active States: {memory_info.get('user_states_size', 0)}
+
+✅ <b>Overall Status:</b> {overall_status}
+
+💡 <b>Recommendations:</b>
+{f'⚠️ Low disk space ({free_gb:.1f} GB) - please clean up' if free_gb < 1.5 else '✅ Disk space is healthy'}
+{f'⚠️ Too many backups ({backup_count})' if backup_count > 20 else '✅ Backup count is reasonable'}
+{f'⚠️ Low pool configs ({available_configs})' if available_configs < 5 else '✅ Pool config supply is sufficient'}
+"""
+    else:
+        overall_status = '🟢 عالی' if free_gb > 2 and panel_active else ('🟡 قابل قبول' if free_gb > 0.5 else '🔴 نیاز به توجه')
+        report = f"""
 📊 <b>گزارش کامل هفتگی ربات</b>
 
 
@@ -570,7 +707,7 @@ async def send_weekly_detailed_report(chat_id: int, bot: Optional[Bot] = None) -
 • کش دیتابیس: {memory_info.get('db_cache_size', 0)} آیتم
 • وضعیت‌های فعال: {memory_info.get('user_states_size', 0)}
 
-✅ <b>وضعیت کلی:</b> {'🟢 عالی' if free_gb > 2 and panel_status == '🟢 فعال' else '🟡 قابل قبول' if free_gb > 0.5 else '🔴 نیاز به توجه'}
+✅ <b>وضعیت کلی:</b> {overall_status}
 
 💡 <b>توصیه‌ها:</b>
 {f'⚠️ فضای دیسک کم است ({free_gb:.1f} GB) - پاکسازی کنید' if free_gb < 1.5 else '✅ فضای دیسک مناسب است'}
@@ -737,7 +874,21 @@ async def weekly_cleanup(bot: Optional[Bot] = None):
                     except Exception:
                         pass
 
-                    warning_msg = f"""
+                    admin_lang = get_user(ADMIN_ID_INT).get('lang', 'fa')
+                    if admin_lang == "en":
+                        warning_msg = (
+                            f"⚠️ <b>Warning: Low Disk Space!</b>\n\n"
+                            f"💾 Free Space: {free_gb:.1f} GB\n"
+                            f"📊 Total Space: {total_gb:.1f} GB\n"
+                            f"📊 Used Space: {used_gb:.1f} GB ({disk_percent:.1f}%)\n\n"
+                            f"{'📁 Large Files: ' + ', '.join(large_files) if large_files else ''}\n\n"
+                            f"💡 Suggestions:\n"
+                            f"• Clear logs: /clear_logs\n"
+                            f"• Remove old backups\n"
+                            f"• Optimize database"
+                        )
+                    else:
+                        warning_msg = f"""
         ⚠️ <b>هشدار: فضای خالی دیسک کم است!</b>
 
         💾 فضای خالی: {free_gb:.1f} GB

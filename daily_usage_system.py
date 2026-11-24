@@ -996,8 +996,11 @@ class DailyUsageStore:
             return False
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            tables = ["services", "traffic_snapshots", "daily_usage", "usage_coverage", "reset_events"]
+            for tbl in tables:
+                cursor.execute(f"DELETE FROM {tbl};")
             for tbl, rows in backup_dict.items():
-                if not isinstance(rows, list) or not rows:
+                if tbl not in tables or not isinstance(rows, list) or not rows:
                     continue
                 for row in rows:
                     if not isinstance(row, dict):
@@ -1012,6 +1015,15 @@ class DailyUsageStore:
             conn.commit()
             logger.info("Daily usage database restored successfully from backup.")
             return True
+
+    def clear_all_data(self) -> None:
+        """پاکسازی کامل جداول مصرف روزانه در دیتابیس"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for tbl in ("reset_events", "usage_coverage", "daily_usage", "traffic_snapshots", "services"):
+                cursor.execute(f"DELETE FROM {tbl};")
+            conn.commit()
+        logger.info("Daily usage SQLite tables cleared.")
 
 
 # ====================================================================

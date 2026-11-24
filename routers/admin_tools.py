@@ -1,7 +1,7 @@
 """
 routers/admin_tools.py
 ----------------------
-ابزارهای مدیریت پنل ادمین: همگام‌سازی کانفیگ‌ها، بازسازی لینک‌های ساب، مدیریت بکاپ‌ها،
+ابزارهای مدیریت پنل ادمین: همگام‌سازی کانفیگ‌ها، مدیریت بکاپ‌ها،
 بررسی لاگ‌ها و کاهش/ریست دستی موجودی کاربران
 """
 
@@ -16,7 +16,6 @@ import asyncio
 import logging
 import unicodedata
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
 from io import BytesIO
 from typing import Optional, List, Dict, Any, Tuple, Union
 
@@ -73,6 +72,7 @@ from user_manager import (
     get_user,
     get_admin_id_int,
     COUPONS,
+    save_coupons,
     save_coupon_to_user_db,
     clear_coupon_from_user_db,
     add_balance,
@@ -1977,522 +1977,6 @@ async def add_balance_manual(message: Message):
 
 logger = logging.getLogger(__name__)
 
-async def rebuild_sub_links_in_database():
-    """
-    بازسازی لینک‌های ساب در دیتابیس بر اساس SENAI_SUB_URL جدید از config.py
-    
-    ویژگی‌ها:
-    - فقط لینک‌های معتبر (شروع با http) را بروزرسانی می‌کند
-    - لینک‌های نامعتبر (مثل Goz) را دست نمی‌زند
-    - با هر دامنه‌ای کار می‌کند (مثل sub.example.com یا vpn.example.net)
-    - فرمت لینک را حفظ می‌کند
-    - پورت را به درستی مدیریت می‌کند
-    
-    Returns:
-        dict: شامل آمار و لیست سفارشات بروزرسانی شده
-    """
-    current_sub_base = await ensure_sub_base_url()
-    if not current_sub_base:
-        logger.error('❌ Subscription URL is not specified (neither in config.py nor in the panel)!')
-        return {
-            'success': False,
-            'error': 'SENAI_SUB_URL not configured',
-            'updated_count': 0,
-            'updated_orders': []
-        }
-
-    logger.info(f"🔄 starting subscription link rebuild with new address: {current_sub_base}")
-    
-    updated_orders = []
-    failed_orders = []
-    skipped_orders = []
-    invalid_links_skipped = []  # لینک‌های نامعتبری که دست نخوردند
-    valid_orders = get_valid_orders()
-    
-    if not valid_orders:
-        logger.info('📭 No orders found in the database')
-        return {
-            'success': True,
-            'updated_count': 0,
-            'updated_orders': [],
-            'message': 'No orders found'
-        }
-    
-    logger.info(f"📊 total orders: {len(valid_orders)}")
-    
-    for order_id, order in valid_orders.items():
-        try:
-            config_link = order.get('config_link')
-            sub_link = order.get('sub_link')
-            email = order.get('email')
-            if not config_link and not sub_link:
-                skipped_orders.append({
-                    'order_id': order_id,
-                    'reason': 'No links found'
-                })
-                continue
-            def is_valid_link(link: str) -> bool:
-                """بررسی اینکه لینک معتبر است یا نه"""
-                if not link:
-                    return False
-                if link.startswith('http://') or link.startswith('https://'):
-                    return True
-                if link.startswith('//'):
-                    return True
-                if link.startswith('sub.'):
-                    return True
-                return False
-            def rebuild_link(link: str) -> str:
-                """بازسازی یک لینک ساب (فقط برای لینک‌های معتبر)"""
-                if not link:
-                    return None
-                if not is_valid_link(link):
-                    return None
-                base_sub = get_sub_base_url()
-                if '/sub/' in link:
-                    sub_path = link.split('/sub/')[-1]
-                    if sub_path:
-                        return f"{base_sub}/{sub_path}"
-                if link.startswith('//'):
-                    link_with_protocol = f"https:{link}"
-                    return rebuild_link(link_with_protocol)
-                if link.startswith('sub.'):
-                    parts = link.split('/')
-                    if len(parts) >= 2:
-                        path = '/' + '/'.join(parts[1:])
-                        return f"{base_sub}{path}"
-                    return f"{base_sub}/{link}"
-                try:
-                    parsed = urlparse(link)
-                    if parsed.scheme and parsed.netloc:
-                        parts = parsed.path.rstrip('/').split('/')
-                        sub_id = parts[-1] if parts else ''
-                        if sub_id:
-                            new_link = f"{base_sub}/{sub_id}"
-                            query = parsed.query or ''
-                            if query:
-                                new_link += f"?{query}"
-                            return new_link
-                except Exception as e:
-                    logger.warning(f"⚠️ Error parsing link: {e}")
-                if is_valid_link(link):
-                    try:
-                        parts = link.rstrip('/').split('/')
-                        if parts and parts[-1]:
-                            return f"{base_sub}/{parts[-1]}"
-                    except Exception:
-                        return None
-
-                return None
-            new_config_link = None
-            new_sub_link = None
-            if config_link:
-                if is_valid_link(config_link):
-                    new_config_link = rebuild_link(config_link)
-                    if new_config_link:
-                        logger.info(f"📝 config_link for order #{order_id} was rebuilt")
-                    else:
-                        logger.warning(f"⚠️ config_link for order #{order_id} was not rebuilt")
-                        failed_orders.append({
-                            'order_id': order_id,
-                            'old_link': config_link,
-                            'reason': 'Rebuild failed for valid link'
-                        })
-                else:
-                    invalid_links_skipped.append({
-                        'order_id': order_id,
-                        'link': config_link,
-                        'reason': 'Invalid link (skipped)'
-                    })
-                    logger.info(f"⏭️ config_link for order #{order_id} is invalid and was left unchanged")
-            if sub_link:
-                if is_valid_link(sub_link):
-                    new_sub_link = rebuild_link(sub_link)
-                    if new_sub_link:
-                        logger.info(f"📝 sub_link for order #{order_id} was rebuilt")
-                    else:
-                        logger.warning(f"⚠️ sub_link for order #{order_id} was not rebuilt")
-                        failed_orders.append({
-                            'order_id': order_id,
-                            'old_link': sub_link,
-                            'reason': 'Rebuild failed for valid link'
-                        })
-                else:
-                    invalid_links_skipped.append({
-                        'order_id': order_id,
-                        'link': sub_link,
-                        'reason': 'Invalid link (skipped)'
-                    })
-                    logger.info(f"⏭️ sub_link for order #{order_id} is invalid and was left unchanged")
-            update_data = {}
-            if new_config_link and new_config_link != config_link:
-                update_data['config_link'] = new_config_link
-            
-            if new_sub_link and new_sub_link != sub_link:
-                update_data['sub_link'] = new_sub_link
-            
-            if update_data:
-                update_data['updated_at'] = now_tehran_iso()
-                update_order(order_id, **update_data)
-                
-                updated_orders.append({
-                    'order_id': order_id,
-                    'email': email,
-                    'old_config_link': config_link,
-                    'new_config_link': new_config_link,
-                    'old_sub_link': sub_link,
-                    'new_sub_link': new_sub_link
-                })
-                logger.info(f"✅ Order #{order_id} was updated")
-            else:
-                if config_link and sub_link:
-                    skipped_orders.append({
-                        'order_id': order_id,
-                        'reason': 'No changes needed'
-                    })
-                else:
-                    skipped_orders.append({
-                        'order_id': order_id,
-                        'reason': 'No valid links to update'
-                    })
-                
-        except Exception as e:
-            logger.error(f"❌ Error updating order #{order_id}: {e}")
-            failed_orders.append({
-                'order_id': order_id,
-                'error': str(e)
-            })
-    result = {
-        'success': True,
-        'total_orders': len(valid_orders),
-        'updated_count': len(updated_orders),
-        'failed_count': len(failed_orders),
-        'skipped_count': len(skipped_orders),
-        'invalid_links_skipped': len(invalid_links_skipped),
-        'updated_orders': updated_orders,
-        'failed_orders': failed_orders,
-        'invalid_links': invalid_links_skipped,
-        'new_base_url': get_sub_base_url(),
-        'timestamp': now_tehran_iso()
-    }
-
-    logger.info("=" * 60)
-    logger.info("✅ subscription link rebuild complete!")
-    logger.info(f"📊 total orders: {result['total_orders']}")
-    logger.info(f"✅ updated: {result['updated_count']}")
-    logger.info(f"❌ error: {result['failed_count']}")
-    logger.info(f"⏭️ no change: {result['skipped_count']}")
-    logger.info(f"⏭️ invalid links untouched: {result['invalid_links_skipped']}")
-    logger.info(f"🌐 new address: {get_sub_base_url()}")
-    logger.info("=" * 60)
-    
-    return result
-
-
-async def rebuild_single_order_sub_link(order_id: int):
-    """
-    بازسازی لینک ساب برای یک سفارش خاص (فقط لینک‌های معتبر)
-    
-    Args:
-        order_id: شناسه سفارش
-        
-    Returns:
-        dict: نتیجه عملیات
-    """
-    order = orders.get(str(order_id))
-    if not order:
-        return {
-            'success': False,
-            'error': f'Order #{order_id} not found'
-        }
-
-    await ensure_sub_base_url()
-    config_link = order.get('config_link')
-    sub_link = order.get('sub_link')
-    def is_valid_link(link: str) -> bool:
-        if not link:
-            return False
-        return (link.startswith('http://') or 
-                link.startswith('https://') or 
-                link.startswith('//') or 
-                link.startswith('sub.'))
-    
-    if config_link and not is_valid_link(config_link):
-        return {
-            'success': True,
-            'order_id': order_id,
-            'message': f'Link is invalid (skipped): {config_link}',
-            'config_link': config_link,
-            'sub_link': sub_link
-        }
-    
-    if sub_link and not is_valid_link(sub_link):
-        return {
-            'success': True,
-            'order_id': order_id,
-            'message': f'Link is invalid (skipped): {sub_link}',
-            'config_link': config_link,
-            'sub_link': sub_link
-        }
-    def rebuild_link(link: str) -> str:
-        if not link:
-            return None
-
-        base_sub = get_sub_base_url()
-        if '/sub/' in link:
-            sub_path = link.split('/sub/')[-1]
-            if sub_path:
-                return f"{base_sub}/{sub_path}"
-
-        try:
-            parsed = urlparse(link)
-            if parsed.scheme and parsed.netloc:
-                parts = parsed.path.rstrip('/').split('/')
-                sub_id = parts[-1] if parts else ''
-                if sub_id:
-                    new_link = f"{base_sub}/{sub_id}"
-                    query = parsed.query or ''
-                    if query:
-                        new_link += f"?{query}"
-                    return new_link
-        except Exception:
-            pass
-
-        return None
-    
-    new_config_link = rebuild_link(config_link) if config_link else None
-    new_sub_link = rebuild_link(sub_link) if sub_link else None
-    
-    update_data = {}
-    if new_config_link and new_config_link != config_link:
-        update_data['config_link'] = new_config_link
-    if new_sub_link and new_sub_link != sub_link:
-        update_data['sub_link'] = new_sub_link
-    
-    if update_data:
-        update_data['updated_at'] = now_tehran_iso()
-        update_order(order_id, **update_data)
-        return {
-            'success': True,
-            'order_id': order_id,
-            'old_config_link': config_link,
-            'new_config_link': new_config_link,
-            'old_sub_link': sub_link,
-            'new_sub_link': new_sub_link
-        }
-    else:
-        return {
-            'success': True,
-            'order_id': order_id,
-            'message': 'No changes needed',
-            'config_link': config_link,
-            'sub_link': sub_link
-        }
-
-
-@router.message(Command("rebuild_links"), IsAdmin())
-async def cmd_rebuild_links(message: Message):
-    """دستور بازسازی لینک‌های ساب در دیتابیس (فقط ادمین)"""
-    if not getattr(message, "from_user", None) or message.from_user.id != ADMIN_ID_INT:
-        return
-    
-    status_msg = await message.reply(
-        "⏳ در حال بازسازی لینک‌های ساب...\n\n"
-        "⏱ این عملیات ممکن است چند ثانیه طول بکشد.\n"
-        "⚠️ لینک‌های نامعتبر (مثل Goz) دست نخورده باقی می‌مانند."
-    )
-    
-    try:
-        result = await rebuild_sub_links_in_database()
-        
-        if result['success']:
-            report = f"""
-✅ <b>بازسازی لینک‌های ساب با موفقیت انجام شد!</b>
-
-━━━━━━━━━━━━━━━━━━━━━━
-📊 <b>آمار:</b>
-• کل سفارشات: {result['total_orders']}
-• ✅ بروزرسانی شده: {result['updated_count']}
-• ❌ خطا: {result['failed_count']}
-• ⏭️ بدون تغییر: {result['skipped_count']}
-• ⏭️ لینک‌های نامعتبر دست نخورده: {result['invalid_links_skipped']}
-━━━━━━━━━━━━━━━━━━━━━━
-🌐 آدرس جدید: <code>{result['new_base_url']}</code>
-🕐 زمان: {now_tehran().strftime('%Y-%m-%d %H:%M:%S')}
-
-{f"📋 <b>سفارشات بروزرسانی شده:</b>" if result['updated_orders'] else ""}
-"""
-            for i, order in enumerate(result['updated_orders'][:10], 1):
-                report += f"\n{i}. #{order['order_id']} - {order.get('email', 'بدون ایمیل')}"
-                if order.get('old_config_link') != order.get('new_config_link'):
-                    old_link = order.get('old_config_link', '')
-                    new_link = order.get('new_config_link', '')
-                    old_short = old_link[:50] + '...' if len(old_link) > 50 else old_link
-                    new_short = new_link[:50] + '...' if len(new_link) > 50 else new_link
-                    report += f"\n   📝 config_link: {old_short} → {new_short}"
-            
-            if len(result['updated_orders']) > 10:
-                report += f"\n\n... و {len(result['updated_orders']) - 10} سفارش دیگر"
-            
-            if result['invalid_links']:
-                report += "\n\n⏭️ <b>لینک‌های نامعتبر دست نخورده:</b>"
-                for inv in result['invalid_links'][:5]:
-                    report += f"\n• #{inv['order_id']}: <code>{inv['link']}</code>"
-                if len(result['invalid_links']) > 5:
-                    report += f"\n• ... و {len(result['invalid_links']) - 5} مورد دیگر"
-            
-            if result['failed_orders']:
-                report += "\n\n⚠️ <b>خطاها:</b>"
-                for fail in result['failed_orders']:
-                    report += f"\n• #{fail['order_id']}: {fail.get('reason', 'نامشخص')}"
-            
-            buttons = [
-                [InlineKeyboardButton(
-                    text="📋 مشاهده کامل لیست",
-                    callback_data="show_rebuild_results"
-                )],
-                [InlineKeyboardButton(
-                    text="🔙 برگشت به پنل",
-                    callback_data="admin_panel"
-                )]
-            ]
-            
-            await status_msg.edit_text(
-                report,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode=ParseMode.HTML
-            )
-            
-            logger.info(f"✅ Links rebuilt by admin {message.from_user.id} completed")
-            
-        else:
-            await status_msg.edit_text(
-                f"❌ خطا در بازسازی لینک‌ها:\n{result.get('error', 'خطای نامشخص')}",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🔙 برگشت", callback_data="admin_panel")]
-                ])
-            )
-            
-    except Exception as e:
-        logger.error(f"Error rebuilding links: {e}", exc_info=True)
-        await status_msg.edit_text(
-            f"❌ خطا: {html.escape(type(e).__name__)}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 برگشت", callback_data="admin_panel")]
-            ])
-        )
-
-
-@router.callback_query(F.data == "show_rebuild_results")
-@admin_only(answer_on_denied=False)
-async def show_rebuild_results(callback: CallbackQuery):
-    """نمایش جزئیات کامل بازسازی لینک‌ها"""
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    
-    result = await rebuild_sub_links_in_database()
-    
-    report_lines = [
-        "📋 گزارش بازسازی لینک‌های ساب",
-        "=" * 60,
-        f"🕐 زمان: {now_tehran().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"🌐 آدرس جدید: {get_sub_base_url()}",
-        "=" * 60,
-        f"📊 کل سفارشات: {result['total_orders']}",
-        f"✅ بروزرسانی شده: {result['updated_count']}",
-        f"❌ خطا: {result['failed_count']}",
-        f"⏭️ بدون تغییر: {result['skipped_count']}",
-        f"⏭️ لینک‌های نامعتبر دست نخورده: {result['invalid_links_skipped']}",
-        "=" * 60,
-        "\n📋 لیست سفارشات بروزرسانی شده:",
-        "-" * 40
-    ]
-    
-    for order in result['updated_orders']:
-        report_lines.append(f"\n🆔 سفارش #{order['order_id']}")
-        report_lines.append(f"   📧 ایمیل: {order.get('email', 'بدون ایمیل')}")
-        if order.get('old_config_link') != order.get('new_config_link'):
-            report_lines.append(f"   📝 config_link: {order.get('new_config_link', 'ندارد')}")
-        if order.get('old_sub_link') != order.get('new_sub_link'):
-            report_lines.append(f"   📝 sub_link: {order.get('new_sub_link', 'ندارد')}")
-    
-    if result['invalid_links']:
-        report_lines.append("\n\n⏭️ لینک‌های نامعتبر دست نخورده:")
-        report_lines.append("-" * 40)
-        for inv in result['invalid_links']:
-            report_lines.append(f"   #{inv['order_id']}: {inv['link']}")
-    
-    if result['failed_orders']:
-        report_lines.append("\n\n❌ سفارشات با خطا:")
-        report_lines.append("-" * 40)
-        for fail in result['failed_orders']:
-            report_lines.append(f"   #{fail['order_id']}: {fail.get('reason', 'نامشخص')}")
-    
-    report_text = "\n".join(report_lines)
-    
-    file_buffer = BytesIO()
-    file_buffer.write(report_text.encode('utf-8'))
-    file_buffer.seek(0)
-    
-    input_file = BufferedInputFile(
-        file_buffer.read(), 
-        filename=f"rebuild_links_report_{now_tehran().strftime('%Y%m%d_%H%M%S')}.txt"
-    )
-    
-    await callback.message.delete()
-    await callback.message.answer_document(
-        document=input_file,
-        caption=t('i18n_rebuild_results_caption', lang, fa_parts=lambda: (result['updated_count'], result['invalid_links_skipped']), en_parts=lambda: (result['updated_count'], result['invalid_links_skipped'])),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t('back_to_panel_63039f103a', lang), callback_data="admin_panel")]
-        ])
-    )
-    
-    await safe_answer(callback)
-
-
-@router.message(Command("rebuild_single"), IsAdmin())
-async def cmd_rebuild_single(message: Message):
-    """بازسازی لینک یک سفارش خاص (فقط ادمین)"""
-    if not getattr(message, "from_user", None) or message.from_user.id != ADMIN_ID_INT:
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.reply(
-            "❌ لطفاً آیدی سفارش را وارد کنید:\n"
-            "<code>/rebuild_single 14</code>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    try:
-        order_id = int(parts[1])
-    except ValueError:
-        await message.reply("❌ آیدی سفارش نامعتبر است")
-        return
-    
-    result = await rebuild_single_order_sub_link(order_id)
-    
-    if result['success']:
-        if result.get('message'):
-            await message.reply(
-                f"ℹ️ {result['message']}\n"
-                f"🆔 سفارش: #{order_id}",
-                parse_mode=ParseMode.HTML
-            )
-        else:
-            await message.reply(
-                f"✅ سفارش #{order_id} با موفقیت بروزرسانی شد!\n"
-                f"📝 config_link: {result.get('new_config_link', 'ندارد')}\n"
-                f"📝 sub_link: {result.get('new_sub_link', 'ندارد')}",
-                parse_mode=ParseMode.HTML
-            )
-    else:
-        await message.reply(f"❌ {result.get('error', 'خطا')}")
-
-
-
-
 def get_backup_list() -> list:
     """دریافت لیست تمام فایل‌های بکاپ موجود"""
     backup_dir = os.path.join(DATA_DIR, 'backups')
@@ -2623,6 +2107,20 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
             daily_usage_before = usage_store.export_backup_data()
         except Exception:
             pass
+        sms_payments_before = {}
+        try:
+            from sms_payment_system import sms_payment_manager
+            sms_payments_before = sms_payment_manager.db.export_backup_data()
+        except Exception:
+            pass
+        alert_cache_before = {}
+        try:
+            alert_cache_path = os.path.join(DATA_DIR, 'alert_cache.json')
+            if os.path.exists(alert_cache_path):
+                with open(alert_cache_path, 'r', encoding='utf-8') as f_ac:
+                    alert_cache_before = json.load(f_ac)
+        except Exception:
+            pass
 
         full_backup = {
             'users': users,
@@ -2637,7 +2135,10 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
             'user_inbound_selection': USER_INBOUND_SELECTION,
             'user_test_usage': USER_TEST_USAGE,
             'shop_status': SHOP_STATUS,
+            'coupons': dict(COUPONS),
             'daily_usage': daily_usage_before,
+            'sms_payments': sms_payments_before,
+            'alert_cache': alert_cache_before,
             'backup_info': {
                 'timestamp': now_tehran().strftime('%Y%m%d_%H%M%S'),
                 'date': now_tehran_iso(),
@@ -2743,7 +2244,41 @@ async def restore_from_backup(backup_file: str, restore_panel: bool = False) -> 
                 logger.info('✅ Daily usage statistics successfully restored from backup file')
             except Exception as ex_du:
                 logger.error(f"❌ Error restoring daily usage statistics: {ex_du}")
-        
+
+        if 'coupons' in data and isinstance(data.get('coupons'), dict):
+            COUPONS.clear()
+            COUPONS.update(data['coupons'])
+            save_coupons(COUPONS)
+            logger.info(f"✅ {len(COUPONS)} coupons restored")
+
+        backup_sms_payments = data.get('sms_payments')
+        if backup_sms_payments and isinstance(backup_sms_payments, dict):
+            try:
+                from sms_payment_system import sms_payment_manager
+                sms_payment_manager.db.import_backup_data(backup_sms_payments)
+                logger.info('✅ SMS payments SQLite database restored from backup file')
+            except Exception as ex_sms:
+                logger.error(f"❌ Error restoring sms_payments database: {ex_sms}")
+
+        backup_alert_cache = data.get('alert_cache')
+        if isinstance(backup_alert_cache, dict):
+            try:
+                alert_cache_path = os.path.join(DATA_DIR, 'alert_cache.json')
+                with open(alert_cache_path, 'w', encoding='utf-8') as f_ac:
+                    json.dump(backup_alert_cache, f_ac, ensure_ascii=False, indent=2)
+                import main as _main_mod
+                als = getattr(_main_mod, 'alert_system', None)
+                if als and hasattr(als, '_load_cache_from_disk'):
+                    als._load_cache_from_disk()
+                logger.info('✅ Alert cache restored from backup file')
+            except Exception as ex_ac:
+                logger.error(f"❌ Error restoring alert_cache: {ex_ac}")
+
+        user_states.clear()
+        save_json(DB_FILES['user_states'], {})
+        _db_cache.clear()
+        _db_modified.clear()
+
         logger.info('💾 Final database save...')
         
         configs_pool['ready_packages'] = READY_PACKAGES
@@ -3112,7 +2647,16 @@ async def admin_manage_backups(callback: CallbackQuery):
     text += t('select_an_operation_c1a5464279', lang)
 
     buttons = [
-        [InlineKeyboardButton(text="⚙️ تنظیمات بکاپ و آپدیت خودکار", callback_data="admin_auto_backup_settings")],
+        [InlineKeyboardButton(
+            text="💾 تهیه بکاپ دستی اکنون" if lang == "fa" else "💾 Create Manual Backup Now",
+            callback_data="backup_db",
+            style="success",
+        )],
+        [InlineKeyboardButton(
+            text="⚙️ تنظیمات بکاپ و آپدیت خودکار" if lang == "fa" else "⚙️ Auto Backup & Sync Settings",
+            callback_data="admin_auto_backup_settings",
+            style="primary",
+        )],
         [InlineKeyboardButton(text=t('delete_all_backups_2d37586fa6', lang), callback_data="delete_all_backups_confirm", style="danger")],
         [InlineKeyboardButton(text=t('delete_old_before_restore_7_fec346871f', lang), callback_data="delete_old_before_restore")],
         [InlineKeyboardButton(text=t('delete_old_backups_30_days_17f6abe3a9', lang), callback_data="delete_old_backups")],
@@ -3127,7 +2671,8 @@ async def admin_manage_backups(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_auto_backup_settings")
 @admin_only
 async def admin_auto_backup_settings(callback: CallbackQuery):
-    """منوی تنظیمات بکاپ و همگام‌سازی خودکار دیتابیس و پنل"""
+    """منوی تنظیمات بکاپ و همگام‌سازی خودکار دیتابیس و پنل (دو زبانه)"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
     settings = configs_pool.setdefault('auto_backup_settings', {
         'backup_enabled': True,
         'backup_interval_hours': 6,
@@ -3137,10 +2682,11 @@ async def admin_auto_backup_settings(callback: CallbackQuery):
         'last_sync_time': None,
     })
 
+    never_label = "هنوز اجرا نشده" if lang == "fa" else "Not run yet"
     backup_enabled = settings.get('backup_enabled', True)
     backup_int = settings.get('backup_interval_hours', 6)
-    last_bk = settings.get('last_backup_time', 'هنوز اجرا نشده')
-    if last_bk and last_bk != 'هنوز اجرا نشده':
+    last_bk = settings.get('last_backup_time') or never_label
+    if last_bk != never_label:
         try:
             last_bk = last_bk[:19].replace('T', ' ')
         except Exception:
@@ -3148,14 +2694,62 @@ async def admin_auto_backup_settings(callback: CallbackQuery):
 
     sync_enabled = settings.get('sync_enabled', True)
     sync_int = settings.get('sync_interval_hours', 6)
-    last_sy = settings.get('last_sync_time', 'هنوز اجرا نشده')
-    if last_sy and last_sy != 'هنوز اجرا نشده':
+    last_sy = settings.get('last_sync_time') or never_label
+    if last_sy != never_label:
         try:
             last_sy = last_sy[:19].replace('T', ' ')
         except Exception:
             pass
 
-    text = f"""⚙️ <b>تنظیمات بکاپ و آپدیت خودکار</b>
+    if lang == "en":
+        text = f"""⚙️ <b>Auto Backup & Panel Sync Settings</b>
+──────────────────────
+💾 <b>Auto Database Backup:</b>
+• Status: {'🟢 Enabled' if backup_enabled else '🔴 Disabled'}
+• Interval: <b>Every {backup_int} hours</b>
+• Last Auto Backup: <code>{last_bk}</code>
+
+🔄 <b>Auto Panel Config Sync:</b>
+• Status: {'🟢 Enabled' if sync_enabled else '🔴 Disabled'}
+• Interval: <b>Every {sync_int} hours</b>
+• Last Sync: <code>{last_sy}</code>
+──────────────────────
+💡 <i>Use the buttons below to toggle or adjust intervals:</i>"""
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text=f"💾 Auto Backup: {'🟢 ON' if backup_enabled else '🔴 OFF'}",
+                    callback_data="toggle_auto_backup"
+                )
+            ],
+            [
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 3 else ''}3h", callback_data="set_auto_backup_int_3"),
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 6 else ''}6h", callback_data="set_auto_backup_int_6"),
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 12 else ''}12h", callback_data="set_auto_backup_int_12"),
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 24 else ''}24h", callback_data="set_auto_backup_int_24"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🔄 Auto Panel Sync: {'🟢 ON' if sync_enabled else '🔴 OFF'}",
+                    callback_data="toggle_auto_sync"
+                )
+            ],
+            [
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 1 else ''}1h", callback_data="set_auto_sync_int_1"),
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 3 else ''}3h", callback_data="set_auto_sync_int_3"),
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 6 else ''}6h", callback_data="set_auto_sync_int_6"),
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 12 else ''}12h", callback_data="set_auto_sync_int_12"),
+            ],
+            [
+                InlineKeyboardButton(text="⚡ Run Backup Now", callback_data="run_auto_backup_now"),
+                InlineKeyboardButton(text="⚡ Sync Panel Now", callback_data="run_auto_sync_now"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Back to Backup Manager", callback_data="admin_manage_backups")
+            ]
+        ]
+    else:
+        text = f"""⚙️ <b>تنظیمات بکاپ و آپدیت خودکار</b>
 ──────────────────────
 💾 <b>بکاپ خودکار دیتابیس:</b>
 • وضعیت: {'🟢 روشن (فعال)' if backup_enabled else '🔴 خاموش (غیرفعال)'}
@@ -3168,64 +2762,39 @@ async def admin_auto_backup_settings(callback: CallbackQuery):
 • آخرین همگام‌سازی: <code>{last_sy}</code>
 ──────────────────────
 💡 <i>برای روشن/خاموش کردن یا تغییر ساعت هر بخش روی دکمه‌های زیر کلیک کنید:</i>"""
-
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text=f"💾 بکاپ خودکار: {'🟢 روشن' if backup_enabled else '🔴 خاموش'}",
-                callback_data="toggle_auto_backup"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if backup_int == 3 else ''}۳ ساعته",
-                callback_data="set_auto_backup_int_3"
-            ),
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if backup_int == 6 else ''}۶ ساعته",
-                callback_data="set_auto_backup_int_6"
-            ),
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if backup_int == 12 else ''}۱۲ ساعته",
-                callback_data="set_auto_backup_int_12"
-            ),
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if backup_int == 24 else ''}۲۴ ساعته",
-                callback_data="set_auto_backup_int_24"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"🔄 آپدیت خودکار پنل: {'🟢 روشن' if sync_enabled else '🔴 خاموش'}",
-                callback_data="toggle_auto_sync"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if sync_int == 1 else ''}۱ ساعته",
-                callback_data="set_auto_sync_int_1"
-            ),
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if sync_int == 3 else ''}۳ ساعته",
-                callback_data="set_auto_sync_int_3"
-            ),
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if sync_int == 6 else ''}۶ ساعته",
-                callback_data="set_auto_sync_int_6"
-            ),
-            InlineKeyboardButton(
-                text=f"{'🔘 ' if sync_int == 12 else ''}۱۲ ساعته",
-                callback_data="set_auto_sync_int_12"
-            ),
-        ],
-        [
-            InlineKeyboardButton(text="⚡ تهیه بکاپ همین الان", callback_data="run_auto_backup_now"),
-            InlineKeyboardButton(text="⚡ همگام‌سازی همین الان", callback_data="run_auto_sync_now"),
-        ],
-        [
-            InlineKeyboardButton(text="🔙 بازگشت به مدیریت بکاپ‌ها", callback_data="admin_manage_backups")
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    text=f"💾 بکاپ خودکار: {'🟢 روشن' if backup_enabled else '🔴 خاموش'}",
+                    callback_data="toggle_auto_backup"
+                )
+            ],
+            [
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 3 else ''}۳ ساعته", callback_data="set_auto_backup_int_3"),
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 6 else ''}۶ ساعته", callback_data="set_auto_backup_int_6"),
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 12 else ''}۱۲ ساعته", callback_data="set_auto_backup_int_12"),
+                InlineKeyboardButton(text=f"{'🔘 ' if backup_int == 24 else ''}۲۴ ساعته", callback_data="set_auto_backup_int_24"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🔄 آپدیت خودکار پنل: {'🟢 روشن' if sync_enabled else '🔴 خاموش'}",
+                    callback_data="toggle_auto_sync"
+                )
+            ],
+            [
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 1 else ''}۱ ساعته", callback_data="set_auto_sync_int_1"),
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 3 else ''}۳ ساعته", callback_data="set_auto_sync_int_3"),
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 6 else ''}۶ ساعته", callback_data="set_auto_sync_int_6"),
+                InlineKeyboardButton(text=f"{'🔘 ' if sync_int == 12 else ''}۱۲ ساعته", callback_data="set_auto_sync_int_12"),
+            ],
+            [
+                InlineKeyboardButton(text="⚡ تهیه بکاپ همین الان", callback_data="run_auto_backup_now"),
+                InlineKeyboardButton(text="⚡ همگام‌سازی همین الان", callback_data="run_auto_sync_now"),
+            ],
+            [
+                InlineKeyboardButton(text="🔙 بازگشت به مدیریت بکاپ‌ها", callback_data="admin_manage_backups")
+            ]
         ]
-    ]
 
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await safe_answer(callback)
@@ -3234,53 +2803,66 @@ async def admin_auto_backup_settings(callback: CallbackQuery):
 @router.callback_query(F.data == "toggle_auto_backup")
 @admin_only
 async def toggle_auto_backup(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
     settings = configs_pool.setdefault('auto_backup_settings', {})
     cur = settings.get('backup_enabled', True)
     settings['backup_enabled'] = not cur
     save_all()
-    status_str = "روشن شد 🟢" if not cur else "خاموش شد 🔴"
-    await safe_answer(callback, f"بکاپ خودکار {status_str}", alert=True)
+    if lang == "en":
+        msg = f"Auto backup {'enabled 🟢' if not cur else 'disabled 🔴'}"
+    else:
+        msg = f"بکاپ خودکار {'روشن شد 🟢' if not cur else 'خاموش شد 🔴'}"
+    await safe_answer(callback, msg, alert=True)
     await admin_auto_backup_settings(callback)
 
 
 @router.callback_query(F.data.startswith("set_auto_backup_int_"))
 @admin_only
 async def set_auto_backup_int(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
     hours = int(callback.data.split("_")[-1])
     settings = configs_pool.setdefault('auto_backup_settings', {})
     settings['backup_interval_hours'] = hours
     save_all()
-    await safe_answer(callback, f"بازه بکاپ خودکار به {hours} ساعت تغییر یافت ✅", alert=True)
+    msg = f"Auto backup interval set to {hours}h ✅" if lang == "en" else f"بازه بکاپ خودکار به {hours} ساعت تغییر یافت ✅"
+    await safe_answer(callback, msg, alert=True)
     await admin_auto_backup_settings(callback)
 
 
 @router.callback_query(F.data == "toggle_auto_sync")
 @admin_only
 async def toggle_auto_sync(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
     settings = configs_pool.setdefault('auto_backup_settings', {})
     cur = settings.get('sync_enabled', True)
     settings['sync_enabled'] = not cur
     save_all()
-    status_str = "روشن شد 🟢" if not cur else "خاموش شد 🔴"
-    await safe_answer(callback, f"آپدیت خودکار پنل {status_str}", alert=True)
+    if lang == "en":
+        msg = f"Auto panel sync {'enabled 🟢' if not cur else 'disabled 🔴'}"
+    else:
+        msg = f"آپدیت خودکار پنل {'روشن شد 🟢' if not cur else 'خاموش شد 🔴'}"
+    await safe_answer(callback, msg, alert=True)
     await admin_auto_backup_settings(callback)
 
 
 @router.callback_query(F.data.startswith("set_auto_sync_int_"))
 @admin_only
 async def set_auto_sync_int(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
     hours = int(callback.data.split("_")[-1])
     settings = configs_pool.setdefault('auto_backup_settings', {})
     settings['sync_interval_hours'] = hours
     save_all()
-    await safe_answer(callback, f"بازه آپدیت پنل به {hours} ساعت تغییر یافت ✅", alert=True)
+    msg = f"Auto sync interval set to {hours}h ✅" if lang == "en" else f"بازه آپدیت پنل به {hours} ساعت تغییر یافت ✅"
+    await safe_answer(callback, msg, alert=True)
     await admin_auto_backup_settings(callback)
 
 
 @router.callback_query(F.data == "run_auto_backup_now")
 @admin_only
 async def run_auto_backup_now(callback: CallbackQuery):
-    await callback.answer("⏳ در حال تهیه بکاپ خودکار...", show_alert=False)
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    await callback.answer("⏳ Creating auto backup..." if lang == "en" else "⏳ در حال تهیه بکاپ خودکار...", show_alert=False)
     try:
         from main import create_auto_backup
         success = create_auto_backup()
@@ -3288,28 +2870,33 @@ async def run_auto_backup_now(callback: CallbackQuery):
             settings = configs_pool.setdefault('auto_backup_settings', {})
             settings['last_backup_time'] = datetime.now().isoformat()
             save_all()
-            await safe_answer(callback, "✅ بکاپ خودکار با موفقیت تهیه شد!", alert=True)
+            await safe_answer(callback, "✅ Auto backup created successfully!" if lang == "en" else "✅ بکاپ خودکار با موفقیت تهیه شد!", alert=True)
         else:
-            await safe_answer(callback, "❌ خطا در ذخیره بکاپ!", alert=True)
+            await safe_answer(callback, "❌ Error saving backup!" if lang == "en" else "❌ خطا در ذخیره بکاپ!", alert=True)
     except Exception as e:
-        await safe_answer(callback, f"❌ خطا: {e}", alert=True)
+        await safe_answer(callback, f"❌ Error: {e}" if lang == "en" else f"❌ خطا: {e}", alert=True)
     await admin_auto_backup_settings(callback)
 
 
 @router.callback_query(F.data == "run_auto_sync_now")
 @admin_only
 async def run_auto_sync_now(callback: CallbackQuery):
-    await callback.answer("⏳ در حال همگام‌سازی با پنل...", show_alert=False)
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    await callback.answer("⏳ Syncing with panel..." if lang == "en" else "⏳ در حال همگام‌سازی با پنل...", show_alert=False)
     try:
-        from routers.admin_tools import sync_deleted_configs
         res = await sync_deleted_configs(batch_size=20)
         settings = configs_pool.setdefault('auto_backup_settings', {})
         settings['last_sync_time'] = datetime.now().isoformat()
         save_all()
         del_count = res.get('deleted', 0) if isinstance(res, dict) else (res if isinstance(res, int) else 0)
-        await safe_answer(callback, f"✅ همگام‌سازی پنل انجام شد ({del_count} کانفیگ بررسی/حذف شد)", alert=True)
+        msg = (
+            f"✅ Panel sync completed ({del_count} configs checked/removed)"
+            if lang == "en"
+            else f"✅ همگام‌سازی پنل انجام شد ({del_count} کانفیگ بررسی/حذف شد)"
+        )
+        await safe_answer(callback, msg, alert=True)
     except Exception as e:
-        await safe_answer(callback, f"❌ خطا در همگام‌سازی: {e}", alert=True)
+        await safe_answer(callback, f"❌ Sync error: {e}" if lang == "en" else f"❌ خطا در همگام‌سازی: {e}", alert=True)
     await admin_auto_backup_settings(callback)
 
 

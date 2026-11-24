@@ -141,8 +141,61 @@ def get_shop_status_message(lang: str = 'fa') -> str:
     """دریافت پیام وضعیت فروش"""
     if lang == 'fa':
         return SHOP_STATUS.get('message', t('the_shop_is_temporarily_clos_7fe29d7f30', lang))
-    else:
-        return t('the_shop_is_temporarily_clos_7fe29d7f30', lang)
+    return SHOP_STATUS.get('message_en') or t('the_shop_is_temporarily_clos_7fe29d7f30', lang)
+
+
+def _build_shop_management_view(lang: str) -> tuple[str, InlineKeyboardMarkup]:
+    is_open = is_shop_open()
+    manual_approval = configs_pool.get('manual_approval_settings', {})
+    enabled = manual_approval.get('enabled', False)
+    status_text = t('i18n_status_open', lang) if is_open else t('i18n_status_closed', lang)
+    approval_status = t('i18n_status_active', lang) if enabled else t('i18n_status_inactive', lang)
+    msg_fa = SHOP_STATUS.get('message', '')
+    msg_en = SHOP_STATUS.get('message_en') or t('the_shop_is_temporarily_clos_7fe29d7f30', 'en')
+
+    text = t(
+        'b_shop_management_b_shop_sta_9b96631079',
+        lang,
+        fa_parts=lambda: (f'{status_text}', f'{approval_status}', f"{premium_emoji('note', '📝')}", f"{msg_fa}", f"{SHOP_STATUS.get('last_updated', 'N/A')}"),
+        en_parts=lambda: (f'{status_text}', f'{approval_status}', f"{premium_emoji('note', '📝')}", f"{msg_en}", f"{SHOP_STATUS.get('last_updated', 'N/A')}"),
+    )
+    en_label = "📝 <b>پیام انگلیسی:</b>" if lang == "fa" else "📝 <b>Persian Message:</b>"
+    extra_msg = msg_en if lang == "fa" else msg_fa
+    text += f"\n\n{en_label}\n{html.escape(str(extra_msg))}"
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=t('i18n_close_shop_label', lang) if lang == "fa" and is_open else (t('close_shop_1d9d2610f0', lang) if is_open else t('open_shop_3662a56cc4', lang)),
+            callback_data="admin_toggle_shop",
+            style="danger" if is_open else "success"
+        )],
+        [InlineKeyboardButton(
+            text=t('manual_approval_for_new_user_35afcb8a4a', lang, fa_parts=lambda: (f"{('غیرفعال کردن' if enabled else 'فعال کردن')}",), en_parts=lambda: (f"{('Disable' if enabled else 'Enable')}",)),
+            callback_data="admin_toggle_manual_approval",
+            style="danger" if enabled else "success"
+        )],
+        [InlineKeyboardButton(
+            text=t('pending_approval_users_ddbdf20f2c', lang),
+            callback_data="admin_pending_users",
+            style="primary"
+        )],
+        [
+            InlineKeyboardButton(
+                text=t('shop_edit_message_fa_btn', lang),
+                callback_data="admin_shop_message"
+            ),
+            InlineKeyboardButton(
+                text=t('shop_edit_message_en_btn', lang),
+                callback_data="admin_shop_message_en"
+            ),
+        ],
+        [InlineKeyboardButton(
+            text=t('back_14968ad63f', lang),
+            callback_data="admin_panel"
+        )]
+    ]
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def set_shop_status(open_status: bool, message: str = None):
     """تنظیم وضعیت فروش"""
@@ -160,44 +213,9 @@ def set_shop_status(open_status: bool, message: str = None):
 @admin_only
 async def admin_shop_settings(callback: CallbackQuery):
     """تنظیمات فروشگاه در پنل ادمین"""
-    
     lang = get_user(callback.from_user.id).get('lang', 'fa')
-    is_open = is_shop_open()
-    manual_approval = configs_pool.get('manual_approval_settings', {})
-    enabled = manual_approval.get('enabled', False)
-    
-    status_text = t('i18n_status_open', lang) if is_open else t('i18n_status_closed', lang)
-    approval_status = t('i18n_status_active', lang) if enabled else t('i18n_status_inactive', lang)
-    
-    text = t('b_shop_management_b_shop_sta_9b96631079', lang, fa_parts=lambda: (f'{status_text}', f'{approval_status}', f"{premium_emoji('note', '📝')}", f"{SHOP_STATUS.get('message', '')}", f"{SHOP_STATUS.get('last_updated', 'N/A')}"), en_parts=lambda: (f'{status_text}', f'{approval_status}', f"{premium_emoji('note', '📝')}", f"{SHOP_STATUS.get('message', '')}", f"{SHOP_STATUS.get('last_updated', 'N/A')}"))
-    
-    buttons = [
-        [InlineKeyboardButton(
-            text=t('i18n_close_shop_label', lang) if lang == "fa" and is_open else (t('close_shop_1d9d2610f0', lang) if is_open else t('open_shop_3662a56cc4', lang)),
-            callback_data="admin_toggle_shop",
-            style="danger" if is_open else "success"
-        )],
-        [InlineKeyboardButton(
-            text=t('manual_approval_for_new_user_35afcb8a4a', lang, fa_parts=lambda: (f"{('غیرفعال کردن' if enabled else 'فعال کردن')}",), en_parts=lambda: (f"{('Disable' if enabled else 'Enable')}",)),
-            callback_data="admin_toggle_manual_approval",
-            style="danger" if enabled else "success"
-        )],
-        [InlineKeyboardButton(
-            text=t('pending_approval_users_ddbdf20f2c', lang),
-            callback_data="admin_pending_users",
-            style="primary"
-        )],
-        [InlineKeyboardButton(
-            text=t('edit_message_f2ccfde54c', lang),
-            callback_data="admin_shop_message"
-        )],
-        [InlineKeyboardButton(
-            text=t('back_14968ad63f', lang),
-            callback_data="admin_panel"
-        )]
-    ]
-    
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    text, kb = _build_shop_management_view(lang)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await safe_answer(callback)
 
 @router.callback_query(F.data == "admin_toggle_manual_approval")
@@ -489,49 +507,55 @@ async def admin_shop_message_save(message: Message):
     save_all()
     
     user_states.pop(admin_id, None)
-    
     await message.reply(
         t('shop_message_updated_success_ba08396b29', lang)
     )
-    is_open = is_shop_open()
-    manual_approval = configs_pool.get('manual_approval_settings', {})
-    enabled = manual_approval.get('enabled', False)
-    
-    status_text = t('i18n_status_open', lang) if is_open else t('i18n_status_closed', lang)
-    approval_status = t('i18n_status_active', lang) if enabled else t('i18n_status_inactive', lang)
-    
-    text = t('b_shop_management_b_shop_sta_9b96631079', lang, fa_parts=lambda: (f'{status_text}', f'{approval_status}', f"{premium_emoji('note', '📝')}", f"{SHOP_STATUS.get('message', '')}", f"{SHOP_STATUS.get('last_updated', 'N/A')}"), en_parts=lambda: (f'{status_text}', f'{approval_status}', f"{premium_emoji('note', '📝')}", f"{SHOP_STATUS.get('message', '')}", f"{SHOP_STATUS.get('last_updated', 'N/A')}"))
-    
-    buttons = [
-        [InlineKeyboardButton(
-            text=t('i18n_close_shop_label', lang) if lang == "fa" and is_open else (t('close_shop_1d9d2610f0', lang) if is_open else t('open_shop_3662a56cc4', lang)),
-            callback_data="admin_toggle_shop",
-            style="danger" if is_open else "success"
-        )],
-        [InlineKeyboardButton(
-            text=t('manual_approval_for_new_user_35afcb8a4a', lang, fa_parts=lambda: (f"{('غیرفعال کردن' if enabled else 'فعال کردن')}",), en_parts=lambda: (f"{('Disable' if enabled else 'Enable')}",)),
-            callback_data="admin_toggle_manual_approval",
-            style="danger" if enabled else "success"
-        )],
-        [InlineKeyboardButton(
-            text=t('pending_approval_users_ddbdf20f2c', lang),
-            callback_data="admin_pending_users",
-            style="primary"
-        )],
-        [InlineKeyboardButton(
-            text=t('edit_message_f2ccfde54c', lang),
-            callback_data="admin_shop_message"
-        )],
-        [InlineKeyboardButton(
-            text=t('back_14968ad63f', lang),
-            callback_data="admin_panel"
-        )]
-    ]
+    text, kb = _build_shop_management_view(lang)
     await message.answer(
         text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
+
+
+@router.callback_query(F.data == "admin_shop_message_en")
+@admin_only
+async def admin_shop_message_en_start(callback: CallbackQuery):
+    """شروع ویرایش پیام انگلیسی فروشگاه"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    user_states[callback.from_user.id] = {'awaiting_shop_message_en': True}
+    cur_en = SHOP_STATUS.get('message_en') or t('the_shop_is_temporarily_clos_7fe29d7f30', 'en')
+    await callback.message.answer(
+        t('shop_edit_message_en_prompt', lang, fa_parts=lambda: (html.escape(str(cur_en)),), en_parts=lambda: (html.escape(str(cur_en)),)),
+        parse_mode=ParseMode.HTML,
+    )
+    await safe_answer(callback)
+
+
+@router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get('awaiting_shop_message_en'))
+async def admin_shop_message_en_save(message: Message):
+    """ذخیره پیام انگلیسی جدید فروشگاه"""
+    admin_id = message.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    if message.text and message.text.strip() == '/cancel':
+        user_states.pop(admin_id, None)
+        await message.reply(t('cancelled_42e9c22038', lang))
+        return
+
+    new_message = message.text or message.caption or ""
+    if not new_message.strip():
+        await message.reply(t('message_cannot_be_empty_9669d7f21e', lang))
+        return
+
+    SHOP_STATUS['message_en'] = new_message.strip()
+    SHOP_STATUS['last_updated'] = now_tehran_iso()
+    configs_pool['shop_status'] = SHOP_STATUS
+    save_all()
+    user_states.pop(admin_id, None)
+
+    await message.reply(t('shop_message_en_updated', lang))
+    text, kb = _build_shop_management_view(lang)
+    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @router.callback_query(F.data.startswith("confirm_approve_user_"))
 @admin_only
@@ -1078,10 +1102,22 @@ async def admin_inbound_default_setting(callback: CallbackQuery):
         return
 
     default_ids = configs_pool.get('default_inbound_ids', [])
+    from services.panel_api import get_inbound_display_names
+    inbound_map = await get_inbound_display_names(include_disabled=True)
+    default_display = (
+        ", ".join(
+            inbound_map.get(int(ib_id), f"ID:{ib_id}")
+            if str(ib_id).lstrip('-').isdigit()
+            else str(ib_id)
+            for ib_id in default_ids
+        )
+        if default_ids
+        else t('i18n_not_set', lang)
+    )
 
     text = t('b_set_default_inbounds_b_9b1e428a6b', lang)
     text += t('these_inbounds_will_be_used_e58f50a192', lang)
-    text += t('current_inbounds_0c8b6c1306', lang, fa_parts=lambda: (f"{(default_ids if default_ids else t('i18n_not_set', lang))}",), en_parts=lambda: (f"{(default_ids if default_ids else t('i18n_not_set', lang))}",))
+    text += t('current_inbounds_0c8b6c1306', lang, fa_parts=lambda: (f"{default_display}",), en_parts=lambda: (f"{default_display}",))
     text += t('you_can_select_multiple_inbo_2b995eb108', lang)
     text += t('selected_inbounds_are_marked_960d4e6140', lang)
     text += t('please_select_the_inbounds_60485aeaab', lang)
@@ -1213,9 +1249,9 @@ async def admin_inbound_select_all_defaults(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
-    inbounds = await xui_get_inbounds()
+    inbounds = await xui_get_inbounds(force_refresh=True)
     active_inbounds = [i for i in inbounds if i.get('enable', True)]
-    all_ids = [i.get('id') for i in active_inbounds if i.get('id')]
+    all_ids = [int(i.get('id')) for i in active_inbounds if i.get('id') is not None]
     
     if not all_ids:
         await callback.answer(

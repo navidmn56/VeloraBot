@@ -741,6 +741,7 @@ def reset_database_collections() -> None:
         'test_service': configs_pool.get('test_service', {}),
         'ready_packages': configs_pool.get('ready_packages', {}),
         'default_inbound_ids': configs_pool.get('default_inbound_ids', []),
+        'auto_backup_settings': configs_pool.get('auto_backup_settings', {}),
     }
     users.clear()
     orders.clear()
@@ -754,3 +755,13 @@ def reset_database_collections() -> None:
         'last_id': 0,
         **saved_settings,
     })
+
+
+def get_test_service_display(lang: str = "fa") -> tuple[str, str]:
+    """Return configured (emoji, name) for the free/test service in the requested language."""
+    emoji = (TEST_SERVICE_STATUS.get('display_emoji') or '').strip() or '🎁'
+    if lang == "fa":
+        name = (TEST_SERVICE_STATUS.get('display_name_fa') or '').strip() or 'کانفیگ خوش‌آمد'
+    else:
+        name = (TEST_SERVICE_STATUS.get('display_name_en') or '').strip() or 'Welcome Config'
+    return emoji, name

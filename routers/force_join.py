@@ -102,6 +102,13 @@ async def admin_force_join_settings(callback: CallbackQuery):
     
     status_text = t('i18n_status_active', lang) if enabled else t('i18n_status_inactive', lang)
 
+    opt = settings.get('optional_channel', {}) or {}
+    opt_status = (
+        f"🟢 {opt.get('title') or opt.get('url', '-')}"
+        if opt.get('enabled') and opt.get('url')
+        else ("🔴 غیرفعال" if lang == "fa" else "🔴 Inactive")
+    )
+
     if lang == "fa":
         text = t('b_force_join_channels_b_stat_11f9df3575', lang, fa_parts=lambda: (f'{status_text}', f'{len(channels)}'))
         for ch in channels:
@@ -112,11 +119,13 @@ async def admin_force_join_settings(callback: CallbackQuery):
         
         text += t('users_must_join_all_above_ch_880bcba8c2', lang)
         text += t('after_joining_click_the_veri_963c4ada02', lang)
+        text += f"\n📣 کانال اختیاری: {opt_status}\n"
         
         buttons = [
             [InlineKeyboardButton(text=t('enable_disable_d7aad0bd90', lang), callback_data="force_join_toggle")],
             [InlineKeyboardButton(text=t('add_channel_c1ed5f0e64', lang), callback_data="force_join_add")],
             [InlineKeyboardButton(text=t('remove_channel_6636beb744', lang), callback_data="force_join_remove")],
+            [InlineKeyboardButton(text=t('force_join_optional_btn', lang), callback_data="force_join_optional_menu", style="primary")],
             [InlineKeyboardButton(text=t('check_my_membership_ce061badb3', lang), callback_data="force_join_check")],
             [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_panel")]
         ]
@@ -130,17 +139,211 @@ async def admin_force_join_settings(callback: CallbackQuery):
         
         text += t('users_must_join_all_above_ch_880bcba8c2', lang)
         text += t('after_joining_click_the_veri_963c4ada02', lang)
+        text += f"\n📣 Optional Channel: {opt_status}\n"
         
         buttons = [
             [InlineKeyboardButton(text=t('enable_disable_d7aad0bd90', lang), callback_data="force_join_toggle")],
             [InlineKeyboardButton(text=t('add_channel_c1ed5f0e64', lang), callback_data="force_join_add")],
             [InlineKeyboardButton(text=t('remove_channel_6636beb744', lang), callback_data="force_join_remove")],
+            [InlineKeyboardButton(text=t('force_join_optional_btn', lang), callback_data="force_join_optional_menu", style="primary")],
             [InlineKeyboardButton(text=t('check_my_membership_ce061badb3', lang), callback_data="force_join_check")],
             [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_panel")]
         ]
     
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await safe_answer(callback)
+
+
+_OPT_STYLE_LABELS = {
+    None: ("پیش‌فرض", "Default"),
+    "primary": ("🔵 آبی", "🔵 Blue"),
+    "success": ("🟢 سبز", "🟢 Green"),
+    "danger": ("🔴 قرمز", "🔴 Red"),
+}
+
+
+async def _render_optional_channel_menu(target, lang: str, is_edit: bool = True):
+    settings = configs_pool.setdefault('force_join_settings', {})
+    opt = settings.setdefault('optional_channel', {})
+    enabled = bool(opt.get('enabled', False)) and bool(opt.get('url'))
+    status_str = t('i18n_status_active', lang) if enabled else t('i18n_status_inactive', lang)
+    ch_str = (
+        f"<a href=\"{html.escape(opt.get('url', ''))}\">{html.escape(opt.get('title') or opt.get('url', ''))}</a>"
+        if opt.get('url')
+        else ("ثبت نشده" if lang == "fa" else "Not set")
+    )
+    cur_style = opt.get('style')
+    if cur_style not in _OPT_STYLE_LABELS:
+        cur_style = None
+    style_lbl = _OPT_STYLE_LABELS[cur_style][0 if lang == "fa" else 1]
+
+    text = t(
+        'force_join_optional_menu_title',
+        lang,
+        fa_parts=lambda: (status_str, ch_str, style_lbl),
+        en_parts=lambda: (status_str, ch_str, style_lbl),
+    )
+
+    color_row = [
+        InlineKeyboardButton(
+            text=f"{'✅ ' if cur_style == st else ''}{lbls[0 if lang == 'fa' else 1]}",
+            callback_data=f"force_join_optional_style:{st or 'default'}",
+            style=st,
+        )
+        for st, lbls in _OPT_STYLE_LABELS.items()
+    ]
+    buttons = [
+        [InlineKeyboardButton(
+            text=t('enable_disable_d7aad0bd90', lang),
+            callback_data="force_join_optional_toggle",
+            style="danger" if enabled else "success",
+        )],
+        [InlineKeyboardButton(
+            text=t('force_join_optional_set_btn', lang),
+            callback_data="force_join_optional_set",
+            style="primary",
+        )],
+        color_row,
+    ]
+    if opt.get('url'):
+        buttons.append([InlineKeyboardButton(
+            text=t('force_join_optional_remove_btn', lang),
+            callback_data="force_join_optional_remove",
+            style="danger",
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=t('back_14968ad63f', lang),
+        callback_data="admin_force_join",
+    )])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    if is_edit:
+        await target.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    else:
+        await target.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+
+@router.callback_query(F.data == "force_join_optional_menu")
+@admin_only
+async def force_join_optional_menu(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    await _render_optional_channel_menu(callback.message, lang, is_edit=True)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "force_join_optional_toggle")
+@admin_only
+async def force_join_optional_toggle(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    settings = configs_pool.setdefault('force_join_settings', {})
+    opt = settings.setdefault('optional_channel', {})
+    if not opt.get('url'):
+        await safe_answer(callback, t('force_join_optional_need_channel', lang), alert=True)
+        return
+    opt['enabled'] = not opt.get('enabled', False)
+    settings['last_updated'] = now_tehran_iso()
+    save_all()
+    await _render_optional_channel_menu(callback.message, lang, is_edit=True)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("force_join_optional_style:"))
+@admin_only
+async def force_join_optional_style(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    chosen = callback.data.split(":", 1)[1]
+    style_val = None if chosen == "default" else chosen
+    if style_val not in (None, "primary", "success", "danger"):
+        style_val = None
+    settings = configs_pool.setdefault('force_join_settings', {})
+    opt = settings.setdefault('optional_channel', {})
+    opt['style'] = style_val
+    settings['last_updated'] = now_tehran_iso()
+    save_all()
+    await _render_optional_channel_menu(callback.message, lang, is_edit=True)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "force_join_optional_remove")
+@admin_only
+async def force_join_optional_remove(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    settings = configs_pool.setdefault('force_join_settings', {})
+    settings.pop('optional_channel', None)
+    settings['last_updated'] = now_tehran_iso()
+    save_all()
+    await safe_answer(callback, t('force_join_optional_removed', lang), alert=True)
+    await _render_optional_channel_menu(callback.message, lang, is_edit=True)
+
+
+@router.callback_query(F.data == "force_join_optional_set")
+@admin_only
+async def force_join_optional_set_start(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    user_states[callback.from_user.id] = {'awaiting_optional_channel': True}
+    await callback.message.answer(t('force_join_optional_set_prompt', lang), parse_mode=ParseMode.HTML)
+    await safe_answer(callback)
+
+
+@router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get('awaiting_optional_channel'))
+async def force_join_optional_set_save(message: Message):
+    admin_id = message.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    raw = (message.text or "").strip()
+    if raw == '/cancel':
+        user_states.pop(admin_id, None)
+        await message.reply(t('cancelled_8a3eb8aae6', lang))
+        return
+
+    custom_title = None
+    target_ref = raw
+    if "|" in raw:
+        left, right = (p.strip() for p in raw.split("|", 1))
+        if left and right:
+            custom_title = left[:48]
+            target_ref = right
+
+    url = None
+    title = custom_title
+    bot_inst = message.bot or get_bot()
+
+    if target_ref.startswith('@'):
+        uname = target_ref.lstrip('@').strip()
+        if not uname:
+            await message.reply(t('force_join_optional_invalid_link', lang))
+            return
+        url = f"https://t.me/{uname}"
+        if not title and bot_inst:
+            try:
+                chat = await bot_inst.get_chat(f"@{uname}")
+                title = (chat.title or f"@{uname}")[:48]
+            except Exception:
+                title = f"@{uname}"
+    elif target_ref.startswith('https://t.me/') or target_ref.startswith('http://t.me/'):
+        url = target_ref.replace('http://t.me/', 'https://t.me/', 1)
+        if not title:
+            title = "📣 عضویت در کانال" if lang == "fa" else "📣 Join Channel"
+    elif target_ref.startswith('t.me/'):
+        url = f"https://{target_ref}"
+        if not title:
+            title = "📣 عضویت در کانال" if lang == "fa" else "📣 Join Channel"
+    else:
+        await message.reply(t('force_join_optional_invalid_link', lang))
+        return
+
+    settings = configs_pool.setdefault('force_join_settings', {})
+    prev_opt = settings.get('optional_channel', {}) or {}
+    settings['optional_channel'] = {
+        'enabled': True,
+        'title': title or "📣 Join Channel",
+        'url': url,
+        'style': prev_opt.get('style', 'primary'),
+    }
+    settings['last_updated'] = now_tehran_iso()
+    save_all()
+    user_states.pop(admin_id, None)
+
+    await message.reply(t('force_join_optional_saved', lang, fa_parts=lambda: (title,), en_parts=lambda: (title,)))
+    await _render_optional_channel_menu(message, lang, is_edit=False)
 
 
 @router.callback_query(F.data == "force_join_toggle")

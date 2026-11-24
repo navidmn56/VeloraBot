@@ -6,6 +6,7 @@ routers/shop.py
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple, Union
 
@@ -342,37 +343,63 @@ def get_user_last_purchased_package(user_id: int, target_order_id: Optional[int]
                 except (ValueError, TypeError):
                     pass
 
-            # 2) انطباق ثانویه (fallback) بر اساس نام دسته، حجم و روز
+            # 2) انطباق ثانویه (fallback) بر اساس شناسه/نام دسته، حجم و روز
             order_cat_name = order.get('category_name')
             order_vol = order.get('volume')
             order_days = order.get('days')
+            order_ip = order.get('ip_limit', 0)
 
-            if order_cat_name and order_vol is not None:
-                for cat in categories:
-                    if not cat.get('is_active', True):
-                        continue
-                    if cat.get('name') == order_cat_name or cat.get('name_en') == order_cat_name:
-                        for pkg in cat.get('packages', []):
-                            if not pkg.get('is_active', True):
-                                continue
-                            try:
-                                pkg_vol = float(pkg.get('volume', 0))
-                                ord_vol = float(order_vol)
-                                if abs(pkg_vol - ord_vol) < 0.01:
-                                    if order_days is not None:
-                                        if int(pkg.get('days', 30)) == int(order_days):
-                                            return cat, pkg
-                                    else:
-                                        return cat, pkg
-                            except (ValueError, TypeError):
-                                continue
+            target_cats = []
+            if cat_id is not None:
+                try:
+                    c_id = int(cat_id)
+                    target_cats = [c for c in categories if c.get('id') == c_id and c.get('is_active', True)]
+                except (ValueError, TypeError):
+                    pass
+            if not target_cats and order_cat_name:
+                target_cats = [
+                    c for c in categories
+                    if c.get('is_active', True)
+                    and (c.get('name') == order_cat_name or c.get('name_en') == order_cat_name)
+                ]
+
+            if target_cats and order_vol is not None:
+                for cat in target_cats:
+                    for pkg in cat.get('packages', []):
+                        if not pkg.get('is_active', True):
+                            continue
+                        try:
+                            pkg_vol = float(pkg.get('volume', 0))
+                            ord_vol = float(order_vol)
+                            if abs(pkg_vol - ord_vol) < 0.01:
+                                if order_days is not None and int(pkg.get('days', 30)) != int(order_days):
+                                    continue
+                                if pkg.get('ip_limit', 0) == order_ip:
+                                    return cat, pkg
+                        except (ValueError, TypeError):
+                            continue
+                # Relax ip_limit if exact ip_limit didn't match
+                for cat in target_cats:
+                    for pkg in cat.get('packages', []):
+                        if not pkg.get('is_active', True):
+                            continue
+                        try:
+                            pkg_vol = float(pkg.get('volume', 0))
+                            ord_vol = float(order_vol)
+                            if abs(pkg_vol - ord_vol) < 0.01:
+                                if order_days is None or int(pkg.get('days', 30)) == int(order_days):
+                                    return cat, pkg
+                        except (ValueError, TypeError):
+                            continue
             return None
+
+        order_values = list(valid_orders.values()) if isinstance(valid_orders, dict) else list(valid_orders)
 
         # ─── اولویت ۱: حالت تمدید یک سفارش خاص ───
         if target_order_id is not None:
             target_order = None
-            for o in valid_orders:
-                if str(o.get('order_id')) == str(target_order_id) or str(o.get('id')) == str(target_order_id):
+            for o in order_values:
+                if isinstance(o, dict) and (str(o.get('order_id')) == str(target_order_id) or str(o.get('id')) == str(target_order_id)):
                     target_order = o
                     break
             if target_order:
@@ -382,11 +409,19 @@ def get_user_last_purchased_package(user_id: int, target_order_id: Optional[int]
 
         # ─── اولویت ۲: آخرین سفارش خریداری شده کاربر ───
         user_orders = []
-        for o in valid_orders:
+        for o in order_values:
+            if not isinstance(o, dict):
+                continue
             if o.get('user_id') == user_id:
                 # نادیده گرفتن اکانت‌های تست
                 o_type = o.get('type', 'purchase')
-                if o_type == 'test' or o.get('is_test', False) or (o.get('email', '') or '').startswith('test_'):
+                email_val = o.get('email', '') or ''
+                if (
+                    o_type == 'test'
+                    or o.get('is_test', False)
+                    or email_val.startswith('test_')
+                    or bool(re.match(r'^t\d+_', email_val))
+                ):
                     continue
                 # نادیده گرفتن سفارش‌های لغو شده یا رد شده
                 if o.get('status') in ['cancelled', 'rejected']:
@@ -597,35 +632,58 @@ async def show_ready_categories(callback: CallbackQuery):
 
     # ─── دکمه بازگشت / انصراف ───
     if is_extend and extend_order_id:
-        back_text = f"🔙 {t('cancel_extension_904323bdf2', lang)}"
-        back_callback = f"cancel_extend_{extend_order_id}"
+        buttons.append([
+            InlineKeyboardButton(
+                text=t('back_to_config_f15bf8e1cd', lang),
+                callback_data=f"extend_back_to_config_{extend_order_id}",
+                style="primary"
+            ),
+            InlineKeyboardButton(
+                text=t('main_menu_0cdd07a7cc', lang),
+                callback_data="back_to_main",
+                style="danger"
+            )
+        ])
     else:
-        back_text = f"🔙 {t('back_to_main_menu_67d29ceca0', lang)}"
-        back_callback = "back_to_main"
-    
-    buttons.append([
-        InlineKeyboardButton(
-            text=back_text,
-            callback_data=back_callback,
-            style="danger"
-        )
-    ])
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🔙 {t('back_to_main_menu_67d29ceca0', lang)}",
+                callback_data="back_to_main",
+                style="danger"
+            )
+        ])
     
     # ─── بررسی وجود دسته‌بندی ───
     if not active_categories:
         empty_text = (
             t('b_packages_temporarily_unavai_0fba9dbdc4', lang)
         )
+        empty_kb = (
+            InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text=t('back_to_config_f15bf8e1cd', lang),
+                    callback_data=f"extend_back_to_config_{extend_order_id}",
+                    style="primary"
+                ),
+                InlineKeyboardButton(
+                    text=t('main_menu_0cdd07a7cc', lang),
+                    callback_data="back_to_main",
+                    style="danger"
+                )
+            ]])
+            if is_extend and extend_order_id
+            else InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text=f"🔙 {t('back_to_main_menu_67d29ceca0', lang)}",
+                    callback_data="back_to_main",
+                    style="danger"
+                )
+            ]])
+        )
         try:
             await callback.message.edit_text(
                 empty_text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text=back_text,
-                        callback_data=back_callback,
-                        style="danger"
-                    )
-                ]]),
+                reply_markup=empty_kb,
                 parse_mode=ParseMode.HTML
             )
         except Exception as e:
@@ -717,6 +775,26 @@ async def cancel_extend(callback: CallbackQuery):
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
+
+
+@router.callback_query(F.data.startswith("extend_back_to_config_"))
+async def extend_back_to_config(callback: CallbackQuery):
+    """بازگشت از فرآیند تمدید به صفحه خود کانفیگ (بدون پیام اضافی)"""
+    user_id = callback.from_user.id
+    lang = get_user(user_id).get('lang', 'fa')
+    try:
+        order_id = int(callback.data.split("_")[4])
+    except (ValueError, IndexError):
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
+        return
+
+    user_state = user_states.get(user_id, {})
+    for k in ('is_extend', 'extend_order_id', 'current_volume', 'current_days'):
+        user_state.pop(k, None)
+
+    from routers.configs_view import view_single_config
+    new_cb = callback.model_copy(update={'data': f"view_config_{order_id}"})
+    await view_single_config(new_cb)
 
 
 @router.callback_query(F.data.startswith("show_category_packages_"))
@@ -852,55 +930,98 @@ async def show_category_packages(callback: CallbackQuery):
             text += f"\n💡 <i>{t('renewal_addition_note', lang)}</i>"
 
     buttons = []
-    
-    for pkg in active_packages:
-        vol = pkg.get('volume', 0)
+
+    # مرتب‌سازی بسته‌ها بر اساس حجم (کم به زیاد؛ نامحدود در انتها)
+    sorted_packages = sorted(
+        active_packages,
+        key=lambda p: (
+            float('inf') if (p.get('volume', 0) or 0) == 0 else float(p.get('volume', 0)),
+            int(p.get('days', 30) or 30),
+            int(p.get('ip_limit', 0) or 0),
+            int(p.get('price', 0) or 0),
+        )
+    )
+
+    for pkg in sorted_packages:
+        vol = pkg.get('volume', 0) or 0
         days = pkg.get('days', 30)
         orig_price = pkg.get('price', 0)
-        ip_limit = pkg.get('ip_limit', 0)
-        
+        ip_limit = pkg.get('ip_limit', 0) or 0
+
         # محاسبه قیمت با تخفیف
         if coupon_applied and coupon_discount and coupon_discount > 0:
             final_price = orig_price - (orig_price * coupon_discount // 100)
-            price_display = f"{final_price:,} {t('toman_06798679d6', lang)} ({coupon_discount}% {t('off_fba5efcba4', lang)})"
-        else:
-            price_display = f"{orig_price:,} {t('toman_06798679d6', lang)}"
-        
-        vol_display = format_package_volume(vol, lang)
-        
-        if ip_limit == 0:
-            ip_text = t('users_unlimited_ff31ebd666', lang)
-        elif ip_limit == 1:
-            ip_text = t('users_1_device_f030aff7fa', lang)
-        else:
-            ip_text = t('users_devices_6344c0109b', lang, fa_parts=lambda: (f'{ip_limit}',), en_parts=lambda: (f'{ip_limit}',))
-        
-        btn_text = f"📦 {vol_display} | ⏱ {days} {t('days_931c818b26', lang)} | {ip_text} | 💰 {price_display}"
-        
-        buttons.append([
-            InlineKeyboardButton(
-                text=btn_text,
-                callback_data=f"buy_package_{category_id}_{pkg.get('id')}",
-                style="primary"
+            price_display = (
+                f"{final_price:,} {t('toman_06798679d6', lang)} ({coupon_discount}%)"
+                if lang == "fa"
+                else f"{final_price:,} T ({coupon_discount}%)"
             )
-        ])
-    
+        else:
+            price_display = (
+                f"{orig_price:,} {t('toman_06798679d6', lang)}"
+                if lang == "fa"
+                else f"{orig_price:,} T"
+            )
+
+        if vol == 0:
+            vol_display = "نامحدود" if lang == "fa" else "Unlimited"
+        else:
+            vol_display = format_package_volume(vol, lang)
+
+        info_parts = [vol_display]
+        if ip_limit > 0:
+            if lang == "fa":
+                info_parts.append(f"{ip_limit} کاربر")
+            else:
+                info_parts.append("1 User" if ip_limit == 1 else f"{ip_limit} Users")
+        info_parts.append(f"{days} {t('days_931c818b26', lang)}" if lang == "fa" else f"{days}d")
+
+        info_text = " · ".join(info_parts)
+        if is_extend:
+            info_text = f"➕ {info_text}"
+
+        pkg_cb = f"buy_package_{category_id}_{pkg.get('id')}"
+        btn_style = "success" if is_extend else "primary"
+
+        info_btn = InlineKeyboardButton(text=info_text, callback_data=pkg_cb, style=btn_style)
+        price_btn = InlineKeyboardButton(text=price_display, callback_data=pkg_cb, style=btn_style)
+
+        # فارسی: حجم و روز سمت راست (price چپ، info راست) | انگلیسی: حجم و روز سمت چپ (info چپ، price راست)
+        if lang == "fa":
+            buttons.append([price_btn, info_btn])
+        else:
+            buttons.append([info_btn, price_btn])
+
     # ─── دکمه بازگشت ───
     restrict_extend = READY_PACKAGES.get('restrict_extend_to_same_category', False)
-    if is_extend and extend_order_id and restrict_extend:
-        back_text = f"🔙 {t('cancel_extension_904323bdf2', lang)}"
-        back_callback = f"cancel_extend_{extend_order_id}"
+    if is_extend and extend_order_id:
+        if not restrict_extend:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"🔙 {t('back_to_categories_246adfe129', lang)}",
+                    callback_data="show_ready_categories"
+                )
+            ])
+        buttons.append([
+            InlineKeyboardButton(
+                text=t('back_to_config_f15bf8e1cd', lang),
+                callback_data=f"extend_back_to_config_{extend_order_id}",
+                style="primary"
+            ),
+            InlineKeyboardButton(
+                text=t('main_menu_0cdd07a7cc', lang),
+                callback_data="back_to_main",
+                style="danger"
+            )
+        ])
     else:
-        back_text = f"🔙 {t('back_to_categories_246adfe129', lang)}"
-        back_callback = "show_ready_categories"
-    
-    buttons.append([
-        InlineKeyboardButton(
-            text=back_text,
-            callback_data=back_callback,
-            style="danger"
-        )
-    ])
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🔙 {t('back_to_categories_246adfe129', lang)}",
+                callback_data="show_ready_categories",
+                style="danger"
+            )
+        ])
     
     try:
         await callback.message.edit_text(
