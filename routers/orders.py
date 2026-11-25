@@ -669,7 +669,6 @@ async def extend_service_start(callback: CallbackQuery):
     if not client_info and is_senai_panel_enabled():
         sub_link = order.get('sub_link') or order.get('config_link')
         if sub_link:
-            import re
             m = re.search(r'/sub/([a-zA-Z0-9]+)', sub_link)
             if m:
                 sub_id = m.group(1)
