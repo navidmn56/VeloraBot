@@ -60,6 +60,12 @@ from routers.admin_test import (
     show_inbound_manager,
     save_user_inbound_selection,
 )
+from services.package_gift_service import (
+    get_package_gift_store,
+    find_defined_package,
+    create_package_gift_code,
+    delete_package_gift_code,
+)
 from routers.force_join import check_membership
 from strings import t
 from emoji_sticker_system import premium_emoji
@@ -278,6 +284,7 @@ async def admin_coupons(callback: CallbackQuery):
     text = t('b_coupon_management_b_coupon_13ad71277f', lang, fa_parts=lambda: (f'{total_coupons}', f'{active_coupons}', f'{used_coupons}', f'{expired_coupons}'), en_parts=lambda: (f'{total_coupons}', f'{active_coupons}', f'{used_coupons}', f'{expired_coupons}'))
     buttons = [
         [InlineKeyboardButton(text=t('i18n_admin_coupon_create_button', lang), callback_data="admin_coupon_create")],
+        [InlineKeyboardButton(text=t('admin_pgift_menu_btn', lang), callback_data="admin_pgift_menu", style="primary")],
         [InlineKeyboardButton(text=t('coupons_list_2b3f1e787a', lang), callback_data="admin_coupons_list")],
         [InlineKeyboardButton(text=t('delete_coupon_52c714868d', lang), callback_data="admin_coupon_delete")],
         [InlineKeyboardButton(text=t('usage_statistics_671ff0454d', lang), callback_data="admin_coupons_stats")],
@@ -285,6 +292,304 @@ async def admin_coupons(callback: CallbackQuery):
     ]
     
     await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+# ==================== کدهای یک‌بارمصرف بسته ویژه (VIP) ====================
+
+def _pgift_package_label(pkg: dict, lang: str) -> str:
+    vol = pkg.get('volume', 0) or 0
+    days = pkg.get('days', 30) or 30
+    vol_txt = format_package_volume(vol, lang)
+    return vol_txt, str(days)
+
+
+def _format_pgift_result(raw_code: str, record: dict, lang: str) -> Tuple[str, InlineKeyboardMarkup]:
+    cat_name = (
+        record.get('category_name') if lang == "fa" else record.get('category_name_en') or record.get('category_name')
+    ) or ""
+    pkg_name = (
+        record.get('package_name') if lang == "fa" else record.get('package_name_en') or record.get('package_name')
+    ) or cat_name
+    vol_txt = format_package_volume(record.get('volume', 0) or 0, lang)
+    days = record.get('days', 30) or 30
+    uid_lock = record.get('allowed_user_id')
+    if uid_lock is not None:
+        lock_str = f"🔒 <code>{uid_lock}</code>"
+    else:
+        lock_str = "🔓 عمومی" if lang == "fa" else "🔓 Open (No user lock)"
+    text = t(
+        'admin_pgift_created',
+        lang,
+        fa_parts=lambda: (html.escape(str(pkg_name)), vol_txt, days, lock_str, html.escape(raw_code)),
+        en_parts=lambda: (html.escape(str(pkg_name)), vol_txt, days, lock_str, html.escape(raw_code)),
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t('admin_pgift_create_btn', lang), callback_data="admin_pgift_create", style="success")],
+        [InlineKeyboardButton(text=t('admin_pgift_list_btn', lang, fa_parts=lambda: (len(get_package_gift_store()),), en_parts=lambda: (len(get_package_gift_store()),)), callback_data="admin_pgift_list")],
+        [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_pgift_menu")],
+    ])
+    return text, kb
+
+
+@router.callback_query(F.data == "admin_pgift_menu")
+@admin_only
+async def admin_pgift_menu(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    store = get_package_gift_store()
+    active_cnt = sum(1 for r in store.values() if isinstance(r, dict) and r.get('status') == 'active')
+    used_cnt = sum(1 for r in store.values() if isinstance(r, dict) and r.get('status') != 'active')
+    text = t(
+        'admin_pgift_menu_title',
+        lang,
+        fa_parts=lambda: (active_cnt, used_cnt),
+        en_parts=lambda: (active_cnt, used_cnt),
+    )
+    buttons = [
+        [InlineKeyboardButton(text=t('admin_pgift_create_btn', lang), callback_data="admin_pgift_create", style="success")],
+        [InlineKeyboardButton(text=t('admin_pgift_list_btn', lang, fa_parts=lambda: (len(store),), en_parts=lambda: (len(store),)), callback_data="admin_pgift_list", style="primary")],
+        [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_coupons")],
+    ]
+    await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data == "admin_pgift_create")
+@admin_only
+async def admin_pgift_create_select_cat(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    cats = [c for c in READY_PACKAGES.get('categories', []) if c.get('packages')]
+    if not cats:
+        await callback.answer(t('admin_pgift_no_packages', lang), show_alert=True)
+        return
+    buttons = []
+    for cat in cats:
+        cat_id = cat.get('id')
+        icon = cat.get('icon', '📦')
+        name = (cat.get('name') if lang == "fa" else cat.get('name_en') or cat.get('name')) or f"#{cat_id}"
+        status_dot = "🟢" if cat.get('is_active', True) else "🔴"
+        pkg_count = len(cat.get('packages', []))
+        buttons.append([InlineKeyboardButton(
+            text=f"{status_dot} {icon} {name} ({pkg_count})"[:55],
+            callback_data=f"admin_pgift_cat_{cat_id}",
+        )])
+    buttons.append([InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_pgift_menu")])
+    await safe_edit_message(callback, t('admin_pgift_select_cat', lang), InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data.startswith("admin_pgift_cat_"))
+@admin_only
+async def admin_pgift_create_select_pkg(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        cat_id = int(callback.data.replace("admin_pgift_cat_", "", 1))
+    except ValueError:
+        await safe_answer(callback)
+        return
+    cat = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == cat_id), None)
+    if not cat or not cat.get('packages'):
+        await callback.answer(t('admin_pgift_no_packages', lang), show_alert=True)
+        return
+    cat_name = (cat.get('name') if lang == "fa" else cat.get('name_en') or cat.get('name')) or f"#{cat_id}"
+    buttons = []
+    for pkg in cat.get('packages', []):
+        pkg_id = pkg.get('id')
+        status_dot = "🟢" if pkg.get('is_active', True) else "🔴"
+        vol_txt, days_txt = _pgift_package_label(pkg, lang)
+        ip_lim = pkg.get('ip_limit', 0) or 0
+        ip_str = f" · {ip_lim}👤" if ip_lim > 0 else ""
+        buttons.append([InlineKeyboardButton(
+            text=f"{status_dot} {vol_txt} · {days_txt}{' روز' if lang == 'fa' else 'd'}{ip_str}"[:55],
+            callback_data=f"admin_pgift_pkg_{cat_id}_{pkg_id}",
+        )])
+    buttons.append([InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_pgift_create")])
+    text = t('admin_pgift_select_pkg', lang, fa_parts=lambda: (html.escape(str(cat_name)),), en_parts=lambda: (html.escape(str(cat_name)),))
+    await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data.startswith("admin_pgift_pkg_"))
+@admin_only
+async def admin_pgift_choose_lock_mode(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        parts = callback.data.replace("admin_pgift_pkg_", "", 1).split("_")
+        cat_id, pkg_id = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback)
+        return
+    cat, pkg = find_defined_package(cat_id, pkg_id)
+    if not cat or not pkg:
+        await callback.answer(t('admin_pgift_no_packages', lang), show_alert=True)
+        return
+    pkg_name = (
+        pkg.get('name_fa') or pkg.get('name') or cat.get('name')
+        if lang == "fa"
+        else pkg.get('name_en') or pkg.get('name') or cat.get('name_en') or cat.get('name')
+    ) or ""
+    vol_txt, days_txt = _pgift_package_label(pkg, lang)
+    text = t(
+        'admin_pgift_choose_lock',
+        lang,
+        fa_parts=lambda: (html.escape(str(pkg_name)), vol_txt, days_txt),
+        en_parts=lambda: (html.escape(str(pkg_name)), vol_txt, days_txt),
+    )
+    buttons = [
+        [InlineKeyboardButton(text=t('admin_pgift_open_btn', lang), callback_data=f"admin_pgift_open_{cat_id}_{pkg_id}", style="primary")],
+        [InlineKeyboardButton(text=t('admin_pgift_lock_btn', lang), callback_data=f"admin_pgift_lock_{cat_id}_{pkg_id}", style="success")],
+        [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data=f"admin_pgift_cat_{cat_id}")],
+    ]
+    await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data.startswith("admin_pgift_open_"))
+@admin_only
+async def admin_pgift_create_open(callback: CallbackQuery):
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    try:
+        parts = callback.data.replace("admin_pgift_open_", "", 1).split("_")
+        cat_id, pkg_id = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback)
+        return
+    try:
+        raw_code, record = create_package_gift_code(cat_id, pkg_id, admin_id, allowed_user_id=None)
+    except ValueError:
+        await callback.answer(t('admin_pgift_no_packages', lang), show_alert=True)
+        return
+    text, kb = _format_pgift_result(raw_code, record, lang)
+    await safe_edit_message(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("admin_pgift_lock_"))
+@admin_only
+async def admin_pgift_lock_prompt(callback: CallbackQuery):
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    try:
+        parts = callback.data.replace("admin_pgift_lock_", "", 1).split("_")
+        cat_id, pkg_id = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        await safe_answer(callback)
+        return
+    cat, pkg = find_defined_package(cat_id, pkg_id)
+    if not cat or not pkg:
+        await callback.answer(t('admin_pgift_no_packages', lang), show_alert=True)
+        return
+    user_states[admin_id] = {
+        'awaiting_pgift_user_id': True,
+        'category_id': cat_id,
+        'package_id': pkg_id,
+    }
+    await callback.message.answer(t('admin_pgift_enter_uid', lang), parse_mode=ParseMode.HTML)
+    await safe_answer(callback)
+
+
+@router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get('awaiting_pgift_user_id'))
+async def admin_pgift_lock_save(message: Message):
+    admin_id = message.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    raw = (message.text or "").strip()
+    if raw == '/cancel':
+        user_states.pop(admin_id, None)
+        await message.reply(t('cancelled_7978307565', lang))
+        return
+    normalized = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    if not normalized.isdigit() or int(normalized) <= 0:
+        await message.reply(t('admin_pgift_invalid_uid', lang))
+        return
+    target_uid = int(normalized)
+    state = user_states.pop(admin_id, {})
+    cat_id = state.get('category_id')
+    pkg_id = state.get('package_id')
+    try:
+        raw_code, record = create_package_gift_code(cat_id, pkg_id, admin_id, allowed_user_id=target_uid)
+    except ValueError:
+        await message.reply(t('admin_pgift_no_packages', lang))
+        return
+    text, kb = _format_pgift_result(raw_code, record, lang)
+    await message.reply(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data == "admin_pgift_list")
+@admin_only
+async def admin_pgift_list(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    store = get_package_gift_store()
+    if not store:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t('admin_pgift_create_btn', lang), callback_data="admin_pgift_create", style="success")],
+            [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_pgift_menu")],
+        ])
+        await safe_edit_message(callback, t('admin_pgift_list_empty', lang), kb)
+        return
+    items = sorted(
+        (r for r in store.values() if isinstance(r, dict) and r.get('id')),
+        key=lambda r: str(r.get('created_at', '')),
+        reverse=True,
+    )
+    buttons = []
+    for rec in items[:20]:
+        st_dot = "🟢" if rec.get('status') == 'active' else "🔴"
+        vol_txt = format_package_volume(rec.get('volume', 0) or 0, lang)
+        days = rec.get('days', 30) or 30
+        lock_icon = "🔒" if rec.get('allowed_user_id') is not None else "🔓"
+        preview = rec.get('code_preview', rec.get('id', ''))
+        buttons.append([InlineKeyboardButton(
+            text=f"{st_dot} {lock_icon} {preview} · {vol_txt}/{days}{'ر' if lang == 'fa' else 'd'}"[:55],
+            callback_data=f"admin_pgift_view_{rec['id']}",
+        )])
+    buttons.append([InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_pgift_menu")])
+    await safe_edit_message(callback, t('admin_pgift_list_title', lang), InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data.startswith("admin_pgift_view_"))
+@admin_only
+async def admin_pgift_view(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    gift_id = callback.data.replace("admin_pgift_view_", "", 1)
+    rec = get_package_gift_store().get(gift_id)
+    if not isinstance(rec, dict):
+        await callback.answer(t('coupon_not_found_a97baa7923', lang), show_alert=True)
+        await admin_pgift_list(callback)
+        return
+    status_str = ("🟢 فعال" if lang == "fa" else "🟢 Active") if rec.get('status') == 'active' else ("🔴 استفاده‌شده" if lang == "fa" else "🔴 Redeemed")
+    pkg_name = (rec.get('package_name') if lang == "fa" else rec.get('package_name_en') or rec.get('package_name')) or rec.get('category_name', '')
+    vol_txt = format_package_volume(rec.get('volume', 0) or 0, lang)
+    days = rec.get('days', 30) or 30
+    uid_lock = rec.get('allowed_user_id')
+    lock_str = f"<code>{uid_lock}</code>" if uid_lock is not None else ("بدون محدودیت" if lang == "fa" else "Open")
+    created = str(rec.get('created_at', ''))[:16].replace('T', ' ')
+    used_extra = ""
+    if rec.get('status') != 'active':
+        used_at = str(rec.get('used_at', ''))[:16].replace('T', ' ')
+        used_extra = (
+            f"\n👤 دریافت‌کننده: <code>{rec.get('used_by')}</code> | سفارش: <code>#{rec.get('order_id')}</code>\n⏱ زمان استفاده: <code>{used_at}</code>"
+            if lang == "fa"
+            else f"\n👤 Redeemed by: <code>{rec.get('used_by')}</code> | Order: <code>#{rec.get('order_id')}</code>\n⏱ Redeemed at: <code>{used_at}</code>"
+        )
+    text = t(
+        'admin_pgift_detail',
+        lang,
+        fa_parts=lambda: (html.escape(str(rec.get('code_preview', ''))), status_str, html.escape(str(pkg_name)), vol_txt, days, lock_str, created, used_extra),
+        en_parts=lambda: (html.escape(str(rec.get('code_preview', ''))), status_str, html.escape(str(pkg_name)), vol_txt, days, lock_str, created, used_extra),
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t('admin_pgift_delete_btn', lang), callback_data=f"admin_pgift_del_{gift_id}", style="danger")],
+        [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_pgift_list")],
+    ])
+    await safe_edit_message(callback, text, kb)
+
+
+@router.callback_query(F.data.startswith("admin_pgift_del_"))
+@admin_only
+async def admin_pgift_delete(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    gift_id = callback.data.replace("admin_pgift_del_", "", 1)
+    removed = delete_package_gift_code(gift_id)
+    if not removed:
+        await callback.answer(t('coupon_not_found_a97baa7923', lang), show_alert=True)
+        return
+    await callback.answer(t('admin_pgift_deleted', lang), show_alert=True)
+    await admin_pgift_list(callback)
 
 @router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get('awaiting_coupon_create'))
 async def admin_coupon_create_process(message: Message):

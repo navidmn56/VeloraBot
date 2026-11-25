@@ -244,6 +244,16 @@ from services.ai_service import (
     set_ai_button_enabled,
     get_ai_button_enabled,
 )
+from services.package_gift_service import (
+    validate_coupon_input,
+    is_coupon_rate_limited,
+    record_failed_coupon_attempt,
+    lookup_package_gift_by_code,
+    find_defined_package,
+    resolve_category_inbound_ids,
+    _REDEEM_LOCK as _PGIFT_REDEEM_LOCK,
+    _REDEEMING_GIFT_IDS as _PGIFT_REDEEMING_IDS,
+)
 
 gemini_client = None
 gemini_error_message = None
@@ -4160,6 +4170,232 @@ from routers.admin_packages import (
 # [Phase 1.1] safe_html imported from utils.helpers
 
 
+async def _redeem_package_gift_code(
+    message: Message,
+    user_id: int,
+    lang: str,
+    gift: dict,
+    back_button: InlineKeyboardMarkup,
+) -> bool:
+    """اعمال امن و یک‌بارمصرف کد هدیه بسته ویژه در بخش کوپن و ارسال کانفیگ."""
+    gift_id = str(gift.get('id') or '')
+    allowed_uid = gift.get('allowed_user_id')
+    if gift.get('status') != 'active' or (allowed_uid is not None and int(allowed_uid) != int(user_id)):
+        logger.warning(
+            "⛔ Unauthorized or reused gift code attempt %s by user %s (lock=%s status=%s)",
+            gift.get('code_preview'),
+            user_id,
+            allowed_uid,
+            gift.get('status'),
+        )
+        return False
+
+    if user_id in BLACKLIST:
+        await notify_blacklisted_user(user_id)
+        return True
+
+    if not await check_membership(user_id):
+        await message.reply(
+            t('please_verify_your_membershi_28b48b1f0b', lang),
+            reply_markup=back_button,
+        )
+        return True
+
+    async with _PGIFT_REDEEM_LOCK:
+        if gift.get('status') != 'active' or gift_id in _PGIFT_REDEEMING_IDS:
+            return False
+        _PGIFT_REDEEMING_IDS.add(gift_id)
+
+    try:
+        cat_id = gift.get('category_id')
+        pkg_id = gift.get('package_id')
+        live_cat, live_pkg = find_defined_package(cat_id, pkg_id)
+
+        vol = (live_pkg or gift).get('volume', 0) or 0
+        days = (live_pkg or gift).get('days', 30) or 30
+        ip_limit = (live_pkg or gift).get('ip_limit', 0) or 0
+        cat_name = (live_cat or gift).get('category_name') if live_cat is None else live_cat.get('name', '')
+        cat_name_en = (live_cat or gift).get('category_name_en') if live_cat is None else live_cat.get('name_en', '')
+        pkg_name = (
+            ((live_pkg.get('name_fa') or live_pkg.get('name')) if lang == "fa" else (live_pkg.get('name_en') or live_pkg.get('name')))
+            if live_pkg
+            else (gift.get('package_name') if lang == "fa" else gift.get('package_name_en') or gift.get('package_name'))
+        ) or cat_name or ""
+
+        inbound_ids = resolve_category_inbound_ids(live_cat) if live_cat else list(gift.get('inbound_ids') or [])
+
+        user_info = get_user(user_id)
+        user_name = user_info.get('name', f'کاربر_{user_id}')
+        timestamp = int(datetime.now().timestamp())
+        email = f"user{user_id}_{timestamp}"
+
+        wait_msg = await message.reply(t('i18n_creating_config', lang))
+
+        sub_link = None
+        config_id = None
+        if is_senai_panel_enabled():
+            if not inbound_ids:
+                try:
+                    panel_inbounds = await xui_get_inbounds()
+                    inbound_ids = [i.get('id') for i in panel_inbounds if i.get('enable', True)]
+                except Exception:
+                    inbound_ids = []
+            try:
+                if inbound_ids:
+                    sub_link = await xui_create_client_with_inbound(
+                        email, vol, days, user_name, user_id, inbound_ids, ip_limit=ip_limit
+                    )
+                else:
+                    sub_link = await create_client_in_panel(
+                        user_id, email, vol, days, user_name, ip_limit=ip_limit
+                    )
+            except Exception as e:
+                logger.error("❌ [package_gift] Error creating panel client for user %s: %s", user_id, e)
+                sub_link = None
+        else:
+            try:
+                pool_cfg = await get_config_from_pool_safe(vol, days)
+                if pool_cfg:
+                    sub_link = pool_cfg['link']
+                    config_id = pool_cfg.get('id')
+            except Exception as e:
+                logger.error("❌ [package_gift] Error getting config from pool: %s", e)
+                sub_link = None
+
+        if not sub_link:
+            try:
+                await wait_msg.edit_text(
+                    f"{premium_emoji('danger', '❌')} {t('error_creating_config_balanc_047d0dbebe', lang)}",
+                    reply_markup=back_button,
+                )
+            except Exception:
+                pass
+            return True
+
+        order_id = create_order(user_id, vol, days, 0, "ready_package", ip_limit=ip_limit)
+        update_order(
+            order_id,
+            status='approved',
+            approved_date=now_tehran().strftime("%Y-%m-%d %H:%M:%S"),
+            config_link=sub_link,
+            sub_link=sub_link,
+            email=email,
+            inbound_id=inbound_ids,
+            ip_limit=ip_limit,
+            category_id=cat_id,
+            category_name=cat_name,
+            category_name_en=cat_name_en,
+            package_id=pkg_id,
+            payment_method='gift_code',
+            payment_label='🎁 کد هدیه ویژه',
+        )
+        if config_id:
+            update_order(order_id, config_id=config_id)
+
+        async with _PGIFT_REDEEM_LOCK:
+            gift['status'] = 'used'
+            gift['used_by'] = user_id
+            gift['used_at'] = now_tehran_iso()
+            gift['order_id'] = order_id
+            save_all()
+
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+
+        vol_txt = format_package_volume(vol, lang)
+        await message.answer(
+            t(
+                'pgift_redeem_success',
+                lang,
+                fa_parts=lambda: (safe_html(str(pkg_name)), vol_txt, days, order_id),
+                en_parts=lambda: (safe_html(str(pkg_name)), vol_txt, days, order_id),
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        await send_config_with_qr_option(user_id, order_id, vol, days, 0, sub_link, lang)
+
+        if log_system:
+            await log_system.log_config_created(user_id, order_id, email, vol, days)
+            await log_system.log_user_action(
+                user_id,
+                "Redeemed VIP gift code",
+                f"Preview: {gift.get('code_preview')} | Order: #{order_id} | {vol_txt}/{days}d",
+            )
+        try:
+            await send_admin_notification('balance', {
+                'user_id': user_id,
+                'volume': vol,
+                'days': days,
+                'price': 0,
+                'discount_percent': 100,
+                'balance_before': user_info.get('balance', 0),
+                'balance_after': user_info.get('balance', 0),
+                'order_id': order_id,
+                'payment_type': 'free',
+                'payment_label': f"🎁 کد هدیه ({gift.get('code_preview')})",
+                'payment_emoji': '🎁',
+                'inbound_ids': inbound_ids,
+                'ip_limit': ip_limit,
+            })
+        except Exception as e:
+            logger.debug("Could not send admin notification for gift redeem: %s", e)
+
+        return True
+    finally:
+        _PGIFT_REDEEMING_IDS.discard(gift_id)
+
+
+async def _prepare_coupon_code_or_redeem_gift(
+    message: Message,
+    user_id: int,
+    lang: str,
+    raw_text: str,
+    back_button: InlineKeyboardMarkup,
+    clear_awaiting: bool = False,
+) -> Tuple[Optional[str], bool]:
+    """بررسی فرمت، محدودیت نرخ، و کد هدیه پیش از بررسی کوپن‌های عادی."""
+    code, err = validate_coupon_input(raw_text)
+    if err == "empty":
+        await message.reply(t('please_enter_a_valid_code_d372db3254', lang))
+        return None, True
+    if err == "invalid_format":
+        if clear_awaiting and user_id in user_states:
+            user_states[user_id].pop('awaiting_coupon_code', None)
+        await message.reply(
+            t('please_enter_a_valid_code_d372db3254', lang),
+            reply_markup=back_button,
+        )
+        return None, True
+
+    if clear_awaiting and user_id in user_states:
+        user_states[user_id].pop('awaiting_coupon_code', None)
+
+    if is_coupon_rate_limited(user_id):
+        await message.reply(
+            t('coupon_rate_limited', lang),
+            reply_markup=back_button,
+        )
+        return None, True
+
+    gift = lookup_package_gift_by_code(code)
+    if gift is not None:
+        handled = await _redeem_package_gift_code(message, user_id, lang, gift, back_button)
+        if handled:
+            return None, True
+        record_failed_coupon_attempt(user_id)
+        code_safe = safe_html(code, max_length=32)
+        await message.reply(
+            t('coupon_code_code_not_found_c_f8ad63bbde', lang, fa_parts=lambda: (f'{code_safe}',), en_parts=lambda: (f'{code_safe}',)),
+            parse_mode=ParseMode.HTML,
+            reply_markup=back_button,
+        )
+        return None, True
+
+    return code, False
+
+
 @dp.message(F.text.regexp(r'^/use_coupon(?:_|\s+|@\w+)'))
 async def use_coupon(message: Message):
     """اعتبارسنجی و اعمال کوپن - پشتیبانی از /use_coupon_CODE و /use_coupon CODE"""
@@ -4201,9 +4437,7 @@ async def use_coupon(message: Message):
         )
         return
 
-    # ==================== بقیه کد اصلی بدون تغییر ====================
-
-    # ✅ دکمه بازگشت
+    # ==================== بررسی فرمت و کد هدیه بسته ====================
     back_button = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=t('main_menu_0cdd07a7cc', lang),
@@ -4211,7 +4445,14 @@ async def use_coupon(message: Message):
         )]
     ])
 
+    code, handled = await _prepare_coupon_code_or_redeem_gift(
+        message, user_id, lang, code, back_button, clear_awaiting=False
+    )
+    if handled:
+        return
+
     if code not in COUPONS:
+        record_failed_coupon_attempt(user_id)
         code_upper = code.upper()
         code_lower = code.lower()
         code_title = code.title()
@@ -4225,8 +4466,8 @@ async def use_coupon(message: Message):
             suggestion = code_title
 
         # ✅ امن‌سازی ورودی کاربر
-        code_safe = safe_html(code, max_length=50)
-        suggestion_safe = safe_html(suggestion, max_length=50) if suggestion else ""
+        code_safe = safe_html(code, max_length=32)
+        suggestion_safe = safe_html(suggestion, max_length=32) if suggestion else ""
         
         if suggestion:
             await message.reply(
@@ -4413,21 +4654,7 @@ async def handle_coupon_code_input(message: Message):
         user_states[user_id].pop('awaiting_coupon_code', None)
         return
 
-    # ✅ استخراج کد
-    code = message.text.strip()
-
-    if not code:
-        await message.reply(
-            t('please_enter_a_valid_code_d372db3254', lang)
-        )
-        return
-
-    # ✅ حذف state (تا از این به بعد پیام‌های عادی پردازش بشن)
-    user_states[user_id].pop('awaiting_coupon_code', None)
-
-    # ══════════════════════════════════════════════
-    # اعتبارسنجی کوپن (همون منطق use_coupon)
-    # ══════════════════════════════════════════════
+    # ✅ بررسی فرمت، محدودیت نرخ و کد هدیه بسته
     back_button = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=t('main_menu_0cdd07a7cc', lang),
@@ -4436,8 +4663,15 @@ async def handle_coupon_code_input(message: Message):
         )]
     ])
 
+    code, handled = await _prepare_coupon_code_or_redeem_gift(
+        message, user_id, lang, message.text or "", back_button, clear_awaiting=True
+    )
+    if handled:
+        return
+
     # ─── کوپن در دیتابیس هست؟ ───
     if code not in COUPONS:
+        record_failed_coupon_attempt(user_id)
         code_upper = code.upper()
         code_lower = code.lower()
         code_title = code.title()
@@ -4451,8 +4685,8 @@ async def handle_coupon_code_input(message: Message):
             suggestion = code_title
 
         # ✅ امن‌سازی
-        code_safe = safe_html(code, max_length=50)
-        suggestion_safe = safe_html(suggestion, max_length=50) if suggestion else ""
+        code_safe = safe_html(code, max_length=32)
+        suggestion_safe = safe_html(suggestion, max_length=32) if suggestion else ""
         
         if suggestion:
             await message.reply(

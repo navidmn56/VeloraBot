@@ -742,6 +742,7 @@ def reset_database_collections() -> None:
         'ready_packages': configs_pool.get('ready_packages', {}),
         'default_inbound_ids': configs_pool.get('default_inbound_ids', []),
         'auto_backup_settings': configs_pool.get('auto_backup_settings', {}),
+        'package_gift_codes': configs_pool.get('package_gift_codes', {}),
     }
     users.clear()
     orders.clear()
