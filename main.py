@@ -3066,6 +3066,24 @@ async def check_referral_bonus(user_id: int):
 # [Phase 2.1] save_feedback moved to routers.support
         
         
+def _build_optional_channel_button(lang: str) -> Optional[InlineKeyboardButton]:
+    """ساخت دکمه عضویت اختیاری در کانال با پشتیبانی از عنوان دوزبانه."""
+    opt_ch = (configs_pool.get('force_join_settings', {}) or {}).get('optional_channel', {}) or {}
+    if not (opt_ch.get('enabled') and opt_ch.get('url')):
+        return None
+    raw_title = (
+        opt_ch.get('title_fa' if lang == 'fa' else 'title_en')
+        or opt_ch.get('title')
+        or ''
+    ).strip()
+    if not raw_title or raw_title in ("📣 Join Channel", "📣 عضویت در کانال"):
+        btn_text = "📣 عضویت در کانال" if lang == "fa" else "📣 Join Channel"
+    else:
+        btn_text = raw_title
+    opt_style = opt_ch.get('style') if opt_ch.get('style') in (None, 'primary', 'success', 'danger') else None
+    return InlineKeyboardButton(text=btn_text, url=str(opt_ch['url']), style=opt_style)
+
+
 def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = None) -> InlineKeyboardMarkup:
     """کیبورد اصلی با پشتیبانی از وضعیت تایید کاربر و سقف تست"""
     show_approval_warning = False
@@ -3149,22 +3167,15 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             buttons.append([
                 InlineKeyboardButton(text=f"{test_emoji} {test_name}", callback_data="get_test_service", style="primary")
             ])
-        
+
+        opt_btn = _build_optional_channel_button(lang)
+        if opt_btn is not None:
+            buttons.append([opt_btn])
+
         # ─── ردیف ۶: تغییر زبان ───
         buttons.append([
             InlineKeyboardButton(text=t('change_language_d5c2ea5f9d', lang), callback_data="change_language")
         ])
-
-        opt_ch = (configs_pool.get('force_join_settings', {}) or {}).get('optional_channel', {}) or {}
-        if opt_ch.get('enabled') and opt_ch.get('url'):
-            opt_style = opt_ch.get('style') if opt_ch.get('style') in (None, 'primary', 'success', 'danger') else None
-            buttons.append([
-                InlineKeyboardButton(
-                    text=str(opt_ch.get('title') or "📣 عضویت در کانال"),
-                    url=str(opt_ch['url']),
-                    style=opt_style,
-                )
-            ])
     
     else:
         buttons = []
@@ -3214,22 +3225,15 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
             buttons.append([
                 InlineKeyboardButton(text=f"{test_emoji} {test_name}", callback_data="get_test_service", style="primary")
             ])
-        
+
+        opt_btn = _build_optional_channel_button(lang)
+        if opt_btn is not None:
+            buttons.append([opt_btn])
+
         # ─── ردیف ۶: تغییر زبان ───
         buttons.append([
             InlineKeyboardButton(text=t('change_language_d5c2ea5f9d', lang), callback_data="change_language")
         ])
-
-        opt_ch = (configs_pool.get('force_join_settings', {}) or {}).get('optional_channel', {}) or {}
-        if opt_ch.get('enabled') and opt_ch.get('url'):
-            opt_style = opt_ch.get('style') if opt_ch.get('style') in (None, 'primary', 'success', 'danger') else None
-            buttons.append([
-                InlineKeyboardButton(
-                    text=str(opt_ch.get('title') or "📣 Join Channel"),
-                    url=str(opt_ch['url']),
-                    style=opt_style,
-                )
-            ])
     
     # ─── ردیف آخر: پنل ادمین (فقط ادمین) ───
     if is_admin:

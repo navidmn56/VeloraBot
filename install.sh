@@ -304,13 +304,19 @@ restore_application_backup() {
 
     if [[ -f "${BACKUP_DIR}/data.tar.gz" ]]; then
         log_info "Restoring data/ from backup..."
-        if tar -xzf "${BACKUP_DIR}/data.tar.gz" \
+        if ! tar -xzf "${BACKUP_DIR}/data.tar.gz" \
             -C "${INSTALL_DIR}" 2>>"${LOG_FILE}"; then
-            chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${DATA_DIR}" 2>/dev/null || true
-            chmod -R 700 "${DATA_DIR}" 2>/dev/null || true
-        else
             log_warning "Could not restore data/ from backup."
         fi
+    fi
+
+    # Restore full ownership and permissions safely (no die inside rollback trap)
+    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${INSTALL_DIR}" 2>/dev/null || true
+    chmod 755 "${INSTALL_DIR}" 2>/dev/null || true
+    [[ -f "${CONFIG_FILE}" ]] && chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
+    if [[ -d "${DATA_DIR}" ]]; then
+        find "${DATA_DIR}" -type d -exec chmod 700 {} + 2>/dev/null || true
+        find "${DATA_DIR}" -type f -exec chmod 600 {} + 2>/dev/null || true
     fi
 
     if [[ "${SERVICE_BACKUP_EXISTS}" -eq 1 && -f "${BACKUP_DIR}/service" ]]; then
@@ -489,7 +495,8 @@ Usage:
   sudo bash $0 --skip-config                  # Skip config prompts
   sudo bash $0 --repair                       # Repair installation
   sudo bash $0 --backup-link                  # Create Setup Link (source)
-  sudo bash $0 --restore "URL#PASS"           # Restore from Setup Link
+  sudo bash $0 --restore                      # Restore from Setup Link (interactive prompt)
+  sudo bash $0 --restore "URL#PASS"           # Restore from Setup Link (inline)
   sudo bash $0 --help
 
 Source of truth:
@@ -508,12 +515,11 @@ parse_arguments() {
             --backup-link)          SCRIPT_MODE="backup-link" ;;
             --create-setup-link)    SCRIPT_MODE="backup-link" ;;
             --restore)
-                if [[ -z "${2:-}" || "${2:0:1}" == "-" ]]; then
-                    die "--restore requires a setup link argument."
-                fi
-                RESTORE_LINK="$2"
                 SCRIPT_MODE="restore"
-                shift
+                if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+                    RESTORE_LINK="$2"
+                    shift
+                fi
                 ;;
             --help|-h)              show_help; exit 0 ;;
             *)                      die "Unknown argument: $1" ;;
@@ -533,6 +539,12 @@ check_root() {
     log_success "Running with root privileges."
 }
 
+acquire_lock() {
+    mkdir -p /var/lock 2>/dev/null || true
+    exec 9>/var/lock/velorabot-installer.lock
+    flock -n 9 || die "Another VeloraBot installer instance is already running."
+}
+
 # ─── FIX (RB): preflight ───
 preflight_checks() {
     if [[ ! -d /run/systemd/system ]]; then
@@ -543,8 +555,6 @@ preflight_checks() {
     if [[ -n "${free_mb}" ]] && (( free_mb < 1024 )); then
         die "At least 1 GB free space is required (found ${free_mb} MB)."
     fi
-    exec 9>/var/lock/velorabot-installer.lock
-    flock -n 9 || die "Another VeloraBot installer instance is already running."
 }
 
 check_operating_system() {
@@ -599,7 +609,7 @@ install_system_dependencies() {
         ca-certificates curl unzip rsync openssl \
         python3 python3-pip \
         python3-venv python3-dev build-essential libssl-dev libffi-dev \
-        libjpeg-dev zlib1g-dev software-properties-common \
+        libjpeg-dev zlib1g-dev \
         || die "Package installation failed."
 
     for cmd in python3 curl unzip rsync openssl; do
@@ -626,7 +636,7 @@ ensure_python_venv_support() {
 ensure_modern_python() {
     local py candidate=""
 
-    log_info "Searching for an installed Python 3.14 or newer..."
+    log_info "Searching for Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ (preferring 3.13/3.12/3.11)..."
     # ─── FIX (RB#3): prefer 3.13/3.12/3.11 first (wheels) then 3.14 ───
     for py in python3.13 python3.12 python3.11 python3.14; do
         if command -v "${py}" >/dev/null 2>&1; then
@@ -651,64 +661,35 @@ ensure_modern_python() {
     fi
 
     if [[ -z "${candidate}" ]]; then
-        log_warning "No Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ found. Installing Python 3.14..."
+        log_warning "No Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+ found. Attempting installation..."
 
-        apt_retry install -y -qq software-properties-common gnupg ca-certificates 2>/dev/null || true
-
-        log_info "Adding deadsnakes PPA..."
-        add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 || true
-        apt_retry update -qq 2>/dev/null || true
-
-        log_info "Attempting to install python3.14..."
-        apt_retry install -y -qq \
-            python3.14 python3.14-venv python3.14-dev 2>&1 | \
-            tee -a "${LOG_FILE}" || true
-
-        if command -v python3.14 >/dev/null 2>&1 && \
-           python3.14 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,14) else 1)" 2>/dev/null; then
-            candidate="python3.14"
-            log_success "Python 3.14 installed successfully!"
+        if [[ "${ID:-}" == "ubuntu" ]]; then
+            apt_retry install -y -qq software-properties-common gnupg ca-certificates 2>/dev/null || true
+            if command -v add-apt-repository >/dev/null 2>&1; then
+                log_info "Adding deadsnakes PPA..."
+                add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1 || true
+                apt_retry update -qq 2>/dev/null || true
+            fi
         fi
+
+        local ver minor
+        for ver in 3.13 3.12 3.11 3.14; do
+            minor="${ver#3.}"
+            log_info "Attempting to install python${ver}..."
+            apt_retry install -y -qq \
+                "python${ver}" "python${ver}-venv" "python${ver}-dev" 2>&1 | \
+                tee -a "${LOG_FILE}" || true
+            if command -v "python${ver}" >/dev/null 2>&1 && \
+               "python${ver}" -c "import sys; raise SystemExit(0 if sys.version_info >= (3,${minor}) else 1)" 2>/dev/null; then
+                candidate="python${ver}"
+                log_success "Python ${ver} installed successfully!"
+                break
+            fi
+        done
     fi
 
     if [[ -z "${candidate}" ]]; then
-        log_warning "Python 3.14 not available. Trying Python 3.13..."
-        apt_retry install -y -qq \
-            python3.13 python3.13-venv python3.13-dev 2>&1 | \
-            tee -a "${LOG_FILE}" || true
-        if command -v python3.13 >/dev/null 2>&1 && \
-           python3.13 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,13) else 1)" 2>/dev/null; then
-            candidate="python3.13"
-            log_success "Python 3.13 installed successfully!"
-        fi
-    fi
-
-    if [[ -z "${candidate}" ]]; then
-        log_warning "Python 3.13 not available. Trying Python 3.12..."
-        apt_retry install -y -qq \
-            python3.12 python3.12-venv python3.12-dev 2>&1 | \
-            tee -a "${LOG_FILE}" || true
-        if command -v python3.12 >/dev/null 2>&1 && \
-           python3.12 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
-            candidate="python3.12"
-            log_success "Python 3.12 installed successfully!"
-        fi
-    fi
-
-    if [[ -z "${candidate}" ]]; then
-        log_warning "Python 3.12 not available. Trying Python 3.11..."
-        apt_retry install -y -qq \
-            python3.11 python3.11-venv python3.11-dev 2>&1 | \
-            tee -a "${LOG_FILE}" || true
-        if command -v python3.11 >/dev/null 2>&1 && \
-           python3.11 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
-            candidate="python3.11"
-            log_success "Python 3.11 installed successfully!"
-        fi
-    fi
-
-    if [[ -z "${candidate}" ]]; then
-        die "Could not install Python 3.11+. Install it manually and re-run the installer."
+        die "Could not install Python ${REQUIRED_PYTHON_MAJOR}.${REQUIRED_PYTHON_MINOR}+. Install it manually and re-run the installer."
     fi
 
     PYTHON_BIN="${candidate}"
@@ -1483,16 +1464,26 @@ def split_comment(line):
 def atomic_write(path, body):
     st = os.stat(path)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(body)
-        f.flush()
-        os.fsync(f.fileno())
-    os.chmod(tmp, st.st_mode & 0o777)
+    mode = st.st_mode & 0o777
     try:
-        os.chown(tmp, st.st_uid, st.st_gid)
-    except PermissionError:
-        pass
-    os.replace(tmp, path)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode != 0o600:
+            os.chmod(tmp, mode)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 for key, value in values.items():
     replacement = f"{key} = {fmt(value)}"
@@ -1672,19 +1663,29 @@ def split_comment(line):
         pass
     return ""
 
-def atomic_write(p, body):
-    st = os.stat(p)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(body)
-        f.flush()
-        os.fsync(f.fileno())
-    os.chmod(tmp, st.st_mode & 0o777)
+def atomic_write(path, body):
+    st = os.stat(path)
+    tmp = path + ".tmp"
+    mode = st.st_mode & 0o777
     try:
-        os.chown(tmp, st.st_uid, st.st_gid)
-    except PermissionError:
-        pass
-    os.replace(tmp, p)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode != 0o600:
+            os.chmod(tmp, mode)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 def repl(match):
     comment = split_comment(match.group(0))
@@ -1954,10 +1955,11 @@ prompt_with_default() {
     local result_var="$3"
     local _pwd_value=""
 
-    printf '%s [%s]: ' "${label}" "${default}" > /dev/tty
-    if ! IFS= read -r _pwd_value <&3; then
+    if ! read_tty "${label} [${default}]: " _pwd_value; then
         die "Could not read input from the terminal."
     fi
+    _pwd_value="${_pwd_value#"${_pwd_value%%[![:space:]]*}"}"
+    _pwd_value="${_pwd_value%"${_pwd_value##*[![:space:]]}"}"
     [[ -z "${_pwd_value}" ]] && _pwd_value="${default}"
     printf -v "${result_var}" '%s' "${_pwd_value}"
 }
@@ -2103,8 +2105,7 @@ edit_all_config_keys() {
                 log_success "SUPPORT_USERNAME updated." ;;
             15) describe "Enable Google Gemini AI assistant feature (true or false)" "true or false"
                 local gem=""
-                printf 'Enable Gemini? [true/false/none]: ' > /dev/tty
-                if ! IFS= read -r gem <&3; then
+                if ! read_tty "Enable Gemini? [true/false/none]: " gem; then
                     die "Could not read input."
                 fi
                 gem="${gem,,}"
@@ -2212,6 +2213,21 @@ read_setup_link_from_tty() {
 # Setup Link — Create (source server)
 # ============================================================
 
+prune_old_setup_archives() {
+    local files
+    mapfile -t files < <(
+        find /root -maxdepth 1 -type f -name 'velorabot-setup-*.enc' \
+            -printf '%T@ %p\n' 2>/dev/null \
+            | sort -rn | awk -v k="${BACKUP_KEEP}" 'NR>k {print $2}'
+    )
+    local f
+    for f in "${files[@]}"; do
+        [[ -n "${f}" ]] || continue
+        log_info "Pruning old setup archive: ${f}"
+        rm -f -- "${f}"
+    done
+}
+
 create_setup_link() {
     draw_step "Creating Setup Link"
 
@@ -2267,9 +2283,6 @@ create_setup_link() {
 
     local upload_url=""
     local host_name=""
-    local file_name
-    file_name="velora-setup-$(date +%s)-$(openssl rand -hex 4).enc"
-
     local user_agent="VeloraBot-Installer/1.0 (https://github.com/navidmn56/VeloraBot)"
 
     log_info "Trying beacon.host..."
@@ -2304,25 +2317,6 @@ create_setup_link() {
             log_success "Uploaded to 0x0.st"
         else
             log_warning "0x0.st upload failed (response: ${upload_url:0:80})"
-            upload_url=""
-        fi
-    fi
-
-    if [[ -z "$upload_url" ]]; then
-        log_info "Trying transfer.sh..."
-        upload_url="$(
-            curl -fsSL --max-time 180 \
-                -H "User-Agent: ${user_agent}" \
-                --upload-file "$work_dir/setup.enc" \
-                "https://transfer.sh/$file_name" \
-                2>>"$LOG_FILE" || true
-        )"
-        upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-        if [[ "$upload_url" =~ ^https?:// ]]; then
-            host_name="transfer.sh"
-            log_success "Uploaded to transfer.sh"
-        else
-            log_warning "transfer.sh upload failed (response: ${upload_url:0:80})"
             upload_url=""
         fi
     fi
@@ -2367,14 +2361,18 @@ create_setup_link() {
     local keep_file="/root/velorabot-setup-$(date +%Y%m%d_%H%M%S).enc"
     if cp -- "$work_dir/setup.enc" "$keep_file" 2>/dev/null; then
         chmod 600 "$keep_file"
+        prune_old_setup_archives
     else
         keep_file=""
     fi
 
+    local keep_name
+    keep_name="$(basename "${keep_file:-setup.enc}")"
+
     if [[ -z "$upload_url" ]]; then
         draw_header "Upload Failed — Manual Transfer Required"
 
-        log_error "Could not upload to any host (beacon.host / 0x0.st / transfer.sh / litterbox)."
+        log_error "Could not upload to any host (beacon.host / 0x0.st / litterbox)."
         printf '\n'
 
         printf '%b📦 Manual Transfer Instructions:%b\n\n' "${BOLD}" "${NC}"
@@ -2393,9 +2391,10 @@ create_setup_link() {
         printf '   b) Base64 paste (small archives only):\n'
         printf '      base64 -w0 %s\n\n' "${keep_file:-$work_dir/setup.enc}"
 
-        printf '%b4. On the target server, run:%b\n' "${BOLD}" "${NC}"
-        printf '   sudo bash %s --restore "file:///tmp/$(basename "$keep_file" 2>/dev/null || echo setup.enc)#%s"\n\n' \
-            "$(basename "$0")" "$password"
+        printf '%b4. On the target server, run (interactive — keeps password out of shell history):%b\n' "${BOLD}" "${NC}"
+        printf '   sudo bash %s --restore\n' "$(basename "$0")"
+        printf '   Then paste:\n'
+        printf '   file:///tmp/%s#%s\n\n' "${keep_name}" "$password"
 
         return 1
     fi
@@ -2420,9 +2419,9 @@ create_setup_link() {
     printf '  Local copy   : %s\n' "${keep_file:-<deleted with TEMP_ROOT>}"
     printf '\n'
 
-    printf '%bHow to restore on another server:%b\n' "${BOLD}" "${NC}"
-    printf '  sudo bash %s --restore "%s"\n' "$(basename "$0")" "$setup_link"
-    printf '\n'
+    printf '%bHow to restore on another server (recommended — keeps password out of bash history):%b\n' "${BOLD}" "${NC}"
+    printf '  sudo bash %s --restore\n' "$(basename "$0")"
+    printf '  (then paste the Setup Link when prompted)\n\n'
 
     log_success "Setup link created successfully."
     return 0
@@ -2601,11 +2600,16 @@ restore_from_setup_link() {
 
     fix_permissions
 
-    if ! "${VENV_DIR}/bin/python" -m py_compile "$CONFIG_FILE" >/dev/null 2>&1; then
+    if ! "${VENV_DIR}/bin/python" -B -c \
+        'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' \
+        "$CONFIG_FILE" >/dev/null 2>&1; then
         log_warning "config.py contains a syntax error!"
         log_warning "Restore aborted to avoid breaking the service."
         return 1
     fi
+
+    # Load BOT_TOKEN from restored config so start_service_and_check runs getMe
+    extract_config_values || true
 
     create_systemd_service
 
@@ -3098,8 +3102,7 @@ configure_config_in_place() {
            [[ -n "${LOG_BOT_TOKEN}" ]]; then
             describe "A LOG_BOT_TOKEN is already set. Press Enter to keep it."
             local keep_choice=""
-            printf 'Keep current LOG_BOT_TOKEN? [Y/n]: ' > /dev/tty
-            if ! IFS= read -r keep_choice <&3; then
+            if ! read_tty "Keep current LOG_BOT_TOKEN? [Y/n]: " keep_choice; then
                 die "Could not read input from the terminal."
             fi
             keep_choice="${keep_choice,,}"
@@ -3120,8 +3123,7 @@ configure_config_in_place() {
         if [[ "${LOG_CHANNEL_ID}" =~ ^-?[0-9]+$ ]]; then
             describe "A LOG_CHANNEL_ID is already set (${LOG_CHANNEL_ID}). Press Enter to keep it."
             local keep_cid=""
-            printf 'Keep current LOG_CHANNEL_ID? [Y/n]: ' > /dev/tty
-            if ! IFS= read -r keep_cid <&3; then
+            if ! read_tty "Keep current LOG_CHANNEL_ID? [Y/n]: " keep_cid; then
                 die "Could not read input from the terminal."
             fi
             keep_cid="${keep_cid,,}"
@@ -3752,6 +3754,7 @@ main() {
     log_info "Requested mode: ${SCRIPT_MODE}"
 
     check_root
+    acquire_lock
     check_operating_system
 
     # ─── FIX #1: --force-update becomes an update ───

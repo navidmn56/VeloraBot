@@ -162,13 +162,25 @@ _OPT_STYLE_LABELS = {
 }
 
 
+def _resolve_optional_channel_title(opt: dict, lang: str) -> str:
+    raw = (
+        opt.get('title_fa' if lang == 'fa' else 'title_en')
+        or opt.get('title')
+        or ''
+    ).strip()
+    if not raw or raw in ("📣 Join Channel", "📣 عضویت در کانال"):
+        return "📣 عضویت در کانال" if lang == "fa" else "📣 Join Channel"
+    return raw
+
+
 async def _render_optional_channel_menu(target, lang: str, is_edit: bool = True):
     settings = configs_pool.setdefault('force_join_settings', {})
     opt = settings.setdefault('optional_channel', {})
     enabled = bool(opt.get('enabled', False)) and bool(opt.get('url'))
     status_str = t('i18n_status_active', lang) if enabled else t('i18n_status_inactive', lang)
+    display_title = _resolve_optional_channel_title(opt, lang) if opt.get('url') else ""
     ch_str = (
-        f"<a href=\"{html.escape(opt.get('url', ''))}\">{html.escape(opt.get('title') or opt.get('url', ''))}</a>"
+        f"<a href=\"{html.escape(opt.get('url', ''))}\">{html.escape(display_title or opt.get('url', ''))}</a>"
         if opt.get('url')
         else ("ثبت نشده" if lang == "fa" else "Not set")
     )
@@ -320,21 +332,26 @@ async def force_join_optional_set_save(message: Message):
                 title = f"@{uname}"
     elif target_ref.startswith('https://t.me/') or target_ref.startswith('http://t.me/'):
         url = target_ref.replace('http://t.me/', 'https://t.me/', 1)
-        if not title:
-            title = "📣 عضویت در کانال" if lang == "fa" else "📣 Join Channel"
     elif target_ref.startswith('t.me/'):
         url = f"https://{target_ref}"
-        if not title:
-            title = "📣 عضویت در کانال" if lang == "fa" else "📣 Join Channel"
     else:
         await message.reply(t('force_join_optional_invalid_link', lang))
         return
 
     settings = configs_pool.setdefault('force_join_settings', {})
     prev_opt = settings.get('optional_channel', {}) or {}
+    if title:
+        title_fa = title
+        title_en = title
+    else:
+        title_fa = "📣 عضویت در کانال"
+        title_en = "📣 Join Channel"
+    display_title = title_fa if lang == "fa" else title_en
     settings['optional_channel'] = {
         'enabled': True,
-        'title': title or "📣 Join Channel",
+        'title': display_title,
+        'title_fa': title_fa,
+        'title_en': title_en,
         'url': url,
         'style': prev_opt.get('style', 'primary'),
     }
@@ -342,7 +359,7 @@ async def force_join_optional_set_save(message: Message):
     save_all()
     user_states.pop(admin_id, None)
 
-    await message.reply(t('force_join_optional_saved', lang, fa_parts=lambda: (title,), en_parts=lambda: (title,)))
+    await message.reply(t('force_join_optional_saved', lang, fa_parts=lambda: (display_title,), en_parts=lambda: (display_title,)))
     await _render_optional_channel_menu(message, lang, is_edit=False)
 
 
