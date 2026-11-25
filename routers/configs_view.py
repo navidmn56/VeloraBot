@@ -32,11 +32,13 @@ from database import (
     orders,
     READY_PACKAGES,
     BLACKLIST,
+    TEST_SERVICE_STATUS,
+    USER_TEST_USAGE,
     get_valid_orders,
     get_test_service_display,
     now_tehran,
 )
-from user_manager import get_user, update_user, user_states
+from user_manager import get_user, update_user, user_states, get_admin_id_int
 from strings import t
 from utils.helpers import (
     safe_answer,
@@ -56,6 +58,7 @@ from emoji_sticker_system import send_sticker as _send_sticker_impl
 from logger_system import logger
 from routers.admin_packages import log_system
 from routers.admin_packages import format_volume
+from routers.admin_test import get_user_test_settings
 from routers.admin_tools import sync_user_configs
 
 from core.state_stores import CONFIG_LINKS_CACHE
@@ -1630,9 +1633,24 @@ async def my_configs(callback: CallbackQuery):
         return f"{days} روز" if lang == "fa" else f"{days}d"
 
     if not configs_list:
-        await send_sticker(user_id, 'config', '📦')
+        can_take_test = False
+        if TEST_SERVICE_STATUS.get('enabled', False):
+            if user_id == get_admin_id_int():
+                can_take_test = True
+            else:
+                user_test_data = USER_TEST_USAGE.get(str(user_id), {})
+                test_count = user_test_data.get('count', 0)
+                user_settings = get_user_test_settings(user_id)
+                max_tests = user_settings.get('max_tests', TEST_SERVICE_STATUS.get('max_tests', 1))
+                can_take_test = test_count < max_tests
+
+        text_key = (
+            'you_have_no_active_configs_4e86fc3538'
+            if can_take_test
+            else 'you_have_no_active_configs_no_test'
+        )
         text = t(
-            'you_have_no_active_configs_4e86fc3538',
+            text_key,
             lang,
             fa_parts=lambda: (f"{premium_emoji('config', '📦')}",),
             en_parts=lambda: (f"{premium_emoji('config', '📦')}",),
@@ -1643,17 +1661,18 @@ async def my_configs(callback: CallbackQuery):
                 callback_data="buy_service",
                 style="success",
             )],
-            [InlineKeyboardButton(
+        ]
+        if can_take_test:
+            no_config_buttons.append([InlineKeyboardButton(
                 text=f"{test_emoji} {test_name}",
                 callback_data="get_test_service",
                 style="primary",
-            )],
-            [InlineKeyboardButton(
-                text=t('main_menu_0cdd07a7cc', lang),
-                callback_data="back_to_main",
-                style="danger",
-            )],
-        ]
+            )])
+        no_config_buttons.append([InlineKeyboardButton(
+            text=t('main_menu_0cdd07a7cc', lang),
+            callback_data="back_to_main",
+            style="danger",
+        )])
         kb = InlineKeyboardMarkup(inline_keyboard=no_config_buttons)
         try:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)

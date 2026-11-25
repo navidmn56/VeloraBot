@@ -1755,4 +1755,6 @@ STRINGS = {
     'admin_test_edit_name_en_btn': '✏️ Test Name (EN)',
     'admin_test_edit_emoji_btn': '😀 Test Emoji',
     'ai_message_too_long': '⚠️ Your message is too long (max {0} characters). Please ask a shorter question.',
+    'you_have_no_active_configs_no_test': '{0} <b>You have no active configs!</b>\n\nYou can buy a subscription to get started.',
+    'ai_link_attached_below': '🔗 The requested link is available via the button below:',
 }

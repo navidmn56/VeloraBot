@@ -16,6 +16,7 @@ import hashlib
 import unicodedata
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple, Union
+from urllib.parse import urlparse
 
 import aiohttp
 from aiogram import Router, F, Bot
@@ -461,6 +462,141 @@ def is_ai_question(text: str) -> bool:
 # ═══════════════════════════════════════════════════════════
 # AI Keyboard & Action Routing
 # ═══════════════════════════════════════════════════════════
+
+def _is_greeting_message(text: str) -> bool:
+    """تشخیص اینکه پیام کاربر صرفاً سلام و احوال‌پرسی است یا خیر."""
+    cleaned = normalize_ai_user_text(text or "")
+    cleaned = re.sub(r"[؟،؛«»]+|[^\w\u0600-\u06ff\s]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned or len(cleaned) > 45:
+        return False
+    return bool(re.fullmatch(
+        r"(?:سلام(?:\s+علیکم)?|درود|خسته نباشید|وقت بخیر|صبح بخیر|عصر بخیر|شب بخیر|"
+        r"سلام خوبی|سلام چطوری|خوبی|چطوری|hi|hello|hey|good morning|good afternoon|"
+        r"good evening|how are you)(?:\s+(?:عزیز|دوست|رفیق|ربات|بات|هوش مصنوعی|ai|bot))?",
+        cleaned,
+        re.IGNORECASE,
+    ))
+
+
+def _normalize_ai_url(raw_url: str) -> Optional[str]:
+    """نرمال‌سازی و اعتبارسنجی لینک استخراج‌شده از پاسخ AI."""
+    url = str(raw_url or "").strip().rstrip(".,;:!?)\"'»>]")
+    if not url:
+        return None
+    if url.lower().startswith("t.me/"):
+        url = "https://" + url
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    if parsed.scheme.lower() not in ("http", "https", "tg"):
+        return None
+    if not parsed.netloc and parsed.scheme.lower() != "tg":
+        return None
+    return url
+
+
+def _derive_ai_link_title(
+    explicit_label: str,
+    url: str,
+    line_prefix: str,
+    lang: str,
+) -> str:
+    """ساخت عنوان مناسب برای دکمه لینک تلگرامی."""
+    label = re.sub(r"\s+", " ", str(explicit_label or "")).strip(" -:|•*")
+    if label and not re.match(r"^(?:https?://|t\.me/|tg://)", label, re.IGNORECASE):
+        title = label
+    else:
+        prefix = re.sub(r"\s+", " ", str(line_prefix or "")).strip(" -:|•*،,")
+        if 2 <= len(prefix) <= 44 and not re.match(r"^(?:https?://|t\.me/|tg://)", prefix, re.IGNORECASE):
+            title = prefix
+        else:
+            parsed = urlparse(url)
+            host = (parsed.netloc or "").lower().removeprefix("www.")
+            path_part = (parsed.path or "").strip("/")
+            if host in ("t.me", "telegram.me"):
+                if path_part and not path_part.startswith("+") and "/" not in path_part:
+                    title = f"💬 تلگرام (@{path_part})" if lang == "fa" else f"💬 Telegram (@{path_part})"
+                else:
+                    title = "💬 باز کردن در تلگرام" if lang == "fa" else "💬 Open in Telegram"
+            elif "github.com" in host:
+                title = "📥 دانلود / مشاهده در گیت‌هاب" if lang == "fa" else "📥 Open on GitHub"
+            elif "play.google.com" in host:
+                title = "📱 دانلود از گوگل‌پلی" if lang == "fa" else "📱 Google Play"
+            elif "apps.apple.com" in host:
+                title = "📱 دانلود از اپ‌استور" if lang == "fa" else "📱 App Store"
+            elif host:
+                title = f"🔗 مشاهده لینک ({host})" if lang == "fa" else f"🔗 Open ({host})"
+            else:
+                title = "🔗 باز کردن لینک" if lang == "fa" else "🔗 Open Link"
+
+    if title and title[0].isalnum():
+        title = f"🔗 {title}"
+    return title[:56]
+
+
+def _extract_ai_response_links(answer: str, lang: str) -> Tuple[str, List[Tuple[str, str]]]:
+    """استخراج لینک‌های پاسخ AI به شکل دکمه و پاکسازی متن از لینک خام."""
+    if not answer:
+        return answer, []
+
+    collected: List[Tuple[str, str]] = []
+    seen_urls = set()
+
+    def _register(label: str, raw_url: str, line_prefix: str = "") -> Optional[str]:
+        norm = _normalize_ai_url(raw_url)
+        if not norm:
+            return None
+        title = _derive_ai_link_title(label, norm, line_prefix, lang)
+        if norm not in seen_urls and len(collected) < 5:
+            seen_urls.add(norm)
+            collected.append((title, norm))
+        return title
+
+    output_lines: List[str] = []
+    md_pattern = re.compile(r"\[([^\]]{1,80})\]\(((?:https?://|tg://|t\.me/)[^\s\)]+)\)")
+    bare_pattern = re.compile(r"(?<![(\w])((?:https?://|t\.me/)[^\s<>\]\)\"']+)")
+
+    for raw_line in answer.splitlines():
+        if re.match(r"^\s*\[\[\s*BUTTON\b", raw_line, re.IGNORECASE):
+            output_lines.append(raw_line)
+            continue
+
+        line = raw_line
+        md_matches = list(md_pattern.finditer(line))
+        if md_matches:
+            def _md_repl(m: re.Match) -> str:
+                lbl, u = m.group(1), m.group(2)
+                before_text = line[:m.start()].strip()
+                after_text = line[m.end():].strip()
+                _register(lbl, u, before_text)
+                if not re.sub(r"^[\-\*\•\d\.\)\s:]+$", "", before_text) and not after_text:
+                    return ""
+                return lbl.strip()
+
+            line = md_pattern.sub(_md_repl, line)
+
+        bare_matches = list(bare_pattern.finditer(line))
+        if bare_matches:
+            def _bare_repl(m: re.Match) -> str:
+                u = m.group(1)
+                prefix = line[:m.start()]
+                _register("", u, prefix)
+                return ""
+
+            line = bare_pattern.sub(_bare_repl, line)
+            line = re.sub(r"[:\-–—]\s*$", "", line).strip()
+
+        cleaned_check = re.sub(r"^[\-\*\•\s:]+$", "", line)
+        if cleaned_check:
+            output_lines.append(line.strip())
+        elif not md_matches and not bare_matches:
+            output_lines.append("")
+
+    cleaned_text = re.sub(r"\n{3,}", "\n\n", "\n".join(output_lines)).strip()
+    return cleaned_text, collected
+
 
 def _format_ai_package_button_label(prefix: str, name: str, suffix: str) -> str:
     separator = " · "
@@ -1109,14 +1245,6 @@ def build_ai_reply_keyboard(
             callback_data="ai_purchase_advisor_new",
             style="primary",
         )])
-    if include_chat_controls:
-        if "buy_service" not in seen_callbacks:
-            buttons.append([InlineKeyboardButton(
-                text=t('continue_purchase', lang),
-                callback_data="buy_service",
-                style="success",
-            )])
-            seen_callbacks.add("buy_service")
     if (
         recommendation_reference
         and user_states.get(user_id, {}).get('purchase_advisor_invoice_order_id')
@@ -1131,8 +1259,28 @@ def build_ai_reply_keyboard(
         )
     else:
         display_answer = strip_ai_button_directives(answer)
+
+    display_answer, extracted_links = _extract_ai_response_links(display_answer, lang)
+    for link_title, link_url in extracted_links:
+        buttons.append([InlineKeyboardButton(
+            text=link_title,
+            url=link_url,
+            style="primary",
+        )])
+
+    if include_chat_controls:
+        if "back_to_main" not in seen_callbacks:
+            buttons.append([InlineKeyboardButton(
+                text=t('main_menu_0cdd07a7cc', lang),
+                callback_data="back_to_main",
+                style="danger",
+            )])
+            seen_callbacks.add("back_to_main")
+
     if not display_answer:
-        if any(
+        if extracted_links:
+            display_answer = t('ai_link_attached_below', lang)
+        elif any(
             button.callback_data in ("invite_friends", "ai_action_invite_friends")
             for row in buttons
             for button in row
@@ -1339,11 +1487,16 @@ async def get_ai_response(
                 full_message += f"{'User' if effective_lang == 'en' else 'کاربر'} {user_name}: {message_text}"
             else:
                 full_message += f"{'User' if effective_lang == 'en' else 'کاربر'}: {message_text}"
-            if has_prior_assistant_response:
+            is_greeting = _is_greeting_message(message_text)
+            full_message += (
+                "\n\n[RESPONSE RELEVANCE RULE: Respond directly and specifically to the user's latest message above. "
+                "Only reference prior conversation history if the latest message clearly relates to it. "
+                "If the user only sends a greeting (e.g. 'سلام', 'hi', 'hello'), reply with a brief friendly greeting "
+                "and ask how you can help; do NOT redirect to human support or bring up unrelated old topics.]"
+            )
+            if has_prior_assistant_response and not is_greeting:
                 full_message += (
-                    "\n\n[CONVERSATION CONTINUATION: You have already greeted this user. "
-                    "Do not greet, welcome, or repeat introductory phrases. Answer the latest "
-                    "message directly and use prior context only when relevant.]"
+                    "\n[CONVERSATION CONTINUATION: Answer directly without repeating introductory phrases.]"
                 )
             system_instruction = (
                 system_instruction_override
@@ -1480,7 +1633,14 @@ async def get_ai_response(
                                 for pattern in patterns_to_remove:
                                     reply = re.sub(pattern, '', reply, flags=re.IGNORECASE | re.MULTILINE)
                                 
-                                reply = reply.replace('**', '').replace('*', '').replace('`', '').replace('#', '')
+                                reply = re.sub(
+                                    r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+                                    lambda m: f"[{re.sub(r'<[^>]+>', '', m.group(2)).strip() or m.group(1)}]({m.group(1).strip()})",
+                                    reply,
+                                    flags=re.IGNORECASE | re.DOTALL,
+                                )
+                                reply = reply.replace('**', '').replace('*', '').replace('`', '')
+                                reply = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', reply)
                                 reply = re.sub(r'<[^>]+>', '', reply)
                                 lines = [line.strip() for line in reply.split('\n') if line.strip()]
                                 reply = '\n'.join(lines)
@@ -1661,7 +1821,8 @@ async def start_ai_support_chat(callback: CallbackQuery):
             'coupon_discount': coupon_discount,
         })
 
-    if conversation_memory.has_history(user_id):
+    has_history = conversation_memory.has_history(user_id)
+    if has_history:
         history = conversation_memory.get_history(user_id)
         last_message = history[-1] if history else None
         
@@ -1673,13 +1834,15 @@ async def start_ai_support_chat(callback: CallbackQuery):
         await send_sticker(user_id, 'robot', '🤖')
         welcome_text = t('b_ai_chat_b_welcome_to_ai_su_9b4141c595', lang, fa_parts=lambda: (f"{premium_emoji('robot', '🤖')}", f"{premium_emoji('note', '📋')}", f"{premium_emoji('warning', '⚠️')}", f'{GEMINI_DAILY_LIMIT}', f"{premium_emoji('hint', '💡')}"), en_parts=lambda: (f"{premium_emoji('robot', '🤖')}", f"{premium_emoji('note', '📋')}", f"{premium_emoji('warning', '⚠️')}", f'{GEMINI_DAILY_LIMIT}', f"{premium_emoji('hint', '💡')}"))
     
+    entry_buttons = []
+    if has_history:
+        entry_buttons.append([InlineKeyboardButton(text=t('clear_memory_d5ce7659f2', lang), callback_data="clear_ai_memory", style="primary")])
+    entry_buttons.append([InlineKeyboardButton(text=t('exit_ai_chat_485827e746', lang), callback_data="exit_ai_chat", style="danger")])
+
     await callback.message.answer(
         welcome_text,
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t('clear_memory_d5ce7659f2', lang), callback_data="clear_ai_memory", style="primary")],
-            [InlineKeyboardButton(text=t('exit_ai_chat_485827e746', lang), callback_data="exit_ai_chat", style="danger")]
-        ])
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=entry_buttons)
     )
     
     await safe_answer(callback)

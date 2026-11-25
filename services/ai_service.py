@@ -192,9 +192,10 @@ class GeminiClient:
 
 
 class ConversationMemory:
-    """مدیریت حافظه مکالمه برای هر کاربر با محدودیت کانتکس"""
+    """مدیریت حافظه مکالمه برای هر کاربر با محدودیت کانتکس و انقضای روزانه"""
 
     STORAGE_KEY = "ai_conversation_memory"
+    DATE_KEY = "ai_conversation_memory_date"
     MAX_HISTORY_MESSAGES = 4
     MAX_MESSAGE_CHARS = 350
     MAX_CONTEXT_CHARS = 1200
@@ -203,12 +204,33 @@ class ConversationMemory:
         self.memories = {}
         self.last_activity = {}
 
+    @staticmethod
+    def _today_str() -> str:
+        return now_tehran().date().isoformat()
+
+    def _history_date(self, user: Any, history: list) -> Optional[str]:
+        if isinstance(user, dict) and user.get(self.DATE_KEY):
+            return str(user.get(self.DATE_KEY))[:10]
+        if history and isinstance(history[-1], dict):
+            ts = str(history[-1].get('timestamp') or '').strip()
+            if len(ts) >= 10 and ts[4:5] == '-' and ts[7:8] == '-':
+                return ts[:10]
+        return None
+
     def _load_history(self, user_id: int) -> list:
+        today = self._today_str()
+        user = users.get(str(user_id), {})
         if user_id not in self.memories:
-            user = users.get(str(user_id), {})
             history = user.get(self.STORAGE_KEY, []) if isinstance(user, dict) else []
             self.memories[user_id] = history if isinstance(history, list) else []
-        return self.memories[user_id]
+
+        history = self.memories[user_id]
+        if history:
+            mem_date = self._history_date(user, history)
+            if mem_date and mem_date != today:
+                self.clear(user_id)
+                return []
+        return history
 
     def _persist_history(self, user_id: int) -> bool:
         user = users.get(str(user_id))
@@ -218,8 +240,10 @@ class ConversationMemory:
         self.memories[user_id] = history
         if history:
             user[self.STORAGE_KEY] = history
+            user[self.DATE_KEY] = self._today_str()
         else:
             user.pop(self.STORAGE_KEY, None)
+            user.pop(self.DATE_KEY, None)
         if not save_json(DB_FILES['users'], users):
             logger.error("Could not persist AI conversation memory for user %s", user_id)
             return False
@@ -289,8 +313,10 @@ class ConversationMemory:
         self.last_activity.pop(user_id, None)
         user = users.get(str(user_id))
         if isinstance(user, dict):
+            had_data = self.STORAGE_KEY in user or self.DATE_KEY in user
             user.pop(self.STORAGE_KEY, None)
-            if not save_json(DB_FILES['users'], users):
+            user.pop(self.DATE_KEY, None)
+            if had_data and not save_json(DB_FILES['users'], users):
                 logger.error(
                     "Could not clear persisted AI conversation memory for user %s",
                     user_id,
@@ -303,6 +329,7 @@ class ConversationMemory:
         for user in users.values():
             if isinstance(user, dict):
                 user.pop(self.STORAGE_KEY, None)
+                user.pop(self.DATE_KEY, None)
         if not save_json(DB_FILES['users'], users):
             logger.error("Could not clear persisted AI conversation memory for all users")
     
@@ -346,8 +373,9 @@ def check_ai_limit(user_id: int) -> tuple:
     if user_id not in user_ai_requests:
         user_ai_requests[user_id] = {'date': today, 'count': 0}
     
-    if user_ai_requests[user_id]['date'] != today:
+    if user_ai_requests[user_id].get('date') != today:
         user_ai_requests[user_id] = {'date': today, 'count': 0}
+        conversation_memory.clear(user_id)
     
     used = user_ai_requests[user_id]['count']
     remaining = daily_limit - used
@@ -362,14 +390,16 @@ def increment_ai_usage(user_id: int):
     """افزایش شمارش استفاده کاربر از AI"""
     today = now_tehran().date().isoformat()
     
-    if user_id not in user_ai_requests or user_ai_requests[user_id]['date'] != today:
+    if user_id not in user_ai_requests or user_ai_requests[user_id].get('date') != today:
+        if user_id in user_ai_requests and user_ai_requests[user_id].get('date') != today:
+            conversation_memory.clear(user_id)
         user_ai_requests[user_id] = {'date': today, 'count': 0}
     
     user_ai_requests[user_id]['count'] += 1
 
 
 def reset_ai_limits():
-    """ریست محدودیت‌های روزانه (برای استفاده در تسک روزانه)"""
+    """ریست محدودیت‌های روزانه و پاکسازی تاریخچه روز قبل"""
     global user_ai_requests
     
     today = now_tehran().date().isoformat()
@@ -380,9 +410,10 @@ def reset_ai_limits():
         if user_ai_requests[uid]['date'] == today:
             user_ai_requests[uid]['count'] = 0
     configs_pool['user_ai_requests'] = user_ai_requests
+    conversation_memory.clear_all()
     save_all()
     
-    logger.info(f"🔄 AI limits reset - {before_users} user with {before_count} question reset")
+    logger.info(f"🔄 AI limits & conversation memory reset - {before_users} user with {before_count} question reset")
     
     return before_users, before_count
 

@@ -226,7 +226,8 @@ async def admin_ai_settings(callback: CallbackQuery):
     # --- تعیین وضعیت کلی ---
     if gemini_client:
         overall_status = t('i18n_status_active', lang)
-        service_name = "Google Gemini"
+        active_model = html.escape(str(getattr(gemini_client, 'model', None) or model_name or GEMINI_MODEL))
+        service_name = f"Google Gemini ({active_model})"
     else:
         overall_status = t('i18n_status_inactive', lang)
         service_name = t('i18n_no_service_active', lang)
@@ -517,9 +518,10 @@ async def cmd_reset_ai_limit(message: Message):
             await message.reply("❌ آیدی نامعتبر")
             return
     
-    if target_id in user_ai_requests:
-        del user_ai_requests[target_id]
-        await message.reply(f"✅ محدودیت AI کاربر {target_id} ریست شد!")
+    if target_id in user_ai_requests or conversation_memory.has_history(target_id):
+        user_ai_requests.pop(target_id, None)
+        conversation_memory.clear(target_id)
+        await message.reply(f"✅ محدودیت و حافظه AI کاربر {target_id} ریست شد!")
     else:
         await message.reply(f"ℹ️ کاربر {target_id} هیچ سوالی نپرسیده بود.")
         
