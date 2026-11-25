@@ -19,6 +19,8 @@ from routers.force_join import (
     force_join_remove_start,
     force_join_remove_channel,
     force_join_check_membership,
+    refresh_optional_channel_membership,
+    _resolve_optional_channel_title,
     set_bot as set_force_join_bot,
 )
 from routers.admin_broadcast import (
@@ -645,6 +647,8 @@ __all__ = [
     "force_join_remove_start",
     "force_join_remove_channel",
     "force_join_check_membership",
+    "refresh_optional_channel_membership",
+    "_resolve_optional_channel_title",
     "admin_broadcast_send",
     "_is_admin_broadcasting",
     "detect_safe_parse_mode",

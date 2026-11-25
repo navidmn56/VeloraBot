@@ -1,7 +1,7 @@
 import base64
 import binascii
 import json
-from typing import Any
+from typing import Any, Iterable, Optional
 from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
@@ -55,7 +55,12 @@ def _server_public_key(settings: dict[str, Any]) -> str:
     return base64.b64encode(public_key).decode("ascii")
 
 
-def _endpoint(inbound: dict[str, Any], settings: dict[str, Any], panel_host: str) -> str:
+def _endpoint(
+    inbound: dict[str, Any],
+    settings: dict[str, Any],
+    panel_host: str,
+    fallback_hosts: Optional[Iterable[str]] = None,
+) -> str:
     strategy = str(inbound.get("shareAddrStrategy", "node") or "node").lower()
     custom_host = inbound.get("shareAddr")
     node_host = inbound.get("nodeAddress")
@@ -74,6 +79,8 @@ def _endpoint(inbound: dict[str, Any], settings: dict[str, Any], panel_host: str
         )
 
     candidates.extend((settings.get("endpoint"), settings.get("server"), panel_host))
+    if fallback_hosts:
+        candidates.extend(fallback_hosts)
     host = None
     for candidate in candidates:
         if not isinstance(candidate, str) or not candidate.strip():
@@ -109,6 +116,7 @@ def build_wireguard_config(
     inbound: dict[str, Any],
     client: dict[str, Any],
     panel_url: str,
+    fallback_hosts: Optional[Iterable[str]] = None,
 ) -> str:
     settings = _wireguard_settings(inbound)
     private_key = _wireguard_key(client.get("privateKey"), "client private key")
@@ -132,7 +140,7 @@ def build_wireguard_config(
     if not addresses:
         raise ValueError("WireGuard client address is missing")
 
-    endpoint = _endpoint(inbound, settings, panel_host)
+    endpoint = _endpoint(inbound, settings, panel_host, fallback_hosts=fallback_hosts)
     lines = [
         "[Interface]",
         f"PrivateKey = {private_key}",

@@ -410,6 +410,8 @@ from routers import (
     process_verify_membership,
     admin_force_join_settings,
     force_join_toggle,
+    refresh_optional_channel_membership,
+    _resolve_optional_channel_title,
     admin_broadcast_send,
     _is_admin_broadcasting,
     detect_safe_parse_mode,
@@ -1443,6 +1445,7 @@ async def cmd_start(message: Message):
         if not can_continue:
             return
         
+        await refresh_optional_channel_membership(user_id, force=True)
         text = format_start_greeting(user_name_escaped, lang, premium_emoji('rocket', '🚀'))
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
@@ -1475,6 +1478,7 @@ async def cmd_start(message: Message):
         if not can_continue:
             return
         
+        await refresh_optional_channel_membership(user_id, force=True)
         text = format_start_greeting(user_name_escaped, lang, premium_emoji('rocket', '🚀'))
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
@@ -3076,20 +3080,19 @@ async def check_referral_bonus(user_id: int):
 # [Phase 2.1] save_feedback moved to routers.support
         
         
-def _build_optional_channel_button(lang: str) -> Optional[InlineKeyboardButton]:
-    """ساخت دکمه عضویت اختیاری در کانال با پشتیبانی از عنوان دوزبانه."""
-    opt_ch = (configs_pool.get('force_join_settings', {}) or {}).get('optional_channel', {}) or {}
+def _build_optional_channel_button(lang: str, user_id: int = None) -> Optional[InlineKeyboardButton]:
+    """ساخت دکمه عضویت اختیاری در کانال با تغییر هوشمند متن بر اساس وضعیت عضویت و عضویت اجباری."""
+    fj_settings = configs_pool.get('force_join_settings', {}) or {}
+    opt_ch = fj_settings.get('optional_channel', {}) or {}
     if not (opt_ch.get('enabled') and opt_ch.get('url')):
         return None
-    raw_title = (
-        opt_ch.get('title_fa' if lang == 'fa' else 'title_en')
-        or opt_ch.get('title')
-        or ''
-    ).strip()
-    if not raw_title or raw_title in ("📣 Join Channel", "📣 عضویت در کانال"):
-        btn_text = "📣 عضویت در کانال" if lang == "fa" else "📣 Join Channel"
-    else:
-        btn_text = raw_title
+    force_join_active = bool(fj_settings.get('enabled', False) and fj_settings.get('channels'))
+    is_joined = bool(get_user(user_id).get('optional_channel_joined', False)) if user_id else False
+    btn_text = _resolve_optional_channel_title(
+        opt_ch,
+        lang,
+        joined_or_forced=bool(force_join_active or is_joined),
+    )
     opt_style = opt_ch.get('style') if opt_ch.get('style') in (None, 'primary', 'success', 'danger') else None
     return InlineKeyboardButton(text=btn_text, url=str(opt_ch['url']), style=opt_style)
 
@@ -3178,7 +3181,7 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 InlineKeyboardButton(text=f"{test_emoji} {test_name}", callback_data="get_test_service", style="primary")
             ])
 
-        opt_btn = _build_optional_channel_button(lang)
+        opt_btn = _build_optional_channel_button(lang, user_id)
         if opt_btn is not None:
             buttons.append([opt_btn])
 
@@ -3236,7 +3239,7 @@ def get_main_keyboard(is_admin: bool = False, lang: str = "fa", user_id: int = N
                 InlineKeyboardButton(text=f"{test_emoji} {test_name}", callback_data="get_test_service", style="primary")
             ])
 
-        opt_btn = _build_optional_channel_button(lang)
+        opt_btn = _build_optional_channel_button(lang, user_id)
         if opt_btn is not None:
             buttons.append([opt_btn])
 
@@ -5052,6 +5055,8 @@ async def back_to_main(callback: CallbackQuery):
     after_state = user_states.get(user_id, {})
     logger.info(f"🔍 final user_states status in back_to_main: {after_state}")
     
+    if not is_admin:
+        await refresh_optional_channel_membership(user_id)
     text = t('main_menu_c928863059', lang, fa_parts=lambda: (f"{premium_emoji('rocket', '🚀')}",), en_parts=lambda: (f"{premium_emoji('rocket', '🚀')}",))
     if callback.message.content_type == 'text':
         await callback.message.edit_text(text, reply_markup=get_main_keyboard(is_admin, lang, user_id))
@@ -5263,6 +5268,7 @@ async def handle_daily_usage_button(callback: CallbackQuery):
         get_order_func=lambda oid: orders.get(str(oid)),
         get_inbounds_func=xui_get_inbounds,
         get_client_traffic_func=xui_get_client_traffic,
+        get_client_info_func=xui_get_client_info,
         lang=lang
     )
 

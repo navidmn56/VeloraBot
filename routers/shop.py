@@ -564,7 +564,7 @@ async def show_ready_categories(callback: CallbackQuery):
         save_coupon_to_user_db(user_id)
         logger.info(f"🏷️ [show_ready_categories] Coupon {coupon_code} in user_states for user {user_id} saved")
     else:
-        logger.warning(f"⚠️ [show_ready_categories] No coupon for user {user_id} not found")
+        logger.debug(f"[show_ready_categories] No active coupon for user {user_id}")
     
     # ─── عنوان صفحه ───
     if is_extend and extend_order_id:
@@ -586,9 +586,9 @@ async def show_ready_categories(callback: CallbackQuery):
         last_days = last_pkg.get('days', 30)
         
         repeat_label = (
-            f"🔄 همون همیشگی ({last_vol_display} / {last_days} روزه)"
+            f"🟢 همون همیشگی ({last_vol_display} / {last_days} روزه)"
             if lang == "fa"
-            else f"🔄 Usual Choice ({last_vol_display} / {last_days}d)"
+            else f"🟢 Usual Choice ({last_vol_display} / {last_days}d)"
         )
         buttons.append([
             InlineKeyboardButton(

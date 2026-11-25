@@ -7,12 +7,14 @@ routers/configs_view.py
 import asyncio
 import base64
 import html
+import ipaddress
 import json
 import re
 import sys
 from io import BytesIO
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiogram import Router, F, Bot
@@ -131,7 +133,61 @@ from services.panel_api import (
     xui_get_client_info,
     xui_get_client_traffic,
     get_order_client_email,
+    get_sub_base_url,
 )
+
+
+def _get_wireguard_fallback_hosts(
+    order: Optional[dict] = None,
+    links: Optional[List[str]] = None,
+) -> List[str]:
+    """Collect public fallback hostnames for WireGuard when panel URL is local."""
+    ip_hosts: List[str] = []
+    domain_hosts: List[str] = []
+    local_hosts = {"0.0.0.0", "::", "*", "127.0.0.1", "::1", "localhost"}
+
+    def _push_candidate(raw: Any, prefer_ip: bool = False):
+        if not isinstance(raw, str) or not raw.strip():
+            return
+        text = raw.strip()
+        parsed = urlsplit(text if "://" in text else f"//{text}")
+        host = parsed.hostname
+        if not host or host.lower() in local_hosts:
+            return
+        try:
+            ip_obj = ipaddress.ip_address(host)
+            if ip_obj.is_loopback or ip_obj.is_unspecified or ip_obj.is_private:
+                return
+            if host not in ip_hosts:
+                ip_hosts.append(host)
+            return
+        except ValueError:
+            pass
+        if not prefer_ip and host not in domain_hosts:
+            domain_hosts.append(host)
+
+    # 1. Direct public IPs from client's non-WireGuard links (best for UDP)
+    for link in links or []:
+        if isinstance(link, str) and link.startswith(("vless://", "trojan://", "ss://")):
+            _push_candidate(link, prefer_ip=True)
+
+    # 2. Order subscription URL (e.g. sub.domain.com)
+    if isinstance(order, dict):
+        _push_candidate(order.get("sub_link"))
+        _push_candidate(order.get("config_link"))
+
+    # 3. Computed subscription base URL
+    try:
+        _push_candidate(get_sub_base_url())
+    except Exception:
+        pass
+
+    # 4. Remaining domain hosts from non-WireGuard links
+    for link in links or []:
+        if isinstance(link, str) and link.startswith(("vless://", "trojan://", "ss://")):
+            _push_candidate(link, prefer_ip=False)
+
+    return ip_hosts + domain_hosts
 
 
 def _decode_inbound_settings(inbound: dict) -> dict:
@@ -327,6 +383,7 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
                 ):
                     links.append(link.strip())
 
+        wg_fallbacks = _get_wireguard_fallback_hosts(order, links)
         for wireguard in await _get_order_wireguard_clients(order_id):
             try:
                 links.append(
@@ -334,14 +391,14 @@ async def _get_cached_config_links(order_id: int, force_refresh: bool = False):
                         wireguard["inbound"],
                         wireguard["client"],
                         app_config.SENAI_PANEL_URL,
+                        fallback_hosts=wg_fallbacks,
                     )
                 )
             except (TypeError, ValueError) as error:
-                logger.error(
-                    'Failed to generate WireGuard text for order #%s: %s',
+                logger.warning(
+                    'Skipping WireGuard text for order #%s: %s',
                     order_id,
                     error,
-                    exc_info=True,
                 )
 
     # اگر پروکسی تلگرام در لینک‌های دریافتی نبود، بررسی ساب کاربر
@@ -1245,18 +1302,20 @@ async def show_wireguard_config(callback: CallbackQuery):
         return
 
     wireguard = matches[0]
+    order = orders.get(str(order_id))
+    wg_fallbacks = _get_wireguard_fallback_hosts(order)
     try:
         config_text = build_wireguard_config(
             wireguard["inbound"],
             wireguard["client"],
             app_config.SENAI_PANEL_URL,
+            fallback_hosts=wg_fallbacks,
         )
     except (TypeError, ValueError) as error:
-        logger.error(
+        logger.warning(
             'Failed to generate WireGuard text for order #%s: %s',
             order_id,
             error,
-            exc_info=True,
         )
         await callback.answer(
             t('failed_to_build_wireguard_con_532e1858a7', lang),
@@ -1319,18 +1378,20 @@ async def send_wireguard_config_file(callback: CallbackQuery):
         return
 
     wireguard = matches[0]
+    order = orders.get(str(order_id))
+    wg_fallbacks = _get_wireguard_fallback_hosts(order)
     try:
         config_text = build_wireguard_config(
             wireguard["inbound"],
             wireguard["client"],
             app_config.SENAI_PANEL_URL,
+            fallback_hosts=wg_fallbacks,
         )
     except (TypeError, ValueError) as error:
-        logger.error(
+        logger.warning(
             'Failed to generate WireGuard file for order #%s: %s',
             order_id,
             error,
-            exc_info=True,
         )
         await callback.answer(
             t('failed_to_build_wireguard_con_532e1858a7', lang),

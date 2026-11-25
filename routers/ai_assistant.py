@@ -1891,7 +1891,7 @@ async def exit_ai_chat(callback: CallbackQuery):
         }
         logger.info(f"🏷️ [exit_ai_chat] Coupon {coupon_code} for user {user_id} preserved")
     else:
-        logger.warning(f"⚠️ [exit_ai_chat] No coupon for user {user_id} not found")
+        logger.debug(f"[exit_ai_chat] No active coupon for user {user_id}")
     is_admin = (user_id == ADMIN_ID_INT)
     
     text = t('main_menu_c928863059', lang, fa_parts=lambda: (f"{premium_emoji('rocket', '🚀')}",), en_parts=lambda: (f"{premium_emoji('rocket', '🚀')}",))

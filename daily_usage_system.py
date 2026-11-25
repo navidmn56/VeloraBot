@@ -1245,7 +1245,13 @@ async def fetch_client_total_traffic(
                     up = int(live_traff["up"])
                     down = int(live_traff["down"])
                     if up >= 0 and down >= 0:
-                        return {'up': up, 'down': down, 'total': up + down}
+                        result = {'up': up, 'down': down, 'total': up + down}
+                        if live_traff.get("total") is not None:
+                            try:
+                                result['limit_bytes'] = max(0, int(live_traff["total"]))
+                            except (TypeError, ValueError):
+                                pass
+                        return result
                 logger.warning("Client traffic API response for %s lacks valid upload/download counters.", email_str)
         except Exception as e:
             logger.debug(f"Error querying traffic for client {email}: {e}")
@@ -1257,6 +1263,7 @@ async def fetch_client_total_traffic(
             if inbounds and isinstance(inbounds, list):
                 max_up = 0
                 max_down = 0
+                max_limit = None
                 found = False
 
                 for inbound in inbounds:
@@ -1283,12 +1290,18 @@ async def fetch_client_total_traffic(
                                         continue
                                     max_up = max(max_up, up)
                                     max_down = max(max_down, down)
+                                    if stat.get('total') is not None:
+                                        stat_total = max(0, int(stat['total']))
+                                        max_limit = stat_total if max_limit is None else max(max_limit, stat_total)
                                     found = True
                                 except (TypeError, ValueError, OverflowError):
                                     pass
 
                 if found:
-                    return {'up': max_up, 'down': max_down, 'total': max_up + max_down}
+                    result = {'up': max_up, 'down': max_down, 'total': max_up + max_down}
+                    if max_limit is not None:
+                        result['limit_bytes'] = max_limit
+                    return result
         except Exception as e:
             logger.debug(f"Error fetching traffic from inbounds for {email}: {e}")
 
@@ -1461,6 +1474,97 @@ usage_collector = DailyUsageCollector(usage_store)
 # 4. Telegram UI & Presentation Handler
 # ====================================================================
 
+def _resolve_order_limit_bytes(
+    client_info: Optional[dict],
+    live_traffic_data: Optional[dict],
+    order: Optional[dict],
+) -> Optional[int]:
+    """Resolve total allocated volume limit in bytes (0 means unlimited)."""
+    if isinstance(client_info, dict) and 'totalGB' in client_info:
+        try:
+            return max(0, int(client_info.get('totalGB') or 0))
+        except (TypeError, ValueError):
+            pass
+
+    if isinstance(live_traffic_data, dict) and live_traffic_data.get('limit_bytes') is not None:
+        try:
+            return max(0, int(live_traffic_data.get('limit_bytes') or 0))
+        except (TypeError, ValueError):
+            pass
+
+    if isinstance(order, dict):
+        vol = order.get('volume')
+        if isinstance(vol, str) and vol.strip().lower() in ("unlimited", "نامحدود", "0"):
+            return 0
+        try:
+            vol_num = float(vol)
+            if vol_num <= 0:
+                return 0
+            return int(round(vol_num * (1024 ** 3)))
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
+def _build_remaining_volume_forecast(
+    limit_bytes: Optional[int],
+    live_traffic_data: Optional[dict],
+    avg_bytes: int,
+    lang: str = "fa",
+) -> str:
+    """Build a friendly one-line forecast based on remaining volume and daily average."""
+    if limit_bytes == 0:
+        return t('daily_usage_forecast_unlimited', lang)
+
+    if limit_bytes is None or not isinstance(live_traffic_data, dict):
+        return ""
+
+    used_bytes = max(0, int(live_traffic_data.get('total') or 0))
+    remaining_bytes = max(0, limit_bytes - used_bytes)
+
+    if remaining_bytes <= 0:
+        return t('daily_usage_forecast_exhausted', lang)
+
+    if avg_bytes <= 0:
+        rem_text = format_traffic_auto(remaining_bytes, lang=lang)
+        return t(
+            'daily_usage_forecast_no_avg',
+            lang,
+            fa_parts=lambda: (rem_text,),
+            en_parts=lambda: (rem_text,),
+        )
+
+    est_days = remaining_bytes / avg_bytes
+    if est_days < 1.0:
+        est_hours = max(1, int(round(est_days * 24)))
+        if est_hours >= 24:
+            return t('daily_usage_forecast_day_one', lang)
+        if est_hours == 1:
+            return t('daily_usage_forecast_hour_one', lang)
+        hours_str = to_persian_digits(str(est_hours)) if lang == "fa" else str(est_hours)
+        return t(
+            'daily_usage_forecast_hours',
+            lang,
+            fa_parts=lambda: (hours_str,),
+            en_parts=lambda: (hours_str,),
+        )
+
+    days_rounded = max(1, int(round(est_days)))
+    if days_rounded > 365:
+        return t('daily_usage_forecast_over_year', lang)
+    if days_rounded == 1:
+        return t('daily_usage_forecast_day_one', lang)
+
+    days_str = to_persian_digits(str(days_rounded)) if lang == "fa" else str(days_rounded)
+    return t(
+        'daily_usage_forecast_days',
+        lang,
+        fa_parts=lambda: (days_str,),
+        en_parts=lambda: (days_str,),
+    )
+
+
 async def handle_daily_usage_request(
     callback: CallbackQuery,
     order_id: int,
@@ -1468,6 +1572,7 @@ async def handle_daily_usage_request(
     get_order_func=None,
     get_inbounds_func=None,
     get_client_traffic_func=None,
+    get_client_info_func=None,
     lang: str = "fa"
 ):
     """
@@ -1525,12 +1630,30 @@ async def handle_daily_usage_request(
 
     # دریافت لحظه‌ای ترافیک دقیق با استفاده از منطق تجمیعی یکپارچه
     live_traffic_data = None
+    client_info = None
     if email:
-        live_traffic_data = await fetch_client_total_traffic(
-            email=email,
-            get_inbounds_func=get_inbounds_func,
-            get_client_traffic_func=get_client_traffic_func
-        )
+        if get_client_info_func:
+            live_traffic_data, client_info = await asyncio.gather(
+                fetch_client_total_traffic(
+                    email=email,
+                    get_inbounds_func=get_inbounds_func,
+                    get_client_traffic_func=get_client_traffic_func
+                ),
+                get_client_info_func(email),
+                return_exceptions=True,
+            )
+            if isinstance(live_traffic_data, Exception):
+                logger.debug(f"Error fetching live traffic for {email}: {live_traffic_data}")
+                live_traffic_data = None
+            if isinstance(client_info, Exception):
+                logger.debug(f"Error fetching client info for {email}: {client_info}")
+                client_info = None
+        else:
+            live_traffic_data = await fetch_client_total_traffic(
+                email=email,
+                get_inbounds_func=get_inbounds_func,
+                get_client_traffic_func=get_client_traffic_func
+            )
         if live_traffic_data:
             # Rendering the chart must not rewrite historical totals or counter baselines.
             usage_store.record_snapshot(email, live_traffic_data['up'], live_traffic_data['down'])
@@ -1546,7 +1669,6 @@ async def handle_daily_usage_request(
     peak_bytes = stats.get("peak_bytes", 0)
     avg_bytes = stats.get("avg_bytes", total_bytes)
     peak_day = stats.get("peak_day_name", "-")
-    history_note = stats.get("history_note", "")
 
     if lang == "fa":
         tot_text = format_traffic_auto(total_bytes, lang="fa")
@@ -1562,6 +1684,11 @@ async def handle_daily_usage_request(
 
         caption = t('b_daily_internet_usage_repor_e03b988112', lang, en_parts=lambda: (f'{tot_text}', f'{avg_text}', f'{peak_text}'))
 
+    limit_bytes = _resolve_order_limit_bytes(client_info, live_traffic_data, order)
+    forecast_line = _build_remaining_volume_forecast(limit_bytes, live_traffic_data, avg_bytes, lang=lang)
+    if forecast_line:
+        caption = f"{caption.rstrip()}\n{forecast_line}"
+
     # ساخت کیبورد بازگشت
     back_callback = f"view_config_{order_id}" if from_view != 2 else f"show_text_{order_id}"
     keyboard = InlineKeyboardMarkup(
@@ -1571,14 +1698,12 @@ async def handle_daily_usage_request(
                     text=t('back_to_config_f15bf8e1cd', lang),
                     callback_data=back_callback,
                     style="primary"
-                )
-            ],
-            [
+                ),
                 InlineKeyboardButton(
                     text=t('main_menu_0cdd07a7cc', lang),
                     callback_data="back_to_main",
                     style="danger"
-                )
+                ),
             ]
         ]
     )
