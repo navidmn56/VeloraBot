@@ -1399,9 +1399,10 @@ async def send_wireguard_config_file(callback: CallbackQuery):
         )
         return
 
+    wg_stem = f"wg-{order_id}"[:15]
     document = BufferedInputFile(
         config_text.encode("utf-8"),
-        filename=f"wireguard-order-{order_id}.conf",
+        filename=f"{wg_stem}.conf",
     )
     bot = get_bot()
     if bot:
