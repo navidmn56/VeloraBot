@@ -1801,4 +1801,12 @@ STRINGS = {
     'force_join_opt_title_prompt': '✏️ Enter the <b>{0}</b> (shown when the user has not joined yet and Force-Join is off):\n\nExample: <code>Join Velora</code>\nSend <code>-</code> to reset or /cancel to abort.',
     'force_join_opt_name_prompt': '✏️ Enter the <b>{0}</b> (shown after joining or when Force-Join is also active):\n\nExample: <code>Velora</code>\nSend <code>-</code> to clear or /cancel to abort.',
     'force_join_opt_field_saved': '✅ Setting saved successfully.',
+    'deeplink_renew_preparing': '⏳ Checking subscription and preparing renewal...',
+    'deeplink_config_not_registered': '❌ <b>This config is not registered in the bot!</b>\n\nIt looks like this subscription was not purchased through the bot (or was created manually on the panel).\nYou can buy a new service or contact support for help.',
+    'deeplink_config_wrong_owner': '🔒 <b>This service belongs to another Telegram account!</b>\n\nTo renew this config, please open the bot using the Telegram account that purchased it, or contact support.',
+    'deeplink_config_deleted': '⚠️ <b>This service has been deleted or closed and cannot be renewed.</b>\n\nYou can purchase a new service from the bot or contact support.',
+    'deeplink_config_not_in_panel': '❌ <b>This config was not found on the panel and cannot be renewed.</b>\n\nPlease contact support or purchase a new service.',
+    'deeplink_btn_smart_support': '🤖 Smart Support',
+    'deeplink_btn_buy_service': '🛒 Buy New Service',
+    'deeplink_continue_after_approval': '🔗 Continue Previous Request',
 }

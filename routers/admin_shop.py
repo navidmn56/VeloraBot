@@ -576,6 +576,7 @@ async def confirm_approve_user(callback: CallbackQuery):
         return
     uid = str(target_id)
     if uid in users:
+        pending_deep_link = users[uid].pop('pending_deep_link', None)
         users[uid]['approved_by_admin'] = True
         users[uid]['approved_date'] = now_tehran_iso()
         users[uid]['registration_status'] = 'approved'
@@ -583,9 +584,23 @@ async def confirm_approve_user(callback: CallbackQuery):
         save_json(DB_FILES['users'], users)
         try:
             user_lang = target.get('lang', 'fa')
+            approve_reply_markup = None
+            if pending_deep_link:
+                try:
+                    bot_info = await bot.get_me()
+                    if getattr(bot_info, 'username', None):
+                        approve_reply_markup = InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(
+                                text=t('deeplink_continue_after_approval', user_lang),
+                                url=f"https://t.me/{bot_info.username}?start={pending_deep_link}",
+                            )
+                        ]])
+                except Exception as dl_btn_err:
+                    logger.debug(f"Could not attach deep-link continue button for user {target_id}: {dl_btn_err}")
             await bot.send_message(
                 target_id,
-                t('b_your_account_has_been_appr_ab66b5881a', user_lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}",), en_parts=lambda: (f"{premium_emoji('success', '✅')}",))
+                t('b_your_account_has_been_appr_ab66b5881a', user_lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}",), en_parts=lambda: (f"{premium_emoji('success', '✅')}",)),
+                reply_markup=approve_reply_markup,
             )
         except Exception as e:
             logger.error(f"Error sending confirmation message to user {target_id}: {e}")

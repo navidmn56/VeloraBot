@@ -11,6 +11,7 @@ routers/orders.py
 - ساخت کلاینت در پنل (create_client_in_panel)
 """
 
+import base64
 import math
 import re
 import html
@@ -18,7 +19,9 @@ import json
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Optional, List, Dict, Any, Tuple, Union
+from urllib.parse import unquote, urlsplit
 
 import aiohttp
 from aiogram import Router, F, Bot, types
@@ -80,6 +83,8 @@ from routers.shop import (
     check_shop_status_and_notify,
     show_ready_categories,
     format_package_volume,
+    is_shop_open,
+    get_shop_status_message,
 )
 from routers.admin_test import save_user_inbound_selection
 from services.panel_api import (
@@ -92,6 +97,8 @@ from services.panel_api import (
     xui_reset_client_traffic,
     xui_create_client_with_inbound,
     get_user_inbound,
+    find_email_by_sub_id,
+    _subscription_id_from_link,
 )
 from sms_payment_system import sms_payment_manager
 from strings import t
@@ -582,6 +589,398 @@ async def extend_service(
             pass
 
 
+def _is_test_order_record(order: Optional[dict]) -> bool:
+    """تشخیص سفارش تست/خوش‌آمد برای جلوگیری از تمدید آن."""
+    if not isinstance(order, dict):
+        return False
+    order_type = order.get('type', 'purchase')
+    email_str = str(order.get('email', '') or '')
+    return bool(
+        order_type == 'test'
+        or order.get('is_test', False)
+        or email_str.startswith('test_')
+        or bool(re.match(r'^t\d+_', email_str))
+    )
+
+
+def decode_renew_sub_id(payload: Optional[str]) -> Optional[str]:
+    """استخراج و رمزگشایی شناسه ساب (subId) از پارامتر دیپ‌لینک تمدید."""
+    if not payload or not isinstance(payload, str):
+        return None
+    cleaned = payload.strip()
+    if cleaned.startswith("renew_b64_"):
+        encoded = cleaned[len("renew_b64_"):].strip()
+        if not encoded:
+            return None
+        try:
+            padded = encoded + "=" * (-len(encoded) % 4)
+            decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8").strip()
+            return decoded or None
+        except Exception:
+            return None
+    if cleaned.startswith("renew_"):
+        raw_sid = cleaned[len("renew_"):].strip()
+        return raw_sid or None
+    return None
+
+
+def _extract_sub_id_from_order(order: Optional[dict]) -> Optional[str]:
+    """استخراج subId ثبت‌شده در فیلدهای مختلف سفارش (sub_id، sub_link یا config_link)."""
+    if not isinstance(order, dict):
+        return None
+    direct_sid = order.get('sub_id')
+    if isinstance(direct_sid, str) and direct_sid.strip():
+        return direct_sid.strip()
+
+    for field in ('sub_link', 'config_link'):
+        link = order.get(field)
+        if not isinstance(link, str):
+            continue
+        link_str = link.strip()
+        if not link_str:
+            continue
+        parsed_sid = _subscription_id_from_link(link_str)
+        if parsed_sid:
+            return parsed_sid.strip()
+        try:
+            parts = urlsplit(link_str)
+            if parts.scheme in ('http', 'https'):
+                segments = [seg for seg in parts.path.split('/') if seg]
+                if segments and (field == 'sub_link' or 'sub' in [s.lower() for s in segments[:-1]]):
+                    return unquote(segments[-1]).strip()
+        except Exception:
+            pass
+    return None
+
+
+def _parse_order_id_int(key: Any, order: dict) -> Optional[int]:
+    try:
+        oid = order.get('order_id') if order.get('order_id') is not None else key
+        return int(oid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_main_order_entry(oid: int, order: dict) -> Tuple[int, dict]:
+    """در صورت انتخاب لاگ تمدید، سفارش اصلی والد را در صورت وجود برمی‌گرداند."""
+    if order.get('is_extend') or order.get('type') == 'extend':
+        parent_id = order.get('parent_order_id')
+        if parent_id is not None:
+            parent = orders.get(str(parent_id))
+            if isinstance(parent, dict):
+                try:
+                    return int(parent_id), parent
+                except (TypeError, ValueError):
+                    pass
+    return oid, order
+
+
+async def resolve_order_by_sub_id(
+    sub_id: str,
+    user_id: int,
+) -> Tuple[str, Optional[int], Optional[dict], Optional[str]]:
+    """یافتن و اعتبارسنجی مالکیت سفارش بر اساس subId صفحه ساب‌اسکریپشن.
+
+    Returns:
+        (status_code, order_id, order_dict, resolved_panel_email)
+        status_code in {"ok", "not_registered", "wrong_owner", "test_service", "deleted_or_inactive"}
+    """
+    target_sid = (sub_id or '').strip()
+    if not target_sid:
+        return "not_registered", None, None, None
+
+    valid_statuses = {'approved', 'inactive', 'deleted'}
+    matched_by_id: Dict[int, dict] = {}
+    resolved_panel_email: Optional[str] = None
+
+    for key, raw_order in list(orders.items()):
+        if not isinstance(raw_order, dict):
+            continue
+        oid = _parse_order_id_int(key, raw_order)
+        if oid is None:
+            continue
+        order_sid = _extract_sub_id_from_order(raw_order)
+        if order_sid and order_sid == target_sid:
+            main_oid, main_order = _resolve_main_order_entry(oid, raw_order)
+            if main_order.get('status') in valid_statuses:
+                matched_by_id[main_oid] = main_order
+
+    has_active_owner_match = any(
+        o.get('user_id') == user_id and o.get('status') in ('approved', 'inactive')
+        for o in matched_by_id.values()
+    )
+
+    # Fallback: پیدا کردن ایمیل از پنل (برای سفارش‌های قدیمی بدون sub_link یا بعد از تغییر لینک)
+    if not has_active_owner_match and is_senai_panel_enabled():
+        try:
+            resolved_panel_email = await find_email_by_sub_id(target_sid)
+        except Exception as e:
+            logger.warning(f"⚠️ [resolve_order_by_sub_id] Error looking up email for subId {target_sid}: {e}")
+            resolved_panel_email = None
+
+        if resolved_panel_email:
+            target_email = resolved_panel_email.strip()
+            for key, raw_order in list(orders.items()):
+                if not isinstance(raw_order, dict):
+                    continue
+                if str(raw_order.get('email') or '').strip() != target_email:
+                    continue
+                oid = _parse_order_id_int(key, raw_order)
+                if oid is None:
+                    continue
+                main_oid, main_order = _resolve_main_order_entry(oid, raw_order)
+                if main_order.get('status') in valid_statuses:
+                    matched_by_id[main_oid] = main_order
+
+    if not matched_by_id:
+        return "not_registered", None, None, resolved_panel_email
+
+    def _sort_key(item: Tuple[int, dict]):
+        oid, o = item
+        is_main = 0 if (not o.get('is_extend') and o.get('type') != 'extend') else 1
+        status_rank = 0 if o.get('status') == 'approved' else (1 if o.get('status') == 'inactive' else 2)
+        return (is_main, status_rank, -oid)
+
+    sorted_matches = sorted(matched_by_id.items(), key=_sort_key)
+    user_matches = [(oid, o) for oid, o in sorted_matches if o.get('user_id') == user_id]
+
+    if user_matches:
+        best_oid, best_order = user_matches[0]
+        if _is_test_order_record(best_order):
+            return "test_service", best_oid, best_order, resolved_panel_email
+        if best_order.get('status') not in ('approved', 'inactive'):
+            return "deleted_or_inactive", best_oid, best_order, resolved_panel_email
+        return "ok", best_oid, best_order, resolved_panel_email
+
+    # سفارش متعلق به کاربر دیگری است
+    other_active = [
+        (oid, o) for oid, o in sorted_matches
+        if o.get('user_id') and o.get('user_id') != user_id and o.get('status') in ('approved', 'inactive')
+    ]
+    if other_active:
+        return "wrong_owner", None, None, resolved_panel_email
+
+    return "not_registered", None, None, resolved_panel_email
+
+
+class _MessageCallbackAdapter:
+    """آداپتور سبک CallbackQuery روی پیام ارسالی ربات برای شروع جریان تمدید از /start."""
+
+    def __init__(self, message: Message, from_user: Any, data: str):
+        self.id = "deeplink_cb"
+        self.message = message
+        self.from_user = from_user
+        self.data = data
+        self.chat_instance = str(message.chat.id) if getattr(message, "chat", None) else "0"
+        self._answered_with_text = False
+
+    async def answer(self, text: str = None, show_alert: bool = False, **kwargs):
+        if text and not self._answered_with_text:
+            self._answered_with_text = True
+            uid = self.from_user.id if self.from_user else 0
+            lang = get_user(uid).get('lang', 'fa') if uid else 'fa'
+            try:
+                await self.message.edit_text(
+                    html.escape(str(text)),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_back_only_keyboard(lang),
+                )
+            except Exception:
+                pass
+        return True
+
+    def model_copy(self, update: Optional[dict] = None, **kwargs):
+        new_data = (update or {}).get("data", self.data)
+        clone = _MessageCallbackAdapter(
+            message=self.message,
+            from_user=self.from_user,
+            data=new_data,
+        )
+        clone._answered_with_text = self._answered_with_text
+        return clone
+
+
+def _build_deeplink_error_keyboard(lang: str, include_buy: bool = True, include_support: bool = True) -> InlineKeyboardMarkup:
+    buttons = []
+    if include_buy:
+        buttons.append([InlineKeyboardButton(
+            text=t('deeplink_btn_buy_service', lang),
+            callback_data="buy_service",
+            style="success",
+        )])
+    if include_support:
+        buttons.append([InlineKeyboardButton(
+            text=t('deeplink_btn_smart_support', lang),
+            callback_data="ai_chat",
+            style="primary",
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=f"🏠 {t('main_menu_9ae3456442', lang)}",
+        callback_data="back_to_main",
+        style="danger",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _prepare_extend_order_in_panel(
+    order_id: int,
+    order: dict,
+    known_email: Optional[str] = None,
+) -> Tuple[bool, Optional[str]]:
+    """بررسی وجود کلاینت در پنل سنایی و بروزرسانی ایمیل در صورت یافتن با subId."""
+    email = order.get('email') or known_email
+    resolved_email = email
+    client_info = None
+
+    if email and is_senai_panel_enabled():
+        try:
+            client_info = await xui_get_client_info(email)
+        except Exception as e:
+            logger.warning(f"Error checking client info for renewal: {e}")
+
+    # Fallback به پیدا کردن ایمیل از ساب‌لینک
+    if not client_info and is_senai_panel_enabled():
+        found_email = known_email if (known_email and known_email != email) else None
+        if not found_email:
+            sub_id = _extract_sub_id_from_order(order)
+            if sub_id:
+                found_email = await find_email_by_sub_id(sub_id)
+        if found_email:
+            resolved_email = found_email
+            order['email'] = found_email
+            update_order(order_id, email=found_email)
+            try:
+                client_info = await xui_get_client_info(found_email)
+            except Exception as e:
+                logger.warning(f"Error checking resolved client info for renewal: {e}")
+
+    if is_senai_panel_enabled() and not client_info:
+        return False, resolved_email
+    return True, resolved_email
+
+
+async def handle_renew_deep_link(
+    message: Message,
+    user_id: int,
+    payload: str,
+    from_user: Any = None,
+) -> None:
+    """هدایت کاربر از لینک تمدید صفحه ساب به بخش تمدید همان کانفیگ."""
+    lang = get_user(user_id).get('lang', 'fa')
+
+    if user_id in BLACKLIST:
+        await notify_blacklisted_user(user_id, message)
+        return
+
+    can_purchase, msg = can_user_purchase(user_id)
+    if not can_purchase:
+        await message.answer(
+            msg if lang == "fa" else t('i18n_pending_admin_approval', lang),
+            reply_markup=get_back_only_keyboard(lang),
+        )
+        return
+
+    if not is_shop_open():
+        shop_msg = get_shop_status_message(lang)
+        await message.answer(
+            f"🛒 <b>{t('shop_is_temporarily_closed_c2da3aaaf1', lang)}</b>\n\n{shop_msg}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_back_only_keyboard(lang),
+        )
+        return
+
+    sub_id = decode_renew_sub_id(payload)
+    if not sub_id:
+        await message.answer(
+            t('deeplink_config_not_registered', lang),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_deeplink_error_keyboard(lang, include_buy=True, include_support=True),
+        )
+        return
+
+    status_msg = await message.answer(
+        t('deeplink_renew_preparing', lang),
+        parse_mode=ParseMode.HTML,
+    )
+
+    status_code, order_id, order, known_email = await resolve_order_by_sub_id(sub_id, user_id)
+
+    if status_code == "not_registered":
+        await status_msg.edit_text(
+            t('deeplink_config_not_registered', lang),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_deeplink_error_keyboard(lang, include_buy=True, include_support=True),
+        )
+        return
+
+    if status_code == "wrong_owner":
+        await status_msg.edit_text(
+            t('deeplink_config_wrong_owner', lang),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_deeplink_error_keyboard(lang, include_buy=False, include_support=True),
+        )
+        return
+
+    if status_code == "test_service":
+        await status_msg.edit_text(
+            t('cannot_extend_trial_service_a01c6c06a4', lang),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_deeplink_error_keyboard(lang, include_buy=True, include_support=True),
+        )
+        return
+
+    if status_code != "ok" or not order or order_id is None:
+        await status_msg.edit_text(
+            t('deeplink_config_deleted', lang),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_deeplink_error_keyboard(lang, include_buy=True, include_support=True),
+        )
+        return
+
+    panel_ok, resolved_email = await _prepare_extend_order_in_panel(
+        order_id,
+        order,
+        known_email=known_email,
+    )
+    if not panel_ok:
+        logger.warning(
+            f"❌ [handle_renew_deep_link] Order #{order_id} (subId={sub_id}, email={resolved_email}) was not found in panel"
+        )
+        await status_msg.edit_text(
+            t('deeplink_config_not_in_panel', lang),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_deeplink_error_keyboard(lang, include_buy=True, include_support=True),
+        )
+        return
+
+    user_states[user_id] = {
+        'extend_order_id': order_id,
+        'current_volume': order.get('volume', 0),
+        'current_days': order.get('days', 0),
+        'email': resolved_email,
+        'is_extend': True,
+        'timestamp': now_tehran_iso(),
+    }
+
+    logger.info(
+        f"🔄 [handle_renew_deep_link] user {user_id} extending order #{order_id} via subId={sub_id}"
+    )
+
+    update_user(user_id, 'volume', 1)
+    update_user(user_id, 'days', 30)
+
+    effective_user = from_user
+    if not effective_user or getattr(effective_user, 'id', None) != user_id:
+        effective_user = SimpleNamespace(id=user_id)
+
+    adapter = _MessageCallbackAdapter(
+        message=status_msg,
+        from_user=effective_user,
+        data=f"extend_service_{order_id}",
+    )
+    await buy_service(adapter)
+
+
 @router.callback_query(F.data.startswith("extend_service_"))
 async def extend_service_start(callback: CallbackQuery):
     """شروع فرآیند تمدید سرویس - با بررسی وجود کانفیگ در پنل"""
@@ -639,15 +1038,7 @@ async def extend_service_start(callback: CallbackQuery):
         return
     
     # ✅ جلوگیری از تمدید سرویس تست
-    order_type = order.get('type', 'purchase')
-    email_str = str(order.get('email', '') or '')
-    is_test = (
-        order_type == 'test'
-        or order.get('is_test', False)
-        or email_str.startswith('test_')
-        or bool(re.match(r'^t\d+_', email_str))
-    )
-    if is_test:
+    if _is_test_order_record(order):
         await callback.answer(
             t('cannot_extend_trial_service_a01c6c06a4', lang),
             show_alert=True
@@ -655,37 +1046,11 @@ async def extend_service_start(callback: CallbackQuery):
         return
     
     # ✅ بررسی وجود کانفیگ در پنل
-    email = order.get('email')
-    resolved_email = email
-    client_info = None
+    panel_ok, resolved_email = await _prepare_extend_order_in_panel(order_id, order)
 
-    if email and is_senai_panel_enabled():
-        try:
-            client_info = await xui_get_client_info(email)
-        except Exception as e:
-            logger.warning(f"Error checking client info for renewal: {e}")
-
-    # Fallback به پیدا کردن ایمیل از ساب‌لینک
-    if not client_info and is_senai_panel_enabled():
-        sub_link = order.get('sub_link') or order.get('config_link')
-        if sub_link:
-            m = re.search(r'/sub/([a-zA-Z0-9]+)', sub_link)
-            if m:
-                sub_id = m.group(1)
-                from services.panel_api import find_email_by_sub_id
-                found_email = await find_email_by_sub_id(sub_id)
-                if found_email:
-                    resolved_email = found_email
-                    order['email'] = found_email
-                    update_order(order_id, email=found_email)
-                    try:
-                        client_info = await xui_get_client_info(found_email)
-                    except Exception as e:
-                        logger.warning(f"Error checking resolved client info for renewal: {e}")
-
-    if is_senai_panel_enabled() and not client_info:
+    if not panel_ok:
         logger.warning(
-            f"❌ [extend_service_start] Order #{order_id} (email: {email}) was not found in the panel! Renewal canceled."
+            f"❌ [extend_service_start] Order #{order_id} (email: {order.get('email')}) was not found in the panel! Renewal canceled."
         )
         await callback.answer(
             t('this_service_cannot_be_exten_9962a37f5b', lang),

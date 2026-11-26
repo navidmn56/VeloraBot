@@ -1750,10 +1750,8 @@ async def cmd_ai(message: Message):
         )
 
 
-@router.callback_query(F.data == "ai_chat")
-async def ai_chat_start(callback: CallbackQuery):
-    """انتخاب مسیر پشتیبانی هوشمند یا ارتباط با پشتیبان واقعی."""
-    user_id = callback.from_user.id
+def _build_smart_support_view(user_id: int) -> Tuple[str, InlineKeyboardMarkup]:
+    """ساخت متن و کیبورد منوی پشتیبانی هوشمند و انتخاب روش پاسخ‌گویی."""
     lang = get_user(user_id).get('lang', 'fa')
     ai_available = get_ai_button_enabled() and GEMINI_ENABLED and gemini_client
     text = (
@@ -1788,10 +1786,28 @@ async def ai_chat_start(callback: CallbackQuery):
             callback_data="back_to_main",
         )],
     ])
+    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def send_smart_support_menu(target_message: Message, user_id: Optional[int] = None) -> None:
+    """ارسال مستقیم منوی پشتیبانی هوشمند (قابل استفاده از دیپ‌لینک /start)."""
+    uid = user_id if user_id is not None else (target_message.from_user.id if target_message.from_user else 0)
+    text, reply_markup = _build_smart_support_view(uid)
+    await target_message.answer(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup,
+    )
+
+
+@router.callback_query(F.data == "ai_chat")
+async def ai_chat_start(callback: CallbackQuery):
+    """انتخاب مسیر پشتیبانی هوشمند یا ارتباط با پشتیبان واقعی."""
+    text, reply_markup = _build_smart_support_view(callback.from_user.id)
     await callback.message.edit_text(
         text,
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        reply_markup=reply_markup,
     )
     await callback.answer()
 

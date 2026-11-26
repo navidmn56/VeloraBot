@@ -1187,8 +1187,38 @@ async def process_verify_membership(callback: CallbackQuery):
             
             success_text = t('b_membership_confirmed_b_wel_053135e07b', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('rocket', '🚀')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('rocket', '🚀')}"))
             await refresh_optional_channel_membership(user_id, force=True)
-            
-            await callback.message.delete()
+
+            pending_deep_link = None
+            user_state = user_states.get(user_id)
+            if isinstance(user_state, dict):
+                pending_deep_link = user_state.pop('pending_deep_link', None)
+                if not user_state:
+                    user_states.pop(user_id, None)
+
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+
+            if pending_deep_link:
+                await safe_answer(
+                    callback,
+                    "✅ عضویت تایید شد!" if lang == "fa" else "✅ Membership verified!"
+                )
+                try:
+                    import main
+                    if hasattr(main, "handle_start_deep_link"):
+                        handled = await main.handle_start_deep_link(
+                            callback.message,
+                            user_id,
+                            pending_deep_link,
+                            from_user=callback.from_user,
+                        )
+                        if handled:
+                            return
+                except Exception as dl_err:
+                    logger.error(f"❌ Error continuing pending deep link for user {user_id}: {dl_err}")
+
             await callback.message.answer(
                 success_text,
                 parse_mode=ParseMode.HTML,

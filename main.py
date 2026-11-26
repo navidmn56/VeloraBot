@@ -391,6 +391,7 @@ from routers import (
     set_package_inbound,
     extend_service,
     extend_service_start,
+    handle_renew_deep_link,
     buy_service,
     vol_down,
     vol_up,
@@ -475,6 +476,7 @@ from routers import (
     get_ai_response,
     cmd_ai,
     ai_chat_start,
+    send_smart_support_menu,
     start_ai_support_chat,
     clear_ai_memory,
     exit_ai_chat,
@@ -1236,9 +1238,45 @@ async def errors_handler(event: types.ErrorEvent):
     
     return True
 
+def is_supported_deep_link(payload: Optional[str]) -> bool:
+    """تشخیص پارامترهای دیپ‌لینک پشتیبانی و تمدید اختصاصی کانفیگ."""
+    if not payload or not isinstance(payload, str):
+        return False
+    cleaned = payload.strip()
+    return (
+        cleaned == "support"
+        or cleaned.startswith("support_")
+        or cleaned.startswith("renew_")
+    )
+
+
+async def handle_start_deep_link(
+    message: Message,
+    user_id: int,
+    payload: str,
+    from_user: Any = None,
+) -> bool:
+    """اجرای مسیر دیپ‌لینک /start پس از عبور از بررسی‌های امنیتی و عضویت اجباری."""
+    cleaned = (payload or "").strip()
+    if cleaned == "support" or cleaned.startswith("support_"):
+        await send_smart_support_menu(message, user_id)
+        return True
+    if cleaned.startswith("renew_"):
+        await handle_renew_deep_link(
+            message,
+            user_id,
+            cleaned,
+            from_user=from_user or getattr(message, "from_user", None),
+        )
+        return True
+    return False
+
+
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    """دستور استارت - نسخه نهایی با مدیریت کامل تایید دستی و عضویت اجباری"""
+    """دستور استارت - نسخه نهایی با مدیریت کامل تایید دستی، عضویت اجباری و دیپ‌لینک‌ها"""
+    if not message.from_user:
+        return
     user_id = message.from_user.id
     if START_REACTION_EMOJI:
         try:
@@ -1255,14 +1293,21 @@ async def cmd_start(message: Message):
         return
     user_name = message.from_user.first_name or message.from_user.username or "کاربر"
     user_name_escaped = html.escape(user_name)
-    
-    await send_sticker(user_id, 'halloween', '🚀', reply_markup=ReplyKeyboardRemove())
+
+    args = (message.text or "").split()
+    deep_link_payload = args[1].strip() if len(args) > 1 else ""
+    has_deep_link = is_supported_deep_link(deep_link_payload)
+
+    if not has_deep_link and user_id in user_states and isinstance(user_states[user_id], dict):
+        user_states[user_id].pop('pending_deep_link', None)
+
+    if not has_deep_link:
+        await send_sticker(user_id, 'halloween', '🚀', reply_markup=ReplyKeyboardRemove())
     if message.from_user.last_name:
         user_name += f" {message.from_user.last_name}"
         user_name_escaped = html.escape(user_name)
     
     user_username = message.from_user.username or ""
-    args = message.text.split()
     uid = str(user_id)
     is_new_user = uid not in users
     manual_approval = configs_pool.get('manual_approval_settings', {})
@@ -1399,6 +1444,14 @@ async def cmd_start(message: Message):
     lang = user.get('lang', 'fa')
     is_admin = (user_id == ADMIN_ID_INT)
     if is_admin:
+        if has_deep_link:
+            await handle_start_deep_link(
+                message,
+                user_id,
+                deep_link_payload,
+                from_user=message.from_user,
+            )
+            return
         await message.answer(
             f"{premium_emoji('rocket', '🚀')} {t('welcome_to_admin_panel_4efb80706c', lang)}",
             reply_markup=get_main_keyboard(True, lang, user_id)
@@ -1421,7 +1474,12 @@ async def cmd_start(message: Message):
                 users[uid]['updated_at'] = now_tehran_iso()
                 save_json(DB_FILES['users'], users)
                 logger.warning(f"⚠️ user {user_id} left the channel; membership page displayed")
-            
+
+            if has_deep_link:
+                state = user_states.setdefault(user_id, {})
+                state['pending_deep_link'] = deep_link_payload
+                state['timestamp'] = now_tehran_iso()
+
             await show_verification_page(message, user_id, lang)
             return False
         else:
@@ -1446,6 +1504,14 @@ async def cmd_start(message: Message):
             return
         
         await refresh_optional_channel_membership(user_id, force=True)
+        if has_deep_link:
+            await handle_start_deep_link(
+                message,
+                user_id,
+                deep_link_payload,
+                from_user=message.from_user,
+            )
+            return
         text = format_start_greeting(user_name_escaped, lang, premium_emoji('rocket', '🚀'))
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
@@ -1479,12 +1545,24 @@ async def cmd_start(message: Message):
             return
         
         await refresh_optional_channel_membership(user_id, force=True)
+        if has_deep_link:
+            await handle_start_deep_link(
+                message,
+                user_id,
+                deep_link_payload,
+                from_user=message.from_user,
+            )
+            return
         text = format_start_greeting(user_name_escaped, lang, premium_emoji('rocket', '🚀'))
         
         await message.answer(text, reply_markup=get_main_keyboard(False, lang, user_id))
         return
     
     # ============ مسیر 3: کاربر در انتظار تایید ============
+    if has_deep_link:
+        users[uid]['pending_deep_link'] = deep_link_payload
+        users[uid]['updated_at'] = now_tehran_iso()
+        save_json(DB_FILES['users'], users)
     status = users[uid].get('registration_status', 'pending')
     if status == 'requested':
         text = t('b_your_request_has_been_subm_e34a9c8175', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('hourglass', '⏳')}", f"{premium_emoji('light', '💡')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('hourglass', '⏳')}", f"{premium_emoji('light', '💡')}"))
