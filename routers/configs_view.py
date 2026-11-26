@@ -1756,6 +1756,7 @@ async def my_configs(callback: CallbackQuery):
 
         remaining_percent = None
         time_left_text = None
+        panel_unlimited_time = False
         volume_gb = order.get('volume', 0) or 0
         panel_is_active = None
         is_unlimited = (volume_gb == 0)
@@ -1790,10 +1791,12 @@ async def my_configs(callback: CallbackQuery):
                             time_left_text = format_time_left(expire_dt)
                         except Exception:
                             pass
+                    else:
+                        panel_unlimited_time = True
             except Exception as e:
                 logger.debug(f"⚠️ Error retrieving information {email}: {e}")
 
-        if time_left_text is None and order.get('days'):
+        if time_left_text is None and not panel_unlimited_time and order.get('days'):
             d = order['days']
             time_left_text = f"{d} روز" if lang == "fa" else f"{d}d"
 
