@@ -2228,6 +2228,44 @@ prune_old_setup_archives() {
     done
 }
 
+_try_upload_setup() {
+    local host_label="$1"
+    local url_endpoint="$2"
+    shift 2
+
+    log_info "Trying ${host_label}..."
+    local raw_resp http_code body
+    raw_resp="$(
+        curl -sSL --max-time 180 \
+            -w $'\n%{http_code}' \
+            "$@" \
+            "$url_endpoint" \
+            2>>"$LOG_FILE" || true
+    )"
+    http_code="$(printf '%s' "$raw_resp" | tail -n1 | tr -d '\r\n')"
+    body="$(printf '%s' "$raw_resp" | sed '$d' | tr -d '\r' | head -n1)"
+
+    if [[ "$http_code" =~ ^2[0-9][0-9]$ ]] && [[ "$body" =~ ^https?:// ]]; then
+        log_success "Uploaded to ${host_label}"
+        printf '%s' "$body"
+        return 0
+    fi
+
+    local preview="${body:0:80}"
+    log_warning "${host_label} upload failed (HTTP ${http_code:-000}${preview:+, response: ${preview}})"
+    return 1
+}
+
+_format_restore_command() {
+    local script_base
+    script_base="$(basename "${0:-install.sh}")"
+    if [[ "$script_base" == *.sh && -f "$0" ]]; then
+        printf 'sudo bash %s --restore' "$script_base"
+    else
+        printf 'bash <(curl -fsSL https://raw.githubusercontent.com/navidmn56/VeloraBot/main/install.sh) --restore'
+    fi
+}
+
 create_setup_link() {
     draw_step "Creating Setup Link"
 
@@ -2245,8 +2283,11 @@ create_setup_link() {
     rm -rf "$work_dir"
     mkdir -p "$work_dir"
 
-    log_info "Packing data/ and config.py..."
+    log_info "Packing data/ and config.py (excluding logs and backup snapshots)..."
     if ! tar -czf "$work_dir/setup.tar.gz" \
+        --exclude='data/*.log' \
+        --exclude='data/*.log.*' \
+        --exclude='data/backups/*' \
         -C "$INSTALL_DIR" \
         data config.py 2>>"$LOG_FILE"; then
         if (( SERVICE_WAS_ACTIVE == 1 )); then
@@ -2283,63 +2324,26 @@ create_setup_link() {
 
     local upload_url=""
     local host_name=""
+    local retention="a few days (host-dependent)"
     local user_agent="VeloraBot-Installer/1.0 (https://github.com/navidmn56/VeloraBot)"
 
-    log_info "Trying beacon.host..."
-    upload_url="$(
-        curl -fsSL --max-time 180 \
-            -H "User-Agent: ${user_agent}" \
-            -F "file=@$work_dir/setup.enc" \
-            "https://beacon.host/v1/upload" \
-            2>>"$LOG_FILE" || true
-    )"
-    upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-    if [[ "$upload_url" =~ ^https?:// ]]; then
+    if upload_url="$(_try_upload_setup "beacon.host" "https://beacon.host/v1/upload" \
+        -H "User-Agent: ${user_agent}" -F "file=@$work_dir/setup.enc")"; then
         host_name="beacon.host"
-        log_success "Uploaded to beacon.host"
+    elif upload_url="$(_try_upload_setup "x0.at" "https://x0.at/" \
+        -H "User-Agent: ${user_agent}" -F "file=@$work_dir/setup.enc")"; then
+        host_name="x0.at"
+        retention="3 to 100 days (size-dependent)"
+    elif upload_url="$(_try_upload_setup "uguu.se" "https://uguu.se/upload?output=text" \
+        -H "User-Agent: ${user_agent}" -F "files[]=@$work_dir/setup.enc")"; then
+        host_name="uguu.se"
+        retention="3 hours (uguu.se)"
+    elif upload_url="$(_try_upload_setup "litterbox.catbox.moe" "https://litterbox.catbox.moe/resources/internals/api.php" \
+        -H "User-Agent: ${user_agent}" -F "reqtype=fileupload" -F "time=72h" -F "fileToUpload=@$work_dir/setup.enc")"; then
+        host_name="litterbox.catbox.moe"
+        retention="72 hours"
     else
-        log_warning "beacon.host upload failed (response: ${upload_url:0:80})"
         upload_url=""
-    fi
-
-    if [[ -z "$upload_url" ]]; then
-        log_info "Trying 0x0.st..."
-        upload_url="$(
-            curl -fsSL --max-time 180 \
-                -H "User-Agent: ${user_agent}" \
-                -F "file=@$work_dir/setup.enc" \
-                "https://0x0.st" \
-                2>>"$LOG_FILE" || true
-        )"
-        upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-        if [[ "$upload_url" =~ ^https?:// ]]; then
-            host_name="0x0.st"
-            log_success "Uploaded to 0x0.st"
-        else
-            log_warning "0x0.st upload failed (response: ${upload_url:0:80})"
-            upload_url=""
-        fi
-    fi
-
-    if [[ -z "$upload_url" ]]; then
-        log_info "Trying litterbox.catbox.moe..."
-        upload_url="$(
-            curl -fsSL --max-time 180 \
-                -H "User-Agent: ${user_agent}" \
-                -F "reqtype=fileupload" \
-                -F "time=72h" \
-                -F "fileToUpload=@$work_dir/setup.enc" \
-                "https://litterbox.catbox.moe/resources/internals/api.php" \
-                2>>"$LOG_FILE" || true
-        )"
-        upload_url="$(printf '%s' "$upload_url" | tr -d '\r\n' | head -n1)"
-        if [[ "$upload_url" =~ ^https?:// ]]; then
-            host_name="litterbox.catbox.moe"
-            log_success "Uploaded to litterbox.catbox.moe"
-        else
-            log_warning "litterbox upload failed (response: ${upload_url:0:80})"
-            upload_url=""
-        fi
     fi
 
     # ─── FIX (SL#7): ask whether to keep source online (split-brain) ───
@@ -2366,13 +2370,14 @@ create_setup_link() {
         keep_file=""
     fi
 
-    local keep_name
+    local keep_name restore_cmd
     keep_name="$(basename "${keep_file:-setup.enc}")"
+    restore_cmd="$(_format_restore_command)"
 
     if [[ -z "$upload_url" ]]; then
         draw_header "Upload Failed — Manual Transfer Required"
 
-        log_error "Could not upload to any host (beacon.host / 0x0.st / litterbox)."
+        log_error "Could not upload to any host (beacon.host / x0.at / uguu.se / litterbox)."
         printf '\n'
 
         printf '%b📦 Manual Transfer Instructions:%b\n\n' "${BOLD}" "${NC}"
@@ -2392,7 +2397,7 @@ create_setup_link() {
         printf '      base64 -w0 %s\n\n' "${keep_file:-$work_dir/setup.enc}"
 
         printf '%b4. On the target server, run (interactive — keeps password out of shell history):%b\n' "${BOLD}" "${NC}"
-        printf '   sudo bash %s --restore\n' "$(basename "$0")"
+        printf '   %s\n' "${restore_cmd}"
         printf '   Then paste:\n'
         printf '   file:///tmp/%s#%s\n\n' "${keep_name}" "$password"
 
@@ -2415,12 +2420,12 @@ create_setup_link() {
     printf '  Host         : %s\n' "$host_name"
     printf '  Encrypted    : %s\n' "$enc_size"
     printf '  Encryption   : AES-256-CBC + PBKDF2\n'
-    printf '  Retention    : a few days (host-dependent)\n'
+    printf '  Retention    : %s\n' "$retention"
     printf '  Local copy   : %s\n' "${keep_file:-<deleted with TEMP_ROOT>}"
     printf '\n'
 
     printf '%bHow to restore on another server (recommended — keeps password out of bash history):%b\n' "${BOLD}" "${NC}"
-    printf '  sudo bash %s --restore\n' "$(basename "$0")"
+    printf '  %s\n' "${restore_cmd}"
     printf '  (then paste the Setup Link when prompted)\n\n'
 
     log_success "Setup link created successfully."
