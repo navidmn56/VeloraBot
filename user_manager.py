@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database import configs_pool, save_all, users, TEHRAN_TZ, now_tehran_iso
 from db_storage import DATA_DIR, DB_FILES, save_json
-from core.save_scheduler import schedule_save, schedule_file_save
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +55,8 @@ from utils.states import FSMStateManager, UserStateProxy
 
 user_states: FSMStateManager = FSMStateManager()
 logger.info("user_states FSM manager initialized")
+
+from core.save_scheduler import schedule_save, schedule_file_save
 
 COUPONS_FILE: str = os.path.join(DATA_DIR, "coupons.json")
 COUPONS: Dict[str, dict] = {}

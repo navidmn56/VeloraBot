@@ -107,5 +107,10 @@ _tg_user_cache: dict[int, tuple[float, dict]] = BoundedTTLCache(maxsize=2000)
 
 
 
-from user_manager import user_states
+def __getattr__(name: str) -> Any:
+    """Lazy compatibility export for user_states without creating startup circular imports."""
+    if name == "user_states":
+        from user_manager import user_states
+        return user_states
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
