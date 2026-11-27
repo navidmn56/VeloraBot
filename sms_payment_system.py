@@ -23,6 +23,7 @@ Architecture & Security Guarantee:
 import os
 import re
 import hmac
+import html
 import json
 import time
 import random
@@ -806,12 +807,63 @@ class SMSWebhookServer:
         now = time.time()
         timestamps = self._rate_limits.setdefault(client_ip, [])
         self._rate_limits[client_ip] = [t for t in timestamps if now - t < 60]
+        if len(self._rate_limits) > 500:
+            stale = [ip for ip, ts in self._rate_limits.items() if not ts]
+            for ip in stale:
+                self._rate_limits.pop(ip, None)
         if len(self._rate_limits[client_ip]) >= max_per_minute:
             return False
         self._rate_limits[client_ip].append(now)
         return True
 
+    @staticmethod
+    def _extract_client_ip(request: web.Request) -> str:
+        return (
+            request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            or request.remote
+            or "127.0.0.1"
+        )
+
+    @staticmethod
+    def _record_security_hit(client_ip: str, path: str, status_code: int) -> None:
+        try:
+            from services.server_guard import (
+                WEBHOOK_AUTH_FAIL_ALERT,
+                WEBHOOK_REQ_PER_MIN_ALERT,
+                record_http_request,
+                report_immediate_security_event,
+            )
+            req_cnt, fail_cnt = record_http_request("sms_webhook", client_ip, path=path, status_code=status_code)
+            safe_ip = html.escape(str(client_ip))
+            if status_code == 429 or req_cnt >= WEBHOOK_REQ_PER_MIN_ALERT:
+                asyncio.create_task(
+                    report_immediate_security_event(
+                        f"webhook_flood:{client_ip}",
+                        "🛡️ هشدار اسپم/ریکوعست زیاد روی وب‌هوک سرور",
+                        f"• <b>IP:</b> <code>{safe_ip}</code>\n"
+                        f"• <b>مسیر:</b> <code>{html.escape(path)}</code>\n"
+                        f"• <b>درخواست در ۱ دقیقه:</b> <code>{req_cnt}</code> (کد: {status_code})",
+                    )
+                )
+            elif status_code in (401, 403) and fail_cnt >= WEBHOOK_AUTH_FAIL_ALERT:
+                asyncio.create_task(
+                    report_immediate_security_event(
+                        f"webhook_auth:{client_ip}",
+                        "🚨 هشدار تلاش احراز هویت نامعتبر روی وب‌هوک",
+                        f"• <b>IP:</b> <code>{safe_ip}</code>\n"
+                        f"• <b>خطاهای 401 در ۵ دقیقه:</b> <code>{fail_cnt}</code>",
+                    )
+                )
+        except Exception:
+            pass
+
     async def handle_health(self, request: web.Request) -> web.Response:
+        client_ip = self._extract_client_ip(request)
+        if not self._check_rate_limit(f"health:{client_ip}", max_per_minute=60):
+            self._record_security_hit(client_ip, "/api/sms-webhook/health", 429)
+            return web.json_response({"error": "Rate limit exceeded"}, status=429)
+        self._record_security_hit(client_ip, "/api/sms-webhook/health", 200)
         return web.json_response({
             "status": "ok",
             "service": "VeloraBot SMS Payment Webhook",
@@ -819,12 +871,7 @@ class SMSWebhookServer:
         })
 
     async def handle_sms_webhook(self, request: web.Request) -> web.Response:
-        client_ip = (
-            request.headers.get("CF-Connecting-IP")
-            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-            or request.remote
-            or "127.0.0.1"
-        )
+        client_ip = self._extract_client_ip(request)
 
         try:
             raw_body_bytes = await request.read()
@@ -833,11 +880,13 @@ class SMSWebhookServer:
             return web.json_response({"error": "Unable to read request"}, status=400)
 
         if not self._check_rate_limit(client_ip):
-            logger.warning("Webhook rate limit exceeded.")
+            logger.warning(f"Webhook rate limit exceeded from {client_ip}.")
+            self._record_security_hit(client_ip, "/api/sms-webhook", 429)
             return web.json_response({"error": "Rate limit exceeded"}, status=429)
 
         if not self.manager.is_enabled():
             logger.warning("Webhook received but SMS system is disabled in admin settings.")
+            self._record_security_hit(client_ip, "/api/sms-webhook", 503)
             return web.json_response({"error": "SMS webhook is disabled by admin"}, status=503)
 
         # اعتبارسنجی هدر احراز هویت با مقایسه زمان‌ثابت
@@ -846,8 +895,11 @@ class SMSWebhookServer:
         expected_token = self.manager.get_secret_token()
 
         if not expected_token or not hmac.compare_digest(token, expected_token):
-            logger.warning("Webhook authentication failed.")
+            logger.warning(f"Webhook authentication failed from {client_ip}.")
+            self._record_security_hit(client_ip, "/api/sms-webhook", 401)
             return web.json_response({"error": "Unauthorized"}, status=401)
+
+        self._record_security_hit(client_ip, "/api/sms-webhook", 200)
 
         try:
             payload = json.loads(raw_body_text)

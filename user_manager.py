@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database import configs_pool, save_all, users, TEHRAN_TZ, now_tehran_iso
 from db_storage import DATA_DIR, DB_FILES, save_json
+from core.save_scheduler import schedule_save, schedule_file_save
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,7 @@ def add_coupon_fields_to_user(user_id: int):
         
         if modified:
             try:
-                save_json(DB_FILES['users'], users)
+                schedule_file_save('users', delay=2.0)
                 logger.info(f"✅ Coupon fields added to user {user_id} added")
             except Exception as e:
                 logger.error(f"❌ Error saving coupon fields: {e}")
@@ -221,7 +222,7 @@ def get_user(user_id: int, username: str = None) -> dict:
             'registration_status': 'approved' if is_admin else 'pending'
         }
         
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
         
         if is_admin:
             logger.info(f"👑 Admin user {user_id} created - status: approved")
@@ -404,7 +405,7 @@ def get_user(user_id: int, username: str = None) -> dict:
                 logger.debug(f"Coupon from user {user_id} cleared (not in the database)")
     if modified:
         user['updated_at'] = now_tehran_iso()
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=2.0)
         logger.debug(f"💾 user changes {user_id} saved")
     
     return user
@@ -471,7 +472,7 @@ def save_coupon_to_user_db(user_id: int) -> bool:
     users[uid]['coupon_applied'] = coupon_applied
     
     try:
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
         logger.info(f"✅ coupon {coupon_code} saved in user database {user_id}saved (discount: {coupon_discount}%)")
         return True
     except Exception as e:
@@ -511,7 +512,7 @@ def load_coupon_from_user_db(user_id: int) -> dict:
                 users[uid]['coupon_code'] = None
                 users[uid]['coupon_discount'] = 0
                 users[uid]['coupon_applied'] = False
-                save_json(DB_FILES['users'], users)
+                schedule_file_save('users', delay=2.0)
             
                 
     except Exception as e:
@@ -589,7 +590,7 @@ def clear_coupon_from_user_db(user_id: int, force: bool = False) -> bool:
     
     # ✅ ذخیره‌سازی
     try:
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
         logger.info(f"✅ user coupon {user_id}cleared:")
         logger.info(f"  - previous code: {old_coupon}")
         logger.info(f"  - previous discount: {old_discount}%")
@@ -629,7 +630,7 @@ def fully_remove_coupon_from_user(user_id: int) -> bool:
         users[uid]['coupon_applied'] = False
         
         try:
-            save_json(DB_FILES['users'], users)
+            schedule_file_save('users', delay=1.0)
             logger.info(f"🏷️ Coupon from user database {user_id} deleted: {old_coupon} (discount: {old_discount}%)")
             removed = True
         except Exception as e:
@@ -712,7 +713,7 @@ def consume_coupon(user_id: int) -> bool:
                 users[uid]['coupon_code'] = coupon_code
                 users[uid]['coupon_discount'] = coupon.get('discount', 0)
                 users[uid]['coupon_applied'] = True
-                save_json(DB_FILES['users'], users)
+                schedule_file_save('users', delay=1.0)
         
         logger.info(f"✅ [consume_coupon] Admin coupon {coupon_code} - user: {user_id} ({current_usage}/{max_usage})")
         return True
@@ -816,7 +817,7 @@ def update_user(user_id: int, key: str, value):
         users[uid][key] = value
         users[uid]['updated_at'] = now_tehran_iso()
         logger.debug(f"📝 user {user_id}: {key} from {old_value} to {value}")
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
     else:
         logger.warning(f"⚠️ user {user_id}not found to update")
 
@@ -830,7 +831,7 @@ def record_purchase(user_id: int, amount: int):
         users[uid]['last_purchase_date'] = datetime.now(TEHRAN_TZ).strftime('%Y/%m/%d %H:%M:%S')
         users[uid]['has_purchased'] = True
         users[uid]['updated_at'] = now_tehran_iso()
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=0.5)
         logger.info(f"🛒 user purchase {user_id}: {amount}tomans")
 
 
@@ -840,7 +841,7 @@ def add_balance(user_id: int, amount: int) -> int:
     old_balance = user.get('balance', 0)
     user['balance'] = old_balance + amount
     user['updated_at'] = now_tehran_iso()
-    save_json(DB_FILES['users'], users)
+    schedule_file_save('users', delay=0.5)
     logger.info(f"💰 user {user_id}: {old_balance} + {amount} = {user['balance']}")
     return user['balance']
 
@@ -855,7 +856,7 @@ def reduce_balance(user_id: int, amount: int) -> int:
     
     user['balance'] -= amount
     logger.info(f"user balance decreased {user_id}: {old_balance} - {amount} = {user['balance']}")
-    save_all()
+    schedule_save(0.5)
     return user['balance']
 
 
@@ -865,7 +866,7 @@ def reset_balance(user_id: int) -> int:
     old_balance = user['balance']
     user['balance'] = 0
     logger.info(f"user balance reached zero {user_id}: {old_balance} -> 0")
-    save_all()
+    schedule_save(0.5)
     return 0
 
 

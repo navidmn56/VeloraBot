@@ -23,6 +23,13 @@ class UserPaymentGuard:
 
     async def _get_lock(self, user_id: int) -> asyncio.Lock:
         async with self._master_lock:
+            if len(self._user_locks) > 500:
+                stale = [
+                    uid for uid, lk in self._user_locks.items()
+                    if uid != user_id and uid not in self._active_users and not lk.locked()
+                ]
+                for uid in stale:
+                    self._user_locks.pop(uid, None)
             if user_id not in self._user_locks:
                 self._user_locks[user_id] = asyncio.Lock()
             return self._user_locks[user_id]
@@ -70,6 +77,13 @@ class OrderApprovalGuard:
 
     async def _get_lock(self, order_id: int) -> asyncio.Lock:
         async with self._master_lock:
+            if len(self._order_locks) > 500:
+                stale = [
+                    oid for oid, lk in self._order_locks.items()
+                    if oid != order_id and oid not in self._active_orders and not lk.locked()
+                ]
+                for oid in stale:
+                    self._order_locks.pop(oid, None)
             if order_id not in self._order_locks:
                 self._order_locks[order_id] = asyncio.Lock()
             return self._order_locks[order_id]

@@ -64,6 +64,8 @@ class AlertSystem:
         self.test_expiry_warnings = [0.25]
         
         self._lock = asyncio.Lock()
+        self._cache_dirty = False
+        self._in_batch_check = False
     
     # ═══════════════════════════════════════════
     # کش
@@ -103,43 +105,56 @@ class AlertSystem:
             self.sent_alerts_history = {}
             self.service_info_cache = {}
     
-    def _save_cache_to_disk(self):
-        """ذخیره کش در فایل"""
+    def _build_cache_payload(self) -> dict:
+        return {
+            'volume_alerts': {
+                k: v.isoformat()
+                for k, v in list(self.volume_alert_cache.items())
+                if isinstance(v, datetime)
+            },
+            'expiry_alerts': {
+                k: v.isoformat()
+                for k, v in list(self.expiry_alert_cache.items())
+                if isinstance(v, datetime)
+            },
+            'history': dict(self.sent_alerts_history),
+            'service_info': {
+                k: dict(v) if isinstance(v, dict) else v
+                for k, v in list(self.service_info_cache.items())
+            },
+            'last_updated': now_tehran_iso(),
+        }
+
+    def _write_cache_payload_sync(self, data: dict):
         try:
-            data = {
-                'volume_alerts': {
-                    k: v.isoformat() 
-                    for k, v in self.volume_alert_cache.items()
-                    if isinstance(v, datetime)
-                },
-                'expiry_alerts': {
-                    k: v.isoformat() 
-                    for k, v in self.expiry_alert_cache.items()
-                    if isinstance(v, datetime)
-                },
-                'history': self.sent_alerts_history,
-                'service_info': self.service_info_cache,
-                'last_updated': now_tehran_iso()
-            }
-            
-            temp_file = f"{self.cache_file}.tmp"
+            temp_file = f"{self.cache_file}.{os.getpid()}.tmp"
             with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            
             os.replace(temp_file, self.cache_file)
-            
         except Exception as e:
             logger.error(f"Error saving cache: {e}")
+
+    def _save_cache_to_disk(self):
+        """ذخیره کش در فایل"""
+        payload = self._build_cache_payload()
+        self._write_cache_payload_sync(payload)
+        self._cache_dirty = False
+
+    async def _save_cache_async(self):
+        """ذخیره غیرمسدودکننده کش در فایل در ترد پس‌زمینه"""
+        payload = self._build_cache_payload()
+        self._cache_dirty = False
+        await asyncio.to_thread(self._write_cache_payload_sync, payload)
     
     # ═══════════════════════════════════════════
     # ✅ تابع کمکی جدید: دریافت email از سفارش
     # ═══════════════════════════════════════════
     
-    async def _resolve_email(self, order: dict) -> Optional[str]:
+    async def _resolve_email(self, order: dict, subid_map: Optional[Dict[str, str]] = None) -> Optional[str]:
         """
         دریافت email کلاینت از سفارش به صورت امن:
         ۱. اول از فیلد email مستقیم سفارش
-        ۲. اگه نبود، از subId → email با query به پنل
+        ۲. اگه نبود، از نقشه اینباند یا subId → email با query به پنل
         ۳. اگه پیدا شد، توی سفارش ذخیره می‌شه تا بار بعد سریع‌تر باشه
         
         Returns:
@@ -166,8 +181,10 @@ class AlertSystem:
         except Exception:
             return None
 
+        found_email = subid_map.get(sub_id) if subid_map else None
+
         # اگه تابع lookup موجود نباشه، برنگردون
-        if not self.find_email_by_sub_id:
+        if not found_email and not self.find_email_by_sub_id:
             logger.warning(
                 f"Order #{order_id}: Missing email and "
                 f"find_email_by_sub_id function is not configured"
@@ -176,7 +193,8 @@ class AlertSystem:
 
         # ─── تلاش برای پیدا کردن email ───
         try:
-            found_email = await self.find_email_by_sub_id(sub_id)
+            if not found_email and subid_map is None:
+                found_email = await self.find_email_by_sub_id(sub_id)
             if found_email:
                 logger.info(
                     f"[resolve_email] Order #{order_id}: "
@@ -245,33 +263,121 @@ class AlertSystem:
     
     async def run_alert_worker(self):
         """کارگر پس‌زمینه"""
+        from core.task_manager import (
+            consume_force_run,
+            get_task_interval,
+            is_task_enabled,
+            record_task_finish,
+            record_task_start,
+            sleep_interruptible,
+            wait_until_task_enabled,
+        )
+
         logger.info("Alert system started (one-time per threshold)")
-        
-        self._save_cache_to_disk()
-        
+
+        await sleep_interruptible("alert_worker", 10.0)
+
         while True:
             try:
-                if self.enabled:
-                    await self.check_all_services()
-                    self._save_cache_to_disk()
-                    
-                await asyncio.sleep(self.check_interval)
+                await wait_until_task_enabled("alert_worker")
+                force = consume_force_run("alert_worker")
+                if self.enabled or force:
+                    started = record_task_start("alert_worker")
+                    try:
+                        await self.check_all_services()
+                        record_task_finish("alert_worker", started)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as inner_err:
+                        record_task_finish("alert_worker", started, str(inner_err))
+                        raise
+
+                self.check_interval = get_task_interval("alert_worker")
+                await sleep_interruptible("alert_worker", self.check_interval)
             except asyncio.CancelledError:
-                self._save_cache_to_disk()
+                if self._cache_dirty:
+                    self._save_cache_to_disk()
                 logger.info("Alert system stopped")
                 break
             except Exception as e:
                 logger.error(f"Error in alert system: {e}", exc_info=True)
-                self._save_cache_to_disk()
-                await asyncio.sleep(60)
+                if self._cache_dirty:
+                    self._save_cache_to_disk()
+                await sleep_interruptible("alert_worker", 60.0)
     
     # ═══════════════════════════════════════════
     # ✅ اصلاح اصلی: check_all_services
     # ═══════════════════════════════════════════
-    
+
+    @staticmethod
+    def _build_inbounds_lookup(inbounds: list) -> tuple[Dict[str, dict], Dict[str, dict], Dict[str, str]]:
+        """Extract client_info, aggregated traffic, and subId->email maps from a single inbounds response."""
+        clients_by_email: Dict[str, dict] = {}
+        traffic_by_email: Dict[str, dict] = {}
+        subid_to_email: Dict[str, str] = {}
+
+        for inbound in inbounds or []:
+            if not isinstance(inbound, dict):
+                continue
+
+            settings = inbound.get('settings', {})
+            if isinstance(settings, str):
+                try:
+                    settings = json.loads(settings)
+                except Exception:
+                    settings = {}
+            if isinstance(settings, dict):
+                for client in settings.get('clients', []) or []:
+                    if not isinstance(client, dict):
+                        continue
+                    email = client.get('email')
+                    if not email:
+                        continue
+                    email_str = str(email).strip()
+                    if not email_str:
+                        continue
+                    if email_str not in clients_by_email:
+                        clients_by_email[email_str] = client
+                    sub_id = client.get('subId')
+                    if sub_id and str(sub_id).strip():
+                        subid_to_email[str(sub_id).strip()] = email_str
+
+            client_stats = inbound.get('clientStats', [])
+            if isinstance(client_stats, str):
+                try:
+                    client_stats = json.loads(client_stats)
+                except Exception:
+                    client_stats = []
+            if isinstance(client_stats, list):
+                for stat in client_stats:
+                    if not isinstance(stat, dict):
+                        continue
+                    email = stat.get('email')
+                    if not email:
+                        continue
+                    email_str = str(email).strip()
+                    if not email_str:
+                        continue
+                    up = stat.get('up')
+                    down = stat.get('down')
+                    if up is not None and down is not None:
+                        try:
+                            up_val = max(0, int(up))
+                            down_val = max(0, int(down))
+                            if email_str not in traffic_by_email:
+                                traffic_by_email[email_str] = {'up': up_val, 'down': down_val}
+                            else:
+                                traffic_by_email[email_str]['up'] = max(traffic_by_email[email_str]['up'], up_val)
+                                traffic_by_email[email_str]['down'] = max(traffic_by_email[email_str]['down'], down_val)
+                        except (TypeError, ValueError, OverflowError):
+                            pass
+
+        return clients_by_email, traffic_by_email, subid_to_email
+
     async def check_all_services(self):
         """بررسی تمام سرویس‌ها"""
         async with self._lock:
+            self._in_batch_check = True
             try:
                 valid_orders = self.get_orders()
                 if not valid_orders:
@@ -293,7 +399,35 @@ class AlertSystem:
                 ]
                 
                 logger.debug(f"Checking {len(approved_orders)} services")
-                
+                if not approved_orders:
+                    return
+
+                try:
+                    from services.panel_api import xui_get_client_info, xui_get_client_traffic, xui_get_inbounds
+                except ImportError:
+                    from main import xui_get_client_info, xui_get_client_traffic
+                    xui_get_inbounds = None
+
+                try:
+                    from config import is_senai_panel_enabled
+                    panel_enabled = is_senai_panel_enabled()
+                except Exception:
+                    panel_enabled = True
+
+                clients_by_email: Dict[str, dict] = {}
+                traffic_by_email: Dict[str, dict] = {}
+                subid_to_email: Dict[str, str] = {}
+                has_inbounds_snapshot = False
+
+                if panel_enabled and xui_get_inbounds is not None:
+                    try:
+                        inbounds = await xui_get_inbounds(include_disabled=True)
+                        if isinstance(inbounds, list) and inbounds:
+                            clients_by_email, traffic_by_email, subid_to_email = self._build_inbounds_lookup(inbounds)
+                            has_inbounds_snapshot = bool(clients_by_email or traffic_by_email)
+                    except Exception as inb_err:
+                        logger.debug(f"Alert system inbound snapshot fallback: {inb_err}")
+
                 for order in approved_orders:
                     order_id = order.get('order_id')
                     user_id = order.get('user_id')
@@ -302,32 +436,32 @@ class AlertSystem:
                         continue
                     
                     try:
-                        email = await self._resolve_email(order)
+                        email = await self._resolve_email(order, subid_map=subid_to_email if has_inbounds_snapshot else None)
                         client_info = None
+                        traffic_data = None
 
-                        if email:
-                            try:
-                                from services.panel_api import xui_get_client_info, xui_get_client_traffic
-                            except ImportError:
-                                from main import xui_get_client_info, xui_get_client_traffic
-
-                            try:
-                                client_info = await xui_get_client_info(email)
-                            except Exception as client_err:
-                                logger.warning(f"Order #{order_id}: error retrieving client_info for {email}: {client_err}")
+                        if email and panel_enabled:
+                            if has_inbounds_snapshot:
+                                client_info = clients_by_email.get(email)
+                                traffic_data = traffic_by_email.get(email)
+                            else:
+                                try:
+                                    client_info = await xui_get_client_info(email)
+                                except Exception as client_err:
+                                    logger.warning(f"Order #{order_id}: error retrieving client_info for {email}: {client_err}")
 
                         if client_info and isinstance(client_info, dict):
                             # تشخیص تمدید
                             await self._check_service_renewal(order, client_info, email)
                             
-                            # دریافت ترافیک
-                            traffic_data = None
-                            try:
-                                traffic_data = await xui_get_client_traffic(email)
-                                if traffic_data and not isinstance(traffic_data, dict):
-                                    traffic_data = None
-                            except Exception:
-                                pass
+                            # دریافت ترافیک (فقط در صورت نبودن در اسنپ‌شات)
+                            if traffic_data is None:
+                                try:
+                                    traffic_data = await xui_get_client_traffic(email)
+                                    if traffic_data and not isinstance(traffic_data, dict):
+                                        traffic_data = None
+                                except Exception:
+                                    pass
                             
                             # بررسی حجم و انقضا بر اساس داده‌های دقیق پنل
                             await self._check_volume_alert(order, client_info, traffic_data)
@@ -344,6 +478,10 @@ class AlertSystem:
                         
             except Exception as e:
                 logger.error(f"Error in check_all_services: {e}", exc_info=True)
+            finally:
+                self._in_batch_check = False
+                if self._cache_dirty:
+                    await self._save_cache_async()
 
     async def _check_fallback_order_expiry(self, order: dict):
         """بررسی فال‌بک انقضای سفارش از روی تاریخ انقضا یا تاریخ تایید و مدت پکیج در صورت عدم دسترسی به پنل"""
@@ -488,7 +626,9 @@ class AlertSystem:
             'last_updated': now,
             'last_renewal': now
         }
-        self._save_cache_to_disk()
+        self._cache_dirty = True
+        if not self._in_batch_check:
+            await self._save_cache_async()
         return True
 
     async def record_service_renewal(
@@ -519,7 +659,9 @@ class AlertSystem:
                 'first_seen': now_tehran_iso(),
                 'last_updated': now_tehran_iso()
             }
-            self._save_cache_to_disk()
+            self._cache_dirty = True
+            if not self._in_batch_check:
+                await self._save_cache_async()
             return
 
         previous_total = previous.get('totalGB', 0)
@@ -532,10 +674,18 @@ class AlertSystem:
         if is_volume_increased or is_expiry_extended:
             await self._record_service_renewal(order, email, previous, current)
         else:
+            changed = (
+                previous.get('totalGB') != current['totalGB']
+                or previous.get('expiryTime') != current['expiryTime']
+                or previous.get('email') != email
+            )
             previous.update(current)
             previous['email'] = email
             previous['last_updated'] = now_tehran_iso()
-            self._save_cache_to_disk()
+            if changed:
+                self._cache_dirty = True
+                if not self._in_batch_check:
+                    await self._save_cache_async()
     
     # ═══════════════════════════════════════════
     # Formatters
@@ -631,7 +781,9 @@ class AlertSystem:
             'delivered': True
         }
         
-        self._save_cache_to_disk()
+        self._cache_dirty = True
+        if not self._in_batch_check:
+            self._save_cache_to_disk()
     
     # ═══════════════════════════════════════════
     # Expiry Alert
@@ -954,7 +1106,9 @@ class AlertSystem:
             self.service_info_cache.clear()
             logger.info("All alert cache cleared")
         
-        self._save_cache_to_disk()
+        self._cache_dirty = True
+        if not self._in_batch_check:
+            self._save_cache_to_disk()
     
     def clear_all_history(self):
         """پاک کردن کامل"""
@@ -969,7 +1123,9 @@ class AlertSystem:
         except Exception as e:
             logger.error(f"Error deleting cache file: {e}")
         
-        self._save_cache_to_disk()
+        self._cache_dirty = True
+        if not self._in_batch_check:
+            self._save_cache_to_disk()
         logger.info("All alert history cleared")
     
     def update_settings(self, settings: dict):
@@ -990,5 +1146,11 @@ class AlertSystem:
         
         if 'enabled' in settings:
             self.enabled = settings['enabled']
+
+        if 'check_interval' in settings and settings['check_interval']:
+            try:
+                self.check_interval = max(60, int(settings['check_interval']))
+            except (TypeError, ValueError):
+                pass
         
         logger.info(f"⚙️ Alert settings updated")

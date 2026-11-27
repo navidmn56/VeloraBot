@@ -25,6 +25,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKe
 from config import SENAI_PANEL_ENABLED, is_senai_panel_enabled
 from utils.payment_guard import payment_guard, order_guard, PaymentInProgressError
 from core.state_stores import TEMP_INBOUND_SELECTION, user_states
+from core.save_scheduler import schedule_file_save
 from database import (
     users,
     orders,
@@ -2838,7 +2839,7 @@ async def cancel_coupon(callback: CallbackQuery):
         users[uid]['coupon_code'] = None
         users[uid]['coupon_discount'] = 0
         users[uid]['coupon_applied'] = False
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
     
     logger.info(f"🗑️ coupon {coupon_code} by user {user_id} cancelled")
     

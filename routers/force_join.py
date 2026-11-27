@@ -24,6 +24,7 @@ from aiogram import Bot
 from config import ADMIN_ID
 from database import users, configs_pool, save_all, now_tehran_iso
 from db_storage import save_json, DB_FILES
+from core.save_scheduler import schedule_save, schedule_file_save
 from user_manager import user_states, get_user, get_admin_id_int
 from strings import t
 from emoji_sticker_system import premium_emoji
@@ -185,6 +186,20 @@ _OPT_MEMBER_CACHE: Dict[int, tuple] = {}
 _OPT_MEMBER_CACHE_TTL = 45.0
 
 
+def _set_opt_member_cache(user_id: int, now_ts: float, is_joined: bool) -> None:
+    if len(_OPT_MEMBER_CACHE) >= 2000:
+        expired = [
+            uid for uid, (ts, _) in _OPT_MEMBER_CACHE.items()
+            if (now_ts - ts) >= _OPT_MEMBER_CACHE_TTL
+        ]
+        for uid in expired:
+            _OPT_MEMBER_CACHE.pop(uid, None)
+        if len(_OPT_MEMBER_CACHE) >= 2000:
+            for uid in list(_OPT_MEMBER_CACHE.keys())[:len(_OPT_MEMBER_CACHE) - 1500]:
+                _OPT_MEMBER_CACHE.pop(uid, None)
+    _OPT_MEMBER_CACHE[user_id] = (now_ts, is_joined)
+
+
 def _strip_join_prefix(raw: str) -> str:
     cleaned = (raw or "").strip()
     cleaned = re.sub(r'^[\U0001F300-\U0001FAFF\u2600-\u27BF]+\s*', '', cleaned).strip()
@@ -286,7 +301,7 @@ async def refresh_optional_channel_membership(user_id: int, force: bool = False)
     uid = str(user_id)
     prev_joined = bool((users.get(uid) or {}).get('optional_channel_joined', False))
     if not chat_ref:
-        _OPT_MEMBER_CACHE[user_id] = (now_ts, prev_joined)
+        _set_opt_member_cache(user_id, now_ts, prev_joined)
         return prev_joined
 
     bot_inst = get_bot()
@@ -296,15 +311,15 @@ async def refresh_optional_channel_membership(user_id: int, force: bool = False)
     try:
         member = await bot_inst.get_chat_member(chat_id=chat_ref, user_id=user_id)
         is_joined = member.status in ('member', 'administrator', 'creator')
-        _OPT_MEMBER_CACHE[user_id] = (now_ts, is_joined)
+        _set_opt_member_cache(user_id, now_ts, is_joined)
         if uid in users and bool(users[uid].get('optional_channel_joined', False)) != is_joined:
             users[uid]['optional_channel_joined'] = is_joined
             users[uid]['updated_at'] = now_tehran_iso()
-            save_json(DB_FILES['users'], users)
+            schedule_file_save('users', delay=1.0)
         return is_joined
     except Exception as e:
         logger.debug(f"Optional channel silent check failed for user {user_id} ({chat_ref}): {e}")
-        _OPT_MEMBER_CACHE[user_id] = (now_ts, prev_joined)
+        _set_opt_member_cache(user_id, now_ts, prev_joined)
         return prev_joined
 
 
@@ -424,7 +439,7 @@ async def force_join_optional_toggle(callback: CallbackQuery):
     opt['enabled'] = not opt.get('enabled', False)
     _OPT_MEMBER_CACHE.clear()
     settings['last_updated'] = now_tehran_iso()
-    save_all()
+    schedule_save(2.0)
     await _render_optional_channel_menu(callback.message, lang, is_edit=True)
     await safe_answer(callback)
 
@@ -441,7 +456,7 @@ async def force_join_optional_style(callback: CallbackQuery):
     opt = settings.setdefault('optional_channel', {})
     opt['style'] = style_val
     settings['last_updated'] = now_tehran_iso()
-    save_all()
+    schedule_save(2.0)
     await _render_optional_channel_menu(callback.message, lang, is_edit=True)
     await safe_answer(callback)
 
@@ -454,7 +469,7 @@ async def force_join_optional_remove(callback: CallbackQuery):
     settings.pop('optional_channel', None)
     _OPT_MEMBER_CACHE.clear()
     settings['last_updated'] = now_tehran_iso()
-    save_all()
+    schedule_save(2.0)
     await safe_answer(callback, t('force_join_optional_removed', lang), alert=True)
     await _render_optional_channel_menu(callback.message, lang, is_edit=True)
 
@@ -515,7 +530,7 @@ async def force_join_optional_field_save(message: Message):
     if field_key == 'title_fa' and cleaned:
         opt['title'] = cleaned
     settings['last_updated'] = now_tehran_iso()
-    save_all()
+    schedule_save(2.0)
     user_states.pop(admin_id, None)
     await message.reply(t('force_join_opt_field_saved', lang))
     await _render_optional_channel_menu(message, lang, is_edit=False)
@@ -613,7 +628,7 @@ async def force_join_optional_set_save(message: Message):
     }
     _OPT_MEMBER_CACHE.clear()
     settings['last_updated'] = now_tehran_iso()
-    save_all()
+    schedule_save(2.0)
     user_states.pop(admin_id, None)
 
     await message.reply(t('force_join_optional_saved', lang, fa_parts=lambda: (display_title,), en_parts=lambda: (display_title,)))
@@ -748,7 +763,7 @@ async def force_join_title_reset(callback: CallbackQuery):
             ch.pop('title_fa', None)
             ch.pop('title_en', None)
             settings['last_updated'] = now_tehran_iso()
-            save_all()
+            schedule_save(2.0)
             break
     await safe_answer(callback, t('force_join_title_reset_done', lang), alert=True)
     await _render_force_join_channel_title_menu(callback.message, ch_id, lang, is_edit=True)
@@ -779,7 +794,7 @@ async def force_join_title_save(message: Message):
             else:
                 ch[f"title_{lang_key}"] = raw[:48]
             settings['last_updated'] = now_tehran_iso()
-            save_all()
+            schedule_save(2.0)
             break
     user_states.pop(admin_id, None)
     await message.reply(t('force_join_title_saved', lang))
@@ -794,7 +809,7 @@ async def force_join_toggle(callback: CallbackQuery):
     settings['enabled'] = not settings.get('enabled', False)
     settings['last_updated'] = now_tehran_iso()
     configs_pool['force_join_settings'] = settings
-    save_all()
+    schedule_save(2.0)
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     status = "فعال" if settings['enabled'] else "غیرفعال"
@@ -872,7 +887,7 @@ async def force_join_add_channel(message: Message):
         settings['channels'] = channels
         settings['last_updated'] = now_tehran_iso()
         configs_pool['force_join_settings'] = settings
-        save_all()
+        schedule_save(2.0)
         
         await message.reply(t('channel_added_e1dac60031', lang, fa_parts=lambda: (f'{channel_name}',), en_parts=lambda: (f'{channel_name}',)))
         
@@ -944,7 +959,7 @@ async def force_join_remove_channel(callback: CallbackQuery):
         settings['channels'] = channels
         settings['last_updated'] = now_tehran_iso()
         configs_pool['force_join_settings'] = settings
-        save_all()
+        schedule_save(2.0)
         
         await callback.answer(t('channel_removed_24a4a9b088', lang, fa_parts=lambda: (f"{removed.get('name')}",), en_parts=lambda: (f"{removed.get('name')}",)), show_alert=True)
         
@@ -1182,7 +1197,7 @@ async def process_verify_membership(callback: CallbackQuery):
             if user:
                 user['verified'] = True
                 user['updated_at'] = now_tehran_iso()
-                save_json(DB_FILES['users'], users)
+                schedule_file_save('users', delay=1.0)
                 logger.info(f"✅ user {user_id} membership in all channels confirmed")
             
             success_text = t('b_membership_confirmed_b_wel_053135e07b', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('rocket', '🚀')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('rocket', '🚀')}"))
@@ -1246,7 +1261,7 @@ async def process_verify_membership(callback: CallbackQuery):
             if user and user.get('verified', False):
                 user['verified'] = False
                 user['updated_at'] = now_tehran_iso()
-                save_json(DB_FILES['users'], users)
+                schedule_file_save('users', delay=1.0)
                 logger.warning(f"⚠️ user {user_id} left the channel; verified changed to False")
             
             await callback.answer(t('i18n_not_joined_yet', lang), show_alert=True)

@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import logging
 from datetime import datetime
 
@@ -285,9 +286,34 @@ def get_support_text(lang: str = "fa") -> str:
 """
 
 
+_PROMPT_CACHE = {}
+_PROMPT_CACHE_TTL = 60.0
+
+
+def _get_runtime_configs_data() -> dict:
+    """Return in-memory configs_pool when available to avoid redundant disk reads."""
+    try:
+        import sys
+        db_mod = sys.modules.get("database")
+        if db_mod is not None:
+            pool = getattr(db_mod, "configs_pool", None)
+            if isinstance(pool, dict) and pool:
+                return pool
+    except Exception:
+        pass
+    return load_configs_from_json()
+
+
 def generate_dynamic_system_prompt(lang: str = "fa") -> str:
     """تولید پرامپت داینامیک با اطلاعات دیتابیس (پشتیبانی از فارسی و انگلیسی)"""
-    configs_data = load_configs_from_json()
+    now_mono = time.monotonic()
+    cached = _PROMPT_CACHE.get(lang)
+    if cached is not None:
+        cached_at, cached_prompt = cached
+        if (now_mono - cached_at) < _PROMPT_CACHE_TTL:
+            return cached_prompt
+
+    configs_data = _get_runtime_configs_data()
 
     price_text = get_price_settings_text(configs_data, lang=lang)
     packages_text = get_ready_packages_text(configs_data, lang=lang)
@@ -303,6 +329,7 @@ def generate_dynamic_system_prompt(lang: str = "fa") -> str:
 {packages_text}
 {test_text}
 {support_text}"""
+        _PROMPT_CACHE[lang] = (now_mono, prompt)
         return prompt
 
     prompt = f"""دستیار فروش و پشتیبانی VPN هستی. فارسی طبیعی، خلاق و موجز پاسخ بده؛ فقط از داده‌های زیر و context همین کاربر استفاده کن و چیزی را حدس نزن. snapshot فقط خواندنی و متعلق به همان کاربر است. ادعای پرداخت، تغییر داده یا تحویل کانفیگ نکن مگر واقعاً انجام شده باشد. برای بسته‌ها فقط حجم درخواستی را پیشنهاد بده؛ دکمه را ربات می‌سازد و دستور دکمه در متن ننویس. فاکتور/رسید کارت و پرداخت موجودی از مسیرهای واقعی ربات انجام می‌شوند. حجم کمتر از ۱ گیگ را به مگابایت نمایش بده.
@@ -312,6 +339,7 @@ def generate_dynamic_system_prompt(lang: str = "fa") -> str:
 {packages_text}
 {test_text}
 {support_text}"""
+    _PROMPT_CACHE[lang] = (now_mono, prompt)
     return prompt
 
 
@@ -335,8 +363,9 @@ def refresh_gemini_prompt():
     global GEMINI_SYSTEM_PROMPT
 
     try:
+        _PROMPT_CACHE.clear()
         GEMINI_SYSTEM_PROMPT = generate_dynamic_system_prompt()
-        logger.info("GEMINI_SYSTEM_PROMPT refreshed successfully")
+        logger.debug("GEMINI_SYSTEM_PROMPT refreshed successfully")
         return True
     except Exception as e:
         logger.error(f"Error refreshing GEMINI_SYSTEM_PROMPT: {e}")

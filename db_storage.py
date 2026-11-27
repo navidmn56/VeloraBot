@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, Set
@@ -27,9 +28,37 @@ DB_FILES = {
     'user_states': os.path.join(DATA_DIR, "user_states.json"),
 }
 
+_DB_CACHEABLE_NAMES = {os.path.basename(p) for p in DB_FILES.values()}
+_storage_lock = threading.RLock()
+
 _db_cache: Dict[str, Any] = {}
 _db_modified: Set[str] = set()
 _last_save_time: Dict[str, float] = {}
+
+
+def fast_snapshot(obj: Any) -> Any:
+    """Create a thread-safe structural snapshot of JSON-like collections without deepcopy memo overhead."""
+    if isinstance(obj, dict):
+        return {k: fast_snapshot(v) for k, v in list(obj.items())}
+    if isinstance(obj, list):
+        return [fast_snapshot(item) for item in list(obj)]
+    if isinstance(obj, tuple):
+        return [fast_snapshot(item) for item in obj]
+    if isinstance(obj, set):
+        return list(obj)
+    return obj
+
+
+def _is_cacheable_db_path(file_path: str) -> bool:
+    """Only cache primary database files, never timestamped backup archives."""
+    try:
+        abs_target = os.path.abspath(file_path)
+        for db_path in DB_FILES.values():
+            if os.path.abspath(db_path) == abs_target:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def ensure_data_directory():
@@ -73,53 +102,64 @@ def ensure_data_directory():
 
 
 def save_json(file_path: str, data: Any) -> bool:
-    """Save data to file_path atomically using a temporary file."""
+    """Save data to file_path atomically using a unique temporary file."""
+    temp_file = None
     try:
         filename = os.path.basename(file_path)
         file_dir = os.path.dirname(file_path)
 
-        logger.info(f"Saving {filename} to path: {os.path.abspath(file_path)}")
+        logger.debug(f"Saving {filename} to path: {os.path.abspath(file_path)}")
 
-        os.makedirs(file_dir, exist_ok=True)
-
-        temp_file = file_path + '.tmp'
+        if file_dir:
+            os.makedirs(file_dir, exist_ok=True)
 
         if data is None:
             data = {}
 
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+        # Serialize in memory before touching disk; retry with snapshot if a live dict mutated concurrently
+        payload = None
+        for attempt in range(3):
+            try:
+                source = data if attempt == 0 else fast_snapshot(data)
+                payload = json.dumps(source, ensure_ascii=False, indent=2)
+                break
+            except RuntimeError:
+                if attempt == 2:
+                    raise
 
-        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
-            if os.path.exists(file_path):
+        temp_file = f"{file_path}.{os.getpid()}.{threading.get_ident()}.tmp"
+
+        with _storage_lock:
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+
+            if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
                 os.replace(temp_file, file_path)
+                temp_file = None
             else:
-                os.rename(temp_file, file_path)
-        else:
-            logger.error(f"Temporary file {temp_file} was not created or is empty")
-            return False
+                logger.error(f"Temporary file {temp_file} was not created or is empty")
+                return False
 
         if os.path.exists(file_path):
             file_size = os.path.getsize(file_path)
-            logger.info(f"{filename} saved successfully ({file_size:,} bytes)")
-
-            with open(file_path, 'r', encoding='utf-8') as f:
-                verify_data = json.load(f)
-            logger.info(
-                f"✅ Final confirmation: {len(verify_data) if isinstance(verify_data, dict) else 'N/A'} record(s) in {filename}"
-            )
+            record_count = len(data) if isinstance(data, dict) else 'N/A'
+            logger.debug(f"{filename} saved successfully ({file_size:,} bytes, {record_count} record(s))")
         else:
             logger.error(f"{filename} was not saved!")
             return False
 
-        _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
+        if _is_cacheable_db_path(file_path):
+            try:
+                _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
+            except RuntimeError:
+                pass
         if filename == 'configs.json':
             try:
                 from config import refresh_gemini_prompt
                 refresh_gemini_prompt()
-                logger.info("Gemini system prompt refreshed after saving configs.json")
+                logger.debug("Gemini system prompt refreshed after saving configs.json")
             except ImportError:
                 logger.debug("Skipping refresh - config.py not available")
             except Exception as e:
@@ -130,6 +170,12 @@ def save_json(file_path: str, data: Any) -> bool:
     except Exception as e:
         logger.error(f"Failed to save {os.path.basename(file_path)}: {e}", exc_info=True)
         return False
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
 
 
 def load_json(file_path: str, use_cache: bool = True) -> dict:
@@ -164,7 +210,7 @@ def load_json(file_path: str, use_cache: bool = True) -> dict:
 
             data = json.loads(content)
 
-            if use_cache:
+            if use_cache and _is_cacheable_db_path(file_path):
                 _db_cache[file_path] = data.copy() if isinstance(data, dict) else data
 
             logger.info(f"✅ {filename} loaded - {len(data) if isinstance(data, dict) else 'N/A'} items")

@@ -309,34 +309,34 @@ def _is_telegram_proxy(link: str) -> bool:
 async def _fetch_proxy_from_subscription(sub_link: str) -> Optional[str]:
     """دریافت و استخراج لینک پروکسی تلگرام از محتوای ساب کاربر"""
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(
-                sub_link,
-                timeout=aiohttp.ClientTimeout(total=4),
-                headers={"User-Agent": "v2rayNG/1.8.5"}
-            ) as response:
-                if response.status == 200:
-                    text_content = await response.text()
-                    if not text_content:
-                        return None
+        from services.panel_api import _ensure_session
+        session = await _ensure_session()
+        async with session.get(
+            sub_link,
+            timeout=aiohttp.ClientTimeout(total=4),
+            headers={"User-Agent": "v2rayNG/1.8.5"}
+        ) as response:
+            if response.status == 200:
+                text_content = await response.text()
+                if not text_content:
+                    return None
 
-                    raw_text = text_content.strip()
-                    lines = []
-                    try:
-                        pad = "=" * (-len(raw_text) % 4)
-                        decoded_bytes = base64.b64decode(raw_text + pad)
-                        decoded_text = decoded_bytes.decode('utf-8', errors='ignore')
-                        lines.extend(decoded_text.splitlines())
-                    except Exception:
-                        pass
+                raw_text = text_content.strip()
+                lines = []
+                try:
+                    pad = "=" * (-len(raw_text) % 4)
+                    decoded_bytes = base64.b64decode(raw_text + pad)
+                    decoded_text = decoded_bytes.decode('utf-8', errors='ignore')
+                    lines.extend(decoded_text.splitlines())
+                except Exception:
+                    pass
 
-                    lines.extend(raw_text.splitlines())
+                lines.extend(raw_text.splitlines())
 
-                    for line in lines:
-                        line = line.strip()
-                        if _is_telegram_proxy(line):
-                            return line
+                for line in lines:
+                    line = line.strip()
+                    if _is_telegram_proxy(line):
+                        return line
     except Exception as e:
         logger.debug(f"Error fetching proxy from subscription {sub_link}: {e}")
     return None
@@ -834,7 +834,7 @@ async def send_config_with_qr_option(
 
     # ─── ارسال ───
     try:
-        qr_img = generate_qr_code(config_link, order_id)
+        qr_img = await asyncio.to_thread(generate_qr_code, config_link, order_id)
         if bot:
             await bot.send_photo(
                 chat_id,
@@ -1350,7 +1350,7 @@ async def show_wireguard_config(callback: CallbackQuery):
 
     bot = get_bot()
     if bot:
-        qr_img = generate_wireguard_qr_code(config_text, order_id, order_data={'lang': lang})
+        qr_img = await asyncio.to_thread(generate_wireguard_qr_code, config_text, order_id, {'lang': lang})
         await bot.send_photo(
             callback.message.chat.id,
             qr_img,
@@ -1480,9 +1480,9 @@ async def show_single_qr(callback: CallbackQuery):
 
     try:
         if target_link.strip().startswith("[Interface]"):
-            qr_img = generate_wireguard_qr_code(target_link, order_id, order_data={'lang': lang})
+            qr_img = await asyncio.to_thread(generate_wireguard_qr_code, target_link, order_id, {'lang': lang})
         else:
-            qr_img = generate_qr_code(target_link, order_id)
+            qr_img = await asyncio.to_thread(generate_qr_code, target_link, order_id)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -1540,7 +1540,7 @@ async def show_subscription_qr(callback: CallbackQuery):
 
     try:
         sub_link = order.get('sub_link') or order.get('config_link')
-        qr_img = generate_qr_code(sub_link, order_id)
+        qr_img = await asyncio.to_thread(generate_qr_code, sub_link, order_id)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -1755,7 +1755,7 @@ async def my_configs(callback: CallbackQuery):
         status = order.get('status', 'approved')
         is_active = (status == 'approved')
 
-        remaining_percent = None
+        used_percent = None
         time_left_text = None
         panel_unlimited_time = False
         volume_gb = order.get('volume', 0) or 0
@@ -1782,8 +1782,7 @@ async def my_configs(callback: CallbackQuery):
                         down = (traffic.get('down', 0) if traffic else 0) / (1024 ** 3)
                         used = up + down
                         if total_gb > 0:
-                            used_pct = min(100, int((used / total_gb) * 100))
-                            remaining_percent = max(0, 100 - used_pct)
+                            used_percent = min(100, max(0, int((used / total_gb) * 100)))
 
                     expiry = client_info.get('expiryTime', 0)
                     if expiry > 0:
@@ -1805,7 +1804,7 @@ async def my_configs(callback: CallbackQuery):
             'order': order,
             'is_test': is_test,
             'is_active': is_active and (panel_is_active is not False),
-            'remaining_percent': remaining_percent,
+            'used_percent': used_percent,
             'time_left_text': time_left_text,
             'volume_gb': volume_gb,
             'is_unlimited': is_unlimited,
@@ -1826,7 +1825,7 @@ async def my_configs(callback: CallbackQuery):
         order_id = c['order_id']
         is_test = item['is_test']
         is_active = item['is_active']
-        rem_pct = item['remaining_percent']
+        used_pct = item['used_percent']
         time_left = item['time_left_text']
         vol = item['volume_gb']
         is_unlimited = item['is_unlimited']
@@ -1845,8 +1844,8 @@ async def my_configs(callback: CallbackQuery):
             label_parts = [build_category_label(cat_name)]
 
         label_parts.append(format_cfg_volume(vol, is_test, is_unlimited))
-        if not is_unlimited and rem_pct is not None:
-            label_parts.append(f"{rem_pct}%")
+        if not is_unlimited and used_pct is not None:
+            label_parts.append(f"{used_pct}%")
         if time_left:
             label_parts.append(time_left)
 

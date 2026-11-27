@@ -33,6 +33,7 @@ from database import (
     save_all,
     get_test_service_display,
 )
+from core.save_scheduler import schedule_save
 from user_manager import user_states, get_user, get_admin_id_int
 from strings import t
 from emoji_sticker_system import premium_emoji
@@ -1237,7 +1238,7 @@ async def confirm_broadcast(callback: CallbackQuery):
     state["broadcast_sending"] = True
     if broadcast_data.get("en_caption"):
         _ensure_broadcast_translation_record(broadcast_data)
-        save_all()
+        schedule_save(2.0)
     logger.info("📢 starting broadcast message:")
     logger.info(f" - type: {broadcast_data.get('type')}")
     logger.info(f" - user count: {len(users)}")

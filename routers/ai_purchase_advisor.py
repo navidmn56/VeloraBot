@@ -34,6 +34,7 @@ from database import (
     TEST_SERVICE_STATUS,
     USER_TEST_USAGE,
 )
+from core.save_scheduler import schedule_file_save
 from user_manager import user_states, get_user, get_admin_id_int
 from routers.admin_packages import format_package_volume
 from routers.admin_test import get_user_test_settings
@@ -910,10 +911,8 @@ def save_ai_purchase_advisor_result(
     history.append(result)
     user['ai_purchase_advisor_history'] = history[-5:]
     user['ai_purchase_advisor_result'] = result
-    saved = save_json(DB_FILES['users'], users)
-    if not saved:
-        logger.error('❌ Smart choice for user %s was not saved', user_id)
-    return saved
+    schedule_file_save('users', delay=1.0)
+    return True
 
 
 def get_ai_purchase_advisor_result(user_id: int) -> Optional[dict]:

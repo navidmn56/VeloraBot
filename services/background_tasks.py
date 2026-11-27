@@ -6,6 +6,7 @@ services/background_tasks.py
 """
 
 import os
+import gc
 import sys
 import time
 import shutil
@@ -28,6 +29,7 @@ from db_storage import (
     DB_FILES,
     _db_cache,
     _db_modified,
+    _storage_lock,
 )
 from database import (
     users,
@@ -45,11 +47,21 @@ from database import (
     now_tehran_iso,
 )
 from user_manager import get_user
+from core.save_scheduler import schedule_save
 from core.state_stores import (
     user_states,
     TEMP_INBOUND_SELECTION,
     INBOUND_BACK_DATA,
     _tg_user_cache,
+)
+from core.task_manager import (
+    consume_force_run,
+    get_task_interval,
+    is_task_enabled,
+    record_task_finish,
+    record_task_start,
+    sleep_interruptible,
+    wait_until_task_enabled,
 )
 from text_utils import format_size
 from daily_usage_system import usage_collector
@@ -308,7 +320,7 @@ def optimize_storage(save: bool = True) -> int:
 
     if cleaned > 0:
         if save:
-            save_all()
+            schedule_save(0.5)
         logger.info("✅ optimization completed:")
         logger.info(f"  🗑 {len(old_rejected)} old rejected order")
         logger.info(f"  🗑 {len(old_cancelled)} old cancelled order")
@@ -722,173 +734,209 @@ async def send_weekly_detailed_report(chat_id: int, bot: Optional[Bot] = None) -
 
 async def cleanup_expired_states_task():
     """پاکسازی خودکار وضعیت‌های منقضی شده کاربران"""
-    logger.info('Status cleanup task started (every 30 minutes)')
-    await asyncio.sleep(10)
+    logger.info('Status cleanup task started')
+    await sleep_interruptible("cleanup_expired_states", 10.0)
 
     while True:
         try:
-            await asyncio.sleep(1800)  # هر 30 دقیقه
-            cleaned = cleanup_expired_states()
-            if cleaned > 0:
-                logger.info(f"🧹 Automatic cleanup: {cleaned} expired status deleted")
-            else:
-                logger.debug('Automatic cleanup: no expired statuses found')
+            await wait_until_task_enabled("cleanup_expired_states")
+            interval = get_task_interval("cleanup_expired_states")
+            consume_force_run("cleanup_expired_states")
+
+            started = record_task_start("cleanup_expired_states")
+            try:
+                cleaned = cleanup_expired_states()
+                if cleaned > 0:
+                    logger.info(f"🧹 Automatic cleanup: {cleaned} expired status deleted")
+                else:
+                    logger.debug('Automatic cleanup: no expired statuses found')
+                record_task_finish("cleanup_expired_states", started)
+            except Exception as inner_err:
+                record_task_finish("cleanup_expired_states", started, str(inner_err))
+                raise
+
+            await sleep_interruptible("cleanup_expired_states", interval)
         except asyncio.CancelledError:
             logger.info('Status cleanup task canceled')
             break
         except Exception as e:
             logger.error(f"Error in status cleanup task: {e}", exc_info=True)
-            await asyncio.sleep(60)
+            await sleep_interruptible("cleanup_expired_states", 60.0)
 
 
 async def sync_deleted_configs_task():
     """همگام‌سازی و آپدیت خودکار کانفیگ‌های حذف‌شده از پنل با قابلیت تنظیم زمان و فعال/غیرفعال‌سازی توسط ادمین"""
     logger.info('Configuration synchronization task started')
-    await asyncio.sleep(60)  # تاخیر اولیه
+    await sleep_interruptible("sync_deleted_configs", 60.0)  # تاخیر اولیه
 
     while True:
         try:
-            settings = configs_pool.get('auto_backup_settings', {})
-            sync_enabled = settings.get('sync_enabled', True)
-            interval_hours = settings.get('sync_interval_hours', 6)
-            interval_seconds = max(300, int(interval_hours * 3600))
+            await wait_until_task_enabled("sync_deleted_configs")
+            force = consume_force_run("sync_deleted_configs")
+            interval_seconds = get_task_interval("sync_deleted_configs")
 
-            if sync_enabled and is_senai_panel_enabled():
-                logger.info('Starting synchronization of deleted configs...')
-                from routers.admin_tools import sync_deleted_configs
-                sync_result = await sync_deleted_configs(batch_size=20)
-                deleted = sync_result.get('deleted', 0) if isinstance(sync_result, dict) else (sync_result if isinstance(sync_result, int) else 0)
-                if deleted > 0:
-                    logger.info(f"🗑 Synchronization: {deleted} deleted config synchronized")
-                else:
-                    logger.debug('Synchronization: no deleted configs found')
-                settings['last_sync_time'] = now_tehran_iso()
-                await asyncio.to_thread(save_all)
+            if (is_task_enabled("sync_deleted_configs") or force) and is_senai_panel_enabled():
+                started = record_task_start("sync_deleted_configs")
+                try:
+                    logger.info('Starting synchronization of deleted configs...')
+                    from routers.admin_tools import sync_deleted_configs
+                    sync_result = await sync_deleted_configs(batch_size=20)
+                    deleted = sync_result.get('deleted', 0) if isinstance(sync_result, dict) else (sync_result if isinstance(sync_result, int) else 0)
+                    if deleted > 0:
+                        logger.info(f"🗑 Synchronization: {deleted} deleted config synchronized")
+                    else:
+                        logger.debug('Synchronization: no deleted configs found')
+                    settings = configs_pool.setdefault('auto_backup_settings', {})
+                    settings['last_sync_time'] = now_tehran_iso()
+                    schedule_save(2.0)
+                    record_task_finish("sync_deleted_configs", started)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as inner_err:
+                    record_task_finish("sync_deleted_configs", started, str(inner_err))
+                    raise
 
-            await asyncio.sleep(interval_seconds)
+            await sleep_interruptible("sync_deleted_configs", get_task_interval("sync_deleted_configs"))
         except asyncio.CancelledError:
             logger.info('Config synchronization task canceled')
             break
         except Exception as e:
             logger.error(f"Error in config synchronization task: {e}", exc_info=True)
-            await asyncio.sleep(600)
+            await sleep_interruptible("sync_deleted_configs", 600.0)
 
 
 async def auto_backup_task(bot: Optional[Bot] = None):
     """تسک زمان‌بندی‌شده بکاپ خودکار دیتابیس با امکان فعال/غیرفعال‌سازی و تنظیم زمان توسط ادمین"""
     logger.info('Auto-backup task started')
-    await asyncio.sleep(120)  # تاخیر اولیه ۲ دقیقه پس از راه‌اندازی ربات
+    await sleep_interruptible("auto_backup", 120.0)  # تاخیر اولیه ۲ دقیقه پس از راه‌اندازی ربات
 
     while True:
         try:
-            settings = configs_pool.get('auto_backup_settings', {})
-            backup_enabled = settings.get('backup_enabled', True)
-            interval_hours = settings.get('backup_interval_hours', 6)
-            interval_seconds = max(600, int(interval_hours * 3600))
+            await wait_until_task_enabled("auto_backup")
+            force = consume_force_run("auto_backup")
+            interval_seconds = get_task_interval("auto_backup")
 
-            if backup_enabled:
-                logger.info('Starting scheduled auto-backup of database...')
-                from main import create_auto_backup
-                success = await asyncio.to_thread(create_auto_backup)
-                if success:
-                    settings['last_backup_time'] = now_tehran_iso()
-                    await asyncio.to_thread(save_all)
-                    logger.info(f"✅ Scheduled auto-backup completed successfully (Interval: {interval_hours}h)")
-                else:
-                    logger.warning("⚠️ Scheduled auto-backup failed to save")
+            if is_task_enabled("auto_backup") or force:
+                started = record_task_start("auto_backup")
+                try:
+                    logger.info('Starting scheduled auto-backup of database...')
+                    from main import create_auto_backup
+                    success = await asyncio.to_thread(create_auto_backup)
+                    if success:
+                        settings = configs_pool.setdefault('auto_backup_settings', {})
+                        settings['last_backup_time'] = now_tehran_iso()
+                        schedule_save(2.0)
+                        logger.info(f"✅ Scheduled auto-backup completed successfully (Interval: {interval_seconds // 3600}h)")
+                    else:
+                        logger.warning("⚠️ Scheduled auto-backup failed to save")
+                    record_task_finish("auto_backup", started)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as inner_err:
+                    record_task_finish("auto_backup", started, str(inner_err))
+                    raise
 
-            await asyncio.sleep(interval_seconds)
+            await sleep_interruptible("auto_backup", get_task_interval("auto_backup"))
         except asyncio.CancelledError:
             logger.info('Auto-backup task canceled')
             break
         except Exception as e:
             logger.error(f"Error in auto_backup_task: {e}", exc_info=True)
-            await asyncio.sleep(600)
+            await sleep_interruptible("auto_backup", 600.0)
 
 
 _weekly_cleanup_running = False
 
 
 async def weekly_cleanup(bot: Optional[Bot] = None):
-    """پاکسازی هفتگی دیتابیس (هر یکشنبه ساعت 00:00)"""
+    """پاکسازی دوره‌ای دیتابیس (پیش‌فرض هر یکشنبه ساعت 00:00 یا طبق بازه انتخابی ادمین)"""
     global _weekly_cleanup_running
     b = bot or get_bot()
-    logger.info('Weekly cleanup task started (every Sunday at 00:00)')
-    await asyncio.sleep(30)
+    logger.info('Weekly cleanup task started')
+    await sleep_interruptible("weekly_cleanup", 30.0)
 
     while True:
         try:
+            await wait_until_task_enabled("weekly_cleanup")
+            force = consume_force_run("weekly_cleanup")
+            interval_sec = get_task_interval("weekly_cleanup")
+
+            if not force:
+                if interval_sec == 604800:
+                    now = now_tehran()
+                    days_until_sunday = (6 - now.weekday()) % 7
+                    next_sunday = (now + timedelta(days=days_until_sunday)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    if now.weekday() == 6:
+                        next_sunday = (now + timedelta(days=7)).replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        )
+                    wait_seconds = max(3600.0, (next_sunday - now).total_seconds())
+                else:
+                    wait_seconds = float(interval_sec)
+
+                logger.info(f"⏳ Time until periodic DB cleanup: {wait_seconds / 3600:.1f} hours")
+                woken = await sleep_interruptible("weekly_cleanup", wait_seconds)
+                if woken and not consume_force_run("weekly_cleanup"):
+                    continue
+
+            if not is_task_enabled("weekly_cleanup") and not force:
+                continue
+
             if _weekly_cleanup_running:
                 logger.warning('⚠️ Weekly cleanup is already running; duplicate run canceled')
-                await asyncio.sleep(3600)
+                await sleep_interruptible("weekly_cleanup", 3600.0)
                 continue
 
             _weekly_cleanup_running = True
-            logger.info('Weekly cleanup: calculating time until next Sunday...')
-
-            now = now_tehran()
-            days_until_sunday = (6 - now.weekday()) % 7
-            next_sunday = (now + timedelta(days=days_until_sunday)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            if now.weekday() == 6:
-                next_sunday = (now + timedelta(days=7)).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-            wait_seconds = (next_sunday - now).total_seconds()
-
-            if wait_seconds < 3600:
-                wait_seconds = 3600
-                logger.info('Time until execution is less than 1 hour; waiting at least 1 hour')
-
-            logger.info(f"⏳ Time until weekly cleanup: {wait_seconds / 3600:.1f} hours")
-            await asyncio.sleep(wait_seconds)
-
-            await asyncio.sleep(5)
-            logger.info('Starting weekly database cleanup...')
-
-            cleaned = optimize_storage(save=False)
-            if cleaned > 0:
-                await asyncio.to_thread(save_all)
-            logger.info(f"🧹 Weekly database cleanup completed - {cleaned} records deleted")
-
+            started = record_task_start("weekly_cleanup")
             try:
-                total, used, free = shutil.disk_usage(".")
-                free_gb = free / (1024**3)
-                total_gb = total / (1024**3)
-                used_gb = used / (1024**3)
-                disk_percent = (used / total) * 100
+                await asyncio.sleep(2)
+                logger.info('Starting periodic database cleanup...')
 
-                logger.info(f"💾 Disk space: total={total_gb:.1f}GB, used={used_gb:.1f}GB, free={free_gb:.1f}GB ({disk_percent:.1f}%)")
+                cleaned = optimize_storage(save=False)
+                if cleaned > 0:
+                    await asyncio.to_thread(save_all)
+                logger.info(f"🧹 Periodic database cleanup completed - {cleaned} records deleted")
 
-                if free_gb < 1.0:
-                    logger.warning(f"⚠️ Low disk space: {free_gb:.1f} GB")
+                try:
+                    total, used, free = shutil.disk_usage(".")
+                    free_gb = free / (1024**3)
+                    total_gb = total / (1024**3)
+                    used_gb = used / (1024**3)
+                    disk_percent = (used / total) * 100
 
-                    large_files = []
-                    try:
-                        for file in ['bot_debug.log', 'events.log', 'bot_error.log']:
-                            if os.path.exists(file):
-                                size_mb = os.path.getsize(file) / (1024 * 1024)
-                                if size_mb > 10:
-                                    large_files.append(f"{file} ({size_mb:.1f} MB)")
-                    except Exception:
-                        pass
+                    logger.info(f"💾 Disk space: total={total_gb:.1f}GB, used={used_gb:.1f}GB, free={free_gb:.1f}GB ({disk_percent:.1f}%)")
 
-                    admin_lang = get_user(ADMIN_ID_INT).get('lang', 'fa')
-                    if admin_lang == "en":
-                        warning_msg = (
-                            f"⚠️ <b>Warning: Low Disk Space!</b>\n\n"
-                            f"💾 Free Space: {free_gb:.1f} GB\n"
-                            f"📊 Total Space: {total_gb:.1f} GB\n"
-                            f"📊 Used Space: {used_gb:.1f} GB ({disk_percent:.1f}%)\n\n"
-                            f"{'📁 Large Files: ' + ', '.join(large_files) if large_files else ''}\n\n"
-                            f"💡 Suggestions:\n"
-                            f"• Clear logs: /clear_logs\n"
-                            f"• Remove old backups\n"
-                            f"• Optimize database"
-                        )
-                    else:
-                        warning_msg = f"""
+                    if free_gb < 1.0:
+                        logger.warning(f"⚠️ Low disk space: {free_gb:.1f} GB")
+
+                        large_files = []
+                        try:
+                            for file in ['bot_debug.log', 'events.log', 'bot_error.log']:
+                                if os.path.exists(file):
+                                    size_mb = os.path.getsize(file) / (1024 * 1024)
+                                    if size_mb > 10:
+                                        large_files.append(f"{file} ({size_mb:.1f} MB)")
+                        except Exception:
+                            pass
+
+                        admin_lang = get_user(ADMIN_ID_INT).get('lang', 'fa')
+                        if admin_lang == "en":
+                            warning_msg = (
+                                f"⚠️ <b>Warning: Low Disk Space!</b>\n\n"
+                                f"💾 Free Space: {free_gb:.1f} GB\n"
+                                f"📊 Total Space: {total_gb:.1f} GB\n"
+                                f"📊 Used Space: {used_gb:.1f} GB ({disk_percent:.1f}%)\n\n"
+                                f"{'📁 Large Files: ' + ', '.join(large_files) if large_files else ''}\n\n"
+                                f"💡 Suggestions:\n"
+                                f"• Clear logs: /clear_logs\n"
+                                f"• Remove old backups\n"
+                                f"• Optimize database"
+                            )
+                        else:
+                            warning_msg = f"""
         ⚠️ <b>هشدار: فضای خالی دیسک کم است!</b>
 
         💾 فضای خالی: {free_gb:.1f} GB
@@ -902,60 +950,64 @@ async def weekly_cleanup(bot: Optional[Bot] = None):
         • بکاپ‌های قدیمی را حذف کنید
         • دیتابیس را بهینه‌سازی کنید
         """
-                    current_bot = b or get_bot()
-                    if current_bot:
-                        await current_bot.send_message(
-                            ADMIN_ID_INT,
-                            warning_msg,
-                            parse_mode=ParseMode.HTML
-                        )
-                        logger.info('Disk space warning sent to admin')
+                        current_bot = b or get_bot()
+                        if current_bot:
+                            await current_bot.send_message(
+                                ADMIN_ID_INT,
+                                warning_msg,
+                                parse_mode=ParseMode.HTML
+                            )
+                            logger.info('Disk space warning sent to admin')
 
-            except Exception as e:
-                logger.error(f"Error checking disk space: {e}", exc_info=True)
-
-            log_sys = get_log_system()
-            if log_sys:
-                try:
-                    await asyncio.sleep(2)
-                    await log_sys.log_admin_action(
-                        ADMIN_ID_INT,
-                        "Automatic weekly database cleanup",
-                        details=f"Deleted {cleaned} records"
-                    )
-                    logger.info('Weekly cleanup log recorded in external system')
                 except Exception as e:
-                    logger.warning(f"Error sending cleanup log to external system: {e}")
+                    logger.error(f"Error checking disk space: {e}", exc_info=True)
 
-            try:
-                backup_dir = os.path.join(DATA_DIR, 'backups')
-                if os.path.exists(backup_dir):
-                    cutoff = time.time() - (30 * 24 * 3600)  # 30 روز
-                    deleted_count = 0
-                    for f in os.listdir(backup_dir):
-                        if f.endswith('.json') or f.endswith('.backup'):
-                            file_path = os.path.join(backup_dir, f)
-                            if os.path.getmtime(file_path) < cutoff:
-                                os.remove(file_path)
-                                deleted_count += 1
-                    if deleted_count > 0:
-                        logger.info(f"🗑 {deleted_count} old backup deleted")
-            except Exception as e:
-                logger.error(f"Error cleaning up backups: {e}")
+                log_sys = get_log_system()
+                if log_sys:
+                    try:
+                        await asyncio.sleep(2)
+                        await log_sys.log_admin_action(
+                            ADMIN_ID_INT,
+                            "Automatic weekly database cleanup",
+                            details=f"Deleted {cleaned} records"
+                        )
+                        logger.info('Weekly cleanup log recorded in external system')
+                    except Exception as e:
+                        logger.warning(f"Error sending cleanup log to external system: {e}")
 
-            try:
-                mem = get_memory_usage()
-                if mem.get('rss_mb', 0) > 400:
-                    logger.warning(f"⚠️ High memory usage: {mem.get('rss_mb', 0):.1f} MB")
-                    _db_cache.clear()
-                    _db_modified.clear()
-                    logger.info('🧹 Database cache cleared')
-            except Exception as e:
-                logger.error(f"Error checking memory: {e}")
+                try:
+                    backup_dir = os.path.join(DATA_DIR, 'backups')
+                    if os.path.exists(backup_dir):
+                        cutoff = time.time() - (30 * 24 * 3600)  # 30 روز
+                        deleted_count = 0
+                        for f in os.listdir(backup_dir):
+                            if f.endswith('.json') or f.endswith('.backup'):
+                                file_path = os.path.join(backup_dir, f)
+                                if os.path.getmtime(file_path) < cutoff:
+                                    os.remove(file_path)
+                                    deleted_count += 1
+                        if deleted_count > 0:
+                            logger.info(f"🗑 {deleted_count} old backup deleted")
+                except Exception as e:
+                    logger.error(f"Error cleaning up backups: {e}")
 
-            _weekly_cleanup_running = False
-            logger.info('Weekly cleanup finished')
-            await asyncio.sleep(86400)
+                try:
+                    mem = get_memory_usage()
+                    if mem.get('rss_mb', 0) > 400:
+                        logger.warning(f"⚠️ High memory usage: {mem.get('rss_mb', 0):.1f} MB")
+                        with _storage_lock:
+                            _db_cache.clear()
+                        gc.collect()
+                        logger.info('🧹 Database cache cleared')
+                except Exception as e:
+                    logger.error(f"Error checking memory: {e}")
+
+                record_task_finish("weekly_cleanup", started)
+                logger.info('Weekly cleanup finished')
+                if get_task_interval("weekly_cleanup") == 604800 and not force:
+                    await sleep_interruptible("weekly_cleanup", 86400.0)
+            finally:
+                _weekly_cleanup_running = False
 
         except asyncio.CancelledError:
             logger.info('❌ Weekly cleanup task canceled')
@@ -970,264 +1022,384 @@ async def weekly_cleanup(bot: Optional[Bot] = None):
                 except Exception as log_err:
                     logger.error(f"Error recording error log: {log_err}")
             _weekly_cleanup_running = False
-            await asyncio.sleep(3600)
+            await sleep_interruptible("weekly_cleanup", 3600.0)
 
 
 async def health_monitor(bot: Optional[Bot] = None):
-    """مانیتورینگ سلامت ربات و ارسال گزارش هر 16 ساعت"""
-    logger.info('Health monitoring task started (every 16 hours)')
+    """مانیتورینگ سلامت ربات و ارسال گزارش بر اساس بازه تنظیمی"""
+    logger.info('Health monitoring task started')
 
     while True:
         try:
-            await asyncio.sleep(16 * 3600)  # هر 16 ساعت
-            logger.info('Starting health monitoring...')
-            await send_health_report(ADMIN_ID_INT, bot=bot)
+            await wait_until_task_enabled("health_monitor")
+            force = consume_force_run("health_monitor")
+            if not force:
+                woken = await sleep_interruptible("health_monitor", get_task_interval("health_monitor"))
+                if woken and not consume_force_run("health_monitor"):
+                    continue
+            if not is_task_enabled("health_monitor") and not force:
+                continue
+
+            started = record_task_start("health_monitor")
+            try:
+                logger.info('Starting health monitoring...')
+                await send_health_report(ADMIN_ID_INT, bot=bot)
+                record_task_finish("health_monitor", started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as inner_err:
+                record_task_finish("health_monitor", started, str(inner_err))
+                raise
 
         except asyncio.CancelledError:
             logger.info('Health monitoring task canceled')
             break
         except Exception as e:
             logger.error(f"Error in health monitoring: {e}", exc_info=True)
-            await asyncio.sleep(3600)
+            await sleep_interruptible("health_monitor", 3600.0)
 
 
 async def disk_space_monitor(bot: Optional[Bot] = None):
-    """هشدار فضای دیسک هر 48 ساعت (فقط در صورت کم بودن فضا)"""
-    logger.info('Disk space alert task started (every 48 hours)')
-
-    await asyncio.sleep(300)
+    """هشدار فضای دیسک بر اساس بازه تنظیمی (فقط در صورت کم بودن فضا)"""
+    logger.info('Disk space alert task started')
+    await sleep_interruptible("disk_space_monitor", 300.0)
 
     while True:
         try:
-            total, used, free = shutil.disk_usage(".")
-            free_gb = free / (1024**3)
+            await wait_until_task_enabled("disk_space_monitor")
+            force = consume_force_run("disk_space_monitor")
 
-            if free_gb < 1.0:
-                await send_disk_warning(ADMIN_ID_INT, bot=bot)
-                logger.info(f"Disk space warning sent (free space: {free_gb:.1f} GB)")
-            else:
-                logger.info(f"Disk space is sufficient: {free_gb:.1f} GB")
+            if is_task_enabled("disk_space_monitor") or force:
+                started = record_task_start("disk_space_monitor")
+                try:
+                    total, used, free = shutil.disk_usage(".")
+                    free_gb = free / (1024**3)
 
-            await asyncio.sleep(48 * 3600)
+                    if free_gb < 1.0:
+                        await send_disk_warning(ADMIN_ID_INT, bot=bot)
+                        logger.info(f"Disk space warning sent (free space: {free_gb:.1f} GB)")
+                    else:
+                        logger.info(f"Disk space is sufficient: {free_gb:.1f} GB")
+                    record_task_finish("disk_space_monitor", started)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as inner_err:
+                    record_task_finish("disk_space_monitor", started, str(inner_err))
+                    raise
+
+            await sleep_interruptible("disk_space_monitor", get_task_interval("disk_space_monitor"))
 
         except asyncio.CancelledError:
             logger.info('Disk space alert task canceled')
             break
         except Exception as e:
             logger.error(f"Error in disk space alert: {e}", exc_info=True)
-            await asyncio.sleep(3600)
+            await sleep_interruptible("disk_space_monitor", 3600.0)
 
 
 async def weekly_detailed_report_task(bot: Optional[Bot] = None):
-    """گزارش کامل هفتگی دقیقاً ساعت ۰۰:۰۰ یکشنبه - فقط یک بار در هفته"""
-    logger.info('📅 Weekly report task started (every Sunday at 00:00)')
+    """گزارش کامل هفتگی (پیش‌فرض یکشنبه‌ها ساعت ۰۰:۰۰ یا طبق بازه انتخابی)"""
+    logger.info('📅 Weekly report task started')
 
     last_report_week = None
 
     while True:
         try:
-            now = now_tehran()
+            await wait_until_task_enabled("weekly_detailed_report")
+            force = consume_force_run("weekly_detailed_report")
+            interval_sec = get_task_interval("weekly_detailed_report")
 
-            days_until_sunday = (6 - now.weekday()) % 7
-            next_sunday = (now + timedelta(days=days_until_sunday)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            if not force:
+                if interval_sec == 604800:
+                    now = now_tehran()
+                    days_until_sunday = (6 - now.weekday()) % 7
+                    next_sunday = (now + timedelta(days=days_until_sunday)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
+                    )
+                    if now.weekday() == 6 and now.hour >= 0 and now.minute >= 0:
+                        next_sunday = (now + timedelta(days=7)).replace(
+                            hour=0, minute=0, second=0, microsecond=0
+                        )
+                    wait_seconds = max(3600.0, (next_sunday - now).total_seconds())
+                else:
+                    wait_seconds = float(interval_sec)
 
-            if now.weekday() == 6 and now.hour >= 0 and now.minute >= 0:
-                next_sunday = (now + timedelta(days=7)).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                logger.info(f"⏳ Time until weekly report: {wait_seconds / 3600:.1f} hours")
+                woken = await sleep_interruptible("weekly_detailed_report", wait_seconds)
+                if woken and not consume_force_run("weekly_detailed_report"):
+                    continue
 
-            wait_seconds = (next_sunday - now).total_seconds()
-
-            if wait_seconds < 3600:
-                wait_seconds = 3600
-                logger.info("⏳ Less than 1 hour remaining; setting to 1 hour")
-
-            current_week_key = f"{now.isocalendar()[0]}-{now.isocalendar()[1]}"
-            logger.info(f"⏳ Time until weekly report: {wait_seconds / 3600:.1f} hours")
-            logger.info(f"📅 Next Sunday: {next_sunday.strftime('%Y-%m-%d %H:%M:%S')} - week {current_week_key}")
-
-            await asyncio.sleep(wait_seconds)
-
-            now = now_tehran()
-            current_week_key = f"{now.isocalendar()[0]}-{now.isocalendar()[1]}"
-
-            if last_report_week == current_week_key:
-                logger.info(f"⏳ Report for week {current_week_key} was already sent; waiting 24 hours...")
-                await asyncio.sleep(86400)
+            if not is_task_enabled("weekly_detailed_report") and not force:
                 continue
 
-            logger.info(f"📊 Starting weekly report delivery - week {current_week_key}")
-            await send_weekly_detailed_report(ADMIN_ID_INT, bot=bot)
-            logger.info('✅ Weekly report sent')
+            now = now_tehran()
+            current_week_key = f"{now.isocalendar()[0]}-{now.isocalendar()[1]}"
 
-            last_report_week = current_week_key
+            if not force and interval_sec == 604800 and last_report_week == current_week_key:
+                logger.info(f"⏳ Report for week {current_week_key} was already sent; waiting 24 hours...")
+                await sleep_interruptible("weekly_detailed_report", 86400.0)
+                continue
 
-            log_sys = get_log_system()
-            if log_sys:
-                try:
-                    await log_sys.log_admin_action(
-                        ADMIN_ID_INT,
-                        "Weekly health report",
-                        details=f"Week: {current_week_key} | Users: {len(users)}, Orders: {len(get_valid_orders())}"
-                    )
-                except Exception as e:
-                    logger.warning(f"Error recording weekly report log: {e}")
+            started = record_task_start("weekly_detailed_report")
+            try:
+                logger.info(f"📊 Starting weekly report delivery - week {current_week_key}")
+                await send_weekly_detailed_report(ADMIN_ID_INT, bot=bot)
+                logger.info('✅ Weekly report sent')
 
-            logger.info('⏳ Waiting 24 hours to prevent duplicate delivery...')
-            await asyncio.sleep(86400)
+                last_report_week = current_week_key
+
+                log_sys = get_log_system()
+                if log_sys:
+                    try:
+                        await log_sys.log_admin_action(
+                            ADMIN_ID_INT,
+                            "Weekly health report",
+                            details=f"Week: {current_week_key} | Users: {len(users)}, Orders: {len(get_valid_orders())}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Error recording weekly report log: {e}")
+
+                record_task_finish("weekly_detailed_report", started)
+                if interval_sec == 604800 and not force:
+                    await sleep_interruptible("weekly_detailed_report", 86400.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception as inner_err:
+                record_task_finish("weekly_detailed_report", started, str(inner_err))
+                raise
 
         except asyncio.CancelledError:
             logger.info('❌ Weekly report task canceled')
             break
         except Exception as e:
             logger.error(f"❌ Error in weekly report: {e}", exc_info=True)
-            await asyncio.sleep(3600)
+            await sleep_interruptible("weekly_detailed_report", 3600.0)
 
 
 async def config_pool_monitor(bot: Optional[Bot] = None):
     """بررسی مخزن کانفیگ و هشدار در صورت کمبود"""
-    logger.info('Configuration repository monitoring task started (every 1 hour)')
-    await asyncio.sleep(300)
+    logger.info('Configuration repository monitoring task started')
+    await sleep_interruptible("config_pool_monitor", 300.0)
 
     while True:
         try:
-            await asyncio.sleep(3600)
+            await wait_until_task_enabled("config_pool_monitor")
+            force = consume_force_run("config_pool_monitor")
+            if not force:
+                woken = await sleep_interruptible("config_pool_monitor", get_task_interval("config_pool_monitor"))
+                if woken and not consume_force_run("config_pool_monitor"):
+                    continue
+            if not is_task_enabled("config_pool_monitor") and not force:
+                continue
 
-            if not is_senai_panel_enabled():
-                available = get_available_configs_count()
-                logger.info(f"Checking config repository: {available} configs available")
+            started = record_task_start("config_pool_monitor")
+            try:
+                if not is_senai_panel_enabled():
+                    available = get_available_configs_count()
+                    logger.info(f"Checking config repository: {available} configs available")
 
-                if available < 10:
-                    logger.warning(f"⚠️ Too few configs in repository: {available} number")
-                    current_bot = bot or get_bot()
-                    if current_bot:
-                        await current_bot.send_message(
-                            ADMIN_ID_INT,
-                            f"⚠️ <b>هشدار: کمبود کانفیگ در مخزن!</b>\n\n"
-                            f"📦 کانفیگ موجود: {available}\n"
-                            f"🔔 لطفاً هر چه سریعتر کانفیگ جدید اضافه کنید.",
-                            parse_mode=ParseMode.HTML
-                        )
-                else:
-                    logger.debug(f"Config repository is in good condition: {available} number")
+                    if available < 10:
+                        logger.warning(f"⚠️ Too few configs in repository: {available} number")
+                        current_bot = bot or get_bot()
+                        if current_bot:
+                            await current_bot.send_message(
+                                ADMIN_ID_INT,
+                                f"⚠️ <b>هشدار: کمبود کانفیگ در مخزن!</b>\n\n"
+                                f"📦 کانفیگ موجود: {available}\n"
+                                f"🔔 لطفاً هر چه سریعتر کانفیگ جدید اضافه کنید.",
+                                parse_mode=ParseMode.HTML
+                            )
+                    else:
+                        logger.debug(f"Config repository is in good condition: {available} number")
+                record_task_finish("config_pool_monitor", started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as inner_err:
+                record_task_finish("config_pool_monitor", started, str(inner_err))
+                raise
 
         except asyncio.CancelledError:
             logger.info('Config repository monitoring task canceled')
             break
         except Exception as e:
             logger.error(f"Error in repository monitoring: {e}", exc_info=True)
-            await asyncio.sleep(3600)
+            await sleep_interruptible("config_pool_monitor", 3600.0)
+
+
+def _rotate_logs_sync() -> tuple[int, int]:
+    """اجرای همگام چرخش و پاک‌سازی لاگ‌ها در ترد جداگانه"""
+    base_names = ['bot_debug.log', 'events.log', 'bot_error.log']
+    search_dirs = []
+    for d in ('.', DATA_DIR):
+        abs_d = os.path.abspath(d)
+        if abs_d not in search_dirs:
+            search_dirs.append(abs_d)
+
+    log_paths = []
+    for directory in search_dirs:
+        for base_name in base_names:
+            log_paths.append((directory, base_name, os.path.join(directory, base_name)))
+
+    rotated_count = 0
+    deleted_count = 0
+    cutoff = time.time() - 30 * 24 * 3600
+
+    for directory, base_name, log_path in log_paths:
+        if os.path.exists(log_path):
+            size = os.path.getsize(log_path)
+            size_mb = size / (1024 * 1024)
+            logger.info(f"Checking log file {log_path}: {size_mb:.1f} MB")
+
+            if size > 50 * 1024 * 1024:  # 50 MB
+                backup_name = f"{log_path}.{now_tehran().strftime('%Y%m%d_%H%M%S')}.old"
+                try:
+                    os.rename(log_path, backup_name)
+                except PermissionError:
+                    shutil.copy2(log_path, backup_name)
+                    with open(log_path, 'w', encoding='utf-8'):
+                        pass
+                rotated_count += 1
+                logger.info(f"🔄 Log rotation: {log_path} -> {backup_name}")
+
+        if os.path.isdir(directory):
+            for old_file in os.listdir(directory):
+                if old_file.startswith(base_name) and old_file.endswith('.old'):
+                    file_path = os.path.join(directory, old_file)
+                    try:
+                        if os.path.getmtime(file_path) < cutoff:
+                            os.remove(file_path)
+                            deleted_count += 1
+                            logger.debug(f"🗑 Deleting old log file: {file_path}")
+                    except Exception as rm_err:
+                        logger.warning(f"Failed to delete old log file {file_path} : {rm_err}")
+
+    return rotated_count, deleted_count
 
 
 async def log_rotation():
-    """چرخش خودکار لاگ‌ها هر 7 روز"""
-    logger.info('Log rotation task started (every 7 days)')
+    """چرخش خودکار لاگ‌ها بر اساس بازه تنظیمی"""
+    logger.info('Log rotation task started')
 
     while True:
         try:
-            await asyncio.sleep(7 * 24 * 3600)  # هر 7 روز
-            logger.info('Starting log rotation...')
+            await wait_until_task_enabled("log_rotation")
+            force = consume_force_run("log_rotation")
+            if not force:
+                woken = await sleep_interruptible("log_rotation", get_task_interval("log_rotation"))
+                if woken and not consume_force_run("log_rotation"):
+                    continue
+            if not is_task_enabled("log_rotation") and not force:
+                continue
 
-            log_files = ['bot_debug.log', 'events.log', 'bot_error.log']
-            rotated_count = 0
-            deleted_count = 0
-
-            for log_file in log_files:
-                if os.path.exists(log_file):
-                    size = os.path.getsize(log_file)
-                    size_mb = size / (1024 * 1024)
-                    logger.info(f"Checking log file {log_file}: {size_mb:.1f} MB")
-
-                    if size > 50 * 1024 * 1024:  # 50 MB
-                        backup_name = f"{log_file}.{now_tehran().strftime('%Y%m%d_%H%M%S')}.old"
-                        try:
-                            os.rename(log_file, backup_name)
-                        except PermissionError:
-                            shutil.copy2(log_file, backup_name)
-                            with open(log_file, 'w', encoding='utf-8') as f:
-                                pass
-                        rotated_count += 1
-                        logger.info(f"🔄 Log rotation: {log_file} -> {backup_name}")
-
-                        for old_file in os.listdir('.'):
-                            if old_file.startswith(log_file) and old_file.endswith('.old'):
-                                file_path = os.path.join('.', old_file)
-                                file_age = time.time() - os.path.getmtime(file_path)
-                                if file_age > 30 * 24 * 3600:
-                                    try:
-                                        os.remove(file_path)
-                                        deleted_count += 1
-                                        logger.debug(f"🗑 Deleting old log file: {old_file} (age: {file_age / 86400:.1f} days)")
-                                    except Exception as rm_err:
-                                        logger.warning(f"Failed to delete old log file {old_file} : {rm_err}")
-
-            logger.info(f"Log rotation completed: {rotated_count} rotated files, {deleted_count} old files deleted")
+            started = record_task_start("log_rotation")
+            try:
+                logger.info('Starting log rotation...')
+                rotated_count, deleted_count = await asyncio.to_thread(_rotate_logs_sync)
+                logger.info(f"Log rotation completed: {rotated_count} rotated files, {deleted_count} old files deleted")
+                record_task_finish("log_rotation", started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as inner_err:
+                record_task_finish("log_rotation", started, str(inner_err))
+                raise
 
         except asyncio.CancelledError:
             logger.info('Log rotation task canceled')
             break
         except Exception as e:
             logger.error(f"Error during log rotation: {e}", exc_info=True)
-            await asyncio.sleep(24 * 3600)
+            await sleep_interruptible("log_rotation", 24 * 3600.0)
 
 
 async def panel_limits_reset():
-    """ریست خودکار محدودیت‌های پنل هر 24 ساعت"""
-    logger.info('Panel limits reset task started (every 24 hours)')
+    """ریست خودکار محدودیت‌های پنل بر اساس بازه تنظیمی"""
+    logger.info('Panel limits reset task started')
 
     while True:
         try:
-            await asyncio.sleep(24 * 3600)  # هر 24 ساعت
-            logger.info('Starting panel rate-limit reset...')
+            await wait_until_task_enabled("panel_limits_reset")
+            force = consume_force_run("panel_limits_reset")
+            if not force:
+                woken = await sleep_interruptible("panel_limits_reset", get_task_interval("panel_limits_reset"))
+                if woken and not consume_force_run("panel_limits_reset"):
+                    continue
+            if not is_task_enabled("panel_limits_reset") and not force:
+                continue
 
-            if callable(reset_panel_rate_limits):
-                await reset_panel_rate_limits()
-                logger.info('🔄 Panel rate limits successfully reset')
-            else:
-                logger.warning('Function reset_panel_rate_limits is unavailable')
+            started = record_task_start("panel_limits_reset")
+            try:
+                logger.info('Starting panel rate-limit reset...')
+
+                if callable(reset_panel_rate_limits):
+                    await reset_panel_rate_limits()
+                    logger.info('🔄 Panel rate limits successfully reset')
+                else:
+                    logger.warning('Function reset_panel_rate_limits is unavailable')
+                record_task_finish("panel_limits_reset", started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as inner_err:
+                record_task_finish("panel_limits_reset", started, str(inner_err))
+                raise
 
         except asyncio.CancelledError:
             logger.info('Panel rate-limit reset task canceled')
             break
         except Exception as e:
             logger.error(f"Error resetting panel rate limits: {e}", exc_info=True)
-            await asyncio.sleep(3600)
+            await sleep_interruptible("panel_limits_reset", 3600.0)
 
 
 async def memory_monitor():
     """بررسی مصرف حافظه و پاکسازی در صورت نیاز"""
-    logger.info('Memory monitoring task started (every 15 minutes)')
-    await asyncio.sleep(60)  # تاخیر اولیه
+    logger.info('Memory monitoring task started')
+    await sleep_interruptible("memory_monitor", 60.0)  # تاخیر اولیه
 
     while True:
         try:
-            await asyncio.sleep(900)  # هر 15 دقیقه
-            mem = get_memory_usage()
-            logger.debug(f"Memory usage: {mem['rss_mb']:.1f} MB ({mem['percent']:.1f}%)")
+            await wait_until_task_enabled("memory_monitor")
+            force = consume_force_run("memory_monitor")
+            if not force:
+                woken = await sleep_interruptible("memory_monitor", get_task_interval("memory_monitor"))
+                if woken and not consume_force_run("memory_monitor"):
+                    continue
 
-            if mem['rss_mb'] > 500:
-                logger.warning(f"⚠️ High memory usage: {mem['rss_mb']:.1f} MB - cleaning up...")
-                cache_size_before = len(_db_cache)
-                _db_cache.clear()
-                _db_modified.clear()
-                cleaned = cleanup_expired_states()
+            started = record_task_start("memory_monitor")
+            try:
+                mem = get_memory_usage()
+                logger.debug(f"Memory usage: {mem['rss_mb']:.1f} MB ({mem['percent']:.1f}%)")
 
-                mem_after = get_memory_usage()
-                logger.info(f"✅ Memory cleanup: cache {cache_size_before} -> 0, statuses cleared: {cleaned}")
-                logger.info(f"Memory usage after cleanup: {mem_after['rss_mb']:.1f} MB (reduced by {mem['rss_mb'] - mem_after['rss_mb']:.1f} MB)")
+                if mem['rss_mb'] > 500 or force:
+                    logger.warning(f"⚠️ High memory usage: {mem['rss_mb']:.1f} MB - cleaning up...")
+                    with _storage_lock:
+                        cache_size_before = len(_db_cache)
+                        _db_cache.clear()
+                    cleaned = cleanup_expired_states()
+                    gc.collect()
+
+                    mem_after = get_memory_usage()
+                    logger.info(f"✅ Memory cleanup: cache {cache_size_before} -> 0, statuses cleared: {cleaned}")
+                    logger.info(f"Memory usage after cleanup: {mem_after['rss_mb']:.1f} MB (reduced by {mem['rss_mb'] - mem_after['rss_mb']:.1f} MB)")
+                record_task_finish("memory_monitor", started)
+            except asyncio.CancelledError:
+                raise
+            except Exception as inner_err:
+                record_task_finish("memory_monitor", started, str(inner_err))
+                raise
 
         except asyncio.CancelledError:
             logger.info('Memory monitoring task canceled')
             break
         except Exception as e:
             logger.error(f"Error in memory monitoring: {e}", exc_info=True)
-            await asyncio.sleep(300)
+            await sleep_interruptible("memory_monitor", 300.0)
 
 
 async def daily_usage_collector_worker():
     """ورکر جمع‌آوری روزانه مصرف ترافیک کلاینت‌ها"""
+    # استگر اولیه برای جلوگیری از هم‌زمانی با alert_system در لحظه استارت
+    await sleep_interruptible("daily_usage_collector", 20.0)
+
     def _get_approved_emails():
         valid = get_valid_orders()
         emails = set()
@@ -1240,7 +1412,7 @@ async def daily_usage_collector_worker():
     await usage_collector.start(
         get_inbounds_func=xui_get_inbounds,
         get_approved_emails_func=_get_approved_emails,
-        interval_seconds=300,
+        interval_seconds=get_task_interval("daily_usage_collector"),
         get_client_traffic_func=xui_get_client_traffic,
     )
 
@@ -1249,14 +1421,15 @@ def start_background_tasks(bot: Bot) -> list[asyncio.Task]:
     """ایجاد و راه‌اندازی تمام تسک‌های پس‌زمینه با نام‌گذاری دقیق جهت مانیتورینگ"""
     set_bot(bot)
     from routers.admin_tools import auto_log_cleanup
+    from services.server_guard import server_guard_worker
 
     tasks = [
         asyncio.create_task(cleanup_expired_states_task(), name="cleanup_expired_states"),
         asyncio.create_task(sync_deleted_configs_task(), name="sync_deleted_configs"),
         asyncio.create_task(auto_backup_task(bot=bot), name="auto_backup"),
         asyncio.create_task(weekly_cleanup(bot=bot), name="weekly_cleanup"),
-        asyncio.create_task(health_monitor(bot=bot), name="health_monitor"),  # هر 16 ساعت
-        asyncio.create_task(disk_space_monitor(bot=bot), name="disk_space_monitor"),  # هر 48 ساعت
+        asyncio.create_task(health_monitor(bot=bot), name="health_monitor"),
+        asyncio.create_task(disk_space_monitor(bot=bot), name="disk_space_monitor"),
         asyncio.create_task(config_pool_monitor(bot=bot), name="config_pool_monitor"),
         asyncio.create_task(log_rotation(), name="log_rotation"),
         asyncio.create_task(panel_limits_reset(), name="panel_limits_reset"),
@@ -1264,6 +1437,7 @@ def start_background_tasks(bot: Bot) -> list[asyncio.Task]:
         asyncio.create_task(memory_monitor(), name="memory_monitor"),
         asyncio.create_task(auto_log_cleanup(), name="auto_log_cleanup"),
         asyncio.create_task(daily_usage_collector_worker(), name="daily_usage_collector"),
+        asyncio.create_task(server_guard_worker(bot=bot), name="server_guard"),
     ]
 
     logger.info(f"✅ {len(tasks)} Background tasks created:")

@@ -357,33 +357,40 @@ class FSMStateManager(dict):
 
     async def _debounced_save(self) -> None:
         try:
-            await asyncio.sleep(0.3)  # 300ms debounce
-            if self._is_dirty:
+            while self._is_dirty:
+                await asyncio.sleep(0.3)  # 300ms debounce
+                if not self._is_dirty:
+                    break
                 self._is_dirty = False
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, self.save)
+                snapshot = self.build_snapshot()
+                from db_storage import save_json
+                await asyncio.to_thread(save_json, self._file_path, snapshot)
         except asyncio.CancelledError:
             self.save()
         except Exception as e:
             logger.debug(f"Debounced save note: {e}")
 
+    def build_snapshot(self) -> Dict[str, Any]:
+        """Build an isolated serializable snapshot of active unexpired user states."""
+        from db_storage import fast_snapshot
+        data_to_save: Dict[str, Any] = {}
+        for k, v in list(super().items()):
+            if isinstance(v, dict) and v:
+                ts = v.get("timestamp")
+                if ts:
+                    try:
+                        age = _timestamp_age_seconds(ts)
+                        if age is not None and age > 86400:
+                            continue
+                    except Exception:
+                        pass
+                data_to_save[str(k)] = fast_snapshot(dict(v))
+        return data_to_save
+
     def save(self) -> bool:
         """Save all active unexpired user states atomically to disk."""
         try:
-            data_to_save = {}
-            for k, v in list(super().items()):
-                if isinstance(v, dict) and v:
-                    # Prune ancient states older than 24 hours
-                    ts = v.get("timestamp")
-                    if ts:
-                        try:
-                            age = _timestamp_age_seconds(ts)
-                            if age is not None and age > 86400:
-                                continue
-                        except Exception:
-                            pass
-                    data_to_save[str(k)] = dict(v)
-
+            data_to_save = self.build_snapshot()
             from db_storage import save_json
             return save_json(self._file_path, data_to_save)
         except Exception as e:

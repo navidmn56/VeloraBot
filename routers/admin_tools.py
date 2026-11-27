@@ -15,6 +15,7 @@ import shutil
 import asyncio
 import logging
 import unicodedata
+from collections import deque
 from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Optional, List, Dict, Any, Tuple, Union
@@ -48,6 +49,7 @@ from db_storage import (
     load_json,
     _db_cache,
     _db_modified,
+    _storage_lock,
 )
 from database import (
     users,
@@ -56,6 +58,7 @@ from database import (
     referrals,
     configs_pool,
     save_all,
+    save_all_async,
     now_tehran,
     now_tehran_iso,
     BLACKLIST,
@@ -67,6 +70,7 @@ from database import (
     add_config_to_pool,
     update_order,
 )
+from core.save_scheduler import schedule_save, schedule_file_save
 from user_manager import (
     user_states,
     get_user,
@@ -542,19 +546,33 @@ async def confirm_clear_logs(callback: CallbackQuery):
     cleared_items = []
     errors = []
     try:
-        log_files = ['bot_debug.log', 'bot_error.log', 'bot.log']
-        for log_file in log_files:
-            if os.path.exists(log_file):
-                with open(log_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    last_lines = lines[-100:] if len(lines) > 100 else lines
+        def _clear_logs_sync() -> List[str]:
+            base_names = ['bot_debug.log', 'bot_error.log', 'bot.log']
+            seen = set()
+            candidates = []
+            for base_dir in ('.', DATA_DIR):
+                for name in base_names:
+                    p = os.path.abspath(os.path.join(base_dir, name))
+                    if p not in seen:
+                        seen.add(p)
+                        candidates.append(p)
+            cleared = []
+            for log_file in candidates:
+                if os.path.exists(log_file):
+                    with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        last_lines = list(deque(f, maxlen=100))
 
-                with open(log_file, 'w', encoding='utf-8') as f:
-                    f.write(f"=== Log cleared at: {now_tehran_iso()} ===\n")
-                    f.write("=== Last 100 lines before cleanup ===\n")
-                    f.writelines(last_lines)
+                    with open(log_file, 'w', encoding='utf-8') as f:
+                        f.write(f"=== Log cleared at: {now_tehran_iso()} ===\n")
+                        f.write("=== Last 100 lines before cleanup ===\n")
+                        f.writelines(last_lines)
 
-                cleared_items.append(f"📄 {os.path.basename(log_file)}")
+                    label = f"📄 {os.path.basename(log_file)}"
+                    if label not in cleared:
+                        cleared.append(label)
+            return cleared
+
+        cleared_items.extend(await asyncio.to_thread(_clear_logs_sync))
         logger.info('✅ Log files deleted')
     except Exception as e:
         err_str = str(e)[:50]
@@ -626,9 +644,9 @@ async def confirm_clear_logs(callback: CallbackQuery):
         logger.error(f"❌ {error_msg}")
     global _db_cache, _db_modified
     try:
-        cache_size = len(_db_cache)
-        _db_cache.clear()
-        _db_modified.clear()
+        with _storage_lock:
+            cache_size = len(_db_cache)
+            _db_cache.clear()
         cleared_items.append(t('i18n_db_cache_items', lang, fa_parts=lambda: (f'{cache_size}',), en_parts=lambda: (f'{cache_size}',)))
         logger.info(f"✅ Database cache cleared - {cache_size} items")
     except Exception as e:
@@ -678,8 +696,82 @@ async def confirm_clear_logs(callback: CallbackQuery):
 
 admin_clear_logs_execute = confirm_clear_logs
 
+def _auto_cleanup_logs_sync():
+    """پاکسازی همگام فایل‌های لاگ با deque بدون بارگذاری کل فایل در حافظه"""
+    _, _, free_before = shutil.disk_usage(".")
+    cleaned_files = []
+    errors = []
+    total_lines_before = 0
+    total_lines_after = 0
+    total_size_freed = 0
+
+    base_names = ['bot_debug.log', 'bot_error.log', 'bot.log', 'events.log']
+    seen = set()
+    candidates = []
+    for base_dir in ('.', DATA_DIR):
+        for name in base_names:
+            p = os.path.abspath(os.path.join(base_dir, name))
+            if p not in seen:
+                seen.add(p)
+                candidates.append(p)
+
+    keep_lines = 500
+    for log_file in candidates:
+        if os.path.exists(log_file):
+            try:
+                size_before = os.path.getsize(log_file)
+                tail = deque(maxlen=keep_lines)
+                lines_before = 0
+                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        lines_before += 1
+                        tail.append(line)
+
+                last_lines = list(tail)
+                lines_after = len(last_lines)
+                total_lines_before += lines_before
+                total_lines_after += lines_after
+
+                with open(log_file, 'w', encoding='utf-8') as f:
+                    f.write(f"=== Log auto cleaned: {now_tehran_iso()} ===\n")
+                    f.write(f"=== {lines_after} last lines kept ===\n\n")
+                    f.writelines(last_lines)
+
+                size_after = os.path.getsize(log_file)
+                size_freed = size_before - size_after
+                total_size_freed += size_freed
+
+                rel_name = os.path.relpath(log_file, '.')
+                cleaned_files.append({
+                    'name': rel_name,
+                    'before': lines_before,
+                    'after': lines_after,
+                    'size_before': size_before,
+                    'size_after': size_after,
+                    'size_freed': size_freed
+                })
+                logger.info(f"✅ File {rel_name} cleaned ({lines_before} → {lines_after} lines, {size_freed / 1024:.1f} KB freed)")
+            except Exception as e:
+                error_msg = f"Error cleaning {os.path.basename(log_file)}: {str(e)[:50]}"
+                errors.append(error_msg)
+                logger.error(f"❌ {error_msg}")
+
+    _, _, free_after = shutil.disk_usage(".")
+    free_gained_mb = (free_after - free_before) / (1024 * 1024)
+    return cleaned_files, errors, total_lines_before, total_lines_after, total_size_freed, free_gained_mb
+
+
 async def auto_log_cleanup():
-    """پاکسازی خودکار فایل‌های لاگ هر 72 ساعت - ارسال گزارش به بات لاگ"""
+    """پاکسازی خودکار فایل‌های لاگ با بازه پویا - ارسال گزارش به بات لاگ"""
+    from core.task_manager import (
+        consume_force_run,
+        get_task_interval,
+        is_task_enabled,
+        record_task_finish,
+        record_task_start,
+        sleep_interruptible,
+        wait_until_task_enabled,
+    )
     
     # از LOG_BOT_TOKEN و LOG_CHANNEL_ID استفاده کنید
     if not LOG_BOT_TOKEN or not LOG_CHANNEL_ID:
@@ -690,90 +782,52 @@ async def auto_log_cleanup():
         log_bot = Bot(token=LOG_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         log_chat_id = LOG_CHANNEL_ID
     
-    logger.info("🧹 Auto log cleanup task started (every 72 hours)")
+    logger.info("🧹 Auto log cleanup task started (dynamic interval)")
     
-    await asyncio.sleep(300)
+    await sleep_interruptible("auto_log_cleanup", 300.0)
     
     try:
         while True:
             try:
-                await asyncio.sleep(259200)  # 72 hours = 259200
-                
-                logger.info("🧹 Starting automatic log file cleanup...")
-                
-                # Calculate disk space before cleanup
-                total_before, used_before, free_before = shutil.disk_usage(".")
-                
-                cleaned_files = []
-                errors = []
-                total_lines_before = 0
-                total_lines_after = 0
-                total_size_freed = 0  # Freed space in bytes
-                
-                log_files = ['bot_debug.log', 'bot_error.log', 'bot.log', 'events.log']
-                
-                for log_file in log_files:
-                    if os.path.exists(log_file):
-                        try:
-                            # Get file size before cleanup
-                            size_before = os.path.getsize(log_file)
-                            
-                            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                                lines = f.readlines()
-                            
-                            lines_before = len(lines)
-                            total_lines_before += lines_before
-                            
-                            keep_lines = 500
-                            last_lines = lines[-keep_lines:] if len(lines) > keep_lines else lines
-                            lines_after = len(last_lines)
-                            total_lines_after += lines_after
-                            
-                            with open(log_file, 'w', encoding='utf-8') as f:
-                                f.write(f"=== Log auto cleaned: {now_tehran_iso()} ===\n")
-                                f.write(f"=== {lines_after} last lines kept ===\n\n")
-                                f.writelines(last_lines)
-                            
-                            # Get file size after cleanup
-                            size_after = os.path.getsize(log_file)
-                            size_freed = size_before - size_after
-                            total_size_freed += size_freed
-                            
-                            cleaned_files.append({
-                                'name': log_file,
-                                'before': lines_before,
-                                'after': lines_after,
-                                'size_before': size_before,
-                                'size_after': size_after,
-                                'size_freed': size_freed
-                            })
-                            
-                            logger.info(f"✅ File {log_file} cleaned ({lines_before} → {lines_after} lines, {size_freed / 1024:.1f} KB freed)")
-                            
-                        except Exception as e:
-                            error_msg = f"Error cleaning {log_file}: {str(e)[:50]}"
-                            errors.append(error_msg)
-                            logger.error(f"❌ {error_msg}")
-                
-                # Calculate disk space after cleanup
-                total_after, used_after, free_after = shutil.disk_usage(".")
-                free_gained_mb = (free_after - free_before) / (1024 * 1024)
-                
-                # Helper function for formatting size
-                def format_size(size_bytes):
-                    if size_bytes >= 1024 * 1024:  # Larger than 1 MB
-                        return f"{size_bytes / (1024 * 1024):.2f} MB"
-                    elif size_bytes >= 1024:  # Larger than 1 KB
-                        return f"{size_bytes / 1024:.1f} KB"
-                    else:
-                        return f"{size_bytes} B"
-                
-                # Send report to log bot
-                if cleaned_files:
-                    # Format total freed space
-                    total_freed_display = format_size(total_size_freed)
+                await wait_until_task_enabled("auto_log_cleanup")
+                force = consume_force_run("auto_log_cleanup")
+                if not force:
+                    interval = get_task_interval("auto_log_cleanup")
+                    woken = await sleep_interruptible("auto_log_cleanup", interval)
+                    force = consume_force_run("auto_log_cleanup")
+                    if woken and not force:
+                        continue
+                    if not is_task_enabled("auto_log_cleanup") and not force:
+                        continue
+
+                started = record_task_start("auto_log_cleanup")
+                try:
+                    logger.info("🧹 Starting automatic log file cleanup...")
                     
-                    report = f"""
+                    (
+                        cleaned_files,
+                        errors,
+                        total_lines_before,
+                        total_lines_after,
+                        total_size_freed,
+                        free_gained_mb,
+                    ) = await asyncio.to_thread(_auto_cleanup_logs_sync)
+                    
+                    # Helper function for formatting size
+                    def format_size(size_bytes):
+                        if size_bytes >= 1024 * 1024:  # Larger than 1 MB
+                            return f"{size_bytes / (1024 * 1024):.2f} MB"
+                        elif size_bytes >= 1024:  # Larger than 1 KB
+                            return f"{size_bytes / 1024:.1f} KB"
+                        else:
+                            return f"{size_bytes} B"
+                    
+                    # Send report to log bot
+                    if cleaned_files:
+                        # Format total freed space
+                        total_freed_display = format_size(total_size_freed)
+                        
+                        report = f"""
 🧹 <b>Auto Log Cleanup Completed!</b>
 
 🕐 Time: {now_tehran().strftime('%Y-%m-%d %H:%M:%S')}
@@ -783,43 +837,50 @@ async def auto_log_cleanup():
 
 <b>File Details:</b>
 """
-                    for f in cleaned_files:
-                        size_before_display = format_size(f['size_before'])
-                        size_after_display = format_size(f['size_after'])
+                        for f in cleaned_files:
+                            size_before_display = format_size(f['size_before'])
+                            size_after_display = format_size(f['size_after'])
+                            
+                            if f['size_freed'] > 0:
+                                freed_display = f"-{format_size(f['size_freed'])}"
+                            else:
+                                freed_display = "No change"
+                            
+                            report += f"• {f['name']}: {f['before']:,} → {f['after']:,} lines | {size_before_display} → {size_after_display} ({freed_display})\n"
                         
-                        if f['size_freed'] > 0:
-                            freed_display = f"-{format_size(f['size_freed'])}"
-                        else:
-                            freed_display = "No change"
+                        # Only show total freed space
+                        report += f"\n💾 Total space freed: {free_gained_mb:.2f} MB"
                         
-                        report += f"• {f['name']}: {f['before']:,} → {f['after']:,} lines | {size_before_display} → {size_after_display} ({freed_display})\n"
-                    
-                    # Only show total freed space
-                    report += f"\n💾 Total space freed: {free_gained_mb:.2f} MB"
-                    
-                    if errors:
-                        report += "\n\n⚠️ <b>Errors:</b>\n"
-                        for err in errors:
-                            report += f"• {err}\n"
-                    
-                    try:
-                        await log_bot.send_message(log_chat_id, report, parse_mode=ParseMode.HTML)
-                        logger.info("✅ Auto cleanup report sent to log bot")
-                    except Exception as e:
-                        logger.error(f"❌ Error sending report to log bot: {e}")
+                        if errors:
+                            report += "\n\n⚠️ <b>Errors:</b>\n"
+                            for err in errors:
+                                report += f"• {err}\n"
+                        
                         try:
-                            await bot.send_message(ADMIN_ID_INT, 
-                                f"⚠️ Error sending to log bot: {e}\n\n{report[:500]}", 
-                                parse_mode=ParseMode.HTML)
-                        except Exception:
-                            pass
+                            await log_bot.send_message(log_chat_id, report, parse_mode=ParseMode.HTML)
+                            logger.info("✅ Auto cleanup report sent to log bot")
+                        except Exception as e:
+                            logger.error(f"❌ Error sending report to log bot: {e}")
+                            try:
+                                await bot.send_message(ADMIN_ID_INT, 
+                                    f"⚠️ Error sending to log bot: {e}\n\n{report[:500]}", 
+                                    parse_mode=ParseMode.HTML)
+                            except Exception:
+                                pass
+                    record_task_finish("auto_log_cleanup", started)
+                except asyncio.CancelledError:
+                    record_task_finish("auto_log_cleanup", started, "cancelled")
+                    raise
+                except Exception as inner_e:
+                    record_task_finish("auto_log_cleanup", started, str(inner_e))
+                    raise
                 
             except asyncio.CancelledError:
                 logger.info("❌ Auto log cleanup task cancelled")
                 break
             except Exception as e:
                 logger.error(f"❌ Error in auto log cleanup: {e}", exc_info=True)
-                await asyncio.sleep(3600)
+                await sleep_interruptible("auto_log_cleanup", 3600.0)
     finally:
         if LOG_BOT_TOKEN and LOG_CHANNEL_ID:
             try:
@@ -970,17 +1031,17 @@ async def admin_test_panel(callback: CallbackQuery):
         ('Telegram', 'https://telegram.org'),
         ('GitHub', 'https://github.com'),
     ]
-    
-    for name, url in http_targets:
-        try:
-            start = time.time()
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        for name, url in http_targets:
+            try:
+                start = time.time()
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     elapsed = int((time.time() - start) * 1000)
                     ping_results[f'🌐 {name}'] = f'{elapsed}ms'
-        except Exception:
-            ping_results[f'🔴 {name}'] = 'Timeout'
+            except Exception:
+                ping_results[f'🔴 {name}'] = 'Timeout'
     panel_enabled = is_senai_panel_enabled()
     text = t('b_panel_status_b_304021a725', lang)
     text += t('url_tg_spoiler_tg_spoiler_ef9094e90d', lang, fa_parts=lambda: (f'{html.escape(SENAI_PANEL_URL)}',), en_parts=lambda: (f'{html.escape(SENAI_PANEL_URL)}',))
@@ -1519,7 +1580,7 @@ async def sync_deleted_configs(batch_size: int = 20, max_retries: int = 3):
             orders[str(order['order_id'])]['status'] = 'deleted'
             stats['deleted'] += 1
             logger.info(f"🗑 Config #{order['order_id']} deleted from the panel - status changed to deleted")        
-        save_all()
+        await save_all_async()
         logger.info('✅ Database saved successfully')
         logger.info("=" * 60)
         logger.info("📊 Synchronization result:")
@@ -2807,7 +2868,9 @@ async def toggle_auto_backup(callback: CallbackQuery):
     settings = configs_pool.setdefault('auto_backup_settings', {})
     cur = settings.get('backup_enabled', True)
     settings['backup_enabled'] = not cur
-    save_all()
+    from core.task_manager import sync_legacy_task_setting
+    sync_legacy_task_setting("auto_backup", enabled=settings['backup_enabled'])
+    schedule_save(2.0)
     if lang == "en":
         msg = f"Auto backup {'enabled 🟢' if not cur else 'disabled 🔴'}"
     else:
@@ -2823,7 +2886,9 @@ async def set_auto_backup_int(callback: CallbackQuery):
     hours = int(callback.data.split("_")[-1])
     settings = configs_pool.setdefault('auto_backup_settings', {})
     settings['backup_interval_hours'] = hours
-    save_all()
+    from core.task_manager import sync_legacy_task_setting
+    sync_legacy_task_setting("auto_backup", interval_seconds=hours * 3600)
+    schedule_save(2.0)
     msg = f"Auto backup interval set to {hours}h ✅" if lang == "en" else f"بازه بکاپ خودکار به {hours} ساعت تغییر یافت ✅"
     await safe_answer(callback, msg, alert=True)
     await admin_auto_backup_settings(callback)
@@ -2836,7 +2901,9 @@ async def toggle_auto_sync(callback: CallbackQuery):
     settings = configs_pool.setdefault('auto_backup_settings', {})
     cur = settings.get('sync_enabled', True)
     settings['sync_enabled'] = not cur
-    save_all()
+    from core.task_manager import sync_legacy_task_setting
+    sync_legacy_task_setting("sync_deleted_configs", enabled=settings['sync_enabled'])
+    schedule_save(2.0)
     if lang == "en":
         msg = f"Auto panel sync {'enabled 🟢' if not cur else 'disabled 🔴'}"
     else:
@@ -2852,7 +2919,9 @@ async def set_auto_sync_int(callback: CallbackQuery):
     hours = int(callback.data.split("_")[-1])
     settings = configs_pool.setdefault('auto_backup_settings', {})
     settings['sync_interval_hours'] = hours
-    save_all()
+    from core.task_manager import sync_legacy_task_setting
+    sync_legacy_task_setting("sync_deleted_configs", interval_seconds=hours * 3600)
+    schedule_save(2.0)
     msg = f"Auto sync interval set to {hours}h ✅" if lang == "en" else f"بازه آپدیت پنل به {hours} ساعت تغییر یافت ✅"
     await safe_answer(callback, msg, alert=True)
     await admin_auto_backup_settings(callback)
@@ -2865,11 +2934,11 @@ async def run_auto_backup_now(callback: CallbackQuery):
     await callback.answer("⏳ Creating auto backup..." if lang == "en" else "⏳ در حال تهیه بکاپ خودکار...", show_alert=False)
     try:
         from main import create_auto_backup
-        success = create_auto_backup()
+        success = await asyncio.to_thread(create_auto_backup)
         if success:
             settings = configs_pool.setdefault('auto_backup_settings', {})
             settings['last_backup_time'] = datetime.now().isoformat()
-            save_all()
+            schedule_save(2.0)
             await safe_answer(callback, "✅ Auto backup created successfully!" if lang == "en" else "✅ بکاپ خودکار با موفقیت تهیه شد!", alert=True)
         else:
             await safe_answer(callback, "❌ Error saving backup!" if lang == "en" else "❌ خطا در ذخیره بکاپ!", alert=True)
@@ -2887,7 +2956,7 @@ async def run_auto_sync_now(callback: CallbackQuery):
         res = await sync_deleted_configs(batch_size=20)
         settings = configs_pool.setdefault('auto_backup_settings', {})
         settings['last_sync_time'] = datetime.now().isoformat()
-        save_all()
+        schedule_save(2.0)
         del_count = res.get('deleted', 0) if isinstance(res, dict) else (res if isinstance(res, int) else 0)
         msg = (
             f"✅ Panel sync completed ({del_count} configs checked/removed)"

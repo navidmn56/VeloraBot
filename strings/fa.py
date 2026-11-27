@@ -1809,4 +1809,5 @@ STRINGS = {
     'deeplink_btn_smart_support': '🤖 پشتیبانی هوشمند',
     'deeplink_btn_buy_service': '🛒 خرید سرویس جدید',
     'deeplink_continue_after_approval': '🔗 ادامه درخواست قبلی',
+    'task_manager_btn': '⚙️ مدیریت وظایف',
 }

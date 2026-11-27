@@ -181,7 +181,24 @@ async def _ensure_session():
     """اطمینان از وجود Session فعال"""
     global HTTP_SESSION, CONNECTOR
 
-    if HTTP_SESSION is None or HTTP_SESSION.closed:
+    needs_new = HTTP_SESSION is None or HTTP_SESSION.closed
+    if not needs_new:
+        try:
+            running_loop = asyncio.get_running_loop()
+            session_loop = getattr(HTTP_SESSION, "_loop", None)
+            if session_loop is not None and (session_loop is not running_loop or session_loop.is_closed()):
+                needs_new = True
+        except RuntimeError:
+            pass
+
+    if needs_new:
+        if HTTP_SESSION is not None and not HTTP_SESSION.closed:
+            try:
+                old_loop = getattr(HTTP_SESSION, "_loop", None)
+                if old_loop is None or not old_loop.is_closed():
+                    await HTTP_SESSION.close()
+            except Exception:
+                pass
         CONNECTOR = aiohttp.TCPConnector(
             ssl=False,
             limit=50,
@@ -194,6 +211,8 @@ async def _ensure_session():
             connector=CONNECTOR,
             cookie_jar=CookieJar(unsafe=True),
         )
+
+    return HTTP_SESSION
 
 
 async def init_http_session():
@@ -855,59 +874,57 @@ async def xui_create_client_with_inbound(
                 logger.info('📤 Client creation request sent to the panel (%s inbounds)', len(valid_inbound_ids))
                 logger.info(f"👤 IP limit: {ip_limit if ip_limit > 0 else 'unlimited'}")
                 logger.info(f"📦 Data: {'unlimited' if volume_gb == 0 else f'{volume_gb} GB'}")
-                connector = aiohttp.TCPConnector(ssl=False)
+                await _ensure_session()
+                csrf = await xui_get_csrf_token(HTTP_SESSION)
+                headers = {"X-CSRF-Token": csrf} if csrf else {}
 
-                async with aiohttp.ClientSession(connector=connector) as session:
-                    csrf = await xui_get_csrf_token(session)
-                    headers = {"X-CSRF-Token": csrf} if csrf else {}
+                async with HTTP_SESSION.post(
+                    f"{SENAI_PANEL_URL}/panel/api/clients/bulkCreate",
+                    cookies={"3x-ui": cookie},
+                    headers=headers,
+                    json=bulk_data,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    response_text = await response.text()
+                    logger.info(f"📥 Panel response: Status {response.status}")
+                    if response.status == 200:
+                        try:
+                            data = json.loads(response_text)
+                            if data.get("success"):
+                                logger.info(f"✅ Client {email} with inbounds {valid_inbound_ids} created!")
+                                logger.info(f"   📦 Volume: {'unlimited' if volume_gb == 0 else f'{volume_gb} GB'}")
+                                logger.info(f"   👤 IP limit: {ip_limit if ip_limit > 0 else 'unlimited'}")
+                                logger.info(f"   📡 Inbounds: {valid_inbound_ids}")
+                                logger.info(f"   📝 Comment: {comment_text}")
+                                try:
+                                    actual_client = await xui_get_client_info(email)
+                                    if actual_client:
+                                        actual_sub_id = actual_client.get('subId', '') or email
+                                        logger.info(f"   🔗 Actual subId from panel: {actual_sub_id}")
+                                        base_sub = await ensure_sub_base_url()
+                                        return f"{base_sub}/{actual_sub_id}"
+                                except Exception as e:
+                                    logger.warning(f"⚠️ Error retrieving actual subId: {e}")
 
-                    async with session.post(
-                        f"{SENAI_PANEL_URL}/panel/api/clients/bulkCreate",
-                        cookies={"3x-ui": cookie},
-                        headers=headers,
-                        json=bulk_data,
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    ) as response:
-                        response_text = await response.text()
-                        logger.info(f"📥 Panel response: Status {response.status}")
-                        if response.status == 200:
-                            try:
-                                data = json.loads(response_text)
-                                if data.get("success"):
-                                    logger.info(f"✅ Client {email} with inbounds {valid_inbound_ids} created!")
-                                    logger.info(f"   📦 Volume: {'unlimited' if volume_gb == 0 else f'{volume_gb} GB'}")
-                                    logger.info(f"   👤 IP limit: {ip_limit if ip_limit > 0 else 'unlimited'}")
-                                    logger.info(f"   📡 Inbounds: {valid_inbound_ids}")
-                                    logger.info(f"   📝 Comment: {comment_text}")
-                                    try:
-                                        actual_client = await xui_get_client_info(email)
-                                        if actual_client:
-                                            actual_sub_id = actual_client.get('subId', '') or email
-                                            logger.info(f"   🔗 Actual subId from panel: {actual_sub_id}")
-                                            base_sub = await ensure_sub_base_url()
-                                            return f"{base_sub}/{actual_sub_id}"
-                                    except Exception as e:
-                                        logger.warning(f"⚠️ Error retrieving actual subId: {e}")
-
-                                    base_sub = await ensure_sub_base_url()
-                                    return f"{base_sub}/{email}"
-                                else:
-                                    error_msg = data.get('msg', 'Unknown error')
-                                    logger.error(f"❌ Error creating client: {error_msg}")
-                                    logger.info(f"📝 Full response: {response_text[:500]}")
-                            except json.JSONDecodeError:
-                                logger.error(f"❌ Invalid JSON response: {response_text[:200]}")
-                        elif response.status == 403:
-                            logger.error('❌ Error 403 - Unauthorized access')
-                            SENAI_COOKIE = None
-                            SENAI_CSRF = None
-                            await asyncio.sleep(3)
-                        elif response.status == 429:
-                            logger.warning('⚠️ Request rate limit (429)')
-                            await asyncio.sleep(5 * (attempt + 1))
-                        else:
-                            logger.error(f"❌ Error creating client: Status {response.status}")
-                            logger.info(f"📝 Response: {response_text[:200]}")
+                                base_sub = await ensure_sub_base_url()
+                                return f"{base_sub}/{email}"
+                            else:
+                                error_msg = data.get('msg', 'Unknown error')
+                                logger.error(f"❌ Error creating client: {error_msg}")
+                                logger.info(f"📝 Full response: {response_text[:500]}")
+                        except json.JSONDecodeError:
+                            logger.error(f"❌ Invalid JSON response: {response_text[:200]}")
+                    elif response.status == 403:
+                        logger.error('❌ Error 403 - Unauthorized access')
+                        SENAI_COOKIE = None
+                        SENAI_CSRF = None
+                        await asyncio.sleep(3)
+                    elif response.status == 429:
+                        logger.warning('⚠️ Request rate limit (429)')
+                        await asyncio.sleep(5 * (attempt + 1))
+                    else:
+                        logger.error(f"❌ Error creating client: Status {response.status}")
+                        logger.info(f"📝 Response: {response_text[:200]}")
 
         except asyncio.TimeoutError:
             logger.error(f"⏰ Timeout creating client {email} (attempt {attempt+1}/3)")
@@ -936,51 +953,49 @@ async def xui_get_client_info(email: str) -> Optional[dict]:
         return None
 
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
 
-        async with aiohttp.ClientSession(connector=connector) as session:
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
+        async with HTTP_SESSION.get(
+            f"{SENAI_PANEL_URL}/panel/api/clients/get/{email}",
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("success"):
+                    obj = data.get("obj", {})
+                    client = obj.get("client", obj)
 
-            async with session.get(
-                f"{SENAI_PANEL_URL}/panel/api/clients/get/{email}",
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("success"):
-                        obj = data.get("obj", {})
-                        client = obj.get("client", obj)
+                    logger.debug('Client retrieved from panel (%s)', type(client).__name__)
 
-                        logger.debug('Client retrieved from panel (%s)', type(client).__name__)
-
-                        if not isinstance(client, dict):
-                            logger.warning(f"⚠️ Client for {email} is not a dictionary: {type(client)}")
-                            return None
-
-                        expiry = client.get('expiryTime', 0)
-                        if expiry > 0:
-                            try:
-                                expiry_date = datetime.fromtimestamp(expiry / 1000)
-                                logger.info(f"📅 Expiration date: {expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
-                            except Exception:
-                                pass
-
-                        return client
-                    else:
-                        logger.info(f"ℹ️ Client {email} not found in panel (success: false)")
+                    if not isinstance(client, dict):
+                        logger.warning(f"⚠️ Client for {email} is not a dictionary: {type(client)}")
                         return None
-                elif response.status == 404:
-                    logger.info(f"ℹ️ Client {email} not found in panel (404)")
-                    return None
+
+                    expiry = client.get('expiryTime', 0)
+                    if expiry > 0:
+                        try:
+                            expiry_date = datetime.fromtimestamp(expiry / 1000)
+                            logger.debug(f"📅 Expiration date: {expiry_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                        except Exception:
+                            pass
+
+                    return client
                 else:
-                    logger.warning(f"⚠️ Error retrieving client {email}: Status {response.status}")
-                    if response.status >= 500:
-                        logger.warning(f"⚠️ Server error {response.status} - client {email} may exist")
-                        return {}
+                    logger.info(f"ℹ️ Client {email} not found in panel (success: false)")
                     return None
+            elif response.status == 404:
+                logger.info(f"ℹ️ Client {email} not found in panel (404)")
+                return None
+            else:
+                logger.warning(f"⚠️ Error retrieving client {email}: Status {response.status}")
+                if response.status >= 500:
+                    logger.warning(f"⚠️ Server error {response.status} - client {email} may exist")
+                    return {}
+                return None
     except asyncio.TimeoutError:
         logger.warning(f"⏰ Timeout retrieving client {email}")
         return {}
@@ -999,25 +1014,23 @@ async def xui_delete_client(email: str) -> bool:
         return False
 
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
 
-        async with aiohttp.ClientSession(connector=connector) as session:
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-
-            async with session.post(
-                f"{SENAI_PANEL_URL}/panel/api/clients/del/{email}",
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("success"):
-                        logger.info(f"✅ Client {email} deleted from the panel")
-                        return True
-                logger.error(f"❌ Error deleting client {email}: {response.status}")
-                return False
+        async with HTTP_SESSION.post(
+            f"{SENAI_PANEL_URL}/panel/api/clients/del/{email}",
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("success"):
+                    logger.info(f"✅ Client {email} deleted from the panel")
+                    return True
+            logger.error(f"❌ Error deleting client {email}: {response.status}")
+            return False
     except Exception as e:
         logger.error(f"❌ Error deleting client {email}: {e}")
         return False
@@ -1062,6 +1075,23 @@ def get_order_client_email(order: dict) -> Optional[str]:
     return None
 
 
+def _prune_subid_cache() -> None:
+    """Keep _subid_to_email_cache bounded to prevent unbounded memory growth."""
+    if len(_subid_to_email_cache) <= 2000:
+        return
+    now_dt = datetime.now()
+    expired_keys = [
+        k for k, (ts, val) in list(_subid_to_email_cache.items())
+        if (now_dt - ts).total_seconds() >= (_subid_cache_ttl if val else _subid_cache_negative_ttl)
+    ]
+    for k in expired_keys:
+        _subid_to_email_cache.pop(k, None)
+    if len(_subid_to_email_cache) > 2000:
+        excess = len(_subid_to_email_cache) - 1500
+        for k in list(_subid_to_email_cache.keys())[:excess]:
+            _subid_to_email_cache.pop(k, None)
+
+
 async def find_email_by_sub_id(sub_id: str, use_cache: bool = True) -> Optional[str]:
     """پیدا کردن email کلاینت با subId (با کش)"""
     if not sub_id:
@@ -1094,6 +1124,7 @@ async def find_email_by_sub_id(sub_id: str, use_cache: bool = True) -> Optional[
                 if client.get('subId', '') == sub_id:
                     email = client.get('email', '')
                     if email:
+                        _prune_subid_cache()
                         _subid_to_email_cache[sub_id] = (datetime.now(), email)
                         logger.info(f"✅ [find_email_by_sub_id] {sub_id[:15]}... → {email}")
                         return email
@@ -1105,6 +1136,7 @@ async def find_email_by_sub_id(sub_id: str, use_cache: bool = True) -> Optional[
                 return cached_email
         return None
 
+    _prune_subid_cache()
     _subid_to_email_cache[sub_id] = (datetime.now(), None)
     logger.debug(f"⏭️ [find_email_by_sub_id] not found: {sub_id[:15]}...")
     return None
@@ -1118,46 +1150,45 @@ async def xui_get_client_traffic(email: str) -> Optional[dict]:
         return None
 
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-            async with session.get(
-                f"{SENAI_PANEL_URL}/panel/api/clients/traffic/{email}",
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as response:
-                body = await response.text()
-                content_type = response.headers.get("Content-Type", "unknown")
-                if response.status != 200:
-                    logger.warning(
-                        "Traffic API returned HTTP %s for client %s (content-type=%s, body=%r).",
-                        response.status, email, content_type, body[:500],
-                    )
-                    return None
-                try:
-                    data = json.loads(body)
-                except json.JSONDecodeError as exc:
-                    logger.warning(
-                        "Traffic API returned invalid JSON for client %s (content-type=%s): %s; body=%r",
-                        email, content_type, exc, body[:500],
-                    )
-                    return None
-                if not isinstance(data, dict):
-                    logger.warning("Traffic API returned %s instead of an object for client %s.", type(data).__name__, email)
-                    return None
-                if not data.get("success"):
-                    logger.warning(
-                        "Traffic API reported failure for client %s (msg=%r, body=%r).",
-                        email, data.get("msg") or data.get("message"), body[:500],
-                    )
-                    return None
-                traffic = data.get("obj")
-                if not isinstance(traffic, dict):
-                    logger.warning("Traffic API response has no usable obj for client %s (obj_type=%s).", email, type(traffic).__name__)
-                    return None
-                return traffic
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
+        async with HTTP_SESSION.get(
+            f"{SENAI_PANEL_URL}/panel/api/clients/traffic/{email}",
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            body = await response.text()
+            content_type = response.headers.get("Content-Type", "unknown")
+            if response.status != 200:
+                logger.warning(
+                    "Traffic API returned HTTP %s for client %s (content-type=%s, body=%r).",
+                    response.status, email, content_type, body[:500],
+                )
+                return None
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Traffic API returned invalid JSON for client %s (content-type=%s): %s; body=%r",
+                    email, content_type, exc, body[:500],
+                )
+                return None
+            if not isinstance(data, dict):
+                logger.warning("Traffic API returned %s instead of an object for client %s.", type(data).__name__, email)
+                return None
+            if not data.get("success"):
+                logger.warning(
+                    "Traffic API reported failure for client %s (msg=%r, body=%r).",
+                    email, data.get("msg") or data.get("message"), body[:500],
+                )
+                return None
+            traffic = data.get("obj")
+            if not isinstance(traffic, dict):
+                logger.warning("Traffic API response has no usable obj for client %s (obj_type=%s).", email, type(traffic).__name__)
+                return None
+            return traffic
     except Exception as exc:
         logger.warning("Error retrieving traffic for client %s: %s", email, exc, exc_info=True)
         return None
@@ -1203,56 +1234,50 @@ async def xui_detach_inbounds(email: str, inbound_ids: list) -> bool:
         logger.info('ℹ️ no inbounds to detach')
         return True
 
-    connector = aiohttp.TCPConnector(ssl=False)
     try:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            cookie = await xui_login()
-            if not cookie:
-                logger.error('❌ Error logging in to the panel')
-                return False
+        cookie = await xui_login()
+        if not cookie:
+            logger.error('❌ Error logging in to the panel')
+            return False
 
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
 
-            detach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/detach"
-            detach_data = {"inboundIds": inbound_ids}
+        detach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/detach"
+        detach_data = {"inboundIds": inbound_ids}
 
-            logger.info('📤 Detach request sent for %s inbounds', len(inbound_ids))
+        logger.info('📤 Detach request sent for %s inbounds', len(inbound_ids))
 
-            async with session.post(
-                detach_url,
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                json=detach_data,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as response:
-                response_text = await response.text()
-                logger.info(f"📥 Detach response: Status {response.status}")
+        async with HTTP_SESSION.post(
+            detach_url,
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            json=detach_data,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as response:
+            response_text = await response.text()
+            logger.info(f"📥 Detach response: Status {response.status}")
 
-                if response.status == 200:
-                    try:
-                        data = json.loads(response_text)
-                        if data.get("success"):
-                            logger.info(f"✅ Inbounds {inbound_ids} successfully detached from client {email} removed")
-                            return True
-                        else:
-                            logger.error(f"❌ detach failed: {data.get('msg', 'Unknown error')}")
-                            return False
-                    except json.JSONDecodeError:
-                        logger.error(f"❌ Error decoding JSON: {response_text[:200]}")
+            if response.status == 200:
+                try:
+                    data = json.loads(response_text)
+                    if data.get("success"):
+                        logger.info(f"✅ Inbounds {inbound_ids} successfully detached from client {email} removed")
+                        return True
+                    else:
+                        logger.error(f"❌ detach failed: {data.get('msg', 'Unknown error')}")
                         return False
-                else:
-                    logger.error(f"❌ detach failed: Status {response.status}")
+                except json.JSONDecodeError:
+                    logger.error(f"❌ Error decoding JSON: {response_text[:200]}")
                     return False
+            else:
+                logger.error(f"❌ detach failed: Status {response.status}")
+                return False
 
     except Exception as e:
         logger.error(f"❌ Error detaching inbounds from client {email}: {e}")
         return False
-    finally:
-        try:
-            await connector.close()
-        except Exception:
-            pass
 
 
 async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
@@ -1261,57 +1286,51 @@ async def xui_attach_inbounds(email: str, inbound_ids: list) -> bool:
         logger.info('ℹ️ no inbounds to attach')
         return True
 
-    connector = aiohttp.TCPConnector(ssl=False)
     try:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            cookie = await xui_login()
-            if not cookie:
-                logger.error('❌ Error logging in to the panel')
-                return False
+        cookie = await xui_login()
+        if not cookie:
+            logger.error('❌ Error logging in to the panel')
+            return False
 
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
 
-            attach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/attach"
-            attach_data = {"inboundIds": inbound_ids}
+        attach_url = f"{SENAI_PANEL_URL}/panel/api/clients/{email}/attach"
+        attach_data = {"inboundIds": inbound_ids}
 
-            logger.info('📤 Attach request sent for %s inbounds', len(inbound_ids))
+        logger.info('📤 Attach request sent for %s inbounds', len(inbound_ids))
 
-            async with session.post(
-                attach_url,
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                json=attach_data,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as response:
-                response_text = await response.text()
-                logger.info(f"📥 Attach response: Status {response.status}")
+        async with HTTP_SESSION.post(
+            attach_url,
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            json=attach_data,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as response:
+            response_text = await response.text()
+            logger.info(f"📥 Attach response: Status {response.status}")
 
-                if response.status == 200:
-                    try:
-                        data = json.loads(response_text)
-                        if data.get("success"):
-                            logger.info(f"✅ Inbounds {inbound_ids} successfully attached to client {email} added")
-                            return True
-                        else:
-                            error_msg = data.get('msg', 'Unknown error')
-                            logger.error(f"❌ attach failed: {error_msg}")
-                            return False
-                    except json.JSONDecodeError:
-                        logger.error(f"❌ Error decoding JSON: {response_text[:200]}")
+            if response.status == 200:
+                try:
+                    data = json.loads(response_text)
+                    if data.get("success"):
+                        logger.info(f"✅ Inbounds {inbound_ids} successfully attached to client {email} added")
+                        return True
+                    else:
+                        error_msg = data.get('msg', 'Unknown error')
+                        logger.error(f"❌ attach failed: {error_msg}")
                         return False
-                else:
-                    logger.error(f"❌ attach failed: Status {response.status}")
+                except json.JSONDecodeError:
+                    logger.error(f"❌ Error decoding JSON: {response_text[:200]}")
                     return False
+            else:
+                logger.error(f"❌ attach failed: Status {response.status}")
+                return False
 
     except Exception as e:
         logger.error(f"❌ Error attaching inbounds to client {email}: {e}")
         return False
-    finally:
-        try:
-            await connector.close()
-        except Exception:
-            pass
 
 
 async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
@@ -1320,77 +1339,54 @@ async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
         return False
 
     success = False
-    connector = aiohttp.TCPConnector(ssl=False)
     try:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            cookie = await xui_login()
-            if not cookie:
-                logger.error(f"❌ Error logging in to the panel to reset traffic {email}")
-                return False
+        cookie = await xui_login()
+        if not cookie:
+            logger.error(f"❌ Error logging in to the panel to reset traffic {email}")
+            return False
 
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-            encoded_email = quote(str(email), safe='')
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
+        encoded_email = quote(str(email), safe='')
 
-            # 1. تلاش از طریق API مستقیم کلاینت
-            try:
-                url = f"{SENAI_PANEL_URL}/panel/api/clients/resetTraffic/{encoded_email}"
-                async with session.post(
-                    url,
-                    cookies={"3x-ui": cookie},
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    resp_text = await resp.text()
-                    if resp.status == 200:
-                        try:
-                            data = json.loads(resp_text)
-                            if data.get("success"):
-                                logger.info(f"✅ Client traffic {email} reset via the clients/resetTraffic endpoint")
-                                success = True
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.debug(f"ℹ️ clients/resetTraffic: {e}")
-
-            # 2. ریست روی تک تک اینباندها
-            target_inbounds = list(inbounds) if inbounds else []
-            if not target_inbounds:
-                try:
-                    target_inbounds = await get_client_inbounds(email)
-                except Exception:
-                    target_inbounds = []
-
-            if target_inbounds:
-                for inb_id in target_inbounds:
-                    if not inb_id:
-                        continue
+        # 1. تلاش از طریق API مستقیم کلاینت
+        try:
+            url = f"{SENAI_PANEL_URL}/panel/api/clients/resetTraffic/{encoded_email}"
+            async with HTTP_SESSION.post(
+                url,
+                cookies={"3x-ui": cookie},
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                resp_text = await resp.text()
+                if resp.status == 200:
                     try:
-                        inb_url = f"{SENAI_PANEL_URL}/panel/api/inbounds/{inb_id}/resetClientTraffic/{encoded_email}"
-                        async with session.post(
-                            inb_url,
-                            cookies={"3x-ui": cookie},
-                            headers=headers,
-                            timeout=aiohttp.ClientTimeout(total=10),
-                        ) as resp:
-                            resp_text = await resp.text()
-                            if resp.status == 200:
-                                try:
-                                    data = json.loads(resp_text)
-                                    if data.get("success"):
-                                        logger.info(f"✅ Client traffic {email} in inbound {inb_id} reset")
-                                        success = True
-                                except Exception:
-                                    pass
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error resetting traffic for inbound {inb_id} client {email}: {e}")
+                        data = json.loads(resp_text)
+                        if data.get("success"):
+                            logger.info(f"✅ Client traffic {email} reset via the clients/resetTraffic endpoint")
+                            success = True
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug(f"ℹ️ clients/resetTraffic: {e}")
 
-            # 3. تلاش با اندپوینت عمومی inbounds/resetClientTraffic/{email}
-            if not success:
+        # 2. ریست روی تک تک اینباندها
+        target_inbounds = list(inbounds) if inbounds else []
+        if not target_inbounds:
+            try:
+                target_inbounds = await get_client_inbounds(email)
+            except Exception:
+                target_inbounds = []
+
+        if target_inbounds:
+            for inb_id in target_inbounds:
+                if not inb_id:
+                    continue
                 try:
-                    alt_url = f"{SENAI_PANEL_URL}/panel/api/inbounds/resetClientTraffic/{encoded_email}"
-                    async with session.post(
-                        alt_url,
+                    inb_url = f"{SENAI_PANEL_URL}/panel/api/inbounds/{inb_id}/resetClientTraffic/{encoded_email}"
+                    async with HTTP_SESSION.post(
+                        inb_url,
                         cookies={"3x-ui": cookie},
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=10),
@@ -1400,22 +1396,39 @@ async def xui_reset_client_traffic(email: str, inbounds: list = None) -> bool:
                             try:
                                 data = json.loads(resp_text)
                                 if data.get("success"):
-                                    logger.info(f"✅ Client traffic {email} reset via the public inbounds endpoint")
+                                    logger.info(f"✅ Client traffic {email} in inbound {inb_id} reset")
                                     success = True
                             except Exception:
                                 pass
                 except Exception as e:
-                    logger.debug(f"ℹ️ alt inbounds/resetClientTraffic: {e}")
+                    logger.warning(f"⚠️ Error resetting traffic for inbound {inb_id} client {email}: {e}")
 
-            return success
+        # 3. تلاش با اندپوینت عمومی inbounds/resetClientTraffic/{email}
+        if not success:
+            try:
+                alt_url = f"{SENAI_PANEL_URL}/panel/api/inbounds/resetClientTraffic/{encoded_email}"
+                async with HTTP_SESSION.post(
+                    alt_url,
+                    cookies={"3x-ui": cookie},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    resp_text = await resp.text()
+                    if resp.status == 200:
+                        try:
+                            data = json.loads(resp_text)
+                            if data.get("success"):
+                                logger.info(f"✅ Client traffic {email} reset via the public inbounds endpoint")
+                                success = True
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"ℹ️ alt inbounds/resetClientTraffic: {e}")
+
+        return success
     except Exception as e:
         logger.error(f"❌ Error in xui_reset_client_traffic for {email}: {e}")
         return False
-    finally:
-        try:
-            await connector.close()
-        except Exception:
-            pass
 
 
 async def test_panel_connection() -> dict:
@@ -1447,22 +1460,20 @@ async def test_panel_connection() -> dict:
             result['ping'] = None
 
         start = time.time()
-        connector = aiohttp.TCPConnector(ssl=False)
-
-        async with aiohttp.ClientSession(connector=connector) as session:
-            try:
-                async with session.get(
-                    SENAI_PANEL_URL,
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as response:
-                    result['http_ping'] = int((time.time() - start) * 1000)
-                    result['http_status'] = response.status
-            except asyncio.TimeoutError:
-                result['http_ping'] = None
-                logger.warning(f"⏰ HTTP timeout to {SENAI_PANEL_URL}")
-            except Exception as e:
-                result['http_ping'] = None
-                logger.warning(f"⚠️ HTTP error: {e}")
+        await _ensure_session()
+        try:
+            async with HTTP_SESSION.get(
+                SENAI_PANEL_URL,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as response:
+                result['http_ping'] = int((time.time() - start) * 1000)
+                result['http_status'] = response.status
+        except asyncio.TimeoutError:
+            result['http_ping'] = None
+            logger.warning(f"⏰ HTTP timeout to {SENAI_PANEL_URL}")
+        except Exception as e:
+            result['http_ping'] = None
+            logger.warning(f"⚠️ HTTP error: {e}")
 
         cookie = await xui_login()
         if cookie:
@@ -1485,57 +1496,56 @@ async def get_panel_status() -> Optional[dict]:
         return None
 
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-            async with session.get(
-                f"{SENAI_PANEL_URL}/panel/api/server/status",
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("success"):
-                        obj = data.get("obj", {})
-                        mem = obj.get("mem", {})
-                        mem_total = mem.get("total", 0)
-                        mem_current = mem.get("current", 0)
-                        mem_percent = mem.get("percent", 0)
-                        if mem_total == 0:
-                            try:
-                                async with session.get(
-                                    f"{SENAI_PANEL_URL}/panel/api/server/meminfo",
-                                    cookies={"3x-ui": cookie},
-                                    headers=headers,
-                                    timeout=aiohttp.ClientTimeout(total=5),
-                                ) as mem_response:
-                                    if mem_response.status == 200:
-                                        mem_data = await mem_response.json()
-                                        if mem_data.get("success"):
-                                            mem_obj = mem_data.get("obj", {})
-                                            mem_total = mem_obj.get("total", 0)
-                                            mem_current = mem_obj.get("current", 0)
-                                            mem_percent = mem_obj.get("percent", 0)
-                            except Exception:
-                                pass
-                        net_io = obj.get("netIO", {})
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
+        async with HTTP_SESSION.get(
+            f"{SENAI_PANEL_URL}/panel/api/server/status",
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("success"):
+                    obj = data.get("obj", {})
+                    mem = obj.get("mem", {})
+                    mem_total = mem.get("total", 0)
+                    mem_current = mem.get("current", 0)
+                    mem_percent = mem.get("percent", 0)
+                    if mem_total == 0:
+                        try:
+                            async with HTTP_SESSION.get(
+                                f"{SENAI_PANEL_URL}/panel/api/server/meminfo",
+                                cookies={"3x-ui": cookie},
+                                headers=headers,
+                                timeout=aiohttp.ClientTimeout(total=5),
+                            ) as mem_response:
+                                if mem_response.status == 200:
+                                    mem_data = await mem_response.json()
+                                    if mem_data.get("success"):
+                                        mem_obj = mem_data.get("obj", {})
+                                        mem_total = mem_obj.get("total", 0)
+                                        mem_current = mem_obj.get("current", 0)
+                                        mem_percent = mem_obj.get("percent", 0)
+                        except Exception:
+                            pass
+                    net_io = obj.get("netIO", {})
 
-                        return {
-                            "cpu": obj.get("cpu", 0),
-                            "mem": {
-                                "total": mem_total,
-                                "current": mem_current,
-                                "percent": mem_percent,
-                            },
-                            "disk": obj.get("disk", {}),
-                            "net": obj.get("net", {}),
-                            "uptime": obj.get("uptime", 0),
-                            "net_up": net_io.get("up", 0),
-                            "net_down": net_io.get("down", 0),
-                        }
-                return None
+                    return {
+                        "cpu": obj.get("cpu", 0),
+                        "mem": {
+                            "total": mem_total,
+                            "current": mem_current,
+                            "percent": mem_percent,
+                        },
+                        "disk": obj.get("disk", {}),
+                        "net": obj.get("net", {}),
+                        "uptime": obj.get("uptime", 0),
+                        "net_up": net_io.get("up", 0),
+                        "net_down": net_io.get("down", 0),
+                    }
+            return None
     except Exception as e:
         logger.error(f"❌ Error retrieving panel status: {e}")
         return None
@@ -1548,25 +1558,23 @@ async def xui_get_client_links(email: str) -> Optional[list]:
         return None
 
     try:
-        connector = aiohttp.TCPConnector(ssl=False)
+        await _ensure_session()
+        csrf = await xui_get_csrf_token(HTTP_SESSION)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
 
-        async with aiohttp.ClientSession(connector=connector) as session:
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-
-            async with session.get(
-                f"{SENAI_PANEL_URL}/panel/api/clients/links/{email}",
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get("success"):
-                        links = data.get("obj", [])
-                        logger.debug('Panel links retrieved (%s items)', len(links) if isinstance(links, list) else 0)
-                        return links
-                return None
+        async with HTTP_SESSION.get(
+            f"{SENAI_PANEL_URL}/panel/api/clients/links/{email}",
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data.get("success"):
+                    links = data.get("obj", [])
+                    logger.debug('Panel links retrieved (%s items)', len(links) if isinstance(links, list) else 0)
+                    return links
+            return None
     except Exception as e:
         logger.error(f"❌ Error retrieving links: {e}")
         return None

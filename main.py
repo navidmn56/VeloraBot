@@ -328,6 +328,7 @@ from routers import (
     admin_shop_router,
     admin_packages_router,
     admin_tools_router,
+    admin_tasks_router,
     ai_purchase_advisor_router,
     admin_ai_router,
     ai_assistant_router,
@@ -577,6 +578,7 @@ dp.include_router(payments_router)
 dp.include_router(admin_orders_router)
 dp.include_router(user_account_router)
 dp.include_router(support_router)
+dp.include_router(admin_tasks_router)
 dp.include_router(fallback_router)
 
 class CustomLogger:
@@ -597,11 +599,13 @@ _order_creation_lock = asyncio.Lock()
 # [Phase 0/2] Core debounced save worker
 from core.save_scheduler import (
     schedule_save,
+    schedule_file_save,
     _debounced_save_worker,
     _save_queue,
     set_save_task,
     get_save_task,
 )
+from database import save_all_async
 _save_task = None
 
 
@@ -898,7 +902,7 @@ async def update_user_receipt_review_status(order: dict, status: str) -> bool:
         
 
 
-CONFIG_LINKS_CACHE = {}          # {order_id: {'links': [...], 'email': str, 'timestamp': datetime}}
+from core.state_stores import CONFIG_LINKS_CACHE  # {order_id: {'links': [...], 'email': str, 'timestamp': datetime}}
 LINK_ROTATION_CONFIRMATIONS = {}
 LINK_ROTATION_LOCKS = {}
 CONFIG_LINKS_CACHE_TTL = 300     # 5 دقیقه
@@ -1391,7 +1395,7 @@ async def cmd_start(message: Message):
             }
             logger.info(f"👤 New user created: {user_name} (ID: {user_id}) - status: pending (awaiting approval)")
         
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
         
     else:
         updated = False
@@ -1437,7 +1441,7 @@ async def cmd_start(message: Message):
         
         if updated:
             users[uid]['updated_at'] = now_tehran_iso()
-            save_json(DB_FILES['users'], users)
+            schedule_file_save('users', delay=2.0)
             logger.info(f"📝 User information for {user_id} updated and saved")
     
     user = users[uid]
@@ -1472,7 +1476,7 @@ async def cmd_start(message: Message):
             if users[uid].get('verified', False):
                 users[uid]['verified'] = False
                 users[uid]['updated_at'] = now_tehran_iso()
-                save_json(DB_FILES['users'], users)
+                schedule_file_save('users', delay=1.0)
                 logger.warning(f"⚠️ user {user_id} left the channel; membership page displayed")
 
             if has_deep_link:
@@ -1487,7 +1491,7 @@ async def cmd_start(message: Message):
             if not users[uid].get('verified', False):
                 users[uid]['verified'] = True
                 users[uid]['updated_at'] = now_tehran_iso()
-                save_json(DB_FILES['users'], users)
+                schedule_file_save('users', delay=1.0)
                 logger.info(f"✅ user {user_id} is a member of all channels; verified changed to True")
             
             return True
@@ -1497,7 +1501,7 @@ async def cmd_start(message: Message):
             users[uid]['registration_status'] = 'approved'
             users[uid]['approved_date'] = now_tehran_iso()
             users[uid]['updated_at'] = now_tehran_iso()
-            save_json(DB_FILES['users'], users)
+            schedule_file_save('users', delay=1.0)
             logger.info(f"✅ user {user_id} automatically approved (manual approval disabled)")
         can_continue = await check_force_join_and_show()
         if not can_continue:
@@ -1562,7 +1566,7 @@ async def cmd_start(message: Message):
     if has_deep_link:
         users[uid]['pending_deep_link'] = deep_link_payload
         users[uid]['updated_at'] = now_tehran_iso()
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
     status = users[uid].get('registration_status', 'pending')
     if status == 'requested':
         text = t('b_your_request_has_been_subm_e34a9c8175', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('hourglass', '⏳')}", f"{premium_emoji('light', '💡')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('hourglass', '⏳')}", f"{premium_emoji('light', '💡')}"))
@@ -1574,7 +1578,7 @@ async def cmd_start(message: Message):
         users[uid]['requested_approval'] = False
         users[uid]['admin_notified'] = False
         users[uid]['updated_at'] = now_tehran_iso()
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
         logger.info(f"🔄 user status {user_id} from {status} changed to pending (retry request)")
     text = t('b_welcome_to_our_community_b_38f430476a', lang, fa_parts=lambda: (f"{premium_emoji('loading', '🔹')}", f"{premium_emoji('email', '📨')}", f"{premium_emoji('cancel', '❌')}", f"{premium_emoji('danger', '⚠️')}"), en_parts=lambda: (f"{premium_emoji('loading', '🔹')}", f"{premium_emoji('email', '📨')}", f"{premium_emoji('cancel', '❌')}", f"{premium_emoji('danger', '⚠️')}"))
     
@@ -1653,7 +1657,7 @@ async def request_approval(callback: CallbackQuery):
     users[uid]['last_request_time'] = now_tehran_iso()
     users[uid]['admin_notified'] = False  # هنوز به ادمین اطلاع داده نشده
     users[uid]['updated_at'] = now_tehran_iso()
-    save_json(DB_FILES['users'], users)
+    schedule_file_save('users', delay=1.0)
     text = t('b_your_request_has_been_subm_48224cb7f8', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('hourglass', '⏳')}", f"{premium_emoji('light', '💡')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('hourglass', '⏳')}", f"{premium_emoji('light', '💡')}"))
     try:
         await callback.message.delete()
@@ -1695,7 +1699,7 @@ async def request_approval(callback: CallbackQuery):
     
     await bot.send_message(ADMIN_ID_INT, admin_text, parse_mode=ParseMode.HTML, reply_markup=admin_kb)
     users[uid]['admin_notified'] = True
-    save_json(DB_FILES['users'], users)
+    schedule_file_save('users', delay=1.0)
     
     logger.info(f"📨 confirmation request for user {user_id} registered and sent to admin")
     
@@ -1715,7 +1719,7 @@ async def cancel_registration(callback: CallbackQuery):
     users[uid]['admin_notified'] = False  # ✅ ریست کردن
     users[uid]['cancelled_date'] = now_tehran_iso()
     users[uid]['updated_at'] = now_tehran_iso()
-    save_json(DB_FILES['users'], users)
+    schedule_file_save('users', delay=1.0)
     text = t('b_goodbye_b_use_b_start_b_ag_ce06ba36c7', lang, fa_parts=lambda: (f"{premium_emoji('cancel', '👋')}",), en_parts=lambda: (f"{premium_emoji('cancel', '👋')}",))
     try:
         await callback.message.delete()
@@ -2061,7 +2065,7 @@ async def save_price_edit(message: Message):
         old_value = configs_pool['price_settings'].get(db_key, 0)
         configs_pool['price_settings'][db_key] = new_value
         configs_pool['price_settings']['last_updated'] = now_tehran_iso()
-        save_all()
+        schedule_save(1.0)
         
         lang = get_user(admin_id).get('lang', 'fa')
         setting_display_name = setting_names.get(setting_key, {}).get(lang, setting_key)
@@ -2777,50 +2781,49 @@ def backup_database(backup_type: str = 'full_backup'):
         
         # ==================== 9. بررسی فایل بکاپ ذخیره شده ====================
         try:
-            with open(backup_file, 'r', encoding='utf-8') as f:
-                saved_data = json.load(f)
-                
-                # بررسی اجزای اصلی
-                saved_force = saved_data.get('configs', {}).get('force_join_settings', {})
-                saved_ready = saved_data.get('ready_packages', {})
-                saved_test = saved_data.get('test_service', {})
-                saved_orders = saved_data.get('orders', {})
-                saved_alert_cache = saved_data.get('alert_cache', {})
-                saved_alert_settings = saved_data.get('alert_settings', {})
-                saved_alert_settings_in_configs = saved_data.get('configs', {}).get('alert_settings', {})
-                
-                # شمارش سفارشات با ip_limit
-                orders_with_ip_count = sum(1 for o in saved_orders.values() if isinstance(o, dict) and 'ip_limit' in o)
-                
-                # لاگ بررسی
-                logger.info("🔍 Checking backup file:")
-                logger.info(f"  - Users: {len(saved_data.get('users', {}))}")
-                logger.info(f"  - Orders: {len(saved_orders)}")
-                logger.info(f"  - Orders with ip_limit: {orders_with_ip_count}/{len(saved_orders)}")
-                logger.info(f"  - force_join_settings: {saved_force}")
-                logger.info(f"  - ready_packages: {len(saved_ready.get('categories', []))} category")
-                logger.info(f"  - test_service: {saved_test.get('inbound_ids', [])}")
-                logger.info(f"  - alert_settings (separate): {saved_alert_settings}")
-                logger.info(f"  - alert_settings (in configs): {saved_alert_settings_in_configs}")
-                logger.info("  - alert_cache:")
-                logger.info(f"    • volume_alerts: {len(saved_alert_cache.get('volume_alerts', {}))}")
-                logger.info(f"    • expiry_alerts: {len(saved_alert_cache.get('expiry_alerts', {}))}")
-                logger.info(f"    • history: {len(saved_alert_cache.get('history', {}))}")
-                logger.info(f"    • service_info: {len(saved_alert_cache.get('service_info', {}))}")
-                logger.info(f"  - blacklist: {saved_data.get('blacklist', {}).get('count', 0)} user")
-                logger.info(f"  - user_inbound_selection: {len(saved_data.get('user_inbound_selection', {}))} user")
-                logger.info(f"  - user_test_usage: {len(saved_data.get('user_test_usage', {}))} user")
-                logger.info(f"  - shop_status: {saved_data.get('shop_status', {}).get('open', 'unknown')}")
-                logger.info(f"  - version: {saved_data.get('backup_info', {}).get('version', 'unknown')}")
-                
-                # بررسی کامل بودن
-                required_keys = ['users', 'orders', 'configs', 'alert_cache', 'ready_packages', 'test_service']
-                missing_keys = [k for k in required_keys if k not in saved_data]
-                if missing_keys:
-                    logger.warning(f"⚠️ Missing keys in backup: {missing_keys}")
-                else:
-                    logger.info(f"✅ Backup is complete - all {len(required_keys)} primary keys are present")
-                    
+            saved_data = full_backup
+
+            # بررسی اجزای اصلی
+            saved_force = saved_data.get('configs', {}).get('force_join_settings', {})
+            saved_ready = saved_data.get('ready_packages', {})
+            saved_test = saved_data.get('test_service', {})
+            saved_orders = saved_data.get('orders', {})
+            saved_alert_cache = saved_data.get('alert_cache', {})
+            saved_alert_settings = saved_data.get('alert_settings', {})
+            saved_alert_settings_in_configs = saved_data.get('configs', {}).get('alert_settings', {})
+
+            # شمارش سفارشات با ip_limit
+            orders_with_ip_count = sum(1 for o in saved_orders.values() if isinstance(o, dict) and 'ip_limit' in o)
+
+            # لاگ بررسی
+            logger.info("🔍 Checking backup file:")
+            logger.info(f"  - Users: {len(saved_data.get('users', {}))}")
+            logger.info(f"  - Orders: {len(saved_orders)}")
+            logger.info(f"  - Orders with ip_limit: {orders_with_ip_count}/{len(saved_orders)}")
+            logger.info(f"  - force_join_settings: {saved_force}")
+            logger.info(f"  - ready_packages: {len(saved_ready.get('categories', []))} category")
+            logger.info(f"  - test_service: {saved_test.get('inbound_ids', [])}")
+            logger.info(f"  - alert_settings (separate): {saved_alert_settings}")
+            logger.info(f"  - alert_settings (in configs): {saved_alert_settings_in_configs}")
+            logger.info("  - alert_cache:")
+            logger.info(f"    • volume_alerts: {len(saved_alert_cache.get('volume_alerts', {}))}")
+            logger.info(f"    • expiry_alerts: {len(saved_alert_cache.get('expiry_alerts', {}))}")
+            logger.info(f"    • history: {len(saved_alert_cache.get('history', {}))}")
+            logger.info(f"    • service_info: {len(saved_alert_cache.get('service_info', {}))}")
+            logger.info(f"  - blacklist: {saved_data.get('blacklist', {}).get('count', 0)} user")
+            logger.info(f"  - user_inbound_selection: {len(saved_data.get('user_inbound_selection', {}))} user")
+            logger.info(f"  - user_test_usage: {len(saved_data.get('user_test_usage', {}))} user")
+            logger.info(f"  - shop_status: {saved_data.get('shop_status', {}).get('open', 'unknown')}")
+            logger.info(f"  - version: {saved_data.get('backup_info', {}).get('version', 'unknown')}")
+
+            # بررسی کامل بودن
+            required_keys = ['users', 'orders', 'configs', 'alert_cache', 'ready_packages', 'test_service']
+            missing_keys = [k for k in required_keys if k not in saved_data]
+            if missing_keys:
+                logger.warning(f"⚠️ Missing keys in backup: {missing_keys}")
+            else:
+                logger.info(f"✅ Backup is complete - all {len(required_keys)} primary keys are present")
+
         except Exception as e:
             logger.warning(f"⚠️ Error checking backup file: {e}")
         
@@ -3088,7 +3091,7 @@ async def process_referral(new_id: int, ref_id: int):
             'date': now_tehran().strftime("%Y-%m-%d %H:%M:%S"),
             'reward_given': False
         }
-        save_all()
+        schedule_save(1.0)
         try:
             await bot.send_message(
                 ref_id, 
@@ -3124,7 +3127,7 @@ async def check_referral_bonus(user_id: int):
     add_balance(ref_id, bonus)
     referrals[key]['reward_given'] = True
     user['has_purchased'] = True
-    save_all()
+    await save_all_async()
     
     new_balance = old_balance + bonus
     
@@ -4095,14 +4098,11 @@ def get_admin_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=t('ready_package_82fdb1605c', lang), callback_data="admin_ready_packages")
         ],
         [
-            InlineKeyboardButton(text=t('health_report_test_79ea763943', lang), callback_data="test_health_report"),
-            InlineKeyboardButton(text=t('disk_warning_test_8c3dbfc2a9', lang), callback_data="test_disk_warning"),
-            InlineKeyboardButton(text=t('weekly_report_test_5ad08164be', lang), callback_data="test_weekly_report"),
+            InlineKeyboardButton(text=t('task_manager_btn', lang), callback_data="admin_task_manager", style="primary"),
         ],
         [
             InlineKeyboardButton(text=t('chats_02caa6561e', lang), callback_data="admin_chats"),
             InlineKeyboardButton(text=t('configs_fc1a5d9c0e', lang), callback_data="admin_configs"),
-            InlineKeyboardButton(text=t('alert_check_e6d7855be2', lang), callback_data="admin_check_alerts")
         ],
         [
             InlineKeyboardButton(text=t('coupon_management_3cfb4152e7', lang), callback_data="admin_coupons"),
@@ -4179,59 +4179,6 @@ async def admin_emergency_backup(callback: CallbackQuery):
     await callback.message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     
     await safe_answer(callback)
-            
-        
-@dp.callback_query(F.data == "test_health_report")
-@admin_only
-async def test_health_report(callback: CallbackQuery):
-    """تست دستی گزارش سلامت"""
-    
-    await callback.answer("⏳ در حال تولید گزارش...")
-    await send_health_report(callback.message.chat.id)
-    
-    await callback.message.answer("✅ گزارش سلامت ارسال شد!")
-@dp.callback_query(F.data == "test_disk_warning")
-@admin_only
-async def test_disk_warning(callback: CallbackQuery):
-    """تست دستی هشدار فضای دیسک"""
-    
-    await callback.answer("⏳ در حال بررسی...")
-    total, used, free = shutil.disk_usage(".")
-    free_gb = free / (1024**3)
-    warning_msg = f"""
-🧪 <b>تست هشدار فضای دیسک</b>
-
-⚠️ <b>هشدار: فضای خالی دیسک کم است!</b>
-
-💾 فضای خالی: {free_gb:.1f} GB
-📊 فضای استفاده شده: {used / (1024**3):.1f} GB
-📊 کل فضا: {total / (1024**3):.1f} GB
-
-📁 <b>فایل‌های بزرگ:</b>
-"""
-    large_files = []
-    for file in ['bot_debug.log', 'events.log', 'bot_error.log']:
-        if os.path.exists(file):
-            size_mb = os.path.getsize(file) / (1024 * 1024)
-            if size_mb > 1:
-                large_files.append(f"• {file}: {size_mb:.1f} MB")
-    
-    if large_files:
-        warning_msg += "\n".join(large_files)
-    else:
-        warning_msg += "• هیچ فایل بزرگی یافت نشد"
-    
-    warning_msg += f"""
-
-💡 راهکارها:
-• بکاپ‌های قدیمی را حذف کنید
-• دیتابیس را بهینه‌سازی کنید
-
-🕐 زمان: {now_tehran().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-    
-    await callback.message.answer(warning_msg, parse_mode=ParseMode.HTML)
-    await callback.answer("✅ هشدار دیسک ارسال شد!")
 
 
 
@@ -4378,7 +4325,7 @@ async def _redeem_package_gift_code(
             gift['used_by'] = user_id
             gift['used_at'] = now_tehran_iso()
             gift['order_id'] = order_id
-            save_all()
+            await save_all_async()
 
         try:
             await wait_msg.delete()
@@ -4951,16 +4898,6 @@ async def handle_coupon_code_input(message: Message):
     )
         
 
-@dp.callback_query(F.data == "test_weekly_report")
-@admin_only
-async def test_weekly_report(callback: CallbackQuery):
-    """تست دستی گزارش هفتگی با جزئیات کامل"""
-    
-    await callback.answer("⏳ در حال تولید گزارش کامل...")
-    await send_weekly_detailed_report(callback.message.chat.id)
-    
-    await callback.message.answer("✅ گزارش هفتگی ارسال شد!")
-
 # ==================== ماژول‌های روتر فاز ۲.۳ (بسته‌های آماده و هشدارها) ====================
 from routers.admin_packages import (
     format_package_volume,
@@ -5110,7 +5047,7 @@ async def back_to_main(callback: CallbackQuery):
         ):
             chat['user_input_enabled'] = False
             chat['updated_at'] = now_tehran_iso()
-            save_all()
+            schedule_file_save('chats', delay=1.0)
         logger.info(
             'User %s left ticket #%s message-receiving mode by selecting the main menu',
             user_id,
@@ -5129,7 +5066,6 @@ async def back_to_main(callback: CallbackQuery):
         logger.info(f"🏷️ coupon {coupon_code} for user {user_id} preserved in back_to_main")
     else:
         logger.debug("No active coupon to preserve for user %s in back_to_main.", user_id)
-    save_all()
     after_state = user_states.get(user_id, {})
     logger.info(f"🔍 final user_states status in back_to_main: {after_state}")
     
@@ -5176,9 +5112,10 @@ async def _show_rotated_subscription(
     caption = (
         t('b_subscription_link_changed_3059c55c74', lang, fa_parts=lambda: (f'{html.escape(subscription_link)}',), en_parts=lambda: (f'{html.escape(subscription_link)}',))
     )
+    qr_img = await asyncio.to_thread(generate_qr_code, subscription_link, order_id)
     await bot.send_photo(
         chat_id,
-        generate_qr_code(subscription_link, order_id),
+        qr_img,
         caption=caption,
         parse_mode=ParseMode.HTML,
         reply_markup=get_config_view_keyboard(
@@ -5231,11 +5168,23 @@ async def change_subscription_link_start(callback: CallbackQuery):
             ),
         ]]),
     )
+    now_ts = time.time()
+    if len(LINK_ROTATION_CONFIRMATIONS) > 200:
+        stale_keys = [
+            k for k, v in LINK_ROTATION_CONFIRMATIONS.items()
+            if not v.get("processing") and (now_ts - float(v.get("created_at", 0))) > 3600
+        ]
+        for k in stale_keys:
+            LINK_ROTATION_CONFIRMATIONS.pop(k, None)
+        while len(LINK_ROTATION_CONFIRMATIONS) > 500:
+            oldest_key = next(iter(LINK_ROTATION_CONFIRMATIONS))
+            LINK_ROTATION_CONFIRMATIONS.pop(oldest_key, None)
     LINK_ROTATION_CONFIRMATIONS[(user_id, confirmation.message_id)] = {
         "order_id": order_id,
         "email": order["email"],
         "origin_message_id": callback.message.message_id,
         "processing": False,
+        "created_at": now_ts,
     }
     await callback.answer()
 
@@ -5267,6 +5216,13 @@ async def change_subscription_link_confirm(callback: CallbackQuery):
     confirmation["processing"] = True
     order_id = confirmation["order_id"]
     email = confirmation["email"]
+    if len(LINK_ROTATION_LOCKS) > 200:
+        stale_locks = [
+            k for k, lk in LINK_ROTATION_LOCKS.items()
+            if k != email and not lk.locked()
+        ]
+        for k in stale_locks:
+            LINK_ROTATION_LOCKS.pop(k, None)
     lock = LINK_ROTATION_LOCKS.setdefault(email, asyncio.Lock())
     await callback.answer(t('checking_the_panel_9b33556a27', lang))
     try:
@@ -7795,7 +7751,7 @@ async def confirm_delete_user_keep_config(callback: CallbackQuery):
         if chats[cid].get('user_id') == target_id:
             del chats[cid]
     
-    save_all()
+    await save_all_async()
     
     text = t('user_id_deleted_a53d0b8375', lang, fa_parts=lambda: (f'{target_name_escaped}', f'{target_id}'), en_parts=lambda: (f'{target_name_escaped}', f'{target_id}'))
     text += t('user_configs_kept_in_panel_a498a215ee', lang)
@@ -7852,7 +7808,7 @@ async def confirm_delete_user(callback: CallbackQuery):
         if chats[cid].get('user_id') == target_id:
             del chats[cid]
     
-    save_all()
+    await save_all_async()
     
     text = t('user_id_deleted_a53d0b8375', lang, fa_parts=lambda: (f'{target_name_escaped}', f'{target_id}'), en_parts=lambda: (f'{target_name_escaped}', f'{target_id}'))
     if deleted_configs > 0:
@@ -7934,48 +7890,45 @@ async def admin_ping_test(callback: CallbackQuery):
     await callback.message.edit_text(t('i18n_admin_ping_testing', lang))
     
     results = {}
-    if is_senai_panel_enabled():
-        try:
-            import time
-            start = time.time()
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        if is_senai_panel_enabled():
+            try:
+                start = time.time()
                 async with session.get(SENAI_PANEL_URL, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                     elapsed = (time.time() - start) * 1000
                     logger.info(f"🔍 Panel HTTP: {resp.status} in {elapsed:.0f}ms")
                     results['🟢 پنل'] = f'{elapsed:.0f}ms'
-        except Exception:
-            results['🔴 پنل'] = 'Timeout'
-    http_targets = [
-        ('Google', 'https://www.google.com'),
-        ('Cloudflare', 'https://www.cloudflare.com'),
-        ('Telegram', 'https://telegram.org'),
-    ]
-    
-    for name, url in http_targets:
-        try:
-            start = time.time()
-            connector = aiohttp.TCPConnector(ssl=False)
-            async with aiohttp.ClientSession(connector=connector) as session:
+            except Exception:
+                results['🔴 پنل'] = 'Timeout'
+        http_targets = [
+            ('Google', 'https://www.google.com'),
+            ('Cloudflare', 'https://www.cloudflare.com'),
+            ('Telegram', 'https://telegram.org'),
+        ]
+
+        for name, url in http_targets:
+            try:
+                start = time.time()
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5), allow_redirects=True) as resp:
                     elapsed = (time.time() - start) * 1000
                     logger.info(f"🔍 HTTP {name}: {resp.status} in {elapsed:.0f}ms")
                     results[f'🟢 {name}'] = f'{elapsed:.0f}ms'
-        except asyncio.TimeoutError:
-            logger.warning(f"⚠️ {name} HTTP timeout")
-            results[f'🔴 {name}'] = 'Timeout'
-        except Exception as e:
-            logger.error(f"❌ {name} HTTP error: {e}")
-            try:
-                ip = {'Google': '8.8.8.8', 'Cloudflare': '1.1.1.1', 'Telegram': '149.154.167.99'}.get(name, '8.8.8.8')
-                start = time.time()
-                reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, 443), timeout=3)
-                elapsed = (time.time() - start) * 1000
-                writer.close()
-                await writer.wait_closed()
-                results[f'🟡 {name} (TCP)'] = f'{elapsed:.0f}ms'
-            except Exception:
-                results[f'🔴 {name}'] = 'Failed'
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ {name} HTTP timeout")
+                results[f'🔴 {name}'] = 'Timeout'
+            except Exception as e:
+                logger.error(f"❌ {name} HTTP error: {e}")
+                try:
+                    ip = {'Google': '8.8.8.8', 'Cloudflare': '1.1.1.1', 'Telegram': '149.154.167.99'}.get(name, '8.8.8.8')
+                    start = time.time()
+                    reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, 443), timeout=3)
+                    elapsed = (time.time() - start) * 1000
+                    writer.close()
+                    await writer.wait_closed()
+                    results[f'🟡 {name} (TCP)'] = f'{elapsed:.0f}ms'
+                except Exception:
+                    results[f'🔴 {name}'] = 'Failed'
     text = t('b_ping_test_http_b_code_code_681ce59f51', lang, fa_parts=lambda: (f"{now_tehran().strftime('%H:%M:%S')}",), en_parts=lambda: (f"{now_tehran().strftime('%H:%M:%S')}",))
     
     for name, result in results.items():
@@ -8124,6 +8077,7 @@ async def main():
         logger.info('Starting background tasks...')
         global _save_task
         _save_task = asyncio.create_task(_debounced_save_worker(), name="debounced_save_worker")
+        set_save_task(_save_task)
 
         tasks = [_save_task] + start_background_tasks(bot)
         
@@ -8191,6 +8145,10 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
     try:
         if _save_task and not _save_task.done():
             _save_task.cancel()
+            try:
+                await asyncio.wait_for(_save_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
         logger.info('💾 Final database save...')
         save_all()
         logger.info('✅ Database saved successfully')
@@ -8263,6 +8221,8 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
                 logger.warning(f"⚠️ Error closing {name}: {e}")
 
         await close_resource("HTTP session", close_http_session)
+        from services.ai_service import close_gemini_http_session
+        await close_resource("Gemini HTTP session", close_gemini_http_session)
 
         if shared_connector:
             await close_resource("shared connector", shared_connector.close)
@@ -8364,6 +8324,9 @@ async def init_alert_system():
             update_order_func=update_order                     # ✅ تابع جدید برای ذخیره email در سفارش
         )
         alert_system.update_settings(alert_system_settings)
+        from core.task_manager import get_task_interval, is_task_enabled
+        alert_system.enabled = is_task_enabled("alert_worker")
+        alert_system.check_interval = get_task_interval("alert_worker")
         asyncio.create_task(alert_system.run_alert_worker())
         
         logger.info('✅ Alert system started successfully')

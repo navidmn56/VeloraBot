@@ -35,6 +35,7 @@ from config import (
     GEMINI_TEMPERATURE,
 )
 from database import users, configs_pool, save_all, now_tehran, now_tehran_iso
+from core.save_scheduler import schedule_save
 from user_manager import user_states, get_user, get_admin_id_int
 from services.ai_service import (
     GeminiClient,
@@ -297,7 +298,7 @@ async def admin_toggle_ai_button(callback: CallbackQuery):
         configs_pool['ai_settings'] = {}
     configs_pool['ai_settings']['button_enabled'] = new_state
     configs_pool['ai_settings']['last_updated'] = now_tehran_iso()
-    save_all()  # ذخیره در دیتابیس
+    schedule_save(2.0)  # ذخیره در دیتابیس
     
     status_text = "فعال" if new_state else "غیرفعال"
     if log_system:
@@ -420,7 +421,7 @@ async def admin_ai_reset_limits(callback: CallbackQuery):
     before_users = len([u for u in user_ai_requests.values() if u.get('date') == today])
     reset_ai_limits()
     configs_pool['user_ai_requests'] = user_ai_requests
-    save_all()
+    schedule_save(2.0)
     logger.info(f"🔄 AI limits reset by admin {callback.from_user.id} reset")
     logger.info(f"   user count before: {before_users} | question count: {before_count}")
     

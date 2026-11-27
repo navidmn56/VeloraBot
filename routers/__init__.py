@@ -473,6 +473,12 @@ from routers.admin_orders import (
     reject_order,
     set_bot as set_admin_orders_bot,
 )
+from routers.admin_tasks import (
+    router as admin_tasks_router,
+    set_bot as set_admin_tasks_bot,
+    admin_task_manager,
+    task_mgr_server_check,
+)
 
 
 def set_bot_for_all_routers(bot: Bot):
@@ -493,6 +499,7 @@ def set_bot_for_all_routers(bot: Bot):
     set_orders_bot(bot)
     set_payments_bot(bot)
     set_admin_orders_bot(bot)
+    set_admin_tasks_bot(bot)
 
 
 __all__ = [
@@ -504,6 +511,10 @@ __all__ = [
     "admin_shop_router",
     "admin_packages_router",
     "admin_tools_router",
+    "admin_tasks_router",
+    "set_admin_tasks_bot",
+    "admin_task_manager",
+    "task_mgr_server_check",
     "ai_purchase_advisor_router",
     "admin_ai_router",
     "ai_assistant_router",

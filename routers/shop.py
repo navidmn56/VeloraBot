@@ -35,6 +35,7 @@ from database import (
     now_tehran,
     now_tehran_iso,
 )
+from core.save_scheduler import schedule_save
 from user_manager import (
     get_user,
     get_user_safe,
@@ -1202,7 +1203,7 @@ async def buy_specific_package(callback: CallbackQuery):
             category['inbound_id'] = None
             READY_PACKAGES['last_updated'] = now_tehran_iso()
             configs_pool['ready_packages'] = READY_PACKAGES
-            save_all()
+            schedule_save(2.0)
     
     if not category_inbound_ids:
         default_ids = configs_pool.get('default_inbound_ids', [])

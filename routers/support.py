@@ -31,6 +31,7 @@ from database import (
     now_tehran_iso,
     BLACKLIST,
 )
+from core.save_scheduler import schedule_save, schedule_file_save
 from user_manager import get_user, user_states
 from strings import t
 from utils.helpers import (
@@ -102,7 +103,7 @@ def create_chat(
         'created_at': now_tehran_iso(),
         'updated_at': now_tehran_iso()
     }
-    save_all()
+    schedule_file_save('chats', delay=1.0)
     return chat_id
 
 
@@ -116,7 +117,7 @@ def add_message(chat_id: int, sender: str, text: str):
             'time': now_tehran().strftime('%Y-%m-%d %H:%M:%S')
         })
         chats[cid]['updated_at'] = now_tehran_iso()
-        save_all()
+        schedule_file_save('chats', delay=1.0)
 
 
 async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool = True):
@@ -136,7 +137,7 @@ async def close_chat(chat_id: int, closed_by: str = "user", notify_other: bool =
         chat['updated_at'] = now_tehran_iso()
         if is_ticket and user_id:
             _clear_ticket_input_state(user_id, chat_id)
-        save_all()
+        schedule_file_save('chats', delay=1.0)
         if notify_other and user_id and bot:
             if closed_by == "user":
                 # کاربر تیکت را بسته است. فقط در صورتی به ادمین پیام بده که کاربر خود ادمین نباشد
@@ -238,7 +239,7 @@ async def auto_pause_user_ticket_if_active(user_id: int) -> bool:
         state.pop('timestamp', None)
         if not state:
             user_states.pop(user_id, None)
-    save_all()
+    schedule_file_save('chats', delay=1.0)
 
     lang = get_user(user_id).get('lang', 'fa')
     notice = (t('sending_messages_to_ticket_p_ddd1ea699a', lang, fa_parts=lambda: (f'{chat_id}',), en_parts=lambda: (f'{chat_id}',)) if chat_id else t('sending_messages_to_support_5bddcf5434', lang))
@@ -380,7 +381,7 @@ async def open_support_ticket(callback: CallbackQuery, config_order_id: Optional
             state[key] = existing_state[key]
     user_states[user_id] = state
     chats[str(chat_id)]['user_input_enabled'] = True
-    save_all()
+    schedule_file_save('chats', delay=1.0)
     bot = get_bot()
     try:
         if bot:
@@ -570,7 +571,7 @@ async def user_pause_ticket_input(callback: CallbackQuery):
     chat['user_input_enabled'] = False
     chat['updated_at'] = now_tehran_iso()
     _clear_ticket_input_state(user_id, chat_id)
-    save_all()
+    schedule_file_save('chats', delay=1.0)
 
     is_admin = (user_id == ADMIN_ID_INT)
     pause_text = (
@@ -627,7 +628,7 @@ async def user_continue_ticket(callback: CallbackQuery):
             existing_chat['updated_at'] = now_tehran_iso()
     chat['user_input_enabled'] = True
     chat['updated_at'] = now_tehran_iso()
-    save_all()
+    schedule_file_save('chats', delay=1.0)
     prompt_text = (
         t('continue_ticket_write_and_se_b5b9545eba', lang, fa_parts=lambda: (f'{chat_id}',), en_parts=lambda: (f'{chat_id}',))
     )
@@ -720,7 +721,7 @@ async def handle_ticket_button_press(message: Message):
                 chat['user_input_enabled'] = False
                 chat['updated_at'] = now_tehran_iso()
             _clear_ticket_input_state(user_id, chat_id)
-            save_all()
+            schedule_file_save('chats', delay=1.0)
             pause_notice = (
                 t('sending_messages_to_ticket_h_20a507a432', lang, fa_parts=lambda: (f'{chat_id}',), en_parts=lambda: (f'{chat_id}',))
             )
@@ -729,7 +730,7 @@ async def handle_ticket_button_press(message: Message):
             state.pop('chat_id', None)
             if not state:
                 user_states.pop(user_id, None)
-            save_all()
+            schedule_file_save('chats', delay=1.0)
             pause_notice = (
                 t('sending_messages_to_support_5bddcf5434', lang)
             )
@@ -757,7 +758,6 @@ async def handle_ticket_button_press(message: Message):
         state.pop('chat_id', None)
         if not state:
             user_states.pop(user_id, None)
-        save_all()
         close_notice = (
             t('ticket_controls_were_closed_aa691a710d', lang)
         )
@@ -793,7 +793,6 @@ async def handle_chat_message(message: Message):
     chat = chats.get(str(chat_id))
     if not chat or chat.get('status') == 'closed':
         _clear_ticket_input_state(user_id, chat_id)
-        save_all()
         return
 
     text = (message.text or "").strip()
@@ -803,7 +802,6 @@ async def handle_chat_message(message: Message):
 
     if not chat.get('user_input_enabled', True):
         _clear_ticket_input_state(user_id, chat_id)
-        save_all()
         return
     try:
         text_content = await relay_support_message(
@@ -845,7 +843,7 @@ async def save_feedback(user_id: int, order_id: int, rating: str, comment: str =
         'comment': comment,
         'date': now_tehran().strftime("%Y-%m-%d %H:%M:%S")
     }
-    save_all()
+    schedule_file_save('feedback', delay=1.0)
     user = get_user(user_id)
     user_name_escaped = html.escape(str(user.get('name') or f'کاربر_{user_id}'))
     comment_escaped = html.escape(str(comment)) if comment else 'بدون نظر'
@@ -897,7 +895,7 @@ async def handle_feedback(callback: CallbackQuery):
         'comment': '',
         'date': now_tehran().strftime("%Y-%m-%d %H:%M:%S")
     }
-    save_all()
+    schedule_file_save('feedback', delay=1.0)
     # Notify admin about new feedback (no chat created)
     bot = get_bot()
     if bot:

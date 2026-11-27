@@ -730,7 +730,7 @@ async def inbound_save(callback: CallbackQuery, callback_data: Optional[InboundC
                         break
                 READY_PACKAGES['last_updated'] = now_tehran_iso()
                 configs_pool['ready_packages'] = READY_PACKAGES
-                save_all()
+                schedule_save(2.0)
                 
                 await go_back_to_category_edit(callback, category_id)
             else:
@@ -1009,7 +1009,7 @@ async def admin_test_edit_save(message: Message):
             elif setting_type == 'emoji':
                 new_value = new_value.split()[0][:12]
             update_test_settings(**{db_key: new_value})
-            save_all()
+            schedule_save(2.0)
             await message.reply(
                 t('settings_updated_new_value_c_f05f1ab6b8', lang, fa_parts=lambda: (f'{html.escape(new_value)}',), en_parts=lambda: (f'{html.escape(new_value)}',)),
                 parse_mode=ParseMode.HTML,

@@ -26,6 +26,8 @@ for _pattern in [
 
 import io
 import logging
+import threading
+from functools import lru_cache
 from typing import Optional, Dict, Any, Union
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
@@ -112,6 +114,8 @@ CANVAS_WIDTH = 850
 CANVAS_HEIGHT = 1024
 NEON_RED = (255, 23, 68)  # #FF1744
 _TEMPLATE_CACHE: Dict[str, Image.Image] = {}
+_LOGO_CACHE: Optional[Image.Image] = None
+_ASSET_CACHE_LOCK = threading.RLock()
 
 
 def to_persian_digits(text: Union[int, str]) -> str:
@@ -147,8 +151,9 @@ def reshape_persian(text: str) -> str:
     return text
 
 
-def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """بارگذاری بهینه‌ترین فونت مدرن سیستمی یا اختصاصی Vazirmatn"""
+@lru_cache(maxsize=4)
+def _load_font_bytes(bold: bool = False) -> Optional[bytes]:
+    """خواندن بایت فونت یک‌بار از دیسک برای ساخت ایمن FreeTypeFont در تردهای هم‌زمان"""
     font_paths = [
         os.path.join(os.path.dirname(__file__), 'assets', 'fonts', 'Vazirmatn-Bold.ttf' if bold else 'Vazirmatn-Regular.ttf'),
         'C:/Windows/Fonts/segoeuib.ttf' if bold else 'C:/Windows/Fonts/segoeui.ttf',
@@ -159,9 +164,32 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     for path in font_paths:
         if os.path.exists(path):
             try:
-                return ImageFont.truetype(path, size)
+                with open(path, 'rb') as f:
+                    return f.read()
             except Exception:
                 continue
+    return None
+
+
+def _get_wireguard_logo(logo_path: str) -> Optional[Image.Image]:
+    """بارگذاری و کش کردن لوگوی WireGuard با قفل ترد-سیف"""
+    global _LOGO_CACHE
+    with _ASSET_CACHE_LOCK:
+        if _LOGO_CACHE is not None:
+            return _LOGO_CACHE
+        with Image.open(logo_path) as img:
+            _LOGO_CACHE = img.convert('RGBA')
+        return _LOGO_CACHE
+
+
+def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    """بارگذاری بهینه‌ترین فونت مدرن سیستمی یا اختصاصی Vazirmatn"""
+    font_bytes = _load_font_bytes(bold)
+    if font_bytes is not None:
+        try:
+            return ImageFont.truetype(io.BytesIO(font_bytes), size)
+        except Exception:
+            pass
     try:
         return ImageFont.load_default(size=size)
     except Exception:
@@ -227,7 +255,7 @@ def generate_wireguard_qr(
                 )
                 
                 # ۲. لود لوگو و قرار دادن داخل حاشیه سفید بدون تماس با لبه بیرونی
-                raw_logo = Image.open(logo_path).convert('RGBA')
+                raw_logo = _get_wireguard_logo(logo_path)
                 inner_logo = raw_logo.resize((inner_sz, inner_sz), Image.Resampling.LANCZOS)
                 
                 inner_mask = Image.new('L', (inner_sz, inner_sz), 0)
@@ -272,10 +300,10 @@ def create_premium_background(
     """
     تولید یا بارگذاری پس‌زمینه اختصاصی با تفکیک زبان (فارسی / انگلیسی) به همراه کش در حافظه
     """
-    global _TEMPLATE_CACHE
-    cached = _TEMPLATE_CACHE.get(lang)
-    if cached is not None and cached.size == (width, height):
-        return cached.copy()
+    with _ASSET_CACHE_LOCK:
+        cached = _TEMPLATE_CACHE.get(lang)
+        if cached is not None and cached.size == (width, height):
+            return cached.copy()
 
     tpl_filename = 'wireguard_template_fa.png' if lang == 'fa' else 'wireguard_template.png'
     template_path = os.path.join(os.path.dirname(__file__), 'assets', tpl_filename)
@@ -289,10 +317,12 @@ def create_premium_background(
 
     if os.path.exists(template_path):
         try:
-            tpl = Image.open(template_path).convert('RGBA')
+            with Image.open(template_path) as tpl_img:
+                tpl = tpl_img.convert('RGBA')
             if tpl.size != (width, height):
                 tpl = tpl.resize((width, height), Image.Resampling.LANCZOS)
-            _TEMPLATE_CACHE[lang] = tpl
+            with _ASSET_CACHE_LOCK:
+                _TEMPLATE_CACHE[lang] = tpl
             return tpl.copy()
         except Exception as err:
             logger.warning("Could not load %s: %s", tpl_filename, err)

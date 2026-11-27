@@ -30,6 +30,9 @@ import shutil
 import logging
 import sqlite3
 import asyncio
+import threading
+from contextlib import closing
+from functools import lru_cache
 from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -64,17 +67,25 @@ BOLD_FONT_PATH = os.path.join(FONTS_DIR, "Vazirmatn-Bold.ttf")
 HAS_RAQM = getattr(ft2font, '__libraqm_version__', None) is not None and hasattr(ft2font.FT2Font, '_layout')
 
 
-def get_font_properties(is_bold: bool = False, size: float = 11.0) -> fm.FontProperties:
-    """
-    دریافت مشخصات فونت اختصاصی وزیرمتن با بررسی دقیق وجود فایل فونت.
-    در صورت عدم وجود فونت، خطای واضح FileNotFoundError ایجاد می‌کند تا از رندر خراب جلوگیری شود.
-    """
+@lru_cache(maxsize=4)
+def _resolve_font_path(is_bold: bool = False) -> str:
+    """بررسی یک‌بار وجود فایل فونت فارسی و بازگشت مسیر آن"""
     font_path = BOLD_FONT_PATH if is_bold else REGULAR_FONT_PATH
     if not os.path.exists(font_path):
         raise FileNotFoundError(
             f"فایل فونت فارسی مورد نیاز یافت نشد: {font_path}\n"
             f"لطفاً مطمئن شوید فونت‌های Vazirmatn-Regular.ttf و Vazirmatn-Bold.ttf در مسیر {FONTS_DIR} قرار دارند."
         )
+    return font_path
+
+
+@lru_cache(maxsize=32)
+def get_font_properties(is_bold: bool = False, size: float = 11.0) -> fm.FontProperties:
+    """
+    دریافت مشخصات فونت اختصاصی وزیرمتن با بررسی دقیق وجود فایل فونت و کش حافظه.
+    در صورت عدم وجود فونت، خطای واضح FileNotFoundError ایجاد می‌کند تا از رندر خراب جلوگیری شود.
+    """
+    font_path = _resolve_font_path(is_bold)
     prop = fm.FontProperties(fname=font_path)
     prop.set_size(size)
     return prop
@@ -260,12 +271,14 @@ class DailyUsageStore:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self._lock = asyncio.Lock()
+        self._db_lock = threading.RLock()
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def _get_connection(self, init: bool = False) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL;")
+        if init:
+            conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
@@ -275,7 +288,7 @@ class DailyUsageStore:
         dirname = os.path.dirname(self.db_path)
         if dirname:
             os.makedirs(dirname, exist_ok=True)
-        with self._get_connection() as conn:
+        with self._db_lock, closing(self._get_connection(init=True)) as conn, conn:
             cursor = conn.cursor()
 
             # جدول سرویس‌ها
@@ -374,7 +387,7 @@ class DailyUsageStore:
         if not service_id:
             return
         now = time.time()
-        with self._get_connection() as conn:
+        with self._db_lock, closing(self._get_connection()) as conn, conn:
             conn.execute("""
                 INSERT INTO services (service_id, order_id, user_id, email, title, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -385,11 +398,10 @@ class DailyUsageStore:
                     title = COALESCE(excluded.title, services.title),
                     updated_at = excluded.updated_at;
             """, (str(service_id), str(order_id) if order_id else None, user_id, email, title, now, now))
-            conn.commit()
 
     def get_latest_snapshot(self, service_id: str) -> Optional[dict]:
         """دریافت آخرین اسنپ‌شات ثبت‌شده برای یک سرویس"""
-        with self._get_connection() as conn:
+        with self._db_lock, closing(self._get_connection()) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT timestamp, up_bytes, down_bytes, total_bytes, is_reset
@@ -401,6 +413,190 @@ class DailyUsageStore:
             if row:
                 return dict(row)
         return None
+
+    def _record_snapshot_with_cursor(
+        self,
+        cursor: sqlite3.Cursor,
+        service_id: str,
+        up_bytes: int,
+        down_bytes: int,
+        now: float,
+        now_dt: datetime,
+        now_str: str,
+        min_interval: float = 30.0,
+        collection_interval_seconds: Optional[int] = None,
+    ) -> bool:
+        """هسته ثبت یک اسنپ‌شات با استفاده از cursor تراکنش فعال"""
+        total_bytes = up_bytes + down_bytes
+
+        # بررسی وجود سرویس، در صورت عدم وجود ثبت اولیه
+        cursor.execute("SELECT service_id FROM services WHERE service_id = ?;", (service_id,))
+        if not cursor.fetchone():
+            cursor.execute("""
+                INSERT INTO services (service_id, email, created_at, updated_at)
+                VALUES (?, ?, ?, ?);
+            """, (service_id, service_id, now, now))
+
+        # بررسی آخرین اسنپ‌شات
+        cursor.execute("""
+            SELECT timestamp, up_bytes, down_bytes, total_bytes
+            FROM traffic_snapshots
+            WHERE service_id = ?
+            ORDER BY timestamp DESC, id DESC LIMIT 1;
+        """, (service_id,))
+        last = cursor.fetchone()
+        if last and now <= last["timestamp"]:
+            logger.warning(
+                "Older or concurrent snapshot for %s was ignored.",
+                service_id,
+            )
+            return False
+
+        if collection_interval_seconds is not None:
+            self._record_collection_observation(
+                cursor, service_id, now, collection_interval_seconds
+            )
+
+        is_reset = 0
+        delta_up = 0
+        delta_down = 0
+        delta_total = 0
+        baseline_up = up_bytes
+        baseline_down = down_bytes
+        baseline_total = total_bytes
+        baseline_repair = False
+
+        if last:
+            last_time = last["timestamp"]
+            last_up = last["up_bytes"]
+            last_down = last["down_bytes"]
+            last_total = last["total_bytes"]
+
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(up_bytes), 0) AS up_bytes,
+                    COALESCE(SUM(down_bytes), 0) AS down_bytes,
+                    COALESCE(SUM(total_bytes), 0) AS total_bytes
+                FROM daily_usage
+                WHERE service_id = ?;
+            """, (service_id,))
+            daily_totals = cursor.fetchone()
+            cursor.execute("""
+                SELECT 1 FROM reset_events
+                WHERE service_id = ? LIMIT 1;
+            """, (service_id,))
+            has_resets = cursor.fetchone() is not None
+
+            # Older versions scaled cumulative snapshots during chart rendering.
+            # Daily totals remain the valid baseline when no counter reset occurred.
+            if not has_resets and daily_totals["total_bytes"] != last_total:
+                baseline_up = daily_totals["up_bytes"]
+                baseline_down = daily_totals["down_bytes"]
+                baseline_total = baseline_up + baseline_down
+                baseline_repair = True
+                logger.warning(
+                    "Snapshot and daily total mismatch for %s; baseline recovered from daily data.",
+                    service_id,
+                )
+            else:
+                baseline_up = last_up
+                baseline_down = last_down
+                baseline_total = last_up + last_down
+                if baseline_total != last_total:
+                    baseline_repair = True
+                    logger.warning(
+                        "Stored snapshot total for %s does not match up/down counters; "
+                        "baseline recovered from upload and download counters.",
+                        service_id,
+                    )
+
+            # شرط 5: جلوگیری از اسنپ‌شات تکراری
+            if not baseline_repair and last_up == up_bytes and last_down == down_bytes:
+                return False
+
+            if not baseline_repair and (now - last_time) < min_interval:
+                return False
+
+            up_reset = up_bytes < baseline_up
+            down_reset = down_bytes < baseline_down
+            if up_reset or down_reset:
+                is_reset = 1
+                cursor.execute("""
+                    INSERT INTO reset_events (
+                        service_id, timestamp, previous_up, previous_down, previous_total,
+                        new_up, new_down, new_total, notes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (
+                    service_id, now, baseline_up, baseline_down, baseline_total,
+                    up_bytes, down_bytes, total_bytes, "Counter reset detected in Sanaei panel", now_str
+                ))
+                logger.warning(
+                    "Counter reset recorded for %s: previous=%d, new=%d",
+                    service_id, baseline_total, total_bytes
+                )
+                delta_up = up_bytes if up_reset else up_bytes - baseline_up
+                delta_down = down_bytes if down_reset else down_bytes - baseline_down
+            else:
+                delta_up = max(0, up_bytes - baseline_up)
+                delta_down = max(0, down_bytes - baseline_down)
+            delta_total = delta_up + delta_down
+        else:
+            # اولین اسنپ‌شات برای این سرویس:
+            # تاریخ دقیق ترافیک قبل از شروع ثبت در دسترس نیست؛ مقدار فعلی را
+            # به روز اولین مشاهده نسبت می‌دهیم تا با شمارنده پنل همگام بماند.
+            delta_up = up_bytes
+            delta_down = down_bytes
+            delta_total = total_bytes
+
+        # ثبت اسنپ‌شات جدید
+        cursor.execute("""
+            INSERT INTO traffic_snapshots (
+                service_id, timestamp, recorded_at, up_bytes, down_bytes, total_bytes, is_reset
+            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+        """, (service_id, now, now_str, up_bytes, down_bytes, total_bytes, is_reset))
+
+        # شرط 3: تخصیص مصرف روزانه با مدیریت عبور از نیمه‌شب
+        if delta_total > 0:
+            if last:
+                last_dt = datetime.fromtimestamp(last["timestamp"], TEHRAN_TZ)
+                day_slices = self._split_interval_across_days(last_dt, now_dt)
+                total_duration = (now_dt - last_dt).total_seconds()
+            else:
+                # The first cumulative sample has no known start time.
+                day_slices = [(now_dt.strftime("%Y-%m-%d"), 1.0)]
+                total_duration = 1.0
+
+            allocated_up = 0
+            allocated_down = 0
+            elapsed_seconds = 0.0
+            for index, (target_date, slice_seconds) in enumerate(day_slices):
+                elapsed_seconds += slice_seconds
+                if index == len(day_slices) - 1:
+                    slice_up = delta_up - allocated_up
+                    slice_down = delta_down - allocated_down
+                else:
+                    target_up = int(round(delta_up * elapsed_seconds / total_duration))
+                    target_down = int(round(delta_down * elapsed_seconds / total_duration))
+                    slice_up = target_up - allocated_up
+                    slice_down = target_down - allocated_down
+                slice_tot = slice_up + slice_down
+                allocated_up += slice_up
+                allocated_down += slice_down
+
+                if slice_tot <= 0 and slice_up <= 0 and slice_down <= 0:
+                    continue
+
+                cursor.execute("""
+                    INSERT INTO daily_usage (service_id, usage_date, up_bytes, down_bytes, total_bytes, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(service_id, usage_date) DO UPDATE SET
+                        up_bytes = daily_usage.up_bytes + excluded.up_bytes,
+                        down_bytes = daily_usage.down_bytes + excluded.down_bytes,
+                        total_bytes = daily_usage.total_bytes + excluded.total_bytes,
+                        updated_at = excluded.updated_at;
+                """, (service_id, target_date, slice_up, slice_down, slice_tot, now))
+
+        return True
 
     def record_snapshot(
         self,
@@ -419,184 +615,58 @@ class DailyUsageStore:
 
         up_bytes = max(0, int(up_bytes or 0))
         down_bytes = max(0, int(down_bytes or 0))
-        total_bytes = up_bytes + down_bytes
-
         now = timestamp if timestamp is not None else time.time()
         now_dt = datetime.fromtimestamp(now, TEHRAN_TZ)
         now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        with self._get_connection() as conn:
+        with self._db_lock, closing(self._get_connection()) as conn, conn:
             cursor = conn.cursor()
+            return self._record_snapshot_with_cursor(
+                cursor,
+                str(service_id),
+                up_bytes,
+                down_bytes,
+                now,
+                now_dt,
+                now_str,
+                min_interval=min_interval,
+                collection_interval_seconds=collection_interval_seconds,
+            )
 
-            # بررسی وجود سرویس، در صورت عدم وجود ثبت اولیه
-            cursor.execute("SELECT service_id FROM services WHERE service_id = ?;", (str(service_id),))
-            if not cursor.fetchone():
-                cursor.execute("""
-                    INSERT INTO services (service_id, email, created_at, updated_at)
-                    VALUES (?, ?, ?, ?);
-                """, (str(service_id), str(service_id), now, now))
+    def record_snapshots_batch(
+        self,
+        snapshots: List[Tuple[str, int, int]],
+        timestamp: Optional[float] = None,
+        min_interval: float = 30.0,
+        collection_interval_seconds: Optional[int] = None,
+    ) -> int:
+        """ثبت دسته‌ای اسنپ‌شات‌ها در یک تراکنش واحد SQLite"""
+        if not snapshots:
+            return 0
 
-            # بررسی آخرین اسنپ‌شات
-            cursor.execute("""
-                SELECT timestamp, up_bytes, down_bytes, total_bytes
-                FROM traffic_snapshots
-                WHERE service_id = ?
-                ORDER BY timestamp DESC, id DESC LIMIT 1;
-            """, (str(service_id),))
-            last = cursor.fetchone()
-            if last and now <= last["timestamp"]:
-                logger.warning(
-                    "Older or concurrent snapshot for %s was ignored.",
-                    service_id,
-                )
-                return False
+        now = timestamp if timestamp is not None else time.time()
+        now_dt = datetime.fromtimestamp(now, TEHRAN_TZ)
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        updated_count = 0
 
-            if collection_interval_seconds is not None:
-                self._record_collection_observation(
-                    cursor, str(service_id), now, collection_interval_seconds
-                )
-
-            is_reset = 0
-            delta_up = 0
-            delta_down = 0
-            delta_total = 0
-            baseline_up = up_bytes
-            baseline_down = down_bytes
-            baseline_total = total_bytes
-            baseline_repair = False
-
-            if last:
-                last_time = last["timestamp"]
-                last_up = last["up_bytes"]
-                last_down = last["down_bytes"]
-                last_total = last["total_bytes"]
-
-                cursor.execute("""
-                    SELECT
-                        COALESCE(SUM(up_bytes), 0) AS up_bytes,
-                        COALESCE(SUM(down_bytes), 0) AS down_bytes,
-                        COALESCE(SUM(total_bytes), 0) AS total_bytes
-                    FROM daily_usage
-                    WHERE service_id = ?;
-                """, (str(service_id),))
-                daily_totals = cursor.fetchone()
-                cursor.execute("""
-                    SELECT 1 FROM reset_events
-                    WHERE service_id = ? LIMIT 1;
-                """, (str(service_id),))
-                has_resets = cursor.fetchone() is not None
-
-                # Older versions scaled cumulative snapshots during chart rendering.
-                # Daily totals remain the valid baseline when no counter reset occurred.
-                if not has_resets and daily_totals["total_bytes"] != last_total:
-                    baseline_up = daily_totals["up_bytes"]
-                    baseline_down = daily_totals["down_bytes"]
-                    baseline_total = baseline_up + baseline_down
-                    baseline_repair = True
-                    logger.warning(
-                        "Snapshot and daily total mismatch for %s; baseline recovered from daily data.",
-                        service_id,
-                    )
-                else:
-                    baseline_up = last_up
-                    baseline_down = last_down
-                    baseline_total = last_up + last_down
-                    if baseline_total != last_total:
-                        baseline_repair = True
-                        logger.warning(
-                            "Stored snapshot total for %s does not match up/down counters; "
-                            "baseline recovered from upload and download counters.",
-                            service_id,
-                        )
-
-                # شرط 5: جلوگیری از اسنپ‌شات تکراری
-                if not baseline_repair and last_up == up_bytes and last_down == down_bytes:
-                    return False
-
-                if not baseline_repair and (now - last_time) < min_interval:
-                    return False
-
-                up_reset = up_bytes < baseline_up
-                down_reset = down_bytes < baseline_down
-                if up_reset or down_reset:
-                    is_reset = 1
-                    cursor.execute("""
-                        INSERT INTO reset_events (
-                            service_id, timestamp, previous_up, previous_down, previous_total,
-                            new_up, new_down, new_total, notes, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                    """, (
-                        str(service_id), now, baseline_up, baseline_down, baseline_total,
-                        up_bytes, down_bytes, total_bytes, "Counter reset detected in Sanaei panel", now_str
-                    ))
-                    logger.warning(
-                        "Counter reset recorded for %s: previous=%d, new=%d",
-                        service_id, baseline_total, total_bytes
-                    )
-                    delta_up = up_bytes if up_reset else up_bytes - baseline_up
-                    delta_down = down_bytes if down_reset else down_bytes - baseline_down
-                else:
-                    delta_up = max(0, up_bytes - baseline_up)
-                    delta_down = max(0, down_bytes - baseline_down)
-                delta_total = delta_up + delta_down
-            else:
-                # اولین اسنپ‌شات برای این سرویس:
-                # تاریخ دقیق ترافیک قبل از شروع ثبت در دسترس نیست؛ مقدار فعلی را
-                # به روز اولین مشاهده نسبت می‌دهیم تا با شمارنده پنل همگام بماند.
-                delta_up = up_bytes
-                delta_down = down_bytes
-                delta_total = total_bytes
-
-            # ثبت اسنپ‌شات جدید
-            cursor.execute("""
-                INSERT INTO traffic_snapshots (
-                    service_id, timestamp, recorded_at, up_bytes, down_bytes, total_bytes, is_reset
-                ) VALUES (?, ?, ?, ?, ?, ?, ?);
-            """, (str(service_id), now, now_str, up_bytes, down_bytes, total_bytes, is_reset))
-
-            # شرط 3: تخصیص مصرف روزانه با مدیریت عبور از نیمه‌شب
-            if delta_total > 0:
-                if last:
-                    last_dt = datetime.fromtimestamp(last["timestamp"], TEHRAN_TZ)
-                    day_slices = self._split_interval_across_days(last_dt, now_dt)
-                    total_duration = (now_dt - last_dt).total_seconds()
-                else:
-                    # The first cumulative sample has no known start time.
-                    day_slices = [(now_dt.strftime("%Y-%m-%d"), 1.0)]
-                    total_duration = 1.0
-
-                allocated_up = 0
-                allocated_down = 0
-                elapsed_seconds = 0.0
-                for index, (target_date, slice_seconds) in enumerate(day_slices):
-                    elapsed_seconds += slice_seconds
-                    if index == len(day_slices) - 1:
-                        slice_up = delta_up - allocated_up
-                        slice_down = delta_down - allocated_down
-                    else:
-                        target_up = int(round(delta_up * elapsed_seconds / total_duration))
-                        target_down = int(round(delta_down * elapsed_seconds / total_duration))
-                        slice_up = target_up - allocated_up
-                        slice_down = target_down - allocated_down
-                    slice_tot = slice_up + slice_down
-                    allocated_up += slice_up
-                    allocated_down += slice_down
-
-                    if slice_tot <= 0 and slice_up <= 0 and slice_down <= 0:
-                        continue
-
-                    cursor.execute("""
-                        INSERT INTO daily_usage (service_id, usage_date, up_bytes, down_bytes, total_bytes, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(service_id, usage_date) DO UPDATE SET
-                            up_bytes = daily_usage.up_bytes + excluded.up_bytes,
-                            down_bytes = daily_usage.down_bytes + excluded.down_bytes,
-                            total_bytes = daily_usage.total_bytes + excluded.total_bytes,
-                            updated_at = excluded.updated_at;
-                    """, (str(service_id), target_date, slice_up, slice_down, slice_tot, now))
-
-            conn.commit()
-            return True
+        with self._db_lock, closing(self._get_connection()) as conn, conn:
+            cursor = conn.cursor()
+            for service_id, up_bytes, down_bytes in snapshots:
+                if not service_id:
+                    continue
+                if self._record_snapshot_with_cursor(
+                    cursor,
+                    str(service_id),
+                    max(0, int(up_bytes or 0)),
+                    max(0, int(down_bytes or 0)),
+                    now,
+                    now_dt,
+                    now_str,
+                    min_interval=min_interval,
+                    collection_interval_seconds=collection_interval_seconds,
+                ):
+                    updated_count += 1
+        return updated_count
 
     @staticmethod
     def _record_collection_observation(
@@ -1018,11 +1088,10 @@ class DailyUsageStore:
 
     def clear_all_data(self) -> None:
         """پاکسازی کامل جداول مصرف روزانه در دیتابیس"""
-        with self._get_connection() as conn:
+        with self._db_lock, closing(self._get_connection()) as conn, conn:
             cursor = conn.cursor()
             for tbl in ("reset_events", "usage_coverage", "daily_usage", "traffic_snapshots", "services"):
                 cursor.execute(f"DELETE FROM {tbl};")
-            conn.commit()
         logger.info("Daily usage SQLite tables cleared.")
 
 
@@ -1056,159 +1125,162 @@ class DailyUsageChartRenderer:
 
         # ساخت شیء ایزوله Figure و Canvas بدون استفاده از وضعیت گلوبال pyplot
         fig = Figure(figsize=(10, 5.8), dpi=140)
-        canvas = FigureCanvasAgg(fig)
-        ax = fig.add_subplot(1, 1, 1)
+        try:
+            canvas = FigureCanvasAgg(fig)
+            ax = fig.add_subplot(1, 1, 1)
 
-        # اعمال چیدمان راست‌به‌چپ (RTL) در زبان فارسی
-        if is_rtl:
-            ax.invert_xaxis()
-            ax.yaxis.tick_right()
-            ax.yaxis.set_label_position("right")
+            # اعمال چیدمان راست‌به‌چپ (RTL) در زبان فارسی
+            if is_rtl:
+                ax.invert_xaxis()
+                ax.yaxis.tick_right()
+                ax.yaxis.set_label_position("right")
 
-        # رنگ‌بندی تیره مدرن داشبورد
-        fig_bg = "#0B0F19"
-        card_bg = "#111827"
-        grid_color = "#334155"
-        text_light = "#F8FAFC"
-        text_muted = "#94A3B8"
-        cyan_primary = "#06B6D4"
-        cyan_accent = "#38BDF8"
-        peak_color = "#10B981"  # رنگ سبز زمردی برای اوج مصرف
+            # رنگ‌بندی تیره مدرن داشبورد
+            fig_bg = "#0B0F19"
+            card_bg = "#111827"
+            grid_color = "#334155"
+            text_light = "#F8FAFC"
+            text_muted = "#94A3B8"
+            cyan_primary = "#06B6D4"
+            cyan_accent = "#38BDF8"
+            peak_color = "#10B981"  # رنگ سبز زمردی برای اوج مصرف
 
-        fig.patch.set_facecolor(fig_bg)
-        ax.set_facecolor(card_bg)
+            fig.patch.set_facecolor(fig_bg)
+            ax.set_facecolor(card_bg)
 
-        # خطوط راهنمای افقی
-        ax.grid(axis='y', linestyle='--', alpha=0.3, color=grid_color, zorder=1)
-        ax.set_axisbelow(True)
+            # خطوط راهنمای افقی
+            ax.grid(axis='y', linestyle='--', alpha=0.3, color=grid_color, zorder=1)
+            ax.set_axisbelow(True)
 
-        x_indices = list(range(len(days_data)))
+            x_indices = list(range(len(days_data)))
 
-        if use_mb:
-            usage_values = [d["total_gb"] * 1024 for d in days_data]
-            max_val = max(usage_values) if usage_values else 100.0
-            y_max = max(max_val * 1.30, 50.0)
-            y_unit_label = "مگابایت" if is_rtl else "MB"
-        else:
-            usage_values = [d["total_gb"] for d in days_data]
-            max_val = max_val_gb if max_val_gb else 1.0
-            y_max = max(max_val * 1.30, 0.5)
-            y_unit_label = "گیگابایت" if is_rtl else "GB"
-
-        # ساخت رنگ میله‌ها (میله اوج مصرف برجسته می‌شود)
-        colors = []
-        edge_colors = []
-        for v in usage_values:
-            if v > 0 and math.isclose(v, max_val, rel_tol=1e-3):
-                colors.append(peak_color)
-                edge_colors.append("#34D399")
+            if use_mb:
+                usage_values = [d["total_gb"] * 1024 for d in days_data]
+                max_val = max(usage_values) if usage_values else 100.0
+                y_max = max(max_val * 1.30, 50.0)
+                y_unit_label = "مگابایت" if is_rtl else "MB"
             else:
-                colors.append(cyan_primary)
-                edge_colors.append(cyan_accent)
+                usage_values = [d["total_gb"] for d in days_data]
+                max_val = max_val_gb if max_val_gb else 1.0
+                y_max = max(max_val * 1.30, 0.5)
+                y_unit_label = "گیگابایت" if is_rtl else "GB"
 
-        bars = ax.bar(
-            x_indices,
-            usage_values,
-            width=0.48,
-            color=colors,
-            edgecolor=edge_colors,
-            linewidth=1.2,
-            zorder=3,
-            alpha=0.92
-        )
+            # ساخت رنگ میله‌ها (میله اوج مصرف برجسته می‌شود)
+            colors = []
+            edge_colors = []
+            for v in usage_values:
+                if v > 0 and math.isclose(v, max_val, rel_tol=1e-3):
+                    colors.append(peak_color)
+                    edge_colors.append("#34D399")
+                else:
+                    colors.append(cyan_primary)
+                    edge_colors.append(cyan_accent)
 
-        # برچسب حجم بالای هر میله با تشخیص خودکار MB و GB
-        bar_fp = get_font_properties(is_bold=True, size=9.5)
-        for bar, d, val in zip(bars, days_data, usage_values):
-            height = bar.get_height()
-            gb = d["total_gb"]
-            if gb <= 0:
-                lbl = "۰" if is_rtl else "0"
-            elif gb < 1.0:
-                mb = gb * 1024
-                lbl = f"{to_persian_digits(f'{mb:.0f}')} مگ" if is_rtl else f"{mb:.0f} MB"
-            else:
-                lbl = f"{to_persian_digits(f'{gb:.2f}')} گیگ" if is_rtl else f"{gb:.2f} GB"
-
-            ax.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height + max(y_max * 0.025, 0.03),
-                lbl,
-                fontproperties=bar_fp,
-                ha='center', va='bottom',
-                color=text_light,
-                zorder=4
+            bars = ax.bar(
+                x_indices,
+                usage_values,
+                width=0.48,
+                color=colors,
+                edgecolor=edge_colors,
+                linewidth=1.2,
+                zorder=3,
+                alpha=0.92
             )
 
-        # برچسب محور X (روز هفته + تاریخ شمسی در فارسی)
-        x_labels = [
-            f"{format_persian_text(d['day_name'])}\n{to_persian_digits(d['short_date']) if is_rtl else d['short_date']}"
-            for d in days_data
-        ]
-
-        xtick_fp = get_font_properties(is_bold=False, size=10.0)
-        ax.set_xticks(x_indices)
-        ax.set_xticklabels(x_labels, fontproperties=xtick_fp, color=text_muted)
-        for tick in ax.get_xticklabels():
-            tick.set_fontproperties(xtick_fp)
-            tick.set_color(text_muted)
-
-        # محور Y و برچسب واحد خودکار
-        ytick_fp = get_font_properties(is_bold=False, size=9.0)
-        ax.tick_params(axis='y', colors=text_muted, labelsize=9)
-        for tick in ax.get_yticklabels():
-            tick.set_fontproperties(ytick_fp)
-            tick.set_color(text_muted)
-
-        ylabel_fp = get_font_properties(is_bold=False, size=10.5)
-        y_label_text = format_persian_text(f"مصرف اینترنت ({y_unit_label})") if is_rtl else f"Internet Usage ({y_unit_label})"
-        ax.set_ylabel(y_label_text, fontproperties=ylabel_fp, color=text_muted, labelpad=12)
-        ax.set_ylim(0, y_max)
-
-        # زیباسازی حاشیه‌ها
-        for spine in ['top', 'left' if is_rtl else 'right']:
-            ax.spines[spine].set_visible(False)
-        for spine in ['right' if is_rtl else 'left', 'bottom']:
-            ax.spines[spine].set_color(grid_color)
-            ax.spines[spine].set_linewidth(1.0)
-
-        # عنوان داشبورد
-        title_fp = get_font_properties(is_bold=True, size=14.5)
-        title = format_persian_text("نمودار مصرف روزانه اینترنت (۷ روز اخیر)") if is_rtl else "Daily Internet Usage (Last 7 Days)"
-        fig.text(0.5, 0.94, title, fontproperties=title_fp, ha='center', va='top', color=text_light)
-
-        # کارت آماری بالای نمودار با تشخیص خودکار مگابایت و گیگابایت
-        def _fmt_brief(gb_val):
-            if gb_val >= 1.0:
-                return f"{to_persian_digits(f'{gb_val:.2f}')} گیگ" if is_rtl else f"{gb_val:.2f} GB"
-            else:
-                mb = gb_val * 1024
-                if mb >= 10:
-                    return f"{to_persian_digits(f'{mb:.1f}')} مگ" if is_rtl else f"{mb:.1f} MB"
-                elif mb > 0:
-                    return f"{to_persian_digits(f'{mb:.2f}')} مگ" if is_rtl else f"{mb:.2f} MB"
+            # برچسب حجم بالای هر میله با تشخیص خودکار MB و GB
+            bar_fp = get_font_properties(is_bold=True, size=9.5)
+            for bar, d, val in zip(bars, days_data, usage_values):
+                height = bar.get_height()
+                gb = d["total_gb"]
+                if gb <= 0:
+                    lbl = "۰" if is_rtl else "0"
+                elif gb < 1.0:
+                    mb = gb * 1024
+                    lbl = f"{to_persian_digits(f'{mb:.0f}')} مگ" if is_rtl else f"{mb:.0f} MB"
                 else:
-                    return "۰ مگ" if is_rtl else "0 MB"
+                    lbl = f"{to_persian_digits(f'{gb:.2f}')} گیگ" if is_rtl else f"{gb:.2f} GB"
 
-        tot_str = _fmt_brief(total_gb)
-        avg_str = _fmt_brief(avg_gb) + ("/روز" if is_rtl else "/day")
-        peak_str = _fmt_brief(peak_gb) + (f" ({peak_day})" if peak_day != "-" else "")
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height + max(y_max * 0.025, 0.03),
+                    lbl,
+                    fontproperties=bar_fp,
+                    ha='center', va='bottom',
+                    color=text_light,
+                    zorder=4
+                )
 
-        if is_rtl:
-            summary_raw = f"مجموع: {tot_str}  •  میانگین: {avg_str}  •  اوج: {peak_str}"
-            summary_text = format_persian_text(summary_raw)
-        else:
-            summary_text = f"Total: {tot_str}  •  Average: {avg_str}  •  Peak: {peak_str}"
+            # برچسب محور X (روز هفته + تاریخ شمسی در فارسی)
+            x_labels = [
+                f"{format_persian_text(d['day_name'])}\n{to_persian_digits(d['short_date']) if is_rtl else d['short_date']}"
+                for d in days_data
+            ]
 
-        summary_fp = get_font_properties(is_bold=True, size=10.5)
-        fig.text(0.5, 0.88, summary_text, fontproperties=summary_fp, ha='center', va='top', color=cyan_accent)
+            xtick_fp = get_font_properties(is_bold=False, size=10.0)
+            ax.set_xticks(x_indices)
+            ax.set_xticklabels(x_labels, fontproperties=xtick_fp, color=text_muted)
+            for tick in ax.get_xticklabels():
+                tick.set_fontproperties(xtick_fp)
+                tick.set_color(text_muted)
 
-        fig.subplots_adjust(top=0.82, bottom=0.15, left=0.08 if is_rtl else 0.10, right=0.92 if is_rtl else 0.96)
+            # محور Y و برچسب واحد خودکار
+            ytick_fp = get_font_properties(is_bold=False, size=9.0)
+            ax.tick_params(axis='y', colors=text_muted, labelsize=9)
+            for tick in ax.get_yticklabels():
+                tick.set_fontproperties(ytick_fp)
+                tick.set_color(text_muted)
 
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
+            ylabel_fp = get_font_properties(is_bold=False, size=10.5)
+            y_label_text = format_persian_text(f"مصرف اینترنت ({y_unit_label})") if is_rtl else f"Internet Usage ({y_unit_label})"
+            ax.set_ylabel(y_label_text, fontproperties=ylabel_fp, color=text_muted, labelpad=12)
+            ax.set_ylim(0, y_max)
 
-        return buf.getvalue()
+            # زیباسازی حاشیه‌ها
+            for spine in ['top', 'left' if is_rtl else 'right']:
+                ax.spines[spine].set_visible(False)
+            for spine in ['right' if is_rtl else 'left', 'bottom']:
+                ax.spines[spine].set_color(grid_color)
+                ax.spines[spine].set_linewidth(1.0)
+
+            # عنوان داشبورد
+            title_fp = get_font_properties(is_bold=True, size=14.5)
+            title = format_persian_text("نمودار مصرف روزانه اینترنت (۷ روز اخیر)") if is_rtl else "Daily Internet Usage (Last 7 Days)"
+            fig.text(0.5, 0.94, title, fontproperties=title_fp, ha='center', va='top', color=text_light)
+
+            # کارت آماری بالای نمودار با تشخیص خودکار مگابایت و گیگابایت
+            def _fmt_brief(gb_val):
+                if gb_val >= 1.0:
+                    return f"{to_persian_digits(f'{gb_val:.2f}')} گیگ" if is_rtl else f"{gb_val:.2f} GB"
+                else:
+                    mb = gb_val * 1024
+                    if mb >= 10:
+                        return f"{to_persian_digits(f'{mb:.1f}')} مگ" if is_rtl else f"{mb:.1f} MB"
+                    elif mb > 0:
+                        return f"{to_persian_digits(f'{mb:.2f}')} مگ" if is_rtl else f"{mb:.2f} MB"
+                    else:
+                        return "۰ مگ" if is_rtl else "0 MB"
+
+            tot_str = _fmt_brief(total_gb)
+            avg_str = _fmt_brief(avg_gb) + ("/روز" if is_rtl else "/day")
+            peak_str = _fmt_brief(peak_gb) + (f" ({peak_day})" if peak_day != "-" else "")
+
+            if is_rtl:
+                summary_raw = f"مجموع: {tot_str}  •  میانگین: {avg_str}  •  اوج: {peak_str}"
+                summary_text = format_persian_text(summary_raw)
+            else:
+                summary_text = f"Total: {tot_str}  •  Average: {avg_str}  •  Peak: {peak_str}"
+
+            summary_fp = get_font_properties(is_bold=True, size=10.5)
+            fig.text(0.5, 0.88, summary_text, fontproperties=summary_fp, ha='center', va='top', color=cyan_accent)
+
+            fig.subplots_adjust(top=0.82, bottom=0.15, left=0.08 if is_rtl else 0.10, right=0.92 if is_rtl else 0.96)
+
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
+
+            return buf.getvalue()
+        finally:
+            fig.clear()
 
 
 # نمونه یکتای سراسری از استور
@@ -1317,6 +1389,8 @@ class DailyUsageCollector:
     def __init__(self, store: DailyUsageStore = usage_store):
         self.store = store
         self._running = False
+        self._missing_client_cache: Dict[str, float] = {}
+        self._missing_cache_warned: set = set()
 
     async def start(
         self,
@@ -1328,17 +1402,41 @@ class DailyUsageCollector:
         """
         اجرای تسک دوره‌ای در پس‌زمینه بدون بلاک کردن ربات
         """
+        from core.task_manager import (
+            consume_force_run,
+            get_task_interval,
+            record_task_finish,
+            record_task_start,
+            sleep_interruptible,
+            wait_until_task_enabled,
+        )
+
         self._running = True
-        logger.info("Daily usage periodic collection task started (interval: %d seconds)", interval_seconds)
+        cur_interval = get_task_interval("daily_usage_collector") or interval_seconds
+        logger.info("Daily usage periodic collection task started (interval: %d seconds)", cur_interval)
 
         while self._running:
             try:
-                await self.collect_all(
-                    get_inbounds_func,
-                    get_approved_emails_func,
-                    get_client_traffic_func=get_client_traffic_func,
-                    interval_seconds=interval_seconds,
-                )
+                await wait_until_task_enabled("daily_usage_collector")
+                if not self._running:
+                    break
+                consume_force_run("daily_usage_collector")
+                cur_interval = get_task_interval("daily_usage_collector") or interval_seconds
+                started = record_task_start("daily_usage_collector")
+                try:
+                    await self.collect_all(
+                        get_inbounds_func,
+                        get_approved_emails_func,
+                        get_client_traffic_func=get_client_traffic_func,
+                        interval_seconds=cur_interval,
+                    )
+                    record_task_finish("daily_usage_collector", started)
+                except asyncio.CancelledError:
+                    record_task_finish("daily_usage_collector", started, "cancelled")
+                    raise
+                except Exception as e:
+                    record_task_finish("daily_usage_collector", started, str(e))
+                    raise
             except asyncio.CancelledError:
                 logger.info("Daily usage collection task cancelled.")
                 break
@@ -1346,7 +1444,8 @@ class DailyUsageCollector:
                 logger.error(f"Error in daily usage periodic collection task: {e}", exc_info=True)
 
             try:
-                await asyncio.sleep(interval_seconds)
+                cur_interval = get_task_interval("daily_usage_collector") or interval_seconds
+                await sleep_interruptible("daily_usage_collector", cur_interval)
             except asyncio.CancelledError:
                 break
 
@@ -1370,21 +1469,37 @@ class DailyUsageCollector:
                 logger.debug("No valid emails for usage collection.")
                 return 0
 
+            inbounds_ok = False
             try:
                 inbounds = await get_inbounds_func(include_disabled=True)
+                if isinstance(inbounds, list):
+                    inbounds_ok = True
+                else:
+                    logger.warning("Inbounds response invalid for usage collection; using client API.")
+                    inbounds = []
             except Exception:
                 logger.exception("Failed to retrieve inbounds for usage collection.")
-                inbounds = []
-            if not isinstance(inbounds, list):
-                logger.warning("Inbounds response invalid for usage collection; using client API.")
                 inbounds = []
 
             # تجمیع مصرف بر اساس email در صورتی که کلاینت در چند اینباند باشد
             client_traffics: Dict[str, Dict[str, int]] = {}
+            panel_client_emails = set()
 
             for inbound in inbounds:
                 if not isinstance(inbound, dict):
                     continue
+
+                settings = inbound.get('settings', {})
+                if isinstance(settings, str):
+                    try:
+                        settings = json.loads(settings)
+                    except Exception:
+                        settings = {}
+                if isinstance(settings, dict):
+                    for client in settings.get('clients', []) or []:
+                        if isinstance(client, dict) and client.get('email'):
+                            panel_client_emails.add(str(client['email']).strip())
+
                 client_stats = inbound.get('clientStats', [])
                 if isinstance(client_stats, str):
                     try:
@@ -1414,6 +1529,9 @@ class DailyUsageCollector:
                         if up < 0 or down < 0:
                             continue
 
+                        self._missing_client_cache.pop(email_str, None)
+                        self._missing_cache_warned.discard(email_str)
+
                         # در 3X-UI هر ایمیل رکورد یکتا در client_traffics دارد.
                         # اگر کلاینت در چند اینباند عضو باشد، نباید ترافیک آن ضرب شود.
                         if email_str not in client_traffics:
@@ -1422,41 +1540,65 @@ class DailyUsageCollector:
                             client_traffics[email_str]['up'] = max(client_traffics[email_str]['up'], up)
                             client_traffics[email_str]['down'] = max(client_traffics[email_str]['down'], down)
 
+            now_poll = time.time()
             missing_emails = approved_emails.difference(client_traffics)
             for email in missing_emails:
                 if not get_client_traffic_func:
-                    logger.warning(
-                        "No record in clientStats for client %s and fallback API is not configured.",
-                        email,
-                    )
+                    if email not in self._missing_cache_warned:
+                        self._missing_cache_warned.add(email)
+                        logger.warning(
+                            "No record in clientStats for client %s and fallback API is not configured.",
+                            email,
+                        )
+                    continue
+                if self._missing_client_cache.get(email, 0.0) > now_poll:
                     continue
                 traffic = await fetch_client_total_traffic(
                     email,
                     get_client_traffic_func=get_client_traffic_func,
                 )
                 if traffic:
+                    self._missing_client_cache.pop(email, None)
+                    self._missing_cache_warned.discard(email)
                     client_traffics[email] = {
                         "up": traffic["up"],
                         "down": traffic["down"],
                     }
                 else:
-                    logger.warning(
-                        "Failed to retrieve usage for client %s from clientStats and fallback API.",
-                        email,
-                    )
+                    if inbounds_ok:
+                        ttl = 3600.0 if email not in panel_client_emails else 1800.0
+                        self._missing_client_cache[email] = now_poll + ttl
+                    if email not in self._missing_cache_warned:
+                        self._missing_cache_warned.add(email)
+                        logger.warning(
+                            "Failed to retrieve usage for client %s from clientStats and fallback API.",
+                            email,
+                        )
+                    else:
+                        logger.debug(
+                            "Client %s still absent from clientStats and fallback API.",
+                            email,
+                        )
 
-            updated_count = 0
+            if len(self._missing_client_cache) > 2000:
+                self._missing_client_cache = {
+                    k: v for k, v in self._missing_client_cache.items() if v > now_poll
+                }
+            if len(self._missing_cache_warned) > 2000:
+                self._missing_cache_warned.clear()
+
             now = time.time()
-            for email, traff in client_traffics.items():
-                recorded = self.store.record_snapshot(
-                    service_id=email,
-                    up_bytes=traff['up'],
-                    down_bytes=traff['down'],
-                    timestamp=now,
-                    collection_interval_seconds=interval_seconds
-                )
-                if recorded:
-                    updated_count += 1
+            snapshot_items = [
+                (email, traff['up'], traff['down'])
+                for email, traff in client_traffics.items()
+            ]
+            updated_count = await asyncio.to_thread(
+                self.store.record_snapshots_batch,
+                snapshot_items,
+                now,
+                30.0,
+                interval_seconds,
+            )
 
             if updated_count > 0:
                 logger.info("Periodic usage snapshot recorded: %d clients updated.", updated_count)
@@ -1618,15 +1760,18 @@ async def handle_daily_usage_request(
     if not service_ids:
         service_ids = [f"order_{order_id}"]
 
-    # ثبت سرویس‌ها در دیتابیس SQLite
-    for s_id in service_ids:
-        usage_store.register_service(
-            service_id=s_id,
-            order_id=str(order_id),
-            user_id=user_id,
-            email=email or s_id,
-            title=f"Order #{order_id}"
-        )
+    # ثبت سرویس‌ها در دیتابیس SQLite (بدون مسدود کردن Event Loop)
+    def _register_all_services():
+        for s_id in service_ids:
+            usage_store.register_service(
+                service_id=s_id,
+                order_id=str(order_id),
+                user_id=user_id,
+                email=email or s_id,
+                title=f"Order #{order_id}"
+            )
+
+    await asyncio.to_thread(_register_all_services)
 
     # دریافت لحظه‌ای ترافیک دقیق با استفاده از منطق تجمیعی یکپارچه
     live_traffic_data = None
@@ -1656,10 +1801,15 @@ async def handle_daily_usage_request(
             )
         if live_traffic_data:
             # Rendering the chart must not rewrite historical totals or counter baselines.
-            usage_store.record_snapshot(email, live_traffic_data['up'], live_traffic_data['down'])
+            await asyncio.to_thread(
+                usage_store.record_snapshot,
+                email,
+                live_traffic_data['up'],
+                live_traffic_data['down'],
+            )
 
     # محاسبه آمار ۷ روز گذشته
-    stats = usage_store.get_statistics(service_ids, days=7, lang=lang)
+    stats = await asyncio.to_thread(usage_store.get_statistics, service_ids, 7, lang)
 
     # رندر نمودار در ترد مجزا تا Event Loop ربات بلاک نشود
     chart_png = await asyncio.to_thread(DailyUsageChartRenderer.render, stats, lang)

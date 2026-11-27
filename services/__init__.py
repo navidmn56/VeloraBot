@@ -82,6 +82,14 @@ from services.background_tasks import (
     set_log_system,
     get_log_system,
 )
+from services.server_guard import (
+    collect_server_metrics_sync,
+    run_server_guard_check,
+    report_immediate_security_event,
+    record_http_request,
+    record_bot_user_block,
+    server_guard_worker,
+)
 
 __all__ = [
     "GeminiClient",
@@ -158,4 +166,11 @@ __all__ = [
     "get_bot",
     "set_log_system",
     "get_log_system",
+    # server_guard
+    "collect_server_metrics_sync",
+    "run_server_guard_check",
+    "report_immediate_security_event",
+    "record_http_request",
+    "record_bot_user_block",
+    "server_guard_worker",
 ]

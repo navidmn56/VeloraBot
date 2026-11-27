@@ -20,6 +20,7 @@ from database import (
     save_all,
     now_tehran_iso,
 )
+from core.save_scheduler import schedule_file_save
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ def create_package_gift_code(
         "order_id": None,
     }
     store[gift_id] = record
-    save_all()
+    schedule_file_save('configs', delay=1.0)
     logger.info(
         "🎁 [package_gift] Created code %s (id=%s) for cat=%s pkg=%s lock=%s by admin=%s",
         code_preview,
@@ -208,5 +209,5 @@ def delete_package_gift_code(gift_id: str) -> Optional[dict]:
     store = get_package_gift_store()
     removed = store.pop(gift_id, None)
     if removed is not None:
-        save_all()
+        schedule_file_save('configs', delay=1.0)
     return removed

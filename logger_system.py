@@ -18,10 +18,12 @@ class LogSystem:
         self.bot = Bot(token=bot_token)
         self.log_channel_id = log_channel_id
         self.initialized = True
-        self.log_queue = asyncio.Queue()
+        self.log_queue = asyncio.Queue(maxsize=1000)
         self.is_sending = False
         self.last_send_time = 0
         self.min_interval = 1.0  # حداقل 1 ثانیه بین هر پیام
+        self._worker_task: Optional[asyncio.Task] = None
+        self._closing = False
     
     @staticmethod
     def _safe(text) -> str:
@@ -80,46 +82,75 @@ class LogSystem:
                     return False
         return False
     
+    def _ensure_worker_started(self):
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(self._process_queue())
+
     async def _process_queue(self):
         """پردازش صف لاگ‌ها با تاخیر مناسب"""
         if self.is_sending:
             return
-        
+
         self.is_sending = True
         try:
-            while not self.log_queue.empty():
+            while True:
                 try:
-                    item = await self.log_queue.get()
+                    item = self.log_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+                try:
                     message = item.get('message', '')
                     parse_mode = item.get('parse_mode', 'HTML')
-                    
+
                     await self._send_with_retry(message, parse_mode)
-                    
+
                     # تاخیر بین پیام‌ها
                     await asyncio.sleep(1)
-                    
+
                 except asyncio.CancelledError:
-                    break
+                    raise
                 except Exception as e:
                     logger.error(f"Error processing log queue: {e}")
                     await asyncio.sleep(2)
-                    
+                finally:
+                    self.log_queue.task_done()
+        except asyncio.CancelledError:
+            pass
         finally:
             self.is_sending = False
-    
+            if self._worker_task is asyncio.current_task():
+                self._worker_task = None
+            if not self.log_queue.empty() and not self._closing:
+                self._ensure_worker_started()
+
     async def send_log(self, message: str, parse_mode: str = "HTML"):
         """ارسال پیام لاگ به کانال با استفاده از صف"""
+        if self._closing:
+            return
+
         timestamp = now_tehran().strftime('%H:%M:%S')
         formatted_message = f"<code>[{timestamp}]</code>\n{message}"
-        
-        # اضافه کردن به صف
-        await self.log_queue.put({
+        item = {
             'message': formatted_message,
             'parse_mode': parse_mode
-        })
-        
-        # شروع پردازش صف اگر در حال اجرا نیست
-        asyncio.create_task(self._process_queue())
+        }
+
+        # Drop oldest queued log if the bounded queue is full instead of leaking memory or blocking
+        if self.log_queue.full():
+            try:
+                self.log_queue.get_nowait()
+                self.log_queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+
+        try:
+            self.log_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            pass
+
+        # شروع یک کارگر یکتا برای پردازش صف در صورت نبودن تسک فعال
+        self._ensure_worker_started()
     
     async def log_bot_start(self, bot_info, admin_id: int):
         """ثبت استارت ربات"""
@@ -347,6 +378,23 @@ class LogSystem:
 ❌ <b>Error:</b> {self._safe(str(error)[:200])}{user_text}
 """
         await self.send_log(text)
+
+    async def log_server_event(
+        self,
+        title: str,
+        body_html: str,
+        is_important: bool = False,
+        admin_mention: str = "",
+    ):
+        """ارسال لاگ وضعیت سرور/امنیت به بات لاگ (تگ کردن ادمین فقط در مشکلات واقعی)"""
+        mention_line = f"\n\n🔔 <b>توجه ادمین:</b> {admin_mention}" if (is_important and admin_mention) else ""
+        text = (
+            f"<b>{self._safe(title)}</b>\n"
+            f"🕐 <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{body_html}{mention_line}"
+        )
+        await self.send_log(text)
     
     async def log_force_join_channel(self, admin_id: int, channel_name: str, channel_id: int, action: str = "add"):
         """ثبت افزودن یا حذف کانال عضویت اجباری"""
@@ -376,12 +424,20 @@ class LogSystem:
     
     async def close(self):
         """بستن جلسه بات و انتظار برای ارسال لاگ‌های باقیمانده"""
+        self._closing = True
         timeout = 30
         start = datetime.now()
-        
-        while not self.log_queue.empty() and (datetime.now() - start).seconds < timeout:
+
+        while not self.log_queue.empty() and (datetime.now() - start).total_seconds() < timeout:
             await asyncio.sleep(1)
-        
+
+        if self._worker_task and not self._worker_task.done():
+            self._worker_task.cancel()
+            try:
+                await asyncio.wait_for(self._worker_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
         try:
             await self.bot.session.close()
         except Exception:

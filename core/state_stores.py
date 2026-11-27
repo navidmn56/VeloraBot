@@ -102,7 +102,7 @@ TEMP_INBOUND_SELECTION: TempStore = TempStore(ttl=900)
 INBOUND_BACK_DATA: TempStore = TempStore(ttl=900)
 USER_INBOUND_SELECTION: dict[str, Any] = {}
 USER_TEST_SETTINGS: dict[str, Any] = {}
-CONFIG_LINKS_CACHE: dict[int, dict] = {}
+CONFIG_LINKS_CACHE: dict[int, dict] = BoundedTTLCache(maxsize=1000)
 _tg_user_cache: dict[int, tuple[float, dict]] = BoundedTTLCache(maxsize=2000)
 
 

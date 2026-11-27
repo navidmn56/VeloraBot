@@ -52,6 +52,7 @@ from database import (
     TEST_SERVICE_STATUS,
     USER_TEST_USAGE,
 )
+from core.save_scheduler import schedule_file_save
 from user_manager import (
     user_states,
     get_user,
@@ -66,6 +67,7 @@ from services.ai_service import (
     reset_ai_limits,
     user_ai_requests,
     get_gemini_client,
+    get_gemini_http_session,
     gemini_error_message,
     AI_FEATURE_ENABLED,
     get_ai_button_enabled,
@@ -1422,12 +1424,7 @@ async def handle_ai_menu_action(callback: CallbackQuery):
                 and str(result.get('package_id')) == str(package_id)
             ):
                 result['invoice_order_id'] = order_id
-                if not save_json(DB_FILES['users'], users):
-                    logger.error(
-                        "❌ advisor invoice %s for user %s could not be saved in the user record",
-                        order_id,
-                        user_id,
-                    )
+                schedule_file_save('users', delay=1.0)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1535,154 +1532,154 @@ async def get_ai_response(
                     )
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-            
-            async with aiohttp.ClientSession() as session:
-                cached_prompt_name = await get_gemini_prompt_cache(
-                    session,
-                    system_instruction,
-                )
-                payload = {
-                    "contents": [{
-                        "parts": [{"text": full_message}]
-                    }],
-                    "generationConfig": {
-                        "temperature": GEMINI_TEMPERATURE,
-                        "maxOutputTokens": max_tokens,
-                        "topP": 0.95,
-                        "topK": 40
-                    }
-                }
-                if response_mime_type:
-                    payload["generationConfig"]["responseMimeType"] = response_mime_type
-                if cached_prompt_name:
-                    payload["cachedContent"] = cached_prompt_name
-                else:
-                    payload["systemInstruction"] = {
-                        "parts": [{"text": system_instruction}]
-                    }
-                async with session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=45)
-                ) as response:
-                    
-                    if response.status == 200:
-                        data = await response.json()
-                        candidates = data.get('candidates', [])
-                        
-                        if (
-                            candidates
-                            and candidates[0].get('finishReason') == "MAX_TOKENS"
-                        ):
-                            retry_tokens = min(max_tokens * 2, 4096)
-                            logger.warning(
-                                '⚠️ Gemini response reached the output limit; retrying with %s tokens',
-                                retry_tokens,
-                            )
-                            payload["generationConfig"]["maxOutputTokens"] = retry_tokens
-                            async with session.post(
-                                url,
-                                json=payload,
-                                timeout=aiohttp.ClientTimeout(total=45),
-                            ) as retry_response:
-                                if retry_response.status != 200:
-                                    logger.warning(
-                                        '⚠️ Gemini retry failed; HTTP %s',
-                                        retry_response.status,
-                                    )
-                                    return "⚠️ پاسخ کامل تولید نشد؛ لطفاً دوباره تلاش کنید."
-                                retry_data = await retry_response.json()
-                                candidates = retry_data.get('candidates', [])
 
-                        if candidates:
-                            finish_reason = candidates[0].get('finishReason', '')
-                            if finish_reason != "STOP":
+            session = await get_gemini_http_session()
+            cached_prompt_name = await get_gemini_prompt_cache(
+                session,
+                system_instruction,
+            )
+            payload = {
+                "contents": [{
+                    "parts": [{"text": full_message}]
+                }],
+                "generationConfig": {
+                    "temperature": GEMINI_TEMPERATURE,
+                    "maxOutputTokens": max_tokens,
+                    "topP": 0.95,
+                    "topK": 40
+                }
+            }
+            if response_mime_type:
+                payload["generationConfig"]["responseMimeType"] = response_mime_type
+            if cached_prompt_name:
+                payload["cachedContent"] = cached_prompt_name
+            else:
+                payload["systemInstruction"] = {
+                    "parts": [{"text": system_instruction}]
+                }
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=45)
+            ) as response:
+
+                if response.status == 200:
+                    data = await response.json()
+                    candidates = data.get('candidates', [])
+
+                    if (
+                        candidates
+                        and candidates[0].get('finishReason') == "MAX_TOKENS"
+                    ):
+                        retry_tokens = min(max_tokens * 2, 4096)
+                        logger.warning(
+                            '⚠️ Gemini response reached the output limit; retrying with %s tokens',
+                            retry_tokens,
+                        )
+                        payload["generationConfig"]["maxOutputTokens"] = retry_tokens
+                        async with session.post(
+                            url,
+                            json=payload,
+                            timeout=aiohttp.ClientTimeout(total=45),
+                        ) as retry_response:
+                            if retry_response.status != 200:
                                 logger.warning(
-                                    '⚠️ Gemini response was incomplete; finish reason: %s',
-                                    finish_reason or "Unknown",
+                                    '⚠️ Gemini retry failed; HTTP %s',
+                                    retry_response.status,
                                 )
                                 return "⚠️ پاسخ کامل تولید نشد؛ لطفاً دوباره تلاش کنید."
+                            retry_data = await retry_response.json()
+                            candidates = retry_data.get('candidates', [])
 
-                            parts = candidates[0].get('content', {}).get('parts', [])
-                            reply = "\n".join(
-                                part.get('text', '')
-                                for part in parts
-                                if isinstance(part, dict) and part.get('text')
-                            ).strip()
-                            
-                            if reply:
-                                patterns_to_remove = [
-                                    r'\*Iterative refinement\*:?',
-                                    r'I\'ll help you with that\.?',
-                                    r'Here\'s what I can tell you:?',
-                                    r'Let me explain:?',
-                                    r'Based on my knowledge:?',
-                                    r'Here\'s my response:?',
-                                    r'^Thought:?',
-                                    r'^Reflection:?',
-                                    r'^Analysis:?',
-                                    r'^Sure,?',
-                                    r'^Of course,?',
-                                    r'^Absolutely,?',
-                                    r'^Okay,?',
-                                    r'^Here is:?',
-                                    r'^Here are:?',
-                                    r'^I can help:?',
-                                    r'^Let me know:?',
-                                ]
-                                for pattern in patterns_to_remove:
-                                    reply = re.sub(pattern, '', reply, flags=re.IGNORECASE | re.MULTILINE)
-                                
-                                reply = re.sub(
-                                    r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-                                    lambda m: f"[{re.sub(r'<[^>]+>', '', m.group(2)).strip() or m.group(1)}]({m.group(1).strip()})",
-                                    reply,
-                                    flags=re.IGNORECASE | re.DOTALL,
-                                )
-                                reply = reply.replace('**', '').replace('*', '').replace('`', '')
-                                reply = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', reply)
-                                reply = re.sub(r'<[^>]+>', '', reply)
-                                lines = [line.strip() for line in reply.split('\n') if line.strip()]
-                                reply = '\n'.join(lines)
-                                if has_prior_assistant_response:
-                                    reply = strip_repeated_ai_greeting(reply)
-                                
-                                if not any('\u0600' <= c <= '\u06FF' for c in reply):
-                                    logger.warning('⚠️ Gemini response was not in Persian; reusing the same response to avoid a duplicate request')
-                                
-                                if not reply:
-                                    return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
-                                
-                                if user_id and remember_conversation:
-                                    memory_reply = strip_ai_button_directives(reply)
-                                    if not memory_reply:
-                                        memory_reply = (
-                                            "برای ادامه، از دکمه‌های پیشنهادی زیر استفاده کنید."
-                                        )
-                                    conversation_memory.add_message(user_id, 'assistant', memory_reply)
-                                
-                                logger.info(f"✅ Gemini response received - length: {len(reply)} characters")
-                                return reply
-                            
-                            return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
-                        
+                    if candidates:
+                        finish_reason = candidates[0].get('finishReason', '')
+                        if finish_reason != "STOP":
+                            logger.warning(
+                                '⚠️ Gemini response was incomplete; finish reason: %s',
+                                finish_reason or "Unknown",
+                            )
+                            return "⚠️ پاسخ کامل تولید نشد؛ لطفاً دوباره تلاش کنید."
+
+                        parts = candidates[0].get('content', {}).get('parts', [])
+                        reply = "\n".join(
+                            part.get('text', '')
+                            for part in parts
+                            if isinstance(part, dict) and part.get('text')
+                        ).strip()
+
+                        if reply:
+                            patterns_to_remove = [
+                                r'\*Iterative refinement\*:?',
+                                r'I\'ll help you with that\.?',
+                                r'Here\'s what I can tell you:?',
+                                r'Let me explain:?',
+                                r'Based on my knowledge:?',
+                                r'Here\'s my response:?',
+                                r'^Thought:?',
+                                r'^Reflection:?',
+                                r'^Analysis:?',
+                                r'^Sure,?',
+                                r'^Of course,?',
+                                r'^Absolutely,?',
+                                r'^Okay,?',
+                                r'^Here is:?',
+                                r'^Here are:?',
+                                r'^I can help:?',
+                                r'^Let me know:?',
+                            ]
+                            for pattern in patterns_to_remove:
+                                reply = re.sub(pattern, '', reply, flags=re.IGNORECASE | re.MULTILINE)
+
+                            reply = re.sub(
+                                r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+                                lambda m: f"[{re.sub(r'<[^>]+>', '', m.group(2)).strip() or m.group(1)}]({m.group(1).strip()})",
+                                reply,
+                                flags=re.IGNORECASE | re.DOTALL,
+                            )
+                            reply = reply.replace('**', '').replace('*', '').replace('`', '')
+                            reply = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', reply)
+                            reply = re.sub(r'<[^>]+>', '', reply)
+                            lines = [line.strip() for line in reply.split('\n') if line.strip()]
+                            reply = '\n'.join(lines)
+                            if has_prior_assistant_response:
+                                reply = strip_repeated_ai_greeting(reply)
+
+                            if not any('\u0600' <= c <= '\u06FF' for c in reply):
+                                logger.warning('⚠️ Gemini response was not in Persian; reusing the same response to avoid a duplicate request')
+
+                            if not reply:
+                                return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
+
+                            if user_id and remember_conversation:
+                                memory_reply = strip_ai_button_directives(reply)
+                                if not memory_reply:
+                                    memory_reply = (
+                                        "برای ادامه، از دکمه‌های پیشنهادی زیر استفاده کنید."
+                                    )
+                                conversation_memory.add_message(user_id, 'assistant', memory_reply)
+
+                            logger.info(f"✅ Gemini response received - length: {len(reply)} characters")
+                            return reply
+
                         return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
-                    elif response.status == 429:
-                        logger.warning("⚠️ Gemini Rate Limit")
-                        return "⚠️ محدودیت درخواست. لطفاً چند لحظه صبر کنید."
-                    
-                    elif response.status == 403:
-                        logger.error('❌ Gemini 403 - Invalid key')
-                        return "❌ خطای احراز هویت. لطفاً کلید API را بررسی کنید."
-                    
-                    elif response.status == 503:
-                        logger.warning('⚠️ Gemini 503 - Service unavailable')
-                        return "⚠️ سرویس شلوغ است. لطفاً چند لحظه صبر کنید."
-                    
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ Gemini Error: {response.status} - {error_text[:200]}")
-                        return f"❌ خطا در ارتباط با هوش مصنوعی. کد: {response.status}"
+
+                    return "❌ متأسفانه نتوانستم پاسخ مناسبی پیدا کنم."
+                elif response.status == 429:
+                    logger.warning("⚠️ Gemini Rate Limit")
+                    return "⚠️ محدودیت درخواست. لطفاً چند لحظه صبر کنید."
+
+                elif response.status == 403:
+                    logger.error('❌ Gemini 403 - Invalid key')
+                    return "❌ خطای احراز هویت. لطفاً کلید API را بررسی کنید."
+
+                elif response.status == 503:
+                    logger.warning('⚠️ Gemini 503 - Service unavailable')
+                    return "⚠️ سرویس شلوغ است. لطفاً چند لحظه صبر کنید."
+
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ Gemini Error: {response.status} - {error_text[:200]}")
+                    return f"❌ خطا در ارتباط با هوش مصنوعی. کد: {response.status}"
                         
         except asyncio.TimeoutError:
             logger.error('⏰ Gemini timeout')

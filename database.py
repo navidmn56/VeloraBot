@@ -1,5 +1,6 @@
 """Shared in-memory database repository, persistence operations, and collections."""
 
+import asyncio
 import json
 import logging
 import os
@@ -8,7 +9,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from db_storage import DATA_DIR, DB_FILES, load_json, save_json
+from db_storage import DATA_DIR, DB_FILES, fast_snapshot, load_json, save_json
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,11 @@ def update_order(order_id: int, **kwargs) -> bool:
             orders[oid][k] = v
         orders[oid]['updated_at'] = now_tehran_iso()
         logger.debug(f"📝 order #{order_id} updated: {list(kwargs.keys())}")
-        save_json(DB_FILES['orders'], orders)
+        try:
+            from core.save_scheduler import schedule_file_save
+            schedule_file_save('orders', delay=0.5)
+        except Exception:
+            save_json(DB_FILES['orders'], orders)
         return True
     logger.error(f"❌ order #{order_id} not found")
     return False
@@ -254,9 +259,7 @@ def save_test_usage() -> bool:
     """ذخیره اطلاعات تست کاربران"""
     try:
         test_file = os.path.join(DATA_DIR, "test_usage.json")
-        with open(test_file, 'w', encoding='utf-8') as f:
-            json.dump(USER_TEST_USAGE, f, ensure_ascii=False, indent=2)
-        return True
+        return save_json(test_file, USER_TEST_USAGE)
     except Exception as e:
         logger.error(f"❌ Error saving tests: {e}")
         return False
@@ -488,17 +491,101 @@ def try_full_restore_from_backup() -> bool:
 # Core Persistence (save_all & load_all_data)
 # ═══════════════════════════════════════════════════════════
 
-def save_all(save_blacklist: bool = True) -> bool:
-    """ذخیره تمام دیتابیس‌ها با لاگ کامل"""
-    start_time = time.time()
-    logger.debug('💾 starting save of all databases...')
-
-    # Pre-save hooks (e.g. sync ready_packages / test_service into configs_pool)
+def _run_pre_save_hooks() -> None:
+    """Execute pre-save hooks (e.g. sync ready_packages / test_service into configs_pool)."""
     for hook in _pre_save_hooks:
         try:
             hook()
         except Exception as e:
             logger.error(f"Error in pre-save hook: {e}")
+
+
+def build_save_snapshots(
+    save_blacklist: bool = True,
+    keys: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
+    """Build isolated in-memory snapshots of requested collections on the caller thread."""
+    include_all = keys is None
+    if include_all or 'configs' in keys:
+        _run_pre_save_hooks()
+
+    collection_map = {
+        'users': (DB_FILES['users'], users),
+        'orders': (DB_FILES['orders'], orders),
+        'referrals': (DB_FILES['referrals'], referrals),
+        'configs': (DB_FILES['configs'], configs_pool),
+        'feedback': (DB_FILES['feedback'], feedbacks),
+        'chats': (DB_FILES['chats'], chats),
+    }
+
+    items: List[tuple[str, str, Any]] = []
+    for name, (file_path, data) in collection_map.items():
+        if include_all or name in keys:
+            items.append((name, file_path, fast_snapshot(data)))
+
+    if (include_all and save_blacklist) or (keys and 'blacklist' in keys):
+        items.append((
+            'blacklist',
+            DB_FILES['blacklist'],
+            {
+                'users': list(BLACKLIST),
+                'last_updated': now_tehran_iso(),
+                'count': len(BLACKLIST),
+            },
+        ))
+
+    if include_all or (keys and 'test_usage' in keys):
+        items.append((
+            'test_usage',
+            os.path.join(DATA_DIR, "test_usage.json"),
+            fast_snapshot(USER_TEST_USAGE),
+        ))
+
+    if include_all or (keys and 'user_states' in keys):
+        try:
+            from user_manager import user_states
+            if hasattr(user_states, 'build_snapshot'):
+                items.append(('user_states', DB_FILES['user_states'], user_states.build_snapshot()))
+        except Exception as e:
+            logger.debug(f"Note: user_states snapshot: {e}")
+
+    return {'items': items}
+
+
+def save_snapshots(bundle: Dict[str, Any]) -> bool:
+    """Persist a pre-built snapshot bundle to disk (safe for worker threads)."""
+    start_time = time.time()
+    items = bundle.get('items', [])
+    success = True
+    saved_count = 0
+    failed_files = []
+
+    for name, file_path, data in items:
+        try:
+            if save_json(file_path, data):
+                saved_count += 1
+            else:
+                success = False
+                failed_files.append(name)
+        except Exception as e:
+            logger.error(f"❌ error saving {name}: {e}")
+            success = False
+            failed_files.append(name)
+
+    elapsed = time.time() - start_time
+    if success:
+        logger.debug(f"✅ databases saved ({saved_count} files, {elapsed:.2f} seconds)")
+    else:
+        logger.error(f"❌ error saving {len(failed_files)} file: {failed_files}")
+    return success
+
+
+def save_all(save_blacklist: bool = True) -> bool:
+    """ذخیره تمام دیتابیس‌ها با لاگ کامل"""
+    start_time = time.time()
+    logger.debug('💾 starting save of all databases...')
+
+    _run_pre_save_hooks()
 
     db_mapping = {
         'users': (DB_FILES['users'], users),
@@ -525,32 +612,6 @@ def save_all(save_blacklist: bool = True) -> bool:
             success = False
             failed_files.append(name)
 
-    try:
-        if 'ready_packages' in configs_pool:
-            if save_json(DB_FILES['configs'], configs_pool):
-                saved_count += 1
-                logger.info('📦 Ready-made packages saved in configs_pool')
-            else:
-                success = False
-                failed_files.append('configs (ready_packages)')
-    except Exception as e:
-        logger.error(f"❌ Error saving ready-made packages: {e}")
-        success = False
-        failed_files.append('ready_packages')
-
-    try:
-        if 'test_service' in configs_pool:
-            if save_json(DB_FILES['configs'], configs_pool):
-                saved_count += 1
-                logger.info('🧪 Service test settings saved in configs_pool')
-            else:
-                success = False
-                failed_files.append('configs (test_service)')
-    except Exception as e:
-        logger.error(f"❌ Error saving test settings: {e}")
-        success = False
-        failed_files.append('test_service')
-
     if save_blacklist:
         try:
             blacklist_data = {
@@ -569,8 +630,11 @@ def save_all(save_blacklist: bool = True) -> bool:
             failed_files.append('blacklist')
 
     try:
-        save_test_usage()
-        saved_count += 1
+        if save_test_usage():
+            saved_count += 1
+        else:
+            success = False
+            failed_files.append('test_usage')
     except Exception as e:
         logger.error(f"❌ Error saving test_usage: {e}")
         success = False
@@ -590,6 +654,12 @@ def save_all(save_blacklist: bool = True) -> bool:
         logger.error(f"❌ error saving {len(failed_files)} file: {failed_files}")
 
     return success
+
+
+async def save_all_async(save_blacklist: bool = True) -> bool:
+    """Snapshot all collections on the event loop and persist off-thread without blocking."""
+    bundle = build_save_snapshots(save_blacklist=save_blacklist)
+    return await asyncio.to_thread(save_snapshots, bundle)
 
 
 def load_all_data() -> bool:

@@ -39,6 +39,7 @@ from database import (
     READY_PACKAGES,
     update_order,
 )
+from core.save_scheduler import schedule_save
 from user_manager import (
     user_states,
     get_user,
@@ -1434,7 +1435,7 @@ async def admin_packages_toggle(callback: CallbackQuery):
     READY_PACKAGES['enabled'] = not READY_PACKAGES.get('enabled', True)
     READY_PACKAGES['last_updated'] = now_tehran_iso()
     configs_pool['ready_packages'] = READY_PACKAGES
-    save_all()
+    schedule_save(2.0)
     
     status = "فعال" if READY_PACKAGES['enabled'] else "غیرفعال"
     await callback.answer(
@@ -1455,7 +1456,7 @@ async def admin_toggle_restrict_extend(callback: CallbackQuery):
     READY_PACKAGES['restrict_extend_to_same_category'] = new_val
     READY_PACKAGES['last_updated'] = now_tehran_iso()
     configs_pool['ready_packages'] = READY_PACKAGES
-    save_all()
+    schedule_save(2.0)
     
     if new_val:
         alert_text = t('renewal_restricted_to_the_sa_aa9d215447', lang)
@@ -1637,7 +1638,7 @@ async def admin_category_add_process(message: Message):
             READY_PACKAGES['categories'].append(category_data)
             READY_PACKAGES['last_updated'] = now_tehran_iso()
             configs_pool['ready_packages'] = READY_PACKAGES
-            save_all()
+            schedule_save(2.0)
             await message.reply(
                 t('b_category_added_successfull_9e88a71983', lang, fa_parts=lambda: (f"{category_data.get('name')}", f"{category_data.get('id')}", f"{category_data.get('icon', '📦')}", f"{category_data.get('description', 'ندارد')}"), en_parts=lambda: (f"{category_data.get('name')}", f"{category_data.get('id')}", f"{category_data.get('icon', '📦')}", f"{category_data.get('description', 'None')}")),
                 parse_mode=ParseMode.HTML
@@ -2093,7 +2094,7 @@ async def save_package_edit(message: Message):
                         pkg[edit_field] = new_value
                         READY_PACKAGES['last_updated'] = now_tehran_iso()
                         configs_pool['ready_packages'] = READY_PACKAGES
-                        save_all()
+                        schedule_save(2.0)
                         
                         field_names = {
                             'volume': t('volume_c445e9f42c', lang),
@@ -2155,7 +2156,7 @@ async def package_toggle(callback: CallbackQuery):
                     pkg['is_active'] = not pkg.get('is_active', True)
                     READY_PACKAGES['last_updated'] = now_tehran_iso()
                     configs_pool['ready_packages'] = READY_PACKAGES
-                    save_all()
+                    schedule_save(2.0)
                     
                     status = "فعال" if pkg['is_active'] else "غیرفعال"
                     await callback.answer(
@@ -2220,7 +2221,7 @@ async def package_confirm_delete(callback: CallbackQuery):
                     del packages[i]
                     READY_PACKAGES['last_updated'] = now_tehran_iso()
                     configs_pool['ready_packages'] = READY_PACKAGES
-                    save_all()
+                    schedule_save(2.0)
                     
                     await callback.answer(
                         t('package_deleted_successfully_01df308fd1', lang),
@@ -2393,7 +2394,9 @@ async def admin_alert_toggle(callback: CallbackQuery):
     
     # ذخیره در دیتابیس
     configs_pool['alert_settings'] = alert_system_settings
-    save_all()
+    from core.task_manager import sync_legacy_task_setting
+    sync_legacy_task_setting("alert_worker", enabled=new_status)
+    schedule_save(2.0)
     
     # لاگ تغییر
     if alert_system and alert_system.log_system:
@@ -2475,7 +2478,7 @@ async def alert_volume_set(callback: CallbackQuery):
     
     # ذخیره در دیتابیس
     configs_pool['alert_settings'] = alert_system_settings
-    save_all()
+    schedule_save(2.0)
     
     # لاگ تغییر
     if alert_system and alert_system.log_system:
@@ -2557,7 +2560,7 @@ async def alert_expiry_set(callback: CallbackQuery):
     
     # ذخیره در دیتابیس
     configs_pool['alert_settings'] = alert_system_settings
-    save_all()
+    schedule_save(2.0)
     
     # لاگ تغییر
     if alert_system and alert_system.log_system:
@@ -2837,7 +2840,7 @@ async def inbound_save_category(callback: CallbackQuery):
     category['inbound_id'] = None
     READY_PACKAGES['last_updated'] = now_tehran_iso()
     configs_pool['ready_packages'] = READY_PACKAGES
-    save_all()
+    schedule_save(2.0)
     if temp_key in TEMP_INBOUND_SELECTION:
         del TEMP_INBOUND_SELECTION[temp_key]
     
@@ -2890,7 +2893,7 @@ def migrate_category_inbound_data():
     
     READY_PACKAGES['last_updated'] = now_tehran_iso()
     configs_pool['ready_packages'] = READY_PACKAGES
-    save_all()
+    schedule_save(2.0)
 
 
 @router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get('awaiting_category_edit'))
@@ -2928,7 +2931,7 @@ async def admin_category_edit_field_save(message: Message):
             READY_PACKAGES['last_updated'] = now_tehran_iso()
             
             configs_pool['ready_packages'] = READY_PACKAGES
-            save_all()
+            schedule_save(2.0)
             
             await message.reply(
                 t('b_field_updated_successfully_42cb0a7f3a', lang, fa_parts=lambda: (f'{old_value}', f'{new_value}'), en_parts=lambda: (f'{old_value}', f'{new_value}')),
@@ -2967,7 +2970,7 @@ async def admin_category_toggle(callback: CallbackQuery):
             READY_PACKAGES['last_updated'] = now_tehran_iso()
             
             configs_pool['ready_packages'] = READY_PACKAGES
-            save_all()
+            schedule_save(2.0)
             
             status = "فعال" if cat.get('is_active') else "غیرفعال"
             await callback.answer(
@@ -3037,7 +3040,7 @@ async def admin_category_delete(callback: CallbackQuery):
     if category_to_delete:
         READY_PACKAGES['last_updated'] = now_tehran_iso()
         configs_pool['ready_packages'] = READY_PACKAGES
-        save_all()
+        schedule_save(2.0)
         
         await callback.answer(
             t('category_and_packages_delete_35f9e6d37e', lang, fa_parts=lambda: (f"{category_to_delete.get('name')}", f"{len(category_to_delete.get('packages', []))}"), en_parts=lambda: (f"{category_to_delete.get('name')}", f"{len(category_to_delete.get('packages', []))}")),
@@ -3207,7 +3210,7 @@ async def admin_package_add_process(message: Message):
                     READY_PACKAGES['last_updated'] = now_tehran_iso()
                     
                     configs_pool['ready_packages'] = READY_PACKAGES
-                    save_all()
+                    schedule_save(2.0)
                     
                     volume_display = "نامحدود" if package_data.get('volume', 0) == 0 else f"{package_data.get('volume')} GB"
                     ip_display = "نامحدود" if package_data.get('ip_limit', 0) == 0 else package_data.get('ip_limit')

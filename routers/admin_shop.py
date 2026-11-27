@@ -31,12 +31,14 @@ from database import (
     referrals,
     configs_pool,
     save_all,
+    save_all_async,
     now_tehran_iso,
     SHOP_STATUS,
     BLACKLIST,
     USER_TEST_USAGE,
     save_test_usage,
 )
+from core.save_scheduler import schedule_save, schedule_file_save
 from user_manager import user_states, get_user, get_user_safe, get_admin_id_int
 from core.state_stores import (
     USER_INBOUND_SELECTION,
@@ -205,7 +207,7 @@ def set_shop_status(open_status: bool, message: str = None):
         SHOP_STATUS['message'] = message
     SHOP_STATUS['last_updated'] = now_tehran_iso()
     configs_pool['shop_status'] = SHOP_STATUS
-    save_all()
+    schedule_save(2.0)
     logger.info(f"Sales status changed: {'open' if open_status else 'closed'}")
     
     
@@ -228,7 +230,7 @@ async def admin_toggle_manual_approval(callback: CallbackQuery):
     manual_approval['enabled'] = not manual_approval.get('enabled', False)
     manual_approval['last_updated'] = now_tehran_iso()
     configs_pool['manual_approval_settings'] = manual_approval
-    save_all()
+    schedule_save(2.0)
     
     status = t('i18n_status_active', lang) if manual_approval['enabled'] else t('i18n_status_inactive', lang)
     await callback.answer(
@@ -504,7 +506,7 @@ async def admin_shop_message_save(message: Message):
     SHOP_STATUS['message'] = new_message
     SHOP_STATUS['last_updated'] = now_tehran_iso()
     configs_pool['shop_status'] = SHOP_STATUS
-    save_all()
+    schedule_save(2.0)
     
     user_states.pop(admin_id, None)
     await message.reply(
@@ -550,7 +552,7 @@ async def admin_shop_message_en_save(message: Message):
     SHOP_STATUS['message_en'] = new_message.strip()
     SHOP_STATUS['last_updated'] = now_tehran_iso()
     configs_pool['shop_status'] = SHOP_STATUS
-    save_all()
+    schedule_save(2.0)
     user_states.pop(admin_id, None)
 
     await message.reply(t('shop_message_en_updated', lang))
@@ -581,7 +583,7 @@ async def confirm_approve_user(callback: CallbackQuery):
         users[uid]['approved_date'] = now_tehran_iso()
         users[uid]['registration_status'] = 'approved'
         users[uid]['updated_at'] = now_tehran_iso()
-        save_json(DB_FILES['users'], users)
+        schedule_file_save('users', delay=1.0)
         try:
             user_lang = target.get('lang', 'fa')
             approve_reply_markup = None
@@ -694,7 +696,7 @@ async def confirm_reject_user(callback: CallbackQuery):
         del USER_TEST_USAGE[uid]
     if uid in USER_TEST_SETTINGS:
         del USER_TEST_SETTINGS[uid]
-    save_all()
+    await save_all_async()
     save_blacklist()
     save_test_usage()
     invalidate_test_users_cache()
@@ -792,7 +794,7 @@ def migrate_inbound_data():
             configs_pool['default_inbound_ids'] = [old_default]
             logger.info(f"✅ Default inbound migration: {old_default} -> {configs_pool['default_inbound_ids']}")
         del configs_pool['default_inbound_id']
-        save_all()
+        schedule_save(2.0)
 
 @router.callback_query(F.data.startswith("admin_inbound_detail_"))
 @admin_only
@@ -1010,7 +1012,7 @@ async def admin_inbound_set_default(callback: CallbackQuery):
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     configs_pool['default_inbound_id'] = inbound_id
-    save_all()
+    schedule_save(2.0)
     
     await callback.answer(
         t('inbound_set_as_default_e729b89224', lang, fa_parts=lambda: (f'{inbound_id}',), en_parts=lambda: (f'{inbound_id}',)),
@@ -1201,7 +1203,7 @@ async def admin_inbound_toggle_default(callback: CallbackQuery):
         await callback.answer(t('i18n_inbound_added_to_list', lang, fa_parts=lambda: (f'{inbound_id}',), en_parts=lambda: (f'{inbound_id}',)), show_alert=True)
     
     configs_pool['default_inbound_ids'] = default_ids
-    save_all()
+    schedule_save(2.0)
     await admin_inbound_default_setting(callback)
 
 
@@ -1249,7 +1251,7 @@ async def admin_inbound_clear_defaults(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     configs_pool['default_inbound_ids'] = []
-    save_all()
+    schedule_save(2.0)
     
     await callback.answer(
         t('all_default_inbounds_cleared_51ed3ca3be', lang),
@@ -1276,7 +1278,7 @@ async def admin_inbound_select_all_defaults(callback: CallbackQuery):
         return
     
     configs_pool['default_inbound_ids'] = all_ids
-    save_all()
+    schedule_save(2.0)
     
     logger.info(f"✅ {len(all_ids)} inbound selected as default: {all_ids}")
     

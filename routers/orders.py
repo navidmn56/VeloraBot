@@ -88,6 +88,7 @@ from routers.shop import (
 )
 from routers.admin_test import save_user_inbound_selection
 from services.panel_api import (
+    _ensure_session,
     xui_login,
     xui_get_csrf_token,
     xui_get_client_info,
@@ -449,83 +450,82 @@ async def extend_service(
         final_ip_limit = new_ip_limit if new_ip_limit is not None else current_ip_limit
         logger.info(f"👤 New IP limit: {final_ip_limit if final_ip_limit > 0 else 'unlimited'}")
         
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            logger.info("🔑 Logging in to the panel...")
-            cookie = await xui_login()
-            if not cookie:
-                logger.error("❌ Error logging in to the panel")
+        session = await _ensure_session()
+        logger.info("🔑 Logging in to the panel...")
+        cookie = await xui_login()
+        if not cookie:
+            logger.error("❌ Error logging in to the panel")
+            return False
+
+        logger.info("🔐 Retrieving CSRF token...")
+        csrf = await xui_get_csrf_token(session)
+        headers = {"X-CSRF-Token": csrf} if csrf else {}
+        update_data = {
+            "email": email,
+            "totalGB": new_volume_bytes,
+            "expiryTime": new_expiry,
+            "enable": True,
+            "tgId": client_info.get('tgId', 0),
+            "subId": client_info.get('subId', email),
+            "flow": client_info.get('flow', ''),
+            "limitIp": final_ip_limit,
+            "comment": client_info.get('comment', ''),
+            "resetStrategy": client_info.get('resetStrategy', 'no_reset')
+        }
+
+        logger.info("📤 Sending UPDATE request to the panel...")
+        logger.info(f"   🌐 URL: {SENAI_PANEL_URL}/panel/api/clients/update/{email}")
+        logger.info(f"   📝 Data: {'unlimited' if new_volume_bytes == 0 else f'{new_volume_gb:.2f}GB'}")
+        logger.info(f"   👤 IP limit: {final_ip_limit if final_ip_limit > 0 else 'unlimited'}")
+
+        async with session.post(
+            f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}",
+            cookies={"3x-ui": cookie},
+            headers=headers,
+            json=update_data,
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as response:
+            response_text = await response.text()
+            logger.info(f"📥 UPDATE response: Status {response.status}")
+
+            if response.status != 200:
+                logger.error(f"❌ Error in UPDATE: Status {response.status}")
                 return False
-            
-            logger.info("🔐 Retrieving CSRF token...")
-            csrf = await xui_get_csrf_token(session)
-            headers = {"X-CSRF-Token": csrf} if csrf else {}
-            update_data = {
-                "email": email,
-                "totalGB": new_volume_bytes,
-                "expiryTime": new_expiry,
-                "enable": True,
-                "tgId": client_info.get('tgId', 0),
-                "subId": client_info.get('subId', email),
-                "flow": client_info.get('flow', ''),
-                "limitIp": final_ip_limit,
-                "comment": client_info.get('comment', ''),
-                "resetStrategy": client_info.get('resetStrategy', 'no_reset')
-            }
-            
-            logger.info("📤 Sending UPDATE request to the panel...")
-            logger.info(f"   🌐 URL: {SENAI_PANEL_URL}/panel/api/clients/update/{email}")
-            logger.info(f"   📝 Data: {'unlimited' if new_volume_bytes == 0 else f'{new_volume_gb:.2f}GB'}")
-            logger.info(f"   👤 IP limit: {final_ip_limit if final_ip_limit > 0 else 'unlimited'}")
-            
-            async with session.post(
-                f"{SENAI_PANEL_URL}/panel/api/clients/update/{email}",
-                cookies={"3x-ui": cookie},
-                headers=headers,
-                json=update_data,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                response_text = await response.text()
-                logger.info(f"📥 UPDATE response: Status {response.status}")
-                
-                if response.status != 200:
-                    logger.error(f"❌ Error in UPDATE: Status {response.status}")
-                    return False
-                
-                try:
-                    data = json.loads(response_text)
-                    if not data.get("success"):
-                        logger.error(f"❌ UPDATE failed: {data.get('msg', 'Unknown error')}")
-                        return False
-                except json.JSONDecodeError:
-                    logger.error("❌ Invalid JSON response")
-                    return False
-            
-            logger.info("✅ UPDATE completed successfully")
 
-            # ✅ در صورت تمدید سرویس نامحدود یا تغییر پکیج، ترافیک مصرفی ریست شود
-            if should_reset_traffic:
-                logger.info(f"🔄 Starting used traffic reset for client {email} in the panel...")
-                reset_ok = await xui_reset_client_traffic(email, selected_inbounds)
-                if reset_ok:
-                    logger.info(f"✅ Traffic usage for client {email} successfully reset in the panel")
-                else:
-                    logger.warning(f"⚠️ Traffic reset result for client {email} failed or was unsupported")
+            try:
+                data = json.loads(response_text)
+                if not data.get("success"):
+                    logger.error(f"❌ UPDATE failed: {data.get('msg', 'Unknown error')}")
+                    return False
+            except json.JSONDecodeError:
+                logger.error("❌ Invalid JSON response")
+                return False
 
-            if inbounds_to_detach:
-                logger.info(f"📤 Removing inbounds {inbounds_to_detach} from client {email}...")
-                detach_success = await xui_detach_inbounds(email, inbounds_to_detach)
-                if detach_success:
-                    logger.info(f"✅ Inbounds {inbounds_to_detach} successfully removed")
-                else:
-                    logger.warning("⚠️ Error detaching inbounds")
-            if inbounds_to_attach:
-                logger.info(f"📤 Adding inbounds {inbounds_to_attach} to client {email}...")
-                attach_success = await xui_attach_inbounds(email, inbounds_to_attach)
-                if attach_success:
-                    logger.info(f"✅ Inbounds {inbounds_to_attach} successfully added")
-                else:
-                    logger.warning("⚠️ Error attaching inbounds")
+        logger.info("✅ UPDATE completed successfully")
+
+        # ✅ در صورت تمدید سرویس نامحدود یا تغییر پکیج، ترافیک مصرفی ریست شود
+        if should_reset_traffic:
+            logger.info(f"🔄 Starting used traffic reset for client {email} in the panel...")
+            reset_ok = await xui_reset_client_traffic(email, selected_inbounds)
+            if reset_ok:
+                logger.info(f"✅ Traffic usage for client {email} successfully reset in the panel")
+            else:
+                logger.warning(f"⚠️ Traffic reset result for client {email} failed or was unsupported")
+
+        if inbounds_to_detach:
+            logger.info(f"📤 Removing inbounds {inbounds_to_detach} from client {email}...")
+            detach_success = await xui_detach_inbounds(email, inbounds_to_detach)
+            if detach_success:
+                logger.info(f"✅ Inbounds {inbounds_to_detach} successfully removed")
+            else:
+                logger.warning("⚠️ Error detaching inbounds")
+        if inbounds_to_attach:
+            logger.info(f"📤 Adding inbounds {inbounds_to_attach} to client {email}...")
+            attach_success = await xui_attach_inbounds(email, inbounds_to_attach)
+            if attach_success:
+                logger.info(f"✅ Inbounds {inbounds_to_attach} successfully added")
+            else:
+                logger.warning("⚠️ Error attaching inbounds")
 
         new_days_total = order.get('days', 0) + extra_days
         

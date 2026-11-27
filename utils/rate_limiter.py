@@ -34,6 +34,11 @@ class ActionRateLimiter:
         last_time = self._last_action.get(key, 0.0)
 
         if now - last_time < limit:
+            try:
+                from services.server_guard import record_bot_user_block
+                record_bot_user_block(user_id, action=action)
+            except Exception:
+                pass
             return True
 
         self._last_action[key] = now

@@ -25,6 +25,7 @@ from config import (
 )
 from db_storage import DATA_DIR, DB_FILES, save_json
 from database import users, configs_pool, save_all, now_tehran, now_tehran_iso
+from core.save_scheduler import schedule_save, schedule_file_save
 from user_manager import get_user
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,40 @@ gemini_client = None
 gemini_error_message = None
 AI_FEATURE_ENABLED = True
 user_ai_requests: Dict[Any, Any] = {}
+_gemini_http_session: Optional[aiohttp.ClientSession] = None
+
+
+async def get_gemini_http_session() -> aiohttp.ClientSession:
+    """دریافت یا ساخت ClientSession مشترک و ترد/لوپ-ایمن برای درخواست‌های Gemini"""
+    global _gemini_http_session
+    current_loop = asyncio.get_running_loop()
+    if _gemini_http_session is not None:
+        session_loop = getattr(_gemini_http_session, "_loop", None)
+        if _gemini_http_session.closed or (session_loop is not None and session_loop is not current_loop):
+            if not _gemini_http_session.closed:
+                try:
+                    await _gemini_http_session.close()
+                except Exception:
+                    pass
+            _gemini_http_session = None
+
+    if _gemini_http_session is None:
+        connector = aiohttp.TCPConnector(limit=15, limit_per_host=10, ttl_dns_cache=300)
+        _gemini_http_session = aiohttp.ClientSession(connector=connector)
+    return _gemini_http_session
+
+
+async def close_gemini_http_session() -> None:
+    """بستن تمیز ClientSession مشترک Gemini هنگام خاموشی ربات"""
+    global _gemini_http_session
+    if _gemini_http_session is not None:
+        try:
+            if not _gemini_http_session.closed:
+                await _gemini_http_session.close()
+        except Exception:
+            pass
+        finally:
+            _gemini_http_session = None
 
 GEMINI_PROMPT_CACHE = {
     "fingerprint": None,
@@ -160,20 +195,20 @@ class GeminiClient:
         """تست اتصال به Gemini API"""
         try:
             url = f"{self.base_url}/models?key={self.api_key}"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        models = data.get('models', [])
-                        gemini_models = [m['name'].split('/')[-1] for m in models if 'gemini' in m['name']]
-                        
-                        if self.model in gemini_models:
-                            return {'success': True, 'message': 'مدل موجود است'}
-                        else:
-                            return {'success': False, 'error': f'مدل {self.model} یافت نشد', 'available': gemini_models[:5]}
+            session = await get_gemini_http_session()
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    models = data.get('models', [])
+                    gemini_models = [m['name'].split('/')[-1] for m in models if 'gemini' in m['name']]
+                    
+                    if self.model in gemini_models:
+                        return {'success': True, 'message': 'مدل موجود است'}
                     else:
-                        text = await response.text()
-                        return {'success': False, 'error': f"HTTP {response.status}: {text[:100]}"}
+                        return {'success': False, 'error': f'مدل {self.model} یافت نشد', 'available': gemini_models[:5]}
+                else:
+                    text = await response.text()
+                    return {'success': False, 'error': f"HTTP {response.status}: {text[:100]}"}
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
@@ -244,9 +279,7 @@ class ConversationMemory:
         else:
             user.pop(self.STORAGE_KEY, None)
             user.pop(self.DATE_KEY, None)
-        if not save_json(DB_FILES['users'], users):
-            logger.error("Could not persist AI conversation memory for user %s", user_id)
-            return False
+        schedule_file_save('users', delay=2.0)
         return True
     
     def add_message(self, user_id: int, role: str, content: str):
@@ -316,11 +349,8 @@ class ConversationMemory:
             had_data = self.STORAGE_KEY in user or self.DATE_KEY in user
             user.pop(self.STORAGE_KEY, None)
             user.pop(self.DATE_KEY, None)
-            if had_data and not save_json(DB_FILES['users'], users):
-                logger.error(
-                    "Could not clear persisted AI conversation memory for user %s",
-                    user_id,
-                )
+            if had_data:
+                schedule_file_save('users', delay=2.0)
 
     def clear_all(self):
         """پاک کردن حافظه مکالمه همه کاربران"""
@@ -330,8 +360,7 @@ class ConversationMemory:
             if isinstance(user, dict):
                 user.pop(self.STORAGE_KEY, None)
                 user.pop(self.DATE_KEY, None)
-        if not save_json(DB_FILES['users'], users):
-            logger.error("Could not clear persisted AI conversation memory for all users")
+        schedule_file_save('users', delay=2.0)
     
     def get_stats(self) -> dict:
         """دریافت آمار حافظه"""
@@ -411,7 +440,7 @@ def reset_ai_limits():
             user_ai_requests[uid]['count'] = 0
     configs_pool['user_ai_requests'] = user_ai_requests
     conversation_memory.clear_all()
-    save_all()
+    schedule_save(2.0)
     
     logger.info(f"🔄 AI limits & conversation memory reset - {before_users} user with {before_count} question reset")
     
@@ -451,8 +480,8 @@ async def init_ai():
                 test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
                 logger.info(f"   🌐 Sending test request to: {test_url[:60]}...")
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(test_url, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                session = await get_gemini_http_session()
+                async with session.get(test_url, timeout=aiohttp.ClientTimeout(total=15)) as response:
                         response_text = await response.text()
                         logger.info(f"   📥 Response received - Status: {response.status}")
 
