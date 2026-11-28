@@ -386,8 +386,8 @@ class LogSystem:
         is_important: bool = False,
         admin_mention: str = "",
     ):
-        """ارسال لاگ وضعیت سرور/امنیت به بات لاگ (تگ کردن ادمین فقط در مشکلات واقعی)"""
-        mention_line = f"\n\n🔔 <b>توجه ادمین:</b> {admin_mention}" if (is_important and admin_mention) else ""
+        """Send server/security monitor log to Log Bot (tagging admin only on critical issues)."""
+        mention_line = f"\n\n🔔 <b>Admin Attention:</b> {admin_mention}" if (is_important and admin_mention) else ""
         text = (
             f"<b>{self._safe(title)}</b>\n"
             f"🕐 <code>{now_tehran().strftime('%Y-%m-%d %H:%M:%S')}</code>\n"

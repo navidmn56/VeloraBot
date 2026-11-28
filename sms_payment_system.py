@@ -837,22 +837,28 @@ class SMSWebhookServer:
             req_cnt, fail_cnt = record_http_request("sms_webhook", client_ip, path=path, status_code=status_code)
             safe_ip = html.escape(str(client_ip))
             if status_code == 429 or req_cnt >= WEBHOOK_REQ_PER_MIN_ALERT:
+                logger.warning(
+                    f"ServerGuard immediate webhook flood: ip={client_ip} path={path} reqs_1m={req_cnt} status={status_code}"
+                )
                 asyncio.create_task(
                     report_immediate_security_event(
                         f"webhook_flood:{client_ip}",
-                        "🛡️ هشدار اسپم/ریکوعست زیاد روی وب‌هوک سرور",
+                        "🛡️ High Webhook Request Rate / Flood Alert",
                         f"• <b>IP:</b> <code>{safe_ip}</code>\n"
-                        f"• <b>مسیر:</b> <code>{html.escape(path)}</code>\n"
-                        f"• <b>درخواست در ۱ دقیقه:</b> <code>{req_cnt}</code> (کد: {status_code})",
+                        f"• <b>Path:</b> <code>{html.escape(path)}</code>\n"
+                        f"• <b>Requests (1m):</b> <code>{req_cnt}</code> (HTTP {status_code})",
                     )
                 )
             elif status_code in (401, 403) and fail_cnt >= WEBHOOK_AUTH_FAIL_ALERT:
+                logger.warning(
+                    f"ServerGuard immediate webhook auth failures: ip={client_ip} path={path} fails_5m={fail_cnt}"
+                )
                 asyncio.create_task(
                     report_immediate_security_event(
                         f"webhook_auth:{client_ip}",
-                        "🚨 هشدار تلاش احراز هویت نامعتبر روی وب‌هوک",
+                        "🚨 Suspicious Invalid Webhook Auth Attempts",
                         f"• <b>IP:</b> <code>{safe_ip}</code>\n"
-                        f"• <b>خطاهای 401 در ۵ دقیقه:</b> <code>{fail_cnt}</code>",
+                        f"• <b>401/403 Errors (5m):</b> <code>{fail_cnt}</code>",
                     )
                 )
         except Exception:

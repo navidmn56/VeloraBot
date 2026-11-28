@@ -5,12 +5,14 @@ routers/shop.py
 انتخاب بسته و پرداخت بسته‌های آماده از موجودی حساب.
 """
 
+import html
 import logging
 import re
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple, Union
 
 from aiogram import Router, F, Bot, types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     Message,
@@ -993,7 +995,20 @@ async def show_category_packages(callback: CallbackQuery):
         else:
             buttons.append([info_btn, price_btn])
 
-    # ─── دکمه بازگشت ───
+    # ─── دکمه مشخصات فنی این دسته + دکمه بازگشت ───
+    has_specs = bool(
+        str(category.get('description') or '').strip()
+        or str(category.get('description_en') or '').strip()
+        or str(category.get('specs_photo') or '').strip()
+    )
+    if has_specs:
+        buttons.append([
+            InlineKeyboardButton(
+                text=t('category_tech_specs_btn', lang),
+                callback_data=f"category_specs_{category_id}",
+            )
+        ])
+
     restrict_extend = READY_PACKAGES.get('restrict_extend_to_same_category', False)
     if is_extend and extend_order_id:
         if not restrict_extend:
@@ -1024,28 +1039,194 @@ async def show_category_packages(callback: CallbackQuery):
             )
         ])
     
-    try:
-        await callback.message.edit_text(
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    has_media_or_no_text = bool(
+        getattr(callback.message, "photo", None)
+        or getattr(callback.message, "document", None)
+        or getattr(callback.message, "video", None)
+        or not getattr(callback.message, "text", None)
+    )
+    if has_media_or_no_text:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.message.answer(
             text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            reply_markup=markup,
             parse_mode=ParseMode.HTML
         )
-    except Exception as e:
-        if "there is no text in the message to edit" in str(e):
+    else:
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            if "there is no text in the message to edit" in str(e).lower():
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
+                await callback.message.answer(
+                    text,
+                    reply_markup=markup,
+                    parse_mode=ParseMode.HTML
+                )
+            elif "message is not modified" in str(e).lower():
+                pass
+            else:
+                raise
+    
+    await safe_answer(callback)
+
+
+async def send_category_specs_view(callback: CallbackQuery, category: dict, lang: str, back_callback: str, back_text: str) -> bool:
+    """Display category HTML technical specs, editing text or replacing message with photo+caption."""
+    desc_fa = str(category.get('description') or '').strip()
+    desc_en = str(category.get('description_en') or '').strip()
+    raw_desc = (desc_en or desc_fa) if lang == "en" else (desc_fa or desc_en)
+    photo_id = str(category.get('specs_photo') or '').strip()
+
+    if not raw_desc and not photo_id:
+        return False
+
+    cat_name = category.get('name') if lang == "fa" else (category.get('name_en') or category.get('name') or '')
+    icon = category.get('icon', '📦')
+    display_text = raw_desc or f"{icon} <b>{html.escape(str(cat_name))}</b>"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=back_text,
+            callback_data=back_callback,
+            style="danger",
+        )
+    ]])
+
+    if photo_id:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        try:
+            await callback.message.answer_photo(
+                photo=photo_id,
+                caption=display_text,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML,
+            )
+        except TelegramBadRequest as e:
+            err_l = str(e).lower()
+            if "caption" in err_l or "too long" in err_l:
+                await callback.message.answer_photo(photo=photo_id)
+                try:
+                    await callback.message.answer(
+                        display_text,
+                        reply_markup=kb,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except TelegramBadRequest:
+                    await callback.message.answer(display_text, reply_markup=kb)
+            elif "can't parse entities" in err_l:
+                await callback.message.answer_photo(
+                    photo=photo_id,
+                    caption=display_text,
+                    reply_markup=kb,
+                    parse_mode=None,
+                )
+            else:
+                logger.warning(f"Failed sending category specs photo, falling back to text: {e}")
+                try:
+                    await callback.message.answer(
+                        display_text,
+                        reply_markup=kb,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except TelegramBadRequest:
+                    await callback.message.answer(display_text, reply_markup=kb)
+        return True
+
+    # No photo defined -> edit existing message directly to specs text
+    try:
+        await callback.message.edit_text(
+            display_text,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML,
+        )
+    except TelegramBadRequest as e:
+        err_l = str(e).lower()
+        if "message is not modified" in err_l:
+            pass
+        elif "can't parse entities" in err_l:
+            await callback.message.edit_text(
+                display_text,
+                reply_markup=kb,
+                parse_mode=None,
+            )
+        elif "there is no text in the message to edit" in err_l:
             try:
                 await callback.message.delete()
             except Exception:
                 pass
             await callback.message.answer(
-                text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-                parse_mode=ParseMode.HTML
+                display_text,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML,
             )
-        elif "message is not modified" in str(e):
-            pass
         else:
             raise
-    
+    return True
+
+
+@router.callback_query(F.data.startswith("category_specs_"))
+async def show_category_specs(callback: CallbackQuery):
+    """نمایش مشخصات فنی دسته (توضیحات HTML فارسی/انگلیسی و تصویر اختیاری)"""
+    user_id = callback.from_user.id
+
+    if user_id in BLACKLIST:
+        await notify_blacklisted_user(user_id)
+        await callback.answer(t('access_blocked_96a5fa848b', get_user(user_id).get('lang', 'fa')), show_alert=True)
+        return
+
+    if not await check_membership(user_id):
+        lang = get_user(user_id).get('lang', 'fa')
+        await callback.answer(t('please_verify_your_membershi_28b48b1f0b', lang), show_alert=True)
+        return
+
+    if not await check_shop_status_and_notify(user_id, callback):
+        return
+
+    lang = get_user(user_id).get('lang', 'fa')
+    try:
+        category_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer(t('i18n_category_not_found', lang), show_alert=True)
+        return
+
+    category = next(
+        (c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id),
+        None,
+    )
+    if not category:
+        await callback.answer(t('i18n_category_not_found', lang), show_alert=True)
+        return
+
+    shown = await send_category_specs_view(
+        callback,
+        category=category,
+        lang=lang,
+        back_callback=f"show_category_packages_{category_id}",
+        back_text=t('back_to_category_packages_btn', lang),
+    )
+    if not shown:
+        msg = (
+            "توضیحات فنی برای این دسته ثبت نشده است."
+            if lang == "fa"
+            else "No technical specifications have been set for this category."
+        )
+        await safe_answer(callback, msg, alert=True)
+        return
+
     await safe_answer(callback)
 
 
@@ -1485,7 +1666,8 @@ async def _process_pay_ready_package_balance(callback: CallbackQuery, user_id: i
         logger.info(f"✅ Ready-made package purchased for user {user_id} - order #{order_id} - {volume}GB/{days} days - {price:,}tomans")
         
         if log_system:
-            await log_system.log_purchase(user_id, order_id, volume, days, price, f"Ready package - {cat_name}")
+            log_cat_name = category.get('name_en') or cat_name
+            await log_system.log_purchase(user_id, order_id, volume, days, price, f"Ready package - {log_cat_name}")
         
     else:
         update_user(user_id, 'balance', balance)

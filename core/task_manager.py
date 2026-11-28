@@ -457,6 +457,10 @@ def request_task_run_now(task_id: str) -> None:
         wake_task(task_id)
 
 
+def is_force_run_requested(task_id: str) -> bool:
+    return task_id in _FORCE_RUN_TASKS
+
+
 def consume_force_run(task_id: str) -> bool:
     if task_id in _FORCE_RUN_TASKS:
         _FORCE_RUN_TASKS.discard(task_id)
@@ -486,13 +490,14 @@ async def sleep_interruptible(task_id: str, timeout_seconds: float) -> bool:
 async def wait_until_task_enabled(task_id: str, poll_fallback: float = 3600.0) -> bool:
     """
     Suspend a disabled task using zero CPU until re-enabled or force-run.
+    Leaves the force-run flag intact so the caller's consume_force_run() sees it.
     Returns True if woken via force-run, False if enabled normally.
     """
     while not is_task_enabled(task_id):
-        if consume_force_run(task_id):
+        if is_force_run_requested(task_id):
             return True
         await sleep_interruptible(task_id, poll_fallback)
-        if consume_force_run(task_id):
+        if is_force_run_requested(task_id):
             return True
     return False
 
@@ -542,22 +547,35 @@ def format_interval_human(seconds: int, lang: str = "fa") -> str:
         if sec < 60:
             return f"{sec}s"
         if sec % 86400 == 0:
+            return f"{sec // 86400}d"
+        if sec >= 86400 and sec % 3600 == 0:
             days = sec // 86400
-            return f"{days}d"
+            rem_h = (sec % 86400) // 3600
+            return f"{days}d {rem_h}h"
         if sec % 3600 == 0:
+            return f"{sec // 3600}h"
+        if sec >= 3600 and sec % 60 == 0:
             hrs = sec // 3600
-            return f"{hrs}h"
+            rem_m = (sec % 3600) // 60
+            return f"{hrs}h {rem_m}m"
         if sec % 60 == 0:
-            mins = sec // 60
-            return f"{mins}m"
+            return f"{sec // 60}m"
         return f"{sec // 60}m {sec % 60}s"
 
     if sec < 60:
         return f"{sec} ثانیه"
     if sec % 86400 == 0:
         return f"{sec // 86400} روز"
+    if sec >= 86400 and sec % 3600 == 0:
+        days = sec // 86400
+        rem_h = (sec % 86400) // 3600
+        return f"{days} روز و {rem_h} ساعت"
     if sec % 3600 == 0:
         return f"{sec // 3600} ساعت"
+    if sec >= 3600 and sec % 60 == 0:
+        hrs = sec // 3600
+        rem_m = (sec % 3600) // 60
+        return f"{hrs} ساعت و {rem_m} دقیقه"
     if sec % 60 == 0:
         return f"{sec // 60} دقیقه"
     return f"{sec // 60} دقیقه و {sec % 60} ثانیه"

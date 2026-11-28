@@ -30,6 +30,7 @@ from database import (
     chats,
     referrals,
     configs_pool,
+    READY_PACKAGES,
     save_all,
     save_all_async,
     now_tehran_iso,
@@ -41,6 +42,7 @@ from database import (
 from core.save_scheduler import schedule_save, schedule_file_save
 from user_manager import user_states, get_user, get_user_safe, get_admin_id_int
 from core.state_stores import (
+    TEMP_INBOUND_SELECTION,
     USER_INBOUND_SELECTION,
     USER_TEST_SETTINGS,
 )
@@ -52,7 +54,7 @@ from strings import t
 from emoji_sticker_system import premium_emoji
 from utils.filters import IsAdmin
 from utils.guards import admin_only
-from utils.helpers import safe_answer
+from utils.helpers import safe_answer, safe_html
 
 logger = logging.getLogger(__name__)
 
@@ -727,31 +729,112 @@ async def confirm_reject_user(callback: CallbackQuery):
     
     await safe_answer(callback, t('user_deleted_520372cec4', lang), alert=True)
     
+def _get_category_inbound_ids(cat: dict) -> List[int]:
+    """Extract normalized ordered list of inbound IDs configured on a category."""
+    raw = cat.get('inbound_ids')
+    ids: List[int] = []
+    if isinstance(raw, list) and raw:
+        for x in raw:
+            try:
+                val = int(x)
+                if val not in ids:
+                    ids.append(val)
+            except (TypeError, ValueError):
+                pass
+    elif cat.get('inbound_id') is not None:
+        try:
+            ids.append(int(cat['inbound_id']))
+        except (TypeError, ValueError):
+            pass
+    return ids
+
+
+def _save_category_inbounds(cat: dict, new_ids: List[int]) -> None:
+    """Persist updated inbound_ids on a category and schedule DB save."""
+    deduped: List[int] = []
+    for x in new_ids:
+        try:
+            val = int(x)
+            if val not in deduped:
+                deduped.append(val)
+        except (TypeError, ValueError):
+            pass
+    cat['inbound_ids'] = deduped
+    cat['inbound_id'] = None
+    READY_PACKAGES['last_updated'] = now_tehran_iso()
+    configs_pool['ready_packages'] = READY_PACKAGES
+    schedule_save(2.0)
+
+
+def _get_categories_using_inbound(inbound_id: int) -> List[dict]:
+    """Return all categories whose explicit inbound list contains inbound_id."""
+    return [
+        cat for cat in READY_PACKAGES.get('categories', [])
+        if inbound_id in _get_category_inbound_ids(cat)
+    ]
+
+
+def _build_inbound_cat_usage_map() -> Dict[int, List[dict]]:
+    """Map each inbound_id -> list of categories directly using it."""
+    usage: Dict[int, List[dict]] = {}
+    for cat in READY_PACKAGES.get('categories', []):
+        for ib_id in _get_category_inbound_ids(cat):
+            usage.setdefault(ib_id, []).append(cat)
+    return usage
+
+
+async def _safe_edit_inbounds_msg(callback: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup) -> None:
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            try:
+                await callback.message.answer(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as inner_e:
+                logger.debug(f"Failed fallback message in admin_shop inbounds: {inner_e}")
+
+
 @router.callback_query(F.data == "admin_inbounds")
 @admin_only
 async def admin_inbounds_list(callback: CallbackQuery):
-    """نمایش لیست اینباندهای پنل با نشان دادن اینباندهای پیش‌فرض"""
+    """نمایش لیست اینباندهای پنل با نشان دادن اینباندهای پیش‌فرض و دسته‌های متصل"""
     
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
-    await callback.message.edit_text(t('i18n_loading_inbounds', lang))
+    await _safe_edit_inbounds_msg(callback, t('i18n_loading_inbounds', lang), InlineKeyboardMarkup(inline_keyboard=[]))
 
     inbounds = await xui_get_inbounds()
-    default_ids = configs_pool.get('default_inbound_ids', [])
+    default_ids = [int(x) for x in (configs_pool.get('default_inbound_ids') or []) if str(x).lstrip('-').isdigit()]
     
     if not inbounds:
         text = t('no_inbounds_found_or_panel_c_c0e6c4d0a4', lang)
         
-        await callback.message.edit_text(
+        await _safe_edit_inbounds_msg(
+            callback,
             text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=t('retry_5550d5f4fa', lang), callback_data="admin_inbounds")],
                 [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_panel")]
             ])
         )
+        await safe_answer(callback)
         return
+
+    usage_map = _build_inbound_cat_usage_map()
     text = t('b_panel_inbounds_b_count_31693c4d5d', lang, fa_parts=lambda: (f'{len(inbounds)}',), en_parts=lambda: (f'{len(inbounds)}',))
     text += t('default_inbounds_d123d69ab5', lang, fa_parts=lambda: (f"{(default_ids if default_ids else t('i18n_not_set', lang))}",), en_parts=lambda: (f"{(default_ids if default_ids else t('i18n_not_set', lang))}",))
+    if lang == "en":
+        text += "\n💡 <i>[N📂] shows direct category count. Tap an inbound to manage its categories or use Bulk Assign.</i>"
+    else:
+        text += "\n💡 <i>عدد [N📂] تعداد دسته‌های متصل را نشان می‌دهد؛ روی هر اینباند بزنید یا از تخصیص گروهی استفاده کنید.</i>"
     
     buttons = []
     for inbound in inbounds:
@@ -763,12 +846,20 @@ async def admin_inbounds_list(callback: CallbackQuery):
         
         status_icon = "🟢" if enable else "🔴"
         is_default = "⭐" if inbound_id in default_ids else "  "
+        cat_cnt = len(usage_map.get(inbound_id, []))
+        cat_badge = f"[{cat_cnt}📂] " if cat_cnt > 0 else ""
         
-        label = f"{is_default} {status_icon} {remark} - {protocol.upper()} :{port}"
+        label = f"{is_default} {status_icon} {cat_badge}{remark} - {protocol.upper()} :{port}"
         buttons.append([InlineKeyboardButton(
             text=label[:55],
             callback_data=f"admin_inbound_detail_{inbound_id}"
         )])
+
+    buttons.append([InlineKeyboardButton(
+        text="🧩 تخصیص گروهی به دسته‌ها (چند به چند)" if lang == "fa" else "🧩 Bulk Assign to Categories (Multi)",
+        callback_data="admin_inbound_bulk_start",
+        style="primary",
+    )])
     buttons.append([InlineKeyboardButton(
         text=t('set_default_inbounds_f346badc1a', lang),
         callback_data="admin_inbound_default"
@@ -783,7 +874,7 @@ async def admin_inbounds_list(callback: CallbackQuery):
         callback_data="admin_panel"
     )])
     
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await _safe_edit_inbounds_msg(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
     await safe_answer(callback)
 
 def migrate_inbound_data():
@@ -799,20 +890,21 @@ def migrate_inbound_data():
 @router.callback_query(F.data.startswith("admin_inbound_detail_"))
 @admin_only
 async def admin_inbound_detail(callback: CallbackQuery):
-    """نمایش جزئیات یک اینباند و تنظیم آن برای کاربران"""
+    """نمایش جزئیات یک اینباند، دسته‌های استفاده‌کننده و مدیریت اتصال به دسته‌ها"""
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     parts = callback.data.split("_")
     
+    default_ids = [int(x) for x in (configs_pool.get('default_inbound_ids') or []) if str(x).lstrip('-').isdigit()]
     try:
         if len(parts) >= 4 and parts[3] == 'default':
-            inbound_id = configs_pool.get('default_inbound_id')
+            inbound_id = default_ids[0] if default_ids else configs_pool.get('default_inbound_id')
             if not inbound_id:
                 await callback.answer(t('i18n_no_default_inbound_set_bang', lang), show_alert=True)
                 return
         else:
             inbound_id = int(parts[3]) if len(parts) > 3 else None
     except (ValueError, IndexError):
-        inbound_id = configs_pool.get('default_inbound_id')
+        inbound_id = default_ids[0] if default_ids else configs_pool.get('default_inbound_id')
         if not inbound_id:
             await callback.answer(t('i18n_no_valid_inbound_found_bang', lang), show_alert=True)
             return
@@ -845,23 +937,645 @@ async def admin_inbound_detail(callback: CallbackQuery):
     enable = inbound.get('enable', True)
     settings = inbound.get('settings', {})
     clients = settings.get('clients', [])
+
+    direct_cats = _get_categories_using_inbound(inbound_id)
+    is_default_ib = inbound_id in default_ids
+    default_fallback_cats = [
+        cat for cat in READY_PACKAGES.get('categories', [])
+        if not _get_category_inbound_ids(cat)
+    ]
+
+    if lang == "en":
+        cat_lines = [
+            f"  • {c.get('icon', '📦')} <b>{safe_html(c.get('name_en') or c.get('name'))}</b>"
+            f"{' (🔴 Inactive)' if not c.get('is_active', True) else ''}"
+            f" — <code>{len(_get_category_inbound_ids(c))} inbound(s)</code>"
+            for c in direct_cats
+        ]
+        cats_section = (
+            f"\n📂 <b>Assigned Categories ({len(direct_cats)}):</b>\n"
+            + ("\n".join(cat_lines) if cat_lines else "  • Not assigned explicitly to any category")
+        )
+        if is_default_ib and default_fallback_cats:
+            fb_names = ", ".join(safe_html(c.get('name_en') or c.get('name')) for c in default_fallback_cats)
+            cats_section += f"\n⭐ <b>Default Inbound</b> (inherited by: {fb_names})"
+    else:
+        cat_lines = [
+            f"  • {c.get('icon', '📦')} <b>{safe_html(c.get('name'))}</b>"
+            f"{' (🔴 غیرفعال)' if not c.get('is_active', True) else ''}"
+            f" — <code>{len(_get_category_inbound_ids(c))} اینباند</code>"
+            for c in direct_cats
+        ]
+        cats_section = (
+            f"\n📂 <b>دسته‌های استفاده‌کننده ({len(direct_cats)}):</b>\n"
+            + ("\n".join(cat_lines) if cat_lines else "  • در هیچ دسته‌ای به‌صورت اختصاصی تنظیم نشده")
+        )
+        if is_default_ib and default_fallback_cats:
+            fb_names = "، ".join(safe_html(c.get('name')) for c in default_fallback_cats)
+            cats_section += f"\n⭐ <b>اینباند پیش‌فرض</b> (ارث‌بری در دسته‌های پیش‌فرض: {fb_names})"
     
-    text = t('b_inbound_details_b_id_name_ae640925ae', lang, fa_parts=lambda: (f'{inbound_id}', f'{remark}', f'{protocol.upper()}', f'{port}', t('i18n_status_active', lang) if enable else t('i18n_status_inactive', lang), f'{user_count}', f'{len(clients)}', f"{settings.get('ipLimit', t('i18n_unknown', lang))}", f"{settings.get('expiryTime', t('i18n_unknown', lang))}"), en_parts=lambda: (f'{inbound_id}', f'{remark}', f'{protocol.upper()}', f'{port}', t('i18n_status_active', lang) if enable else t('i18n_status_inactive', lang), f'{user_count}', f'{len(clients)}', f"{settings.get('ipLimit', t('i18n_unknown', lang))}", f"{settings.get('expiryTime', t('i18n_unknown', lang))}"))
+    text = t('b_inbound_details_b_id_name_ae640925ae', lang, fa_parts=lambda: (f'{inbound_id}', f'{safe_html(remark)}', f'{protocol.upper()}', f'{port}', t('i18n_status_active', lang) if enable else t('i18n_status_inactive', lang), f'{user_count}', f'{len(clients)}', f"{settings.get('ipLimit', t('i18n_unknown', lang))}", f"{settings.get('expiryTime', t('i18n_unknown', lang))}"), en_parts=lambda: (f'{inbound_id}', f'{safe_html(remark)}', f'{protocol.upper()}', f'{port}', t('i18n_status_active', lang) if enable else t('i18n_status_inactive', lang), f'{user_count}', f'{len(clients)}', f"{settings.get('ipLimit', t('i18n_unknown', lang))}", f"{settings.get('expiryTime', t('i18n_unknown', lang))}"))
+    text = text.rstrip() + f"\n{cats_section}\n"
+
     buttons = [
+        [InlineKeyboardButton(
+            text=f"📂 مدیریت دسته‌های این اینباند ({len(direct_cats)})" if lang == "fa" else f"📂 Manage Categories ({len(direct_cats)})",
+            callback_data=f"admin_ib_cats_{inbound_id}",
+            style="success",
+        )],
         [InlineKeyboardButton(text=t('view_clients_d9f439ff7a', lang), callback_data=f"admin_inbound_clients_{inbound_id}")],
         [InlineKeyboardButton(text=t('view_users_ea6de3ff4d', lang), callback_data=f"admin_inbound_users_{inbound_id}")],
     ]
 
-    default_id = configs_pool.get('default_inbound_id')
-    if default_id == inbound_id:
-        buttons.append([InlineKeyboardButton(text=t('current_default_6efdf1acd5', lang), callback_data="noop", style="primary")])
+    if is_default_ib:
+        buttons.append([InlineKeyboardButton(text=t('current_default_6efdf1acd5', lang), callback_data=f"admin_inbound_set_default_{inbound_id}", style="primary")])
     else:
         buttons.append([InlineKeyboardButton(text=t('set_as_default_8698a1dc7f', lang), callback_data=f"admin_inbound_set_default_{inbound_id}", style="primary")])
 
     buttons.append([InlineKeyboardButton(text=t('back_to_list_eca8a9c338', lang), callback_data="admin_inbounds")])
     
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await _safe_edit_inbounds_msg(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
     await safe_answer(callback)
+
+
+async def _render_single_inbound_categories(callback: CallbackQuery, inbound_id: int) -> None:
+    """نمایش صفحه ۱-کلیکی افزودن/حذف یک اینباند در تمام دسته‌بندی‌ها"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    inbounds = await xui_get_inbounds()
+    inbound = next((i for i in inbounds if i.get('id') == inbound_id), None)
+    if not inbound:
+        await safe_answer(callback, t('i18n_inbound_not_found', lang), alert=True)
+        return
+
+    categories = READY_PACKAGES.get('categories', [])
+    remark = inbound.get('remark', f'Inbound {inbound_id}')
+    protocol = str(inbound.get('protocol', '')).upper()
+    port = inbound.get('port', '')
+    direct_cnt = sum(1 for c in categories if inbound_id in _get_category_inbound_ids(c))
+
+    if lang == "en":
+        text = (
+            f"📂 <b>Category Usage for Inbound</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 <b>Inbound:</b> {safe_html(remark)} (<code>{protocol}:{port}</code> | ID: <code>{inbound_id}</code>)\n"
+            f"📊 <b>Assigned:</b> <code>{direct_cnt}/{len(categories)}</code> categories\n\n"
+            "💡 Tap any category below to <b>add or remove</b> this inbound in one click (existing inbounds on each category are preserved).\n"
+            "ℹ️ Categories showing <i>(Default)</i> currently inherit global default inbounds."
+        )
+    else:
+        text = (
+            f"📂 <b>مدیریت دسته‌های اینباند</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 <b>اینباند:</b> {safe_html(remark)} (<code>{protocol}:{port}</code> | ID: <code>{inbound_id}</code>)\n"
+            f"📊 <b>وضعیت اتصال:</b> فعال در <code>{direct_cnt}/{len(categories)}</code> دسته\n\n"
+            "💡 با کلیک روی هر دسته، این اینباند با <b>یک کلیک اضافه یا حذف</b> می‌شود (سایر اینباندهای آن دسته حفظ می‌شوند).\n"
+            "ℹ️ دسته‌های بدون اینباند اختصاصی <i>(پیش‌فرض)</i> هستند و با افزودن اینباند به حالت اختصاصی تغییر می‌کنند."
+        )
+
+    buttons = []
+    if not categories:
+        text += "\n\n⚠️ " + ("No categories defined." if lang == "en" else "هیچ دسته‌بندی تعریف نشده است.")
+    else:
+        for cat in categories:
+            cat_id = cat.get('id')
+            ib_list = _get_category_inbound_ids(cat)
+            has_it = inbound_id in ib_list
+            cat_name = (cat.get('name_en') or cat.get('name')) if lang == "en" else cat.get('name')
+            icon = cat.get('icon', '📦')
+            inactive_tag = (" 🔴" if not cat.get('is_active', True) else "")
+            if ib_list:
+                cnt_tag = f"({len(ib_list)}📡)"
+            else:
+                cnt_tag = "(Default)" if lang == "en" else "(پیش‌فرض)"
+
+            prefix_ico = "✅" if has_it else "⬜"
+            btn_label = f"{prefix_ico} {icon} {cat_name}{inactive_tag} {cnt_tag}"
+            buttons.append([InlineKeyboardButton(
+                text=btn_label[:58],
+                callback_data=f"admin_ib_cat_tog_{inbound_id}_{cat_id}",
+                style="success" if has_it else None,
+            )])
+
+        buttons.append([
+            InlineKeyboardButton(
+                text="✅ افزودن به همه دسته‌ها" if lang == "fa" else "✅ Add to All",
+                callback_data=f"admin_ib_cat_all_{inbound_id}",
+                style="primary",
+            ),
+            InlineKeyboardButton(
+                text="🗑 حذف از همه دسته‌ها" if lang == "fa" else "🗑 Remove from All",
+                callback_data=f"admin_ib_cat_none_{inbound_id}",
+                style="danger",
+            ),
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔙 جزئیات اینباند" if lang == "fa" else "🔙 Inbound Details",
+            callback_data=f"admin_inbound_detail_{inbound_id}",
+        ),
+        InlineKeyboardButton(
+            text="📡 لیست اینباندها" if lang == "fa" else "📡 Inbounds List",
+            callback_data="admin_inbounds",
+        ),
+    ])
+    await _safe_edit_inbounds_msg(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data.startswith("admin_ib_cats_"))
+@admin_only
+async def admin_inbound_categories_view(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        inbound_id = int(callback.data.replace("admin_ib_cats_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+    await _render_single_inbound_categories(callback, inbound_id)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("admin_ib_cat_tog_"))
+@admin_only
+async def admin_inbound_category_toggle(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        parts = callback.data.split("_")
+        inbound_id = int(parts[4])
+        cat_id = int(parts[5])
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+
+    cat = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == cat_id), None)
+    if not cat:
+        await safe_answer(callback, t('category_not_found_04182ef028', lang), alert=True)
+        return
+
+    current_ids = _get_category_inbound_ids(cat)
+    cat_name = (cat.get('name_en') or cat.get('name')) if lang == "en" else cat.get('name')
+    if inbound_id in current_ids:
+        new_ids = [x for x in current_ids if x != inbound_id]
+        _save_category_inbounds(cat, new_ids)
+        toast = (
+            f"🗑 Removed from «{cat_name}»"
+            if lang == "en"
+            else f"🗑 از دسته «{cat_name}» حذف شد"
+        )
+    else:
+        current_ids.append(inbound_id)
+        _save_category_inbounds(cat, current_ids)
+        toast = (
+            f"✅ Added to «{cat_name}»"
+            if lang == "en"
+            else f"✅ به دسته «{cat_name}» اضافه شد"
+        )
+
+    await _render_single_inbound_categories(callback, inbound_id)
+    await safe_answer(callback, toast, alert=False)
+
+
+@router.callback_query(F.data.startswith("admin_ib_cat_all_"))
+@admin_only
+async def admin_inbound_category_add_all(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        inbound_id = int(callback.data.replace("admin_ib_cat_all_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+
+    changed = 0
+    for cat in READY_PACKAGES.get('categories', []):
+        ids = _get_category_inbound_ids(cat)
+        if inbound_id not in ids:
+            ids.append(inbound_id)
+            _save_category_inbounds(cat, ids)
+            changed += 1
+
+    if log_system and changed:
+        await log_system.log_admin_action(
+            callback.from_user.id,
+            f"Added inbound #{inbound_id} to {changed} category(ies)",
+        )
+
+    toast = (
+        f"✅ Inbound added to {changed} category(ies)."
+        if lang == "en"
+        else f"✅ این اینباند به {changed} دسته اضافه شد."
+    )
+    await _render_single_inbound_categories(callback, inbound_id)
+    await safe_answer(callback, toast, alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_ib_cat_none_"))
+@admin_only
+async def admin_inbound_category_remove_all(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        inbound_id = int(callback.data.replace("admin_ib_cat_none_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+
+    changed = 0
+    for cat in READY_PACKAGES.get('categories', []):
+        ids = _get_category_inbound_ids(cat)
+        if inbound_id in ids:
+            _save_category_inbounds(cat, [x for x in ids if x != inbound_id])
+            changed += 1
+
+    if log_system and changed:
+        await log_system.log_admin_action(
+            callback.from_user.id,
+            f"Removed inbound #{inbound_id} from {changed} category(ies)",
+        )
+
+    toast = (
+        f"🗑 Removed from {changed} category(ies)."
+        if lang == "en"
+        else f"🗑 این اینباند از {changed} دسته حذف شد."
+    )
+    await _render_single_inbound_categories(callback, inbound_id)
+    await safe_answer(callback, toast, alert=True)
+
+
+def _get_bulk_assign_state(admin_id: int) -> dict:
+    key = f"bulk_assign_{admin_id}"
+    state = TEMP_INBOUND_SELECTION.get(key)
+    if not isinstance(state, dict):
+        state = {"inbound_ids": [], "category_ids": []}
+        TEMP_INBOUND_SELECTION[key] = state
+    state.setdefault("inbound_ids", [])
+    state.setdefault("category_ids", [])
+    TEMP_INBOUND_SELECTION[key] = state
+    return state
+
+
+async def _render_bulk_step_inbounds(callback: CallbackQuery) -> None:
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    state = _get_bulk_assign_state(admin_id)
+    sel_ibs = set(state["inbound_ids"])
+
+    inbounds = await xui_get_inbounds()
+    if not inbounds:
+        await safe_answer(callback, t('i18n_no_inbounds_found', lang), alert=True)
+        return
+
+    if lang == "en":
+        text = (
+            "🧩 <b>Bulk Assign Inbounds to Categories — Step 1/2</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 <b>Selected Inbounds:</b> <code>{len(sel_ibs)}</code>\n\n"
+            "👇 Select one or more inbounds, then tap <b>Choose Categories</b>:"
+        )
+    else:
+        text = (
+            "🧩 <b>تخصیص گروهی اینباند به دسته‌ها — مرحله ۱ از ۲</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 <b>اینباندهای انتخاب‌شده:</b> <code>{len(sel_ibs)}</code> عدد\n\n"
+            "👇 یک یا چند اینباند را انتخاب کنید و سپس دکمه <b>انتخاب دسته‌ها</b> را بزنید:"
+        )
+
+    buttons = []
+    for ib in inbounds:
+        ib_id = ib.get('id')
+        remark = ib.get('remark', f'Inbound {ib_id}')
+        proto = str(ib.get('protocol', '')).upper()
+        port = ib.get('port', '')
+        en_flag = "🟢" if ib.get('enable', True) else "🔴"
+        is_sel = ib_id in sel_ibs
+        mark = "✅" if is_sel else "⬜"
+        lbl = f"{mark} {en_flag} {remark} - {proto}:{port}"
+        buttons.append([InlineKeyboardButton(
+            text=lbl[:55],
+            callback_data=f"admin_ib_bulk_ti_{ib_id}",
+            style="primary" if is_sel else None,
+        )])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="✅ همه فعال‌ها" if lang == "fa" else "✅ All Active",
+            callback_data="admin_ib_bulk_all_ib",
+        ),
+        InlineKeyboardButton(
+            text="🧹 پاک کردن انتخاب" if lang == "fa" else "🧹 Clear",
+            callback_data="admin_ib_bulk_clr_ib",
+            style="danger",
+        ),
+    ])
+    buttons.append([InlineKeyboardButton(
+        text=(f"📂 انتخاب دسته‌ها ({len(sel_ibs)} اینباند) ➡️" if lang == "fa" else f"📂 Choose Categories ({len(sel_ibs)} selected) ➡️"),
+        callback_data="admin_ib_bulk_step_cat",
+        style="success",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text="🔙 لیست اینباندها" if lang == "fa" else "🔙 Back to Inbounds",
+        callback_data="admin_inbounds",
+    )])
+
+    await _safe_edit_inbounds_msg(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+async def _render_bulk_step_categories(callback: CallbackQuery) -> None:
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    state = _get_bulk_assign_state(admin_id)
+    sel_ibs = state["inbound_ids"]
+    sel_cats = set(state["category_ids"])
+
+    inbounds = await xui_get_inbounds()
+    ib_lookup = {ib.get('id'): ib for ib in inbounds}
+    selected_lines = []
+    for ib_id in sel_ibs[:10]:
+        ib = ib_lookup.get(ib_id, {})
+        remark = ib.get('remark', f'ID:{ib_id}')
+        proto = str(ib.get('protocol', '')).upper()
+        port = ib.get('port', '')
+        selected_lines.append(f"  • {safe_html(remark)} (<code>{proto}:{port}</code>)")
+    if len(sel_ibs) > 10:
+        selected_lines.append(f"  • +{len(sel_ibs) - 10} more...")
+    ib_summary = "\n".join(selected_lines)
+
+    categories = READY_PACKAGES.get('categories', [])
+    if lang == "en":
+        text = (
+            "🧩 <b>Bulk Assign Inbounds to Categories — Step 2/2</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 <b>Selected Inbounds ({len(sel_ibs)}):</b>\n{ib_summary}\n\n"
+            f"📂 <b>Selected Categories:</b> <code>{len(sel_cats)}/{len(categories)}</code>\n\n"
+            "👇 Tap categories below, then choose an action:\n"
+            "• <b>➕ Add:</b> Appends selected inbounds (keeps existing ones)\n"
+            "• <b>🔄 Replace:</b> Replaces category inbounds with selected set\n"
+            "• <b>➖ Remove:</b> Removes selected inbounds from categories"
+        )
+    else:
+        text = (
+            "🧩 <b>تخصیص گروهی اینباند به دسته‌ها — مرحله ۲ از ۲</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📡 <b>اینباندهای انتخاب‌شده ({len(sel_ibs)}):</b>\n{ib_summary}\n\n"
+            f"📂 <b>دسته‌های انتخاب‌شده:</b> <code>{len(sel_cats)}/{len(categories)}</code>\n\n"
+            "👇 دسته‌های هدف را انتخاب کنید و عملیات مورد نظر را بزنید:\n"
+            "• <b>➕ افزودن:</b> اینباندهای انتخابی را اضافه می‌کند (اینباندهای قبلی دسته حفظ می‌شوند)\n"
+            "• <b>🔄 جایگزینی:</b> لیست اینباند دسته را فقط با این موارد جایگزین می‌کند\n"
+            "• <b>➖ حذف:</b> اینباندهای انتخابی را از دسته‌های هدف حذف می‌کند"
+        )
+
+    buttons = []
+    sel_ib_set = set(sel_ibs)
+    for cat in categories:
+        cat_id = cat.get('id')
+        cur_ibs = _get_category_inbound_ids(cat)
+        overlap = sum(1 for x in sel_ib_set if x in cur_ibs)
+        is_sel = cat_id in sel_cats
+        cat_name = (cat.get('name_en') or cat.get('name')) if lang == "en" else cat.get('name')
+        icon = cat.get('icon', '📦')
+        if overlap == len(sel_ib_set) and len(sel_ib_set) > 0:
+            ov_tag = "[همه✓]" if lang == "fa" else "[All✓]"
+        elif overlap > 0:
+            ov_tag = f"[{overlap}/{len(sel_ib_set)}]"
+        else:
+            ov_tag = ""
+        cur_tag = f"({len(cur_ibs)}📡)" if cur_ibs else ("(پیش‌فرض)" if lang == "fa" else "(Default)")
+        mark = "✅" if is_sel else "⬜"
+        lbl = f"{mark} {icon} {cat_name} {cur_tag} {ov_tag}".strip()
+        buttons.append([InlineKeyboardButton(
+            text=lbl[:58],
+            callback_data=f"admin_ib_bulk_tc_{cat_id}",
+            style="primary" if is_sel else None,
+        )])
+
+    buttons.append([
+        InlineKeyboardButton(
+            text="✅ همه دسته‌ها" if lang == "fa" else "✅ All Categories",
+            callback_data="admin_ib_bulk_all_cat",
+        ),
+        InlineKeyboardButton(
+            text="🧹 پاک کردن" if lang == "fa" else "🧹 Clear",
+            callback_data="admin_ib_bulk_clr_cat",
+            style="danger",
+        ),
+    ])
+    buttons.append([InlineKeyboardButton(
+        text=(f"➕ افزودن به {len(sel_cats)} دسته" if lang == "fa" else f"➕ Add to {len(sel_cats)} Category(ies)"),
+        callback_data="admin_ib_bulk_apply_add",
+        style="success",
+    )])
+    buttons.append([
+        InlineKeyboardButton(
+            text="🔄 جایگزینی کامل" if lang == "fa" else "🔄 Replace All",
+            callback_data="admin_ib_bulk_apply_set",
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            text="➖ حذف از دسته‌ها" if lang == "fa" else "➖ Remove Selected",
+            callback_data="admin_ib_bulk_apply_rem",
+            style="danger",
+        ),
+    ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="⬅️ تغییر اینباندها" if lang == "fa" else "⬅️ Edit Inbounds",
+            callback_data="admin_ib_bulk_step_ib",
+        ),
+        InlineKeyboardButton(
+            text="📡 لیست اینباندها" if lang == "fa" else "📡 Inbounds List",
+            callback_data="admin_inbounds",
+        ),
+    ])
+
+    await _safe_edit_inbounds_msg(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data == "admin_inbound_bulk_start")
+@admin_only
+async def admin_inbound_bulk_start(callback: CallbackQuery):
+    TEMP_INBOUND_SELECTION[f"bulk_assign_{callback.from_user.id}"] = {"inbound_ids": [], "category_ids": []}
+    await _render_bulk_step_inbounds(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "admin_ib_bulk_step_ib")
+@admin_only
+async def admin_ib_bulk_step_ib(callback: CallbackQuery):
+    await _render_bulk_step_inbounds(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "admin_ib_bulk_step_cat")
+@admin_only
+async def admin_ib_bulk_step_cat(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    state = _get_bulk_assign_state(callback.from_user.id)
+    if not state["inbound_ids"]:
+        await safe_answer(
+            callback,
+            "⚠️ Select at least one inbound first." if lang == "en" else "⚠️ لطفاً ابتدا حداقل یک اینباند انتخاب کنید.",
+            alert=True,
+        )
+        return
+    if not READY_PACKAGES.get('categories'):
+        await safe_answer(
+            callback,
+            "⚠️ No categories found." if lang == "en" else "⚠️ هیچ دسته‌بندی وجود ندارد.",
+            alert=True,
+        )
+        return
+    await _render_bulk_step_categories(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("admin_ib_bulk_ti_"))
+@admin_only
+async def admin_ib_bulk_toggle_ib(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        ib_id = int(callback.data.replace("admin_ib_bulk_ti_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+    state = _get_bulk_assign_state(callback.from_user.id)
+    ibs = state["inbound_ids"]
+    if ib_id in ibs:
+        ibs.remove(ib_id)
+    else:
+        ibs.append(ib_id)
+    TEMP_INBOUND_SELECTION[f"bulk_assign_{callback.from_user.id}"] = state
+    await _render_bulk_step_inbounds(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "admin_ib_bulk_all_ib")
+@admin_only
+async def admin_ib_bulk_all_ib(callback: CallbackQuery):
+    inbounds = await xui_get_inbounds()
+    active_ids = [int(i['id']) for i in inbounds if i.get('enable', True) and i.get('id') is not None]
+    state = _get_bulk_assign_state(callback.from_user.id)
+    state["inbound_ids"] = active_ids
+    TEMP_INBOUND_SELECTION[f"bulk_assign_{callback.from_user.id}"] = state
+    await _render_bulk_step_inbounds(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "admin_ib_bulk_clr_ib")
+@admin_only
+async def admin_ib_bulk_clr_ib(callback: CallbackQuery):
+    state = _get_bulk_assign_state(callback.from_user.id)
+    state["inbound_ids"] = []
+    TEMP_INBOUND_SELECTION[f"bulk_assign_{callback.from_user.id}"] = state
+    await _render_bulk_step_inbounds(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("admin_ib_bulk_tc_"))
+@admin_only
+async def admin_ib_bulk_toggle_cat(callback: CallbackQuery):
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        cat_id = int(callback.data.replace("admin_ib_bulk_tc_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+    state = _get_bulk_assign_state(callback.from_user.id)
+    cats = state["category_ids"]
+    if cat_id in cats:
+        cats.remove(cat_id)
+    else:
+        cats.append(cat_id)
+    TEMP_INBOUND_SELECTION[f"bulk_assign_{callback.from_user.id}"] = state
+    await _render_bulk_step_categories(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "admin_ib_bulk_all_cat")
+@admin_only
+async def admin_ib_bulk_all_cat(callback: CallbackQuery):
+    state = _get_bulk_assign_state(callback.from_user.id)
+    state["category_ids"] = [c.get('id') for c in READY_PACKAGES.get('categories', []) if c.get('id') is not None]
+    TEMP_INBOUND_SELECTION[f"bulk_assign_{callback.from_user.id}"] = state
+    await _render_bulk_step_categories(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data == "admin_ib_bulk_clr_cat")
+@admin_only
+async def admin_ib_bulk_clr_cat(callback: CallbackQuery):
+    state = _get_bulk_assign_state(callback.from_user.id)
+    state["category_ids"] = []
+    TEMP_INBOUND_SELECTION[f"bulk_assign_{callback.from_user.id}"] = state
+    await _render_bulk_step_categories(callback)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("admin_ib_bulk_apply_"))
+@admin_only
+async def admin_ib_bulk_apply(callback: CallbackQuery):
+    admin_id = callback.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    mode = callback.data.replace("admin_ib_bulk_apply_", "")
+    if mode not in ("add", "set", "rem"):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+
+    state = _get_bulk_assign_state(admin_id)
+    sel_ibs = list(state["inbound_ids"])
+    sel_cats = set(state["category_ids"])
+    if not sel_ibs:
+        await safe_answer(callback, "⚠️ Select at least one inbound." if lang == "en" else "⚠️ حداقل یک اینباند انتخاب کنید.", alert=True)
+        return
+    if not sel_cats:
+        await safe_answer(callback, "⚠️ Select at least one category." if lang == "en" else "⚠️ حداقل یک دسته انتخاب کنید.", alert=True)
+        return
+
+    updated_count = 0
+    for cat in READY_PACKAGES.get('categories', []):
+        if cat.get('id') not in sel_cats:
+            continue
+        cur = _get_category_inbound_ids(cat)
+        if mode == "add":
+            new_list = list(cur)
+            for x in sel_ibs:
+                if x not in new_list:
+                    new_list.append(x)
+        elif mode == "set":
+            new_list = list(sel_ibs)
+        else:  # rem
+            rem_set = set(sel_ibs)
+            new_list = [x for x in cur if x not in rem_set]
+
+        if new_list != cur or 'inbound_id' in cat and cat.get('inbound_id') is not None:
+            _save_category_inbounds(cat, new_list)
+            updated_count += 1
+
+    if log_system:
+        await log_system.log_admin_action(
+            admin_id,
+            f"Bulk inbound {mode}: inbounds={sel_ibs} categories={sorted(sel_cats)}",
+            details=f"Modified {updated_count} category(ies)",
+        )
+
+    if mode == "add":
+        msg = (
+            f"✅ {len(sel_ibs)} inbound(s) added across {len(sel_cats)} category(ies)!"
+            if lang == "en"
+            else f"✅ {len(sel_ibs)} اینباند به {len(sel_cats)} دسته اضافه شد!"
+        )
+    elif mode == "set":
+        msg = (
+            f"🔄 {len(sel_cats)} category(ies) updated to selected {len(sel_ibs)} inbound(s)!"
+            if lang == "en"
+            else f"🔄 اینباندهای {len(sel_cats)} دسته جایگزین شد!"
+        )
+    else:
+        msg = (
+            f"🗑 {len(sel_ibs)} inbound(s) removed from {len(sel_cats)} category(ies)!"
+            if lang == "en"
+            else f"🗑 {len(sel_ibs)} اینباند از {len(sel_cats)} دسته حذف شد!"
+        )
+
+    await _render_bulk_step_categories(callback)
+    await safe_answer(callback, msg, alert=True)
 
 @router.callback_query(F.data.startswith("admin_inbound_clients_"))
 @admin_only
@@ -998,31 +1712,35 @@ async def admin_inbound_users(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("admin_inbound_set_default_"))
 @admin_only
 async def admin_inbound_set_default(callback: CallbackQuery):
-    """تنظیم اینباند پیش‌فرض"""
+    """افزودن/حذف اینباند در لیست اینباندهای پیش‌فرض و رفرش جزئیات"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
     parts = callback.data.split("_")
     try:
         inbound_id = int(parts[4]) if len(parts) > 4 else None
     except (ValueError, IndexError):
-        await callback.answer(t('i18n_process_error', get_user(callback.from_user.id).get('lang', 'fa')), show_alert=True)
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
         return
 
     if not inbound_id:
-        await callback.answer(t('i18n_inbound_invalid', get_user(callback.from_user.id).get('lang', 'fa')), show_alert=True)
+        await callback.answer(t('i18n_inbound_invalid', lang), show_alert=True)
         return
-    
-    lang = get_user(callback.from_user.id).get('lang', 'fa')
-    configs_pool['default_inbound_id'] = inbound_id
-    schedule_save(2.0)
-    
-    await callback.answer(
-        t('inbound_set_as_default_e729b89224', lang, fa_parts=lambda: (f'{inbound_id}',), en_parts=lambda: (f'{inbound_id}',)),
-        show_alert=True
-    )
-    
 
-    new_callback = callback
-    
-    await show_inbound_detail(callback.message, inbound_id, lang)
+    default_ids = [int(x) for x in (configs_pool.get('default_inbound_ids') or []) if str(x).lstrip('-').isdigit()]
+    if inbound_id in default_ids:
+        default_ids.remove(inbound_id)
+        msg = (
+            f"🗑 Inbound {inbound_id} removed from defaults."
+            if lang == "en"
+            else f"🗑 اینباند {inbound_id} از پیش‌فرض‌ها حذف شد."
+        )
+    else:
+        default_ids.append(inbound_id)
+        msg = t('inbound_set_as_default_e729b89224', lang, fa_parts=lambda: (f'{inbound_id}',), en_parts=lambda: (f'{inbound_id}',))
+    configs_pool['default_inbound_ids'] = default_ids
+    schedule_save(2.0)
+
+    await safe_answer(callback, msg, alert=True)
+    await admin_inbound_detail(callback.model_copy(update={"data": f"admin_inbound_detail_{inbound_id}"}))
     
 async def show_inbound_detail(message: types.Message, inbound_id: int, lang: str = "fa"):
     """نمایش جزئیات یک اینباند با استفاده از Message به جای CallbackQuery"""

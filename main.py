@@ -8231,7 +8231,7 @@ async def shutdown(dispatcher: Dispatcher, bot: Bot):
         await close_resource("Bot session", bot.session.close)
         await close_resource("FSM storage", dispatcher.fsm.storage.close)
         if log_system:
-            await close_resource("سیستم لاگ خارجی", log_system.close)
+            await close_resource("External log system", log_system.close)
         if cleanup_errors:
             logger.error(f"Bot shutdown completed with errors while closing these resources: {', '.join(cleanup_errors)}")
         else:

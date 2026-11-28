@@ -1810,4 +1810,6 @@ STRINGS = {
     'deeplink_btn_buy_service': '🛒 Buy New Service',
     'deeplink_continue_after_approval': '🔗 Continue Previous Request',
     'task_manager_btn': '⚙️ Task Management',
+    'category_tech_specs_btn': '📋 Technical Specifications',
+    'back_to_category_packages_btn': '🔙 Back to Packages',
 }

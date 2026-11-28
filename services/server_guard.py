@@ -551,10 +551,10 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
         load_txt = f"{metrics['load1']} (ratio {load_ratio:.2f})" if metrics["load1"] is not None else "N/A"
         issues.append((
             "cpu",
-            "🚨 هشدار مصرف بالای CPU سرور",
-            f"• <b>مصرف CPU:</b> <code>{cpu:.1f}%</code>\n"
+            "🚨 High Server CPU Usage Alert",
+            f"• <b>CPU Usage:</b> <code>{cpu:.1f}%</code>\n"
             f"• <b>Load Average (1m):</b> <code>{load_txt}</code>\n"
-            f"• <b>تعداد هسته:</b> {metrics['cpu_count']}",
+            f"• <b>CPU Cores:</b> {metrics['cpu_count']}",
         ))
 
     # 2. RAM / Swap / Bot RSS
@@ -571,10 +571,10 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
         current_issue_keys.add("ram")
         issues.append((
             "ram",
-            "🚨 هشدار مصرف بالای حافظه (RAM)",
-            f"• <b>RAM سرور:</b> <code>{metrics['ram_used_gb']:.2f}/{metrics['ram_total_gb']:.2f} GB ({ram_pct:.1f}%)</code>\n"
-            f"• <b>حافظه آزاد:</b> <code>{metrics['ram_avail_mb']:.0f} MB</code>\n"
-            f"• <b>رم پروسه ربات:</b> <code>{bot_rss:.1f} MB</code> | Swap: <code>{swap_pct:.1f}%</code>",
+            "🚨 High Memory (RAM) Usage Alert",
+            f"• <b>Server RAM:</b> <code>{metrics['ram_used_gb']:.2f}/{metrics['ram_total_gb']:.2f} GB ({ram_pct:.1f}%)</code>\n"
+            f"• <b>Available RAM:</b> <code>{metrics['ram_avail_mb']:.0f} MB</code>\n"
+            f"• <b>Bot RSS:</b> <code>{bot_rss:.1f} MB</code> | Swap: <code>{swap_pct:.1f}%</code>",
         ))
         # Defensive cleanup if bot RSS itself is elevated
         if bot_rss >= 500.0:
@@ -596,9 +596,9 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
         current_issue_keys.add("disk")
         issues.append((
             "disk",
-            "🚨 هشدار کمبود فضای دیسک سرور",
-            f"• <b>فضای خالی:</b> <code>{metrics['disk_free_gb']:.2f} GB</code> از <code>{metrics['disk_total_gb']:.1f} GB</code>\n"
-            f"• <b>درصد اشغال:</b> <code>{metrics['disk_percent']:.1f}%</code>",
+            "🚨 Low Server Disk Space Alert",
+            f"• <b>Free Space:</b> <code>{metrics['disk_free_gb']:.2f} GB</code> / <code>{metrics['disk_total_gb']:.1f} GB</code>\n"
+            f"• <b>Disk Used:</b> <code>{metrics['disk_percent']:.1f}%</code>",
         ))
 
     # 4. Panel Connectivity
@@ -608,9 +608,9 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
             current_issue_keys.add("panel")
             issues.append((
                 "panel",
-                "🔴 خطای اتصال یا عدم پاسخگویی پنل 3X-UI",
-                f"• <b>خطا:</b> <code>{html.escape(str(panel_res.get('error') or 'Unknown'))}</code>\n"
-                f"• <b>تعداد خطای متوالی:</b> {_PANEL_FAIL_STREAK}",
+                "🔴 3X-UI Panel Connection Failure",
+                f"• <b>Error:</b> <code>{html.escape(str(panel_res.get('error') or 'Unknown'))}</code>\n"
+                f"• <b>Consecutive Failures:</b> {_PANEL_FAIL_STREAK}",
             ))
         else:
             _PANEL_FAIL_STREAK = 0
@@ -621,9 +621,9 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
         current_issue_keys.add("syn_flood")
         issues.append((
             "syn_flood",
-            "🛡️ هشدار احتمال SYN Flood روی سرور",
-            f"• <b>تعداد اتصالات SYN_RECV:</b> <code>{net['total_syn']}</code>\n"
-            f"• <b>کل اتصالات باز:</b> <code>{net['total_conns']}</code>",
+            "🛡️ Potential SYN Flood Alert on Server",
+            f"• <b>SYN_RECV Connections:</b> <code>{net['total_syn']}</code>\n"
+            f"• <b>Total Open Connections:</b> <code>{net['total_conns']}</code>",
         ))
 
     for entry in net.get("top_ips", []):
@@ -636,10 +636,10 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
             ports_str = ", ".join(str(p) for p in entry.get("ports") or []) or "-"
             issues.append((
                 ikey,
-                "🛡️ هشدار اتصال/اسپم زیاد از یک IP روی سرور",
-                f"• <b>IP مهاجم/پرمصرف:</b> <code>{html.escape(ip)}</code>\n"
-                f"• <b>تعداد کانکشن هم‌زمان:</b> <code>{cnt}</code> (SYN_RECV: <code>{syn}</code>)\n"
-                f"• <b>پورت‌های هدف:</b> <code>{ports_str}</code>",
+                "🛡️ High TCP Connection / Spam Alert from Single IP",
+                f"• <b>Source IP:</b> <code>{html.escape(ip)}</code>\n"
+                f"• <b>Concurrent Connections:</b> <code>{cnt}</code> (SYN_RECV: <code>{syn}</code>)\n"
+                f"• <b>Target Ports:</b> <code>{ports_str}</code>",
             ))
 
     # 6. Nginx high request rate per IP
@@ -650,10 +650,10 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
             current_issue_keys.add(ikey)
             issues.append((
                 ikey,
-                "🛡️ هشدار ریکوعست زیاد HTTP از یک IP (Nginx)",
+                "🛡️ High HTTP Request Rate from Single IP (Nginx)",
                 f"• <b>IP:</b> <code>{html.escape(h['ip'])}</code>\n"
-                f"• <b>تعداد درخواست در ۹۰ ثانیه اخیر:</b> <code>{h['count']}</code>\n"
-                f"• <b>مسیر پرتکرار:</b> <code>{html.escape(h['top_path'])}</code>",
+                f"• <b>Requests (last 90s):</b> <code>{h['count']}</code>\n"
+                f"• <b>Top Path:</b> <code>{html.escape(h['top_path'])}</code>",
             ))
 
     # 7. Application-level Webhook & Telegram Spam Floods
@@ -663,30 +663,31 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
         if f["kind"] == "webhook_flood":
             issues.append((
                 ikey,
-                "🛡️ هشدار اسپم/ریکوعست زیاد به وب‌هوک سرور",
+                "🛡️ High Webhook Request Rate / Spam Alert",
                 f"• <b>IP:</b> <code>{html.escape(f['ip'])}</code>\n"
-                f"• <b>منبع:</b> <code>{html.escape(f['source'])}</code>\n"
-                f"• <b>تعداد درخواست در ۱ دقیقه:</b> <code>{f['count']}</code>",
+                f"• <b>Source:</b> <code>{html.escape(f['source'])}</code>\n"
+                f"• <b>Requests (1m):</b> <code>{f['count']}</code>",
             ))
         elif f["kind"] == "webhook_auth":
             issues.append((
                 ikey,
-                "🚨 هشدار تلاش مشکوک/احراز هویت نامعتبر روی وب‌هوک",
+                "🚨 Suspicious Invalid Webhook Authentication Attempts",
                 f"• <b>IP:</b> <code>{html.escape(f['ip'])}</code>\n"
-                f"• <b>خطاهای 401/429 در ۵ دقیقه:</b> <code>{f['count']}</code>",
+                f"• <b>401/429 Errors (5m):</b> <code>{f['count']}</code>",
             ))
         elif f["kind"] == "bot_spam":
             issues.append((
                 ikey,
-                "⚠️ هشدار اسپم مکرر کاربر در ربات تلگرام",
-                f"• <b>آیدی کاربر:</b> <code>{f['user_id']}</code>\n"
-                f"• <b>درخواست‌های مسدودشده در ۱ دقیقه:</b> <code>{f['count']}</code>",
+                "⚠️ Repeated Telegram User Spam / Flood Blocked",
+                f"• <b>User ID:</b> <code>{f['user_id']}</code>\n"
+                f"• <b>Blocked Requests (1m):</b> <code>{f['count']}</code>",
             ))
 
     # Emit important alerts WITH admin @username mention (cooldown-protected)
     for ikey, title, body in issues:
         _ACTIVE_ISSUES.add(ikey)
         if _can_emit_alert(ikey):
+            logger.warning(f"ServerGuard alert triggered [{ikey}]: {title}")
             await _send_server_log(title=title, body_html=body, is_important=True, bot=bot)
 
     # Emit recovery notifications WITHOUT admin @username mention
@@ -694,9 +695,10 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
     for rkey in resolved:
         _ACTIVE_ISSUES.discard(rkey)
         _ALERT_COOLDOWNS.pop(rkey, None)
+        logger.info(f"ServerGuard issue recovered [{rkey}]")
         await _send_server_log(
-            title="✅ رفع مشکل سرور / سرویس",
-            body_html=f"• مورد <code>{html.escape(rkey)}</code> به وضعیت عادی بازگشت.",
+            title="✅ Server / Service Issue Resolved",
+            body_html=f"• Condition <code>{html.escape(rkey)}</code> has returned to normal.",
             is_important=False,
             bot=bot,
         )
@@ -710,16 +712,34 @@ async def run_server_guard_check(bot: Any = None, force_summary: bool = False) -
             if panel_res.get("enabled") and panel_res.get("ok")
             else ("🔴 OFF" if not panel_res.get("enabled") else f"🔴 {panel_res.get('error')}")
         )
+        panel_log_str = (
+            f"OK({panel_res['latency_ms']}ms)"
+            if panel_res.get("enabled") and panel_res.get("ok")
+            else ("OFF" if not panel_res.get("enabled") else f"ERR({panel_res.get('error')})")
+        )
         top_ip_txt = ""
+        top_ip_log = "none"
         if net.get("top_ips"):
             t0 = net["top_ips"][0]
-            top_ip_txt = f"\n• <b>پرمصرف‌ترین IP خارجی:</b> <code>{html.escape(t0['ip'])}</code> ({t0['count']} اتصال)"
+            top_ip_txt = f"\n• <b>Top External IP:</b> <code>{html.escape(t0['ip'])}</code> ({t0['count']} conns)"
+            top_ip_log = f"{t0['ip']}({t0['count']})"
+        logger.info(
+            "ServerGuard status: CPU=%.1f%% RAM=%.1f%% BotRSS=%.1fMB DiskFree=%.1f/%.1fGB TCP=%d Panel=%s TopIP=%s",
+            cpu,
+            ram_pct,
+            bot_rss,
+            metrics["disk_free_gb"],
+            metrics["disk_total_gb"],
+            net.get("total_conns", 0),
+            panel_log_str,
+            top_ip_log,
+        )
         await _send_server_log(
-            title="🖥️ گزارش دوره‌ای وضعیت سرور",
+            title="🖥️ Periodic Server Status Report",
             body_html=(
-                f"• <b>CPU:</b> <code>{cpu:.1f}%</code> | <b>RAM:</b> <code>{ram_pct:.1f}%</code> (ربات: <code>{bot_rss:.1f} MB</code>)\n"
-                f"• <b>دیسک آزاد:</b> <code>{metrics['disk_free_gb']:.1f}/{metrics['disk_total_gb']:.1f} GB</code>\n"
-                f"• <b>اتصالات TCP:</b> <code>{net.get('total_conns', 0)}</code> | <b>پنل:</b> {html.escape(str(panel_str))}"
+                f"• <b>CPU:</b> <code>{cpu:.1f}%</code> | <b>RAM:</b> <code>{ram_pct:.1f}%</code> (Bot: <code>{bot_rss:.1f} MB</code>)\n"
+                f"• <b>Free Disk:</b> <code>{metrics['disk_free_gb']:.1f}/{metrics['disk_total_gb']:.1f} GB</code>\n"
+                f"• <b>TCP Conns:</b> <code>{net.get('total_conns', 0)}</code> | <b>Panel:</b> {html.escape(str(panel_str))}"
                 f"{top_ip_txt}"
             ),
             is_important=False,
@@ -755,7 +775,7 @@ async def server_guard_worker(bot: Any = None) -> None:
                 record_task_finish("server_guard", started, str(e))
                 logger.error(f"Error in server_guard check: {e}", exc_info=True)
                 await _send_server_log(
-                    title="⚠️ خطا در اجرای پایشگر سرور",
+                    title="⚠️ Server Guard Execution Error",
                     body_html=f"<code>{html.escape(str(e)[:200])}</code>",
                     is_important=False,
                     bot=bot,

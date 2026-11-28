@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple, Union
 
 from aiogram import Router, F, Bot, types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     CallbackQuery,
     Message,
@@ -82,11 +83,45 @@ from routers.shop import (
     show_ready_categories,
     cancel_extend,
     show_category_packages,
+    send_category_specs_view,
     buy_specific_package,
     show_ready_categories_keep_coupon,
     pay_ready_package_balance,
     _process_pay_ready_package_balance,
 )
+
+
+def _extract_category_html(message: Message) -> str:
+    """Extract raw Telegram HTML tags if written literally, or convert UI formatting entities to HTML."""
+    raw = (message.text or message.caption or "").strip()
+    if not raw:
+        return ""
+    try:
+        from routers.admin_broadcast import detect_safe_parse_mode
+        if detect_safe_parse_mode(raw) == ParseMode.HTML:
+            return raw
+    except Exception:
+        pass
+    formatting_types = {
+        "bold", "italic", "underline", "strikethrough", "code", "pre",
+        "text_link", "spoiler", "blockquote", "expandable_blockquote", "custom_emoji",
+    }
+    entities = getattr(message, "entities", None) or getattr(message, "caption_entities", None) or []
+    if any(getattr(e, "type", "") in formatting_types for e in entities):
+        html_val = getattr(message, "html_text", None)
+        if html_val:
+            return html_val.strip()
+    return raw
+
+
+def _safe_desc_preview(text: Optional[str], empty_label: str, limit: int = 85) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return empty_label
+    compact = re.sub(r"\s+", " ", s)
+    if len(compact) > limit:
+        compact = compact[:limit - 1] + "…"
+    return safe_html(compact)
 
 logger = logging.getLogger(__name__)
 
@@ -1614,7 +1649,10 @@ async def admin_category_add_process(message: Message):
                 parse_mode=ParseMode.HTML
             )
         elif step == 'description':
-            category_data['description'] = message.text.strip()
+            raw_desc = _extract_category_html(message)
+            if raw_desc.lower() in ('-', 'clear', 'skip', 'حذف', 'ندارد'):
+                raw_desc = ''
+            category_data['description'] = raw_desc
             
             user_states[admin_id] = {
                 'awaiting_category_add': True,
@@ -1627,7 +1665,11 @@ async def admin_category_add_process(message: Message):
                 parse_mode=ParseMode.HTML
             )
         elif step == 'description_en':
-            category_data['description_en'] = message.text.strip()
+            raw_desc_en = _extract_category_html(message)
+            if raw_desc_en.lower() in ('-', 'clear', 'skip', 'حذف', 'none', 'ندارد'):
+                raw_desc_en = ''
+            category_data['description_en'] = raw_desc_en
+            category_data['specs_photo'] = None
             category_data['is_active'] = True
             category_data['inbound_id'] = None
             category_data['packages'] = []
@@ -1639,8 +1681,9 @@ async def admin_category_add_process(message: Message):
             READY_PACKAGES['last_updated'] = now_tehran_iso()
             configs_pool['ready_packages'] = READY_PACKAGES
             schedule_save(2.0)
+            desc_preview = _safe_desc_preview(category_data.get('description'), 'ندارد' if lang == 'fa' else 'None', limit=100)
             await message.reply(
-                t('b_category_added_successfull_9e88a71983', lang, fa_parts=lambda: (f"{category_data.get('name')}", f"{category_data.get('id')}", f"{category_data.get('icon', '📦')}", f"{category_data.get('description', 'ندارد')}"), en_parts=lambda: (f"{category_data.get('name')}", f"{category_data.get('id')}", f"{category_data.get('icon', '📦')}", f"{category_data.get('description', 'None')}")),
+                t('b_category_added_successfull_9e88a71983', lang, fa_parts=lambda: (f"{safe_html(category_data.get('name'))}", f"{category_data.get('id')}", f"{category_data.get('icon', '📦')}", desc_preview), en_parts=lambda: (f"{safe_html(category_data.get('name'))}", f"{category_data.get('id')}", f"{category_data.get('icon', '📦')}", desc_preview)),
                 parse_mode=ParseMode.HTML
             )
             user_states.pop(admin_id, None)
@@ -1732,14 +1775,150 @@ async def admin_category_edit_field_start(callback: CallbackQuery):
         'field': field
     }
     
+    safe_current = html.escape(str(current_value or ('ندارد' if lang == 'fa' else 'None')))
+    prompt = t(
+        'b_edit_b_current_value_code_960c9fa333',
+        lang,
+        fa_parts=lambda: (f'{field_names.get(field, field)}', safe_current),
+        en_parts=lambda: (f'{field_names.get(field, field)}', safe_current),
+    )
+    if field in ('description', 'description_en'):
+        if lang == "en":
+            prompt += (
+                "\n\n✨ <b>Telegram HTML Supported:</b> You can write HTML tags "
+                "(<code>&lt;b&gt;</code>, <code>&lt;i&gt;</code>, <code>&lt;u&gt;</code>, "
+                "<code>&lt;code&gt;</code>, <code>&lt;blockquote&gt;</code>, <code>&lt;tg-spoiler&gt;</code>, "
+                "<code>&lt;a href=\"...\"&gt;</code>) or use Telegram's built-in text formatting."
+                "\n🗑 Send <code>-</code> or <code>clear</code> to remove the description."
+            )
+        else:
+            prompt += (
+                "\n\n✨ <b>پشتیبانی از HTML تلگرام:</b> می‌توانید از تگ‌های HTML تلگرام "
+                "(<code>&lt;b&gt;</code>، <code>&lt;i&gt;</code>، <code>&lt;u&gt;</code>، "
+                "<code>&lt;code&gt;</code>، <code>&lt;blockquote&gt;</code>، <code>&lt;tg-spoiler&gt;</code>، "
+                "<code>&lt;a href=\"...\"&gt;</code>) یا فرمت‌بندی خود تلگرام استفاده کنید."
+                "\n🗑 برای پاک کردن توضیحات، عبارت <code>-</code> یا <code>حذف</code> را بفرستید."
+            )
+
     await callback.message.answer(
-        t('b_edit_b_current_value_code_960c9fa333', lang, fa_parts=lambda: (f'{field_names.get(field, field)}', f'{current_value}'), en_parts=lambda: (f'{field_names.get(field, field)}', f'{current_value}')),
+        prompt,
         parse_mode=ParseMode.HTML
     )
     
     await safe_answer(callback)
     
-    
+
+@router.callback_query(F.data.startswith("admin_category_photo_clear_"))
+@admin_only
+async def admin_category_photo_clear(callback: CallbackQuery):
+    """حذف تصویر مشخصات فنی دسته"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        category_id = int(callback.data.replace("admin_category_photo_clear_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id), None)
+    if not category:
+        await safe_answer(callback, t('category_not_found_04182ef028', lang), alert=True)
+        return
+
+    category['specs_photo'] = None
+    READY_PACKAGES['last_updated'] = now_tehran_iso()
+    configs_pool['ready_packages'] = READY_PACKAGES
+    schedule_save(2.0)
+
+    await safe_answer(
+        callback,
+        "🗑 Specs photo removed." if lang == "en" else "🗑 تصویر مشخصات فنی حذف شد.",
+        alert=True,
+    )
+    await admin_category_edit(callback.model_copy(update={"data": f"admin_category_edit_{category_id}"}))
+
+
+@router.callback_query(F.data.startswith("admin_category_photo_"))
+@admin_only
+async def admin_category_photo_start(callback: CallbackQuery):
+    """شروع تنظیم یا تغییر تصویر مشخصات فنی دسته"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        category_id = int(callback.data.replace("admin_category_photo_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id), None)
+    if not category:
+        await safe_answer(callback, t('category_not_found_04182ef028', lang), alert=True)
+        return
+
+    user_states[callback.from_user.id] = {
+        'awaiting_category_photo': True,
+        'category_id': category_id,
+    }
+    cat_name = category.get('name_en') or category.get('name') if lang == "en" else category.get('name')
+    has_photo = bool(category.get('specs_photo'))
+    if lang == "en":
+        prompt = (
+            f"🖼 <b>Technical Specs Photo for «{safe_html(cat_name)}»</b>\n\n"
+            f"• Current status: {'🟢 Photo is set' if has_photo else '❌ Not set'}\n\n"
+            "📸 Send a <b>photo</b> to display above this category's HTML specifications.\n"
+            "🗑 Send <code>clear</code> or <code>-</code> to remove the photo.\n"
+            "Send /cancel to abort."
+        )
+    else:
+        prompt = (
+            f"🖼 <b>تصویر مشخصات فنی دسته «{safe_html(cat_name)}»</b>\n\n"
+            f"• وضعیت فعلی: {'🟢 تصویر تنظیم شده' if has_photo else '❌ ندارد'}\n\n"
+            "📸 لطفاً <b>عکس</b> مورد نظر را ارسال کنید تا همراه با توضیحات HTML بالای دکمه بازگشت نمایش داده شود.\n"
+            "🗑 برای حذف عکس عبارت <code>حذف</code> یا <code>-</code> را بفرستید.\n"
+            "برای لغو /cancel را بفرستید."
+        )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="❌ Cancel" if lang == "en" else "❌ لغو",
+            callback_data=f"admin_category_edit_{category_id}",
+            style="danger",
+        )
+    ]])
+    await callback.message.answer(prompt, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("admin_category_specs_preview_"))
+@admin_only
+async def admin_category_specs_preview(callback: CallbackQuery):
+    """پیش‌نمایش مشخصات فنی دسته (همانند دید کاربر)"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        category_id = int(callback.data.replace("admin_category_specs_preview_", ""))
+    except (ValueError, IndexError):
+        await safe_answer(callback, t('i18n_process_error', lang), alert=True)
+        return
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id), None)
+    if not category:
+        await safe_answer(callback, t('category_not_found_04182ef028', lang), alert=True)
+        return
+
+    shown = await send_category_specs_view(
+        callback,
+        category=category,
+        lang=lang,
+        back_callback=f"admin_category_edit_{category_id}",
+        back_text=t('back_to_edit_category_733bfd109e', lang),
+    )
+    if not shown:
+        await safe_answer(
+            callback,
+            "No description or photo is set yet!" if lang == "en" else "هنوز توضیحات یا تصویری برای این دسته ثبت نشده است!",
+            alert=True,
+        )
+        return
+    await safe_answer(callback)
+
+
 @router.callback_query(F.data.startswith("admin_category_edit_"))
 @admin_only
 async def admin_category_edit(callback: CallbackQuery):
@@ -1755,7 +1934,8 @@ async def admin_category_edit(callback: CallbackQuery):
         logger.error(f"❌ Error extracting category_id: {e}")
         await callback.answer(t('i18n_process_error', get_user(callback.from_user.id).get('lang', 'fa')), show_alert=True)
         return
-    
+
+    user_states.pop(callback.from_user.id, None)
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     category = None
     for cat in READY_PACKAGES.get('categories', []):
@@ -1767,7 +1947,7 @@ async def admin_category_edit(callback: CallbackQuery):
         await callback.answer(t('category_not_found_04182ef028', lang), show_alert=True)
         return
     
-    status_text = "🟢 فعال" if category.get('is_active', True) else "🔴 غیرفعال"
+    status_text = ("🟢 فعال" if lang == "fa" else "🟢 Active") if category.get('is_active', True) else ("🔴 غیرفعال" if lang == "fa" else "🔴 Inactive")
     inbound_ids = category.get('inbound_ids', [])
     if not inbound_ids:
         old_inbound = category.get('inbound_id')
@@ -1775,7 +1955,7 @@ async def admin_category_edit(callback: CallbackQuery):
             inbound_ids = [old_inbound]
             category['inbound_ids'] = inbound_ids
             category['inbound_id'] = None  # حذف کلید قدیمی
-    inbound_info = "❌ پیش‌فرض (همانند کاربر)"
+    inbound_info = "❌ پیش‌فرض (همانند کاربر)" if lang == "fa" else "❌ Default (same as user)"
     if inbound_ids:
         from services.panel_api import get_inbound_display_names
         inbound_map = await get_inbound_display_names(include_disabled=True)
@@ -1785,14 +1965,44 @@ async def admin_category_edit(callback: CallbackQuery):
             if str(ib_id).lstrip('-').isdigit() and int(ib_id) in inbound_map
         ]
         if inbound_names:
-            inbound_info = "📡 اینباندهای اختصاصی:\n" + "\n".join([f"  • {safe_html(name)}" for name in inbound_names])
+            header_ib = "📡 اینباندهای اختصاصی:\n" if lang == "fa" else "📡 Custom Inbounds:\n"
+            inbound_info = header_ib + "\n".join([f"  • {safe_html(name)}" for name in inbound_names])
         elif not inbound_map:
-            inbound_info = f"📡 اینباندهای انتخاب شده: {inbound_ids}"
+            inbound_info = f"📡 Selected inbounds: {inbound_ids}" if lang == "en" else f"📡 اینباندهای انتخاب شده: {inbound_ids}"
         else:
-            inbound_info = "❌ پیش‌فرض (همانند کاربر)"
+            inbound_info = "❌ پیش‌فرض (همانند کاربر)" if lang == "fa" else "❌ Default (same as user)"
+
+    has_photo = bool(str(category.get('specs_photo') or '').strip())
+    desc_fa_prev = _safe_desc_preview(category.get('description'), 'ندارد')
+    desc_en_prev = _safe_desc_preview(category.get('description_en'), 'None')
+    photo_line = (
+        f"🖼 تصویر مشخصات فنی: {'🟢 تنظیم شده' if has_photo else '❌ ندارد'}\n"
+        if lang == "fa"
+        else f"🖼 Specs Photo: {'🟢 Set' if has_photo else '❌ Not set'}\n"
+    )
     
-    text = t('b_edit_category_b_id_persian_c04ea7eccb', lang, fa_parts=lambda: (f"{category.get('name')}", f"{category.get('id')}", f"{category.get('name')}", f"{category.get('name_en')}", f"{category.get('icon', '📦')}", f"{category.get('description', 'ندارد')}", f"{category.get('description_en', 'ندارد')}", f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f'{inbound_info}'), en_parts=lambda: (f"{category.get('name')}", f"{category.get('id')}", f"{category.get('name')}", f"{category.get('name_en')}", f"{category.get('icon', '📦')}", f"{category.get('description', 'None')}", f"{category.get('description_en', 'None')}", f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f'{inbound_info}'))
+    text = t(
+        'b_edit_category_b_id_persian_c04ea7eccb',
+        lang,
+        fa_parts=lambda: (f"{safe_html(category.get('name'))}", f"{category.get('id')}", f"{safe_html(category.get('name'))}", f"{safe_html(category.get('name_en'))}", f"{safe_html(category.get('icon', '📦'))}", desc_fa_prev, desc_en_prev, f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f"{photo_line}{inbound_info}"),
+        en_parts=lambda: (f"{safe_html(category.get('name_en') or category.get('name'))}", f"{category.get('id')}", f"{safe_html(category.get('name'))}", f"{safe_html(category.get('name_en'))}", f"{safe_html(category.get('icon', '📦'))}", desc_fa_prev, desc_en_prev, f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f"{photo_line}{inbound_info}"),
+    )
     
+    photo_row = [
+        InlineKeyboardButton(
+            text="🖼 تغییر تصویر مشخصات" if (has_photo and lang == "fa") else ("🖼 Change Specs Photo" if has_photo else ("🖼 افزودن تصویر مشخصات" if lang == "fa" else "🖼 Set Specs Photo")),
+            callback_data=f"admin_category_photo_{category_id}"
+        )
+    ]
+    if has_photo:
+        photo_row.append(
+            InlineKeyboardButton(
+                text="🗑 حذف تصویر" if lang == "fa" else "🗑 Remove Photo",
+                callback_data=f"admin_category_photo_clear_{category_id}",
+                style="danger",
+            )
+        )
+
     buttons = [
         [InlineKeyboardButton(
             text=t('edit_persian_name_779315ad82', lang),
@@ -1814,8 +2024,13 @@ async def admin_category_edit(callback: CallbackQuery):
             text=t('edit_english_description_3c5f3968b7', lang),
             callback_data=f"admin_category_edit_field_{category_id}_description_en"
         )],
+        photo_row,
         [InlineKeyboardButton(
-            text=f"🔘 {t('disable_26c50d45c1', lang) if category.get('is_active', True) else t('enable_a8db0a64c5', lang)}" if lang == "fa" else f"🔘 {t('disable_26c50d45c1', lang) if category.get('is_active', True) else t('enable_a8db0a64c5', lang)}",
+            text="👁 پیش‌نمایش مشخصات فنی" if lang == "fa" else "👁 Preview Technical Specs",
+            callback_data=f"admin_category_specs_preview_{category_id}"
+        )],
+        [InlineKeyboardButton(
+            text=f"🔘 {t('disable_26c50d45c1', lang) if category.get('is_active', True) else t('enable_a8db0a64c5', lang)}",
             callback_data=f"admin_category_toggle_{category_id}"
         )],
         [InlineKeyboardButton(
@@ -1835,19 +2050,35 @@ async def admin_category_edit(callback: CallbackQuery):
     )
     ])
     
-    try:
-        await callback.message.edit_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode=ParseMode.HTML
-        )
-    except Exception:
-        await callback.message.delete()
+    has_media = bool(getattr(callback.message, "photo", None) or not getattr(callback.message, "text", None))
+    if has_media:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
         await callback.message.answer(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
             parse_mode=ParseMode.HTML
         )
+    else:
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            if "message is not modified" not in str(e).lower():
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
+                await callback.message.answer(
+                    text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                    parse_mode=ParseMode.HTML
+                )
     
     await safe_answer(callback)
 @router.callback_query(F.data.startswith("admin_package_edit_"))
@@ -2896,6 +3127,77 @@ def migrate_category_inbound_data():
     schedule_save(2.0)
 
 
+@router.message(IsAdmin(), lambda m: bool(user_states.get(m.from_user.id, {}).get('awaiting_category_photo')))
+async def admin_category_photo_save(message: Message):
+    """ذخیره تصویر مشخصات فنی دسته"""
+    admin_id = message.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    state = user_states.get(admin_id, {})
+    category_id = state.get('category_id')
+
+    raw_text = (message.text or "").strip()
+    if raw_text == '/cancel':
+        user_states.pop(admin_id, None)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t('back_to_edit_category_733bfd109e', lang), callback_data=f"admin_category_edit_{category_id}")
+        ]]) if category_id else None
+        await message.reply(t('cancelled_68c51319f6', lang), reply_markup=kb)
+        return
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id), None)
+    if not category:
+        user_states.pop(admin_id, None)
+        await message.reply(t('category_not_found_04182ef028', lang))
+        return
+
+    if raw_text.lower() in ('-', 'clear', 'حذف', 'پاک', 'remove'):
+        category['specs_photo'] = None
+        READY_PACKAGES['last_updated'] = now_tehran_iso()
+        configs_pool['ready_packages'] = READY_PACKAGES
+        schedule_save(2.0)
+        user_states.pop(admin_id, None)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t('back_to_edit_category_733bfd109e', lang), callback_data=f"admin_category_edit_{category_id}")
+        ]])
+        await message.reply(
+            "🗑 Specs photo removed." if lang == "en" else "🗑 تصویر مشخصات فنی این دسته حذف شد.",
+            reply_markup=kb,
+        )
+        return
+
+    if not message.photo:
+        await message.reply(
+            "📸 Please send a <b>photo</b>, send <code>clear</code> to remove it, or /cancel."
+            if lang == "en"
+            else "📸 لطفاً یک <b>عکس</b> ارسال کنید، برای حذف عبارت <code>حذف</code> یا برای لغو /cancel را بفرستید.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    file_id = message.photo[-1].file_id
+    category['specs_photo'] = file_id
+    READY_PACKAGES['last_updated'] = now_tehran_iso()
+    configs_pool['ready_packages'] = READY_PACKAGES
+    schedule_save(2.0)
+    user_states.pop(admin_id, None)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="👁 Preview Technical Specs" if lang == "en" else "👁 پیش‌نمایش مشخصات فنی",
+            callback_data=f"admin_category_specs_preview_{category_id}",
+            style="primary",
+        )],
+        [InlineKeyboardButton(
+            text=t('back_to_edit_category_733bfd109e', lang),
+            callback_data=f"admin_category_edit_{category_id}",
+        )],
+    ])
+    await message.reply(
+        "✅ Category specs photo saved!" if lang == "en" else "✅ تصویر مشخصات فنی دسته با موفقیت ذخیره شد!",
+        reply_markup=kb,
+    )
+
+
 @router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get('awaiting_category_edit'))
 async def admin_category_edit_field_save(message: Message):
     """ذخیره ویرایش فیلد دسته"""
@@ -2904,8 +3206,12 @@ async def admin_category_edit_field_save(message: Message):
     logger.info(f"🔍 [save] BEFORE READ user_states[{admin_id}] = {user_states.get(admin_id, {})}")
     
     if message.text and message.text.strip() == '/cancel':
-        user_states.pop(admin_id, None)
-        await message.reply(t('cancelled_68c51319f6', lang))
+        state = user_states.pop(admin_id, None) or {}
+        cat_id = state.get('category_id')
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t('back_to_edit_category_733bfd109e', lang), callback_data=f"admin_category_edit_{cat_id}")
+        ]]) if cat_id else None
+        await message.reply(t('cancelled_68c51319f6', lang), reply_markup=kb)
         return
     
     state = user_states.get(admin_id, {})
@@ -2918,37 +3224,94 @@ async def admin_category_edit_field_save(message: Message):
         user_states.pop(admin_id, None)
         await message.reply(t('i18n_invalid_info', lang))
         return
-    
-    new_value = message.text.strip()
-    if not new_value:
+
+    is_desc_field = field in ('description', 'description_en')
+    raw_input = (message.text or "").strip()
+    if not raw_input:
         await message.reply(t('value_cannot_be_empty_3d66911b6e', lang))
         return
-    
-    for cat in READY_PACKAGES.get('categories', []):
-        if cat.get('id') == category_id:
-            old_value = cat.get(field)
-            cat[field] = new_value
+
+    clearing = is_desc_field and raw_input.lower() in ('-', 'clear', 'حذف', 'پاک', 'remove')
+    new_value = '' if clearing else (_extract_category_html(message) if is_desc_field else raw_input)
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id), None)
+    if not category:
+        await message.reply(t('category_not_found_04182ef028', lang))
+        user_states.pop(admin_id, None)
+        return
+
+    old_value = category.get(field)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=t('back_to_edit_category_733bfd109e', lang),
+            callback_data=f"admin_category_edit_{category_id}"
+        )]
+    ])
+
+    if is_desc_field:
+        if clearing:
+            category[field] = ''
             READY_PACKAGES['last_updated'] = now_tehran_iso()
-            
             configs_pool['ready_packages'] = READY_PACKAGES
             schedule_save(2.0)
-            
-            await message.reply(
-                t('b_field_updated_successfully_42cb0a7f3a', lang, fa_parts=lambda: (f'{old_value}', f'{new_value}'), en_parts=lambda: (f'{old_value}', f'{new_value}')),
-                parse_mode=ParseMode.HTML
-            )
-            
             user_states.pop(admin_id, None)
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=t('back_to_edit_category_733bfd109e', lang),
-                    callback_data=f"admin_category_edit_{category_id}"
-                )]
-            ])
-            await message.answer("🔄" if lang == "fa" else "🔄", reply_markup=keyboard)
+            await message.reply(
+                "🗑 Description cleared." if lang == "en" else "🗑 توضیحات این بخش پاک شد.",
+                reply_markup=keyboard,
+            )
             return
-    
-    await message.reply(t('category_not_found_04182ef028', lang))
+
+        caption_note = ""
+        if category.get('specs_photo') and len(re.sub(r"<[^>]+>", "", new_value)) > 1000:
+            caption_note = (
+                "\n\nℹ️ <i>Note: Text exceeds Telegram's 1024-char photo caption limit, so photo + text will be sent cleanly when viewed.</i>"
+                if lang == "en"
+                else "\n\nℹ️ <i>نکته: چون طول متن بیش از ۱۰۲۴ کاراکتر است، هنگام نمایش با عکس، متن زیر پیام بعدی عکس ارسال می‌شود.</i>"
+            )
+        preview_msg = (
+            f"✅ <b>Description updated!</b>\n\n👁 <b>Rendered Preview:</b>\n━━━━━━━━━━━━━━━━━━\n{new_value}{caption_note}"
+            if lang == "en"
+            else f"✅ <b>توضیحات با موفقیت ذخیره شد!</b>\n\n👁 <b>پیش‌نمایش نمایش به کاربر:</b>\n━━━━━━━━━━━━━━━━━━\n{new_value}{caption_note}"
+        )
+        try:
+            await message.reply(
+                preview_msg,
+                reply_markup=keyboard,
+                parse_mode=ParseMode.HTML,
+            )
+        except TelegramBadRequest as e:
+            if "can't parse entities" in str(e).lower():
+                await message.reply(
+                    f"❌ <b>Invalid Telegram HTML!</b>\n<code>{html.escape(str(e))}</code>\n\nPlease fix your HTML tags (e.g. close every <code>&lt;b&gt;...&lt;/b&gt;</code>) and send again, or /cancel."
+                    if lang == "en"
+                    else f"❌ <b>ساختار HTML پیام نامعتبر است!</b>\n<code>{html.escape(str(e))}</code>\n\nلطفاً تگ‌های HTML را درست ببندید و دوباره بفرستید، یا /cancel بزنید.",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            raise
+
+        category[field] = new_value
+        READY_PACKAGES['last_updated'] = now_tehran_iso()
+        configs_pool['ready_packages'] = READY_PACKAGES
+        schedule_save(2.0)
+        user_states.pop(admin_id, None)
+        return
+
+    category[field] = new_value
+    READY_PACKAGES['last_updated'] = now_tehran_iso()
+    configs_pool['ready_packages'] = READY_PACKAGES
+    schedule_save(2.0)
+
+    await message.reply(
+        t(
+            'b_field_updated_successfully_42cb0a7f3a',
+            lang,
+            fa_parts=lambda: (f'{safe_html(old_value)}', f'{safe_html(new_value)}'),
+            en_parts=lambda: (f'{safe_html(old_value)}', f'{safe_html(new_value)}'),
+        ),
+        reply_markup=keyboard,
+        parse_mode=ParseMode.HTML,
+    )
     user_states.pop(admin_id, None)
 
 @router.callback_query(F.data.startswith("admin_category_toggle_"))

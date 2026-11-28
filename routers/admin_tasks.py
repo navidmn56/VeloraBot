@@ -45,6 +45,7 @@ bot: Optional[Bot] = None
 TASKS_PER_PAGE = 8
 
 _DIGIT_TRANS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_TASK_BACK_TARGET: dict[int, str] = {}
 
 
 def set_bot(bot_instance: Bot) -> None:
@@ -215,7 +216,11 @@ def build_task_list_view(lang: str = "fa", page: int = 0) -> tuple[str, InlineKe
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_task_detail_view(task_id: str, lang: str = "fa") -> tuple[str, InlineKeyboardMarkup]:
+def build_task_detail_view(
+    task_id: str,
+    lang: str = "fa",
+    admin_id: Optional[int] = None,
+) -> tuple[str, InlineKeyboardMarkup]:
     meta = get_task_definition(task_id)
     if not meta:
         return build_task_list_view(lang, 0)
@@ -349,6 +354,14 @@ def build_task_detail_view(task_id: str, lang: str = "fa") -> tuple[str, InlineK
             callback_data=f"task_mgr_page:{page}",
         ),
     ])
+    if admin_id and _TASK_BACK_TARGET.get(admin_id) == "admin_manage_backups":
+        rows.append([
+            InlineKeyboardButton(
+                text="🔙 Back to Backup Manager" if lang == "en" else "🔙 بازگشت به مدیریت بکاپ‌ها",
+                callback_data="admin_manage_backups",
+                style="danger",
+            )
+        ])
 
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -358,6 +371,7 @@ def build_task_detail_view(task_id: str, lang: str = "fa") -> tuple[str, InlineK
 async def admin_task_manager(callback: CallbackQuery):
     admin_id = callback.from_user.id
     user_states.pop(admin_id, None)
+    _TASK_BACK_TARGET.pop(admin_id, None)
     lang = get_user(admin_id).get("lang", "fa")
     text, kb = build_task_list_view(lang, page=0)
     await _safe_edit(callback, text, kb)
@@ -369,6 +383,7 @@ async def admin_task_manager(callback: CallbackQuery):
 async def task_mgr_page(callback: CallbackQuery):
     admin_id = callback.from_user.id
     user_states.pop(admin_id, None)
+    _TASK_BACK_TARGET.pop(admin_id, None)
     lang = get_user(admin_id).get("lang", "fa")
     try:
         page = int(callback.data.split(":", 1)[1])
@@ -391,8 +406,14 @@ async def task_mgr_view(callback: CallbackQuery):
     admin_id = callback.from_user.id
     user_states.pop(admin_id, None)
     lang = get_user(admin_id).get("lang", "fa")
-    task_id = callback.data.split(":", 1)[1]
-    text, kb = build_task_detail_view(task_id, lang)
+    parts = callback.data.split(":")
+    task_id = parts[1] if len(parts) > 1 else ""
+    src = parts[2] if len(parts) > 2 else ""
+    if src == "backup":
+        _TASK_BACK_TARGET[admin_id] = "admin_manage_backups"
+    elif task_id != "auto_backup":
+        _TASK_BACK_TARGET.pop(admin_id, None)
+    text, kb = build_task_detail_view(task_id, lang, admin_id=admin_id)
     await _safe_edit(callback, text, kb)
     await safe_answer(callback)
 
@@ -416,7 +437,7 @@ async def task_mgr_toggle(callback: CallbackQuery):
             else "🛡️ این وظیفه ضروری است و برای پایداری سرور قابل خاموش کردن نیست."
         )
         await safe_answer(callback, msg, alert=True)
-        text, kb = build_task_detail_view(task_id, lang)
+        text, kb = build_task_detail_view(task_id, lang, admin_id=admin_id)
         await _safe_edit(callback, text, kb)
         return
 
@@ -440,7 +461,7 @@ async def task_mgr_toggle(callback: CallbackQuery):
         else ("🟢 وظیفه روشن شد." if new_enabled else "🔴 وظیفه خاموش شد.")
     )
     await safe_answer(callback, toast, alert=True)
-    text, kb = build_task_detail_view(task_id, lang)
+    text, kb = build_task_detail_view(task_id, lang, admin_id=admin_id)
     await _safe_edit(callback, text, kb)
 
 
@@ -452,13 +473,13 @@ async def task_mgr_set(callback: CallbackQuery):
     lang = get_user(admin_id).get("lang", "fa")
     parts = callback.data.split(":")
     if len(parts) < 3:
-        await safe_answer(callback, "Invalid request", alert=True)
+        await safe_answer(callback, "Invalid request" if lang == "en" else "درخواست نامعتبر", alert=True)
         return
     task_id = parts[1]
     try:
         requested = int(parts[2])
     except ValueError:
-        await safe_answer(callback, "Invalid interval", alert=True)
+        await safe_answer(callback, "Invalid interval" if lang == "en" else "بازه نامعتبر", alert=True)
         return
 
     applied = set_task_interval(task_id, requested)
@@ -484,7 +505,7 @@ async def task_mgr_set(callback: CallbackQuery):
         else f"✅ بازه زمانی روی {human} تنظیم شد"
     )
     await safe_answer(callback, toast, alert=True)
-    text, kb = build_task_detail_view(task_id, lang)
+    text, kb = build_task_detail_view(task_id, lang, admin_id=admin_id)
     await _safe_edit(callback, text, kb)
 
 
@@ -506,7 +527,7 @@ async def task_mgr_run(callback: CallbackQuery):
         else "▶️ اجرای فوری وظیفه زمان‌بندی شد و تا لحظاتی دیگر انجام می‌شود."
     )
     await safe_answer(callback, toast, alert=True)
-    text, kb = build_task_detail_view(task_id, lang)
+    text, kb = build_task_detail_view(task_id, lang, admin_id=admin_id)
     await _safe_edit(callback, text, kb)
 
 
@@ -574,7 +595,7 @@ async def handle_custom_task_interval(message: Message):
     raw = (message.text or "").strip()
     if raw.lower() in ("/cancel", "cancel", "لغو", "❌ لغو"):
         user_states.pop(admin_id, None)
-        text, kb = build_task_detail_view(task_id or "", lang)
+        text, kb = build_task_detail_view(task_id or "", lang, admin_id=admin_id)
         await message.reply(
             ("❌ Cancelled.\n\n" if lang == "en" else "❌ ویرایش بازه لغو شد.\n\n") + text,
             reply_markup=kb,
@@ -629,7 +650,7 @@ async def handle_custom_task_interval(message: Message):
             else f"✅ بازه زمانی جدید ذخیره شد: <b>{html.escape(human)}</b>\n\n"
         )
 
-    text, kb = build_task_detail_view(task_id, lang)
+    text, kb = build_task_detail_view(task_id, lang, admin_id=admin_id)
     await message.reply(note + text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 
@@ -646,27 +667,40 @@ async def task_mgr_server_check(callback: CallbackQuery):
         net = m["network"]
         issues_cnt = res.get("issues_count", 0)
 
-        panel_txt = (
-            f"🟢 OK ({p['latency_ms']}ms)"
-            if p.get("enabled") and p.get("ok")
-            else ("🔴 OFF" if not p.get("enabled") else f"🔴 {p.get('error')}")
-        )
+        if p.get("enabled") and p.get("ok"):
+            panel_txt = f"🟢 OK ({p['latency_ms']}ms)"
+        elif not p.get("enabled"):
+            panel_txt = "🔴 OFF" if lang == "en" else "🔴 غیرفعال"
+        else:
+            panel_txt = f"🔴 {p.get('error')}"
 
         top_ips_lines = []
         for idx, item in enumerate((net.get("top_ips") or [])[:5], 1):
-            top_ips_lines.append(
-                f"  {idx}. <code>{html.escape(item['ip'])}</code> — {item['count']} conns (SYN: {item['syn']})"
-            )
+            if lang == "en":
+                top_ips_lines.append(
+                    f"  {idx}. <code>{html.escape(item['ip'])}</code> — {item['count']} conns (SYN: {item['syn']})"
+                )
+            else:
+                top_ips_lines.append(
+                    f"  \u200F{idx}. \u200E<code>{html.escape(item['ip'])}</code> — {item['count']} اتصال (SYN: {item['syn']})"
+                )
         top_ips_block = "\n".join(top_ips_lines) if top_ips_lines else ("  • None" if lang == "en" else "  • مورد مشکوکی ثبت نشده")
 
         nginx = m.get("nginx")
         nginx_block = ""
         if nginx and nginx.get("hot_ips"):
-            nginx_lines = [
-                f"  • <code>{html.escape(h['ip'])}</code>: {h['count']} reqs (<code>{html.escape(h['top_path'])}</code>)"
-                for h in nginx["hot_ips"]
-            ]
-            nginx_block = "\n🌐 <b>Nginx Hot IPs (90s):</b>\n" + "\n".join(nginx_lines) + "\n"
+            if lang == "en":
+                nginx_lines = [
+                    f"  • <code>{html.escape(h['ip'])}</code>: {h['count']} reqs (<code>{html.escape(h['top_path'])}</code>)"
+                    for h in nginx["hot_ips"]
+                ]
+                nginx_block = "\n🌐 <b>Nginx Hot IPs (90s):</b>\n" + "\n".join(nginx_lines) + "\n"
+            else:
+                nginx_lines = [
+                    f"  \u200F• \u200E<code>{html.escape(h['ip'])}</code>: {h['count']} درخواست (<code>{html.escape(h['top_path'])}</code>)"
+                    for h in nginx["hot_ips"]
+                ]
+                nginx_block = "\n🌐 <b>آی‌پی‌های پرترافیک Nginx (۹۰ ثانیه):</b>\n" + "\n".join(nginx_lines) + "\n"
 
         if lang == "en":
             text = (
@@ -681,13 +715,14 @@ async def task_mgr_server_check(callback: CallbackQuery):
                 f"⚠️ <b>Active Issues:</b> <code>{issues_cnt}</code>\n\n"
                 f"🔍 <b>Top External IPs:</b>\n{top_ips_block}\n"
                 f"{nginx_block}\n"
-                "📋 Report sent to Log Bot (admin @username is tagged only on critical issues)."
+                "📋 English report sent to Log Bot (admin @username is tagged only on critical issues)."
             )
         else:
+            RLM = "\u200F"
             text = (
                 "🛡️ <b>وضعیت لحظه‌ای سرور و امنیت</b>\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🖥 <b>CPU:</b> <code>{m['cpu_percent']:.1f}%</code> | Load: <code>{m['load1']}</code> ({m['cpu_count']} هسته)\n"
+                f"{RLM}🖥 <b>مصرف CPU:</b> <code>{m['cpu_percent']:.1f}%</code> | لود: <code>{m['load1']}</code> ({m['cpu_count']} هسته)\n"
                 f"🧠 <b>رم سرور:</b> <code>{m['ram_used_gb']:.2f}/{m['ram_total_gb']:.2f} GB ({m['ram_percent']:.1f}%)</code>\n"
                 f"🤖 <b>رم ربات:</b> <code>{m['bot_rss_mb']:.1f} MB</code> | آزاد: <code>{m['ram_avail_mb']:.0f} MB</code>\n"
                 f"💽 <b>دیسک:</b> <code>{m['disk_free_gb']:.2f}/{m['disk_total_gb']:.1f} GB آزاد ({m['disk_percent']:.1f}% پر)</code>\n"
@@ -696,11 +731,12 @@ async def task_mgr_server_check(callback: CallbackQuery):
                 f"⚠️ <b>مشکلات فعال:</b> <code>{issues_cnt}</code>\n\n"
                 f"🔍 <b>پرمصرف‌ترین IPهای خارجی:</b>\n{top_ips_block}\n"
                 f"{nginx_block}\n"
-                "📋 این گزارش به بات لاگ ارسال شد (تگ @username ادمین فقط در مشکلات واقعی انجام می‌شود)."
+                "📋 این گزارش به بات لاگ ارسال شد (تگ \u200E@username\u200F ادمین فقط در مشکلات واقعی انجام می‌شود)."
             )
     except Exception as e:
         logger.error(f"Error in manual server guard check: {e}", exc_info=True)
-        text = f"❌ Error: <code>{html.escape(str(e))}</code>"
+        err_lbl = "❌ Error:" if lang == "en" else "❌ خطا:"
+        text = f"{err_lbl} <code>{html.escape(str(e))}</code>"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
