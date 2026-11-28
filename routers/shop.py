@@ -995,13 +995,13 @@ async def show_category_packages(callback: CallbackQuery):
         else:
             buttons.append([info_btn, price_btn])
 
-    # ─── دکمه مشخصات فنی این دسته + دکمه بازگشت ───
+    # ─── دکمه مشخصات فنی این دسته (فقط در خرید جدید، نه تمدید) + دکمه بازگشت ───
     has_specs = bool(
         str(category.get('description') or '').strip()
         or str(category.get('description_en') or '').strip()
         or str(category.get('specs_photo') or '').strip()
     )
-    if has_specs:
+    if has_specs and not is_extend:
         buttons.append([
             InlineKeyboardButton(
                 text=t('category_tech_specs_btn', lang),
