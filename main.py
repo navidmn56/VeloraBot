@@ -178,6 +178,7 @@ from user_manager import (
     consume_coupon,
     release_coupon_on_cancel,
     debug_coupon_state,
+    format_coupon_category_discounts_lines,
     update_user,
     record_purchase,
     add_balance,
@@ -1841,6 +1842,17 @@ dp.message.outer_middleware(auto_pause_ticket_on_message_middleware)
 _TG_USER_CACHE_TTL = 300.0  # 5 دقیقه
 
 
+def _plain_tg_text(value: str) -> str:
+    """Unescape possibly HTML-escaped Telegram profile strings for plain-text widgets and safe single-pass escaping."""
+    text = str(value or "")
+    for _ in range(2):
+        unescaped = html.unescape(text)
+        if unescaped == text:
+            break
+        text = unescaped
+    return text
+
+
 async def get_user_info_from_telegram(user_id: int, force_refresh: bool = False) -> dict:
     """دریافت اطلاعات کاربر از تلگرام با کش ۵ دقیقه‌ای و escape برای استفاده در HTML"""
     now = time.monotonic()
@@ -2171,9 +2183,11 @@ async def blacklist_add_user(message: Message):
         user_states.pop(admin_id, None)
         return
     user_info = await get_user_info_from_telegram(target_id)
-    full_name_escaped = html.escape(user_info['full_name'])
-    username_escaped = html.escape(user_info['username']) if user_info['username'] else 'ندارد'
-    username_display = f"@{username_escaped}" if user_info['username'] else 'ندارد'
+    full_name_plain = _plain_tg_text(user_info['full_name'])
+    username_plain = _plain_tg_text(user_info['username']) if user_info['username'] else ''
+    full_name_escaped = html.escape(full_name_plain)
+    username_escaped = html.escape(username_plain) if username_plain else 'ندارد'
+    username_display = f"@{username_escaped}" if username_plain else 'ندارد'
     if target_id in BLACKLIST:
         await message.reply(
             t('user_id_is_already_blacklist_a67607dcbe', lang, fa_parts=lambda: (f'{full_name_escaped}', f'{target_id}'), en_parts=lambda: (f'{full_name_escaped}', f'{target_id}')),
@@ -2227,16 +2241,16 @@ async def blacklist_show(callback: CallbackQuery):
     blacklist_users = []
     for uid in BLACKLIST:
         user_info = await get_user_info_from_telegram(uid)
-        user_info['full_name_escaped'] = html.escape(user_info['full_name'])
-        user_info['username_escaped'] = html.escape(user_info['username']) if user_info['username'] else ''
+        user_info['full_name_plain'] = _plain_tg_text(user_info['full_name'])
+        user_info['username_plain'] = _plain_tg_text(user_info['username']) if user_info['username'] else ''
         blacklist_users.append(user_info)
     text = t('b_blacklist_b_06fa34c8e0', lang)
     text += t('count_users_07744b8dcb', lang, fa_parts=lambda: (f'{len(blacklist_users)}',), en_parts=lambda: (f'{len(blacklist_users)}',))
     text += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
     buttons = []
     for user in blacklist_users:
-        display_name = user['full_name_escaped'][:25]
-        username_part = f" @{user['username_escaped']}" if user['username_escaped'] else ""
+        display_name = user['full_name_plain'][:25]
+        username_part = f" @{user['username_plain']}" if user['username_plain'] else ""
         label = f"🚫 {display_name}{username_part} - ID: {user['id']}"
         buttons.append([InlineKeyboardButton(
             text=label[:55],
@@ -2273,8 +2287,9 @@ async def blacklist_user_detail(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     user_info = await get_user_info_from_telegram(user_id)
-    full_name_escaped = html.escape(user_info['full_name'])
-    username_display = f"@{html.escape(user_info['username'])}" if user_info['username'] else 'ندارد'
+    full_name_escaped = html.escape(_plain_tg_text(user_info['full_name']))
+    username_plain = _plain_tg_text(user_info['username']) if user_info['username'] else ''
+    username_display = f"@{html.escape(username_plain)}" if username_plain else 'ندارد'
     
     text = t('b_user_in_blacklist_b_id_cod_5a9d6c30db', lang, fa_parts=lambda: (f'{user_id}', f'{full_name_escaped}', f'{username_display}'), en_parts=lambda: (f'{user_id}', f'{full_name_escaped}', f'{username_display}'))
     
@@ -2299,7 +2314,7 @@ async def blacklist_remove_user(callback: CallbackQuery):
     lang = get_user(callback.from_user.id).get('lang', 'fa')
     
     user_info = await get_user_info_from_telegram(user_id)
-    full_name_escaped = html.escape(user_info['full_name'])
+    full_name_escaped = html.escape(_plain_tg_text(user_info['full_name']))
     
     if remove_from_blacklist(user_id):
         CustomLogger.log_event('BLACKLIST_REMOVE', f'User {user_id} was removed from the blacklist', user_id)
@@ -4193,6 +4208,7 @@ from routers.admin_packages import (
     admin_coupon_delete_confirm,
     admin_coupon_delete_execute,
     admin_coupons_list,
+    admin_coupon_cat_discount_save,
 )
 
 # [Phase 1.1] safe_html imported from utils.helpers
@@ -4571,8 +4587,13 @@ async def use_coupon(message: Message):
             )]
         ])
 
+        msg_text = t('b_admin_coupon_applied_succe_9bbdb687fa', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining_text}', f"{premium_emoji('shopping_cart', '🛒')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining_text}', f"{premium_emoji('shopping_cart', '🛒')}"))
+        cat_ov = format_coupon_category_discounts_lines(coupon, READY_PACKAGES.get('categories', []), lang)
+        if cat_ov:
+            hdr = "\n\n📂 <b>تخفیف اختصاصی دسته‌ها:</b>" if lang == "fa" else "\n\n📂 <b>Per-Category Discounts:</b>"
+            msg_text += f"{hdr}\n{cat_ov}"
         await message.reply(
-            t('b_admin_coupon_applied_succe_9bbdb687fa', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining_text}', f"{premium_emoji('shopping_cart', '🛒')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining_text}', f"{premium_emoji('shopping_cart', '🛒')}")),
+            msg_text,
             parse_mode=ParseMode.HTML,
             reply_markup=success_buttons
         )
@@ -4659,8 +4680,13 @@ async def use_coupon(message: Message):
         )]
     ])
 
+    msg_text = t('b_coupon_applied_successfull_e9d9c125d7', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}", f"{premium_emoji('light', '💡')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}", f"{premium_emoji('light', '💡')}"))
+    cat_ov = format_coupon_category_discounts_lines(coupon, READY_PACKAGES.get('categories', []), lang)
+    if cat_ov:
+        hdr = "\n\n📂 <b>تخفیف اختصاصی دسته‌ها:</b>" if lang == "fa" else "\n\n📂 <b>Per-Category Discounts:</b>"
+        msg_text += f"{hdr}\n{cat_ov}"
     await message.reply(
-        t('b_coupon_applied_successfull_e9d9c125d7', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}", f"{premium_emoji('light', '💡')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}", f"{premium_emoji('light', '💡')}")),
+        msg_text,
         parse_mode=ParseMode.HTML,
         reply_markup=success_buttons
     )
@@ -4795,8 +4821,15 @@ async def handle_coupon_code_input(message: Message):
             )]
         ])
 
+        msg_text = t('b_admin_coupon_applied_b_cod_db47ed9e6e', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}')),
+        cat_ov = format_coupon_category_discounts_lines(coupon, READY_PACKAGES.get('categories', []), lang)
+        if isinstance(msg_text, tuple):
+            msg_text = msg_text[0]
+        if cat_ov:
+            hdr = "\n\n📂 <b>تخفیف اختصاصی دسته‌ها:</b>" if lang == "fa" else "\n\n📂 <b>Per-Category Discounts:</b>"
+            msg_text += f"{hdr}\n{cat_ov}"
         await message.reply(
-            t('b_admin_coupon_applied_b_cod_db47ed9e6e', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}')),
+            msg_text,
             parse_mode=ParseMode.HTML,
             reply_markup=success_buttons
         )
@@ -4891,8 +4924,13 @@ async def handle_coupon_code_input(message: Message):
         )]
     ])
 
+    msg_text = t('b_coupon_applied_b_code_code_6370aec08f', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}"))
+    cat_ov = format_coupon_category_discounts_lines(coupon, READY_PACKAGES.get('categories', []), lang)
+    if cat_ov:
+        hdr = "\n\n📂 <b>تخفیف اختصاصی دسته‌ها:</b>" if lang == "fa" else "\n\n📂 <b>Per-Category Discounts:</b>"
+        msg_text += f"{hdr}\n{cat_ov}"
     await message.reply(
-        t('b_coupon_applied_b_code_code_6370aec08f', lang, fa_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}"), en_parts=lambda: (f"{premium_emoji('success', '✅')}", f"{premium_emoji('label', '🏷️')}", f'{code}', f"{premium_emoji('discount', '💳')}", f'{discount}', f"{premium_emoji('count', '🔢')}", f'{remaining}', f"{premium_emoji('shopping_cart', '🛒')}")),
+        msg_text,
         parse_mode=ParseMode.HTML,
         reply_markup=success_buttons
     )
@@ -6278,6 +6316,17 @@ async def handle_admin_special_states(message: Message, user_state: dict):
             user_states.pop(admin_id, None)
             await message.reply(t('i18n_cancel_create_coupon', lang))
             return
+        elif user_state.get('awaiting_coupon_cat_discount'):
+            code = user_state.get('edit_coupon_code') or user_state.get('coupon_code')
+            user_states.pop(admin_id, None)
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
+                    callback_data=f"admin_coupon_cat_discounts_{code}" if code else "admin_coupons_list"
+                )
+            ]])
+            await message.reply(t('cancelled_68c51319f6', lang), reply_markup=kb)
+            return
         else:
             await message.reply(
                 t('i18n_admin_cancel_help', lang)
@@ -6309,6 +6358,8 @@ async def handle_admin_special_states(message: Message, user_state: dict):
         await admin_category_edit_field_save(message)
     elif user_state.get('awaiting_coupon_create'):
         await admin_coupon_create_process(message)
+    elif user_state.get('awaiting_coupon_cat_discount'):
+        await admin_coupon_cat_discount_save(message)
     else:
         logger.debug(f"Admin - message ignored: {message.text}")
 

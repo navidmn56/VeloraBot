@@ -419,7 +419,11 @@ async def _confirm_approve_package_impl(callback: CallbackQuery, oid: int):
     await update_user_receipt_review_status(order, 'approved')
     
     await check_referral_bonus(uid)
-    coupon_consumed = consume_coupon(uid)
+    if order.get('discount_source') not in ('category', 'none'):
+        coupon_consumed = consume_coupon(uid)
+    else:
+        coupon_consumed = False
+        logger.info(f"🏷️ Coupon NOT consumed for order #{oid} (discount_source={order.get('discount_source')})")
     
     if coupon_consumed:
         logger.info(f"🏷️ Coupon for order #{oid} consumed")
@@ -856,9 +860,12 @@ async def _confirm_approve_with_inbound_impl(callback: CallbackQuery, oid: int):
     )
     await update_user_receipt_review_status(order, 'approved')
     
-    coupon_consumed = consume_coupon(uid)
-    if coupon_consumed:
-        logger.info(f"🏷️ Coupon for order #{oid} consumed")
+    if order.get('discount_source') not in ('category', 'none'):
+        coupon_consumed = consume_coupon(uid)
+        if coupon_consumed:
+            logger.info(f"🏷️ Coupon for order #{oid} consumed")
+    else:
+        logger.info(f"🏷️ Coupon NOT consumed for order #{oid} (discount_source={order.get('discount_source')})")
     
     if not is_extend:
         referral_result = await check_referral_bonus(uid)
@@ -2281,6 +2288,9 @@ async def _fulfill_vpn_order_impl(
         payment_method=payment_method,
         payment_verified=True,
     )
+    if order.get("discount_source") == "coupon" and not order.get("coupon_consumed"):
+        if consume_coupon(user_id):
+            update_order(order_id, coupon_consumed=True)
     await check_referral_bonus(user_id)
 
     # ۲. بررسی وضعیت پنل سنایی

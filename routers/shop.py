@@ -48,6 +48,9 @@ from user_manager import (
     save_coupon_to_user_db,
     load_coupon_from_user_db,
     is_coupon_valid_for_user,
+    consume_coupon,
+    resolve_category_package_discount,
+    format_coupon_category_discounts_lines,
 )
 
 ADMIN_ID_INT = get_admin_id_int()
@@ -576,8 +579,16 @@ async def show_ready_categories(callback: CallbackQuery):
         text = t('b_ready_packages_b_please_se_ad21074e40', lang)
     
     # ─── نمایش اطلاعات کوپن در متن ───
-    if coupon_applied and coupon_code and coupon_discount:
-        text += f"\n\n🏷️ <b>{t('active_coupon_code_percent_c13a3b5030', lang, fa_parts=lambda: (f'{coupon_code}', f'{coupon_discount}'), en_parts=lambda: (f'{coupon_code}', f'{coupon_discount}'))}</b>"
+    active_coupon_obj = COUPONS.get(coupon_code) if (coupon_applied and coupon_code) else None
+    has_admin_coupon = bool(active_coupon_obj and active_coupon_obj.get('coupon_type') == 'admin_special')
+    if coupon_applied and coupon_code and (coupon_discount or (active_coupon_obj and active_coupon_obj.get('category_discounts'))):
+        text += f"\n\n🏷️ <b>{t('active_coupon_code_percent_c13a3b5030', lang, fa_parts=lambda: (f'{coupon_code}', f'{coupon_discount or 0}'), en_parts=lambda: (f'{coupon_code}', f'{coupon_discount or 0}'))}</b>"
+        cat_override_lines = format_coupon_category_discounts_lines(
+            active_coupon_obj, READY_PACKAGES.get('categories', []), lang
+        )
+        if cat_override_lines:
+            hdr = "📂 تخفیف اختصاصی دسته‌ها:" if lang == "fa" else "📂 Per-category discounts:"
+            text += f"\n{hdr}\n{cat_override_lines}"
     
     buttons = []
     
@@ -612,16 +623,25 @@ async def show_ready_categories(callback: CallbackQuery):
     for cat, pkg_count in active_categories:
         cat_name = cat.get('name') if lang == "fa" else cat.get('name_en', cat.get('name'))
         icon = cat.get('icon', '📦')
-        
-        btn_text = f"{icon} {cat_name} ({pkg_count})"
-        
-        buttons.append([
-            InlineKeyboardButton(
-                text=btn_text,
-                callback_data=f"show_category_packages_{cat.get('id')}",
-                style="primary"
-            )
-        ])
+        try:
+            cat_discount = max(0, min(99, int(cat.get('discount_percent') or 0)))
+        except (TypeError, ValueError):
+            cat_discount = 0
+
+        if cat_discount > 0 and not has_admin_coupon:
+            btn_text = f"{icon} {cat_name} ({pkg_count}) · 🔥 {cat_discount}%"
+        else:
+            btn_text = f"{icon} {cat_name} ({pkg_count})"
+
+        btn_kwargs = {
+            "text": btn_text,
+            "callback_data": f"show_category_packages_{cat.get('id')}",
+        }
+        cat_style = cat['button_style'] if 'button_style' in cat else 'primary'
+        if cat_style in ("primary", "success", "danger"):
+            btn_kwargs["style"] = cat_style
+
+        buttons.append([InlineKeyboardButton(**btn_kwargs)])
 
     # ✅ دکمه انتخاب هوشمند (فقط در حالت خرید، نه تمدید)
     if not is_extend:
@@ -843,21 +863,10 @@ async def show_category_packages(callback: CallbackQuery):
     current_volume = user_state.get('current_volume', 0)
     current_days = user_state.get('current_days', 0)
     
-    # ✅ دریافت کوپن فعال از user_states
-    coupon_code = user_state.get('coupon_code')
-    coupon_discount = user_state.get('coupon_discount')
-    coupon_applied = user_state.get('coupon_applied', False)
-    
-    if coupon_applied and coupon_code:
-        is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
-        if not is_valid:
-            coupon_applied = False
-            coupon_code = None
-            coupon_discount = 0
-            if user_id in user_states:
-                user_states[user_id].pop('coupon_code', None)
-                user_states[user_id].pop('coupon_discount', None)
-                user_states[user_id].pop('coupon_applied', None)
+    # ✅ محاسبه تخفیف مؤثر دسته / کوپن ادمین / کوپن عادی
+    disc_info = resolve_category_package_discount(user_id, category, user_state)
+    effective_discount = disc_info['discount_percent']
+    banner_mode = disc_info['banner_mode']
     
     active_packages = [p for p in category.get('packages', []) if p.get('is_active', True)]
     
@@ -877,9 +886,23 @@ async def show_category_packages(callback: CallbackQuery):
     else:
         text = t('b_packages_b_category_f5d165f126', lang, fa_parts=lambda: (f'{icon}', f'{cat_name}'), en_parts=lambda: (f'{icon}', f'{cat_name}'))
     
-    # ─── نمایش کوپن فعال ───
-    if coupon_applied and coupon_code and coupon_discount:
-        text += f"\n\n🏷️ <b>{t('active_coupon_code_percent_c13a3b5030', lang, fa_parts=lambda: (f'{coupon_code}', f'{coupon_discount}'), en_parts=lambda: (f'{coupon_code}', f'{coupon_discount}'))}</b>"
+    # ─── نمایش تخفیف دسته یا کوپن فعال ───
+    if banner_mode == 'category':
+        cat_disc = disc_info['category_discount']
+        if lang == "fa":
+            text += f"\n\n🏷️ <b>{cat_disc}٪ تخفیف برای این دسته فعال می‌باشد</b>"
+        else:
+            text += f"\n\n🏷️ <b>{cat_disc}% discount is active for this category</b>"
+    elif banner_mode == 'coupon' and disc_info.get('coupon_code'):
+        active_code = disc_info['coupon_code']
+        eff_coupon_pct = disc_info['coupon_effective_discount']
+        if eff_coupon_pct > 0:
+            text += f"\n\n🏷️ <b>{t('active_coupon_code_percent_c13a3b5030', lang, fa_parts=lambda: (f'{active_code}', f'{eff_coupon_pct}'), en_parts=lambda: (f'{active_code}', f'{eff_coupon_pct}'))}</b>"
+        else:
+            if lang == "fa":
+                text += f"\n\nℹ️ <b>کوپن <code>{html.escape(str(active_code))}</code> برای این دسته شامل ۰٪ تخفیف است</b>"
+            else:
+                text += f"\n\nℹ️ <b>Coupon <code>{html.escape(str(active_code))}</code> applies 0% discount for this category</b>"
     
     # ─── نمایش اطلاعات فعلی سرویس در حالت تمدید ───
     if is_extend and extend_order_id:
@@ -952,12 +975,12 @@ async def show_category_packages(callback: CallbackQuery):
         ip_limit = pkg.get('ip_limit', 0) or 0
 
         # محاسبه قیمت با تخفیف
-        if coupon_applied and coupon_discount and coupon_discount > 0:
-            final_price = orig_price - (orig_price * coupon_discount // 100)
+        if effective_discount > 0:
+            final_price = max(0, orig_price - (orig_price * effective_discount // 100))
             price_display = (
-                f"{final_price:,} {t('toman_06798679d6', lang)} ({coupon_discount}%)"
+                f"{final_price:,} {t('toman_06798679d6', lang)} ({effective_discount}%)"
                 if lang == "fa"
-                else f"{final_price:,} T ({coupon_discount}%)"
+                else f"{final_price:,} T ({effective_discount}%)"
             )
         else:
             price_display = (
@@ -1324,55 +1347,15 @@ async def buy_specific_package(callback: CallbackQuery):
         ip_display = t('users_devices_6344c0109b', lang, fa_parts=lambda: (f'{ip_limit}',), en_parts=lambda: (f'{ip_limit}',))
     
     user_state = user_states.get(user_id, {})
-    discount_percent = 0
+    disc_info = resolve_category_package_discount(user_id, category, user_state)
+    discount_percent = disc_info['discount_percent']
+    discount_source = disc_info['discount_source']
     final_price = original_price
-    
-    coupon_code = user_state.get('coupon_code')
-    coupon_applied = user_state.get('coupon_applied', False)
-    
-    if coupon_applied and coupon_code:
-        coupon = COUPONS.get(coupon_code)
-        if coupon and coupon.get('status') == 'active':
-            coupon_type = coupon.get('coupon_type', 'normal')
-            coupon_valid = False
-            
-            if coupon_type == 'admin_special':
-                locked_user_id = coupon.get('locked_user_id')
-                user_usage = coupon.get('user_usage', {})
-                user_used_count = user_usage.get(str(user_id), 0)
-                max_usage = coupon.get('usage_limit', 1)
-                
-                if locked_user_id == user_id and user_used_count < max_usage:
-                    coupon_valid = True
-                    logger.info(f"✅ Admin coupon {coupon_code} is valid ({user_used_count}/{max_usage})")
-                else:
-                    logger.warning(f"⚠️ Admin coupon {coupon_code} is invalid - locked={locked_user_id}, usage={user_used_count}/{max_usage}")
-            else:
-                if user_id not in coupon.get('used_by', []):
-                    coupon_valid = True
-                else:
-                    logger.warning(f"⚠️ Regular coupon {coupon_code} was already used")
-            
-            if coupon_valid:
-                discount_percent = coupon.get('discount', 0)
-                if discount_percent > 0:
-                    final_price = original_price - (original_price * discount_percent // 100)
-                    logger.info(f"🏷️ Discount {discount_percent}% on package {package_id} applied: {original_price:,} → {final_price:,}")
-            else:
-                if user_id in user_states:
-                    user_states[user_id].pop('coupon_code', None)
-                    user_states[user_id].pop('coupon_discount', None)
-                    user_states[user_id].pop('coupon_applied', None)
-                discount_percent = 0
-                final_price = original_price
-        else:
-            logger.warning(f"⚠️ Coupon {coupon_code} is invalid or inactive")
-            if user_id in user_states:
-                user_states[user_id].pop('coupon_code', None)
-                user_states[user_id].pop('coupon_discount', None)
-                user_states[user_id].pop('coupon_applied', None)
-            discount_percent = 0
-            final_price = original_price
+    if discount_percent > 0:
+        final_price = max(0, original_price - (original_price * discount_percent // 100))
+        logger.info(
+            f"🏷️ Discount {discount_percent}% ({discount_source}) on package {package_id} applied: {original_price:,} → {final_price:,}"
+        )
             
     category_inbound_ids = category.get('inbound_ids', [])
     
@@ -1429,6 +1412,7 @@ async def buy_specific_package(callback: CallbackQuery):
         'price': final_price,
         'original_price': original_price,
         'discount_percent': discount_percent,
+        'discount_source': discount_source,
         'inbound_ids': category_inbound_ids,
         'category_name': category.get('name'),
         'category_name_en': category.get('name_en') or '',
@@ -1449,7 +1433,14 @@ async def buy_specific_package(callback: CallbackQuery):
         logger.info(f"   user_states[{user_id}]['is_extend'] = {user_states[user_id].get('is_extend')}")
         logger.info(f"   user_states[{user_id}]['extend_order_id'] = {user_states[user_id].get('extend_order_id')}")
     
-    if coupon_applied_old and coupon_code_old:
+    if disc_info.get('coupon_valid') and disc_info.get('coupon_code'):
+        kept_code = disc_info['coupon_code']
+        kept_base_disc = (COUPONS.get(kept_code) or {}).get('discount', 0)
+        user_states[user_id]['coupon_code'] = kept_code
+        user_states[user_id]['coupon_applied'] = True
+        user_states[user_id]['coupon_discount'] = kept_base_disc
+        logger.info(f"🏷️ [buy_specific_package] Coupon {kept_code} preserved (source={discount_source})")
+    elif coupon_applied_old and coupon_code_old and is_coupon_valid_for_user(coupon_code_old, user_id)[0]:
         user_states[user_id]['coupon_code'] = coupon_code_old
         user_states[user_id]['coupon_applied'] = True
         user_states[user_id]['coupon_discount'] = coupon_discount_old or 0
@@ -1591,7 +1582,11 @@ async def _process_pay_ready_package_balance(callback: CallbackQuery, user_id: i
     
     volume = package.get('volume', 0)
     days = package.get('days', 30)
-    price = package.get('price', 0)
+    orig_price = package.get('price', 0)
+    disc_info = resolve_category_package_discount(user_id, category)
+    discount_percent = disc_info['discount_percent']
+    discount_source = disc_info['discount_source']
+    price = max(0, orig_price - (orig_price * discount_percent // 100)) if discount_percent > 0 else orig_price
     balance = user.get('balance', 0)
     inbound_id = category.get('inbound_id')
     
@@ -1614,10 +1609,15 @@ async def _process_pay_ready_package_balance(callback: CallbackQuery, user_id: i
                 category_name=category.get('name'),
                 package_id=package_id,
                 inbound_id=inbound_id,
+                original_price=orig_price,
+                discount_percent=discount_percent,
+                discount_source=discount_source,
                 payment_method='balance',
                 approved_date=now_tehran().strftime("%Y-%m-%d %H:%M:%S"))
     
     record_purchase(user_id, price)
+    if discount_source == 'coupon':
+        consume_coupon(user_id)
     await check_referral_bonus(user_id)
     
     await callback.message.edit_text(t('i18n_processing_config_in_panel', lang))

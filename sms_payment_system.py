@@ -693,6 +693,148 @@ class SMSPaymentDatabase:
         finally:
             conn.close()
 
+    def find_and_recover_sms_for_order(self, order_id: int, test_mode: bool = False) -> Dict[str, Any]:
+        """
+        بررسی وضعیت رزرو سفارش و تطبیق مجدد با پیامک‌های جامانده یا مبهم در بازه مجاز واریز.
+        """
+        now_utc = datetime.now(timezone.utc)
+        now_utc_str = now_utc.isoformat()
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE;")
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                UPDATE amount_reservations
+                SET status = 'expired'
+                WHERE status = 'active' AND expires_at_utc < ?;
+            """, (now_utc_str,))
+
+            cursor.execute("""
+                SELECT * FROM amount_reservations
+                WHERE order_id = ?
+                ORDER BY id DESC
+                LIMIT 1;
+            """, (order_id,))
+            res_row = cursor.fetchone()
+            if not res_row:
+                conn.commit()
+                return {"status": "no_reservation"}
+
+            res = dict(res_row)
+            res_status = res.get("status")
+
+            if res_status == "claimed":
+                matched_tx_id = res.get("matched_sms_id")
+                tx_row = None
+                if matched_tx_id:
+                    cursor.execute("SELECT * FROM sms_transactions WHERE id = ?;", (matched_tx_id,))
+                    r = cursor.fetchone()
+                    tx_row = dict(r) if r else None
+                conn.commit()
+                if tx_row and tx_row.get("fulfillment_status") == "failed_pending_retry":
+                    return {
+                        "status": "retry_fulfillment",
+                        "reservation": res,
+                        "tx_id": matched_tx_id,
+                        "tx_row": tx_row,
+                    }
+                return {"status": "already_approved", "reservation": res, "tx_row": tx_row}
+
+            try:
+                created_utc = datetime.fromisoformat(res["created_at_utc"])
+                expires_utc = datetime.fromisoformat(res["expires_at_utc"])
+                if created_utc.tzinfo is None:
+                    created_utc = created_utc.replace(tzinfo=timezone.utc)
+                if expires_utc.tzinfo is None:
+                    expires_utc = expires_utc.replace(tzinfo=timezone.utc)
+            except Exception:
+                created_utc = now_utc - timedelta(minutes=60)
+                expires_utc = now_utc
+
+            if res_status in ("expired", "cancelled") or now_utc > expires_utc:
+                if res_status == "active":
+                    cursor.execute(
+                        "UPDATE amount_reservations SET status = 'expired' WHERE id = ?;",
+                        (res["id"],),
+                    )
+                conn.commit()
+                return {"status": "expired", "reservation": res}
+
+            payable_amount = int(res["payable_amount"])
+            cursor.execute("""
+                SELECT * FROM sms_transactions
+                WHERE amount_toman = ?
+                  AND status IN ('unmatched', 'ambiguous')
+                  AND (matched_order_id IS NULL OR matched_order_id = ?)
+                ORDER BY id DESC;
+            """, (payable_amount, order_id))
+            candidates = [dict(r) for r in cursor.fetchall()]
+
+            chosen_tx = None
+            for tx in candidates:
+                ts_str = tx.get("bank_tx_utc") or tx.get("device_received_at_utc") or tx.get("server_received_at_utc")
+                if not ts_str:
+                    continue
+                try:
+                    tx_dt = datetime.fromisoformat(ts_str)
+                    if tx_dt.tzinfo is None:
+                        tx_dt = tx_dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                if tx_dt < (created_utc - timedelta(seconds=60)):
+                    continue
+                if tx_dt > expires_utc:
+                    continue
+                chosen_tx = tx
+                break
+
+            if not chosen_tx:
+                conn.commit()
+                return {"status": "pending_wait", "reservation": res}
+
+            if test_mode:
+                conn.commit()
+                return {"status": "test_matched", "reservation": res, "tx_row": chosen_tx}
+
+            cursor.execute("""
+                UPDATE amount_reservations
+                SET status = 'claimed', matched_at_utc = ?, matched_sms_id = ?
+                WHERE id = ? AND status = 'active';
+            """, (now_utc_str, chosen_tx["id"], res["id"]))
+            if cursor.rowcount != 1:
+                conn.rollback()
+                return {"status": "already_approved", "reservation": res}
+
+            cursor.execute("""
+                UPDATE sms_transactions
+                SET status = 'approved',
+                    matched_order_id = ?,
+                    matched_order_type = ?,
+                    matched_user_id = ?,
+                    confidence_notes = ?
+                WHERE id = ?;
+            """, (
+                order_id,
+                res["order_type"],
+                res["user_id"],
+                f"تأیید و تطبیق مجدد با بررسی کاربر ({payable_amount:,} تومان)",
+                chosen_tx["id"],
+            ))
+            conn.commit()
+            logger.info(
+                "SMS MANUAL RECOVERY APPROVED | order_id=#%s | tx_id=%s | amount=%d Toman",
+                order_id, chosen_tx["id"], payable_amount
+            )
+            return {
+                "status": "verified_now",
+                "reservation": res,
+                "tx_id": chosen_tx["id"],
+                "tx_row": chosen_tx,
+            }
+        finally:
+            conn.close()
+
     def update_fulfillment_status(self, tx_id: int, status: str, error_message: str = ""):
         conn = self._get_connection()
         try:
@@ -1156,6 +1298,89 @@ class SMSPaymentManager:
             await self._notify_admin_unmatched(parsed, reason)
             return {"status": "unmatched", "reason": reason}
 
+    @staticmethod
+    def _parsed_summary_from_tx(tx_row: Optional[dict]) -> dict:
+        tx = tx_row or {}
+        amt = int(tx.get("amount_toman") or 0)
+        rial = int(tx.get("amount_rial") or (amt * 10))
+        time_str = "--:--"
+        ts = tx.get("bank_tx_utc") or tx.get("server_received_at_utc") or ""
+        if ts:
+            try:
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                time_str = dt.astimezone(TEHRAN_TZ).strftime("%H:%M")
+            except Exception:
+                pass
+        return {
+            "amount_toman": amt,
+            "amount_rial": rial,
+            "bank_time_str": time_str,
+            "bank_date_shamsi_str": "-",
+        }
+
+    async def verify_payment_by_user_button(self, order_id: int) -> Dict[str, Any]:
+        """
+        بررسی وضعیت پرداخت از طریق دکمه کاربر و ریکاوری خودکار پیامک جامانده در بازه زمانی معتبر.
+        """
+        test_mode = self.is_test_mode()
+        res_info = await asyncio.to_thread(
+            self.db.find_and_recover_sms_for_order,
+            order_id=order_id,
+            test_mode=test_mode,
+        )
+        status = res_info.get("status")
+        if status not in ("verified_now", "retry_fulfillment"):
+            return res_info
+
+        reservation = res_info["reservation"]
+        tx_id = res_info["tx_id"]
+        tx_row = res_info.get("tx_row")
+        order_type = reservation.get("order_type", "purchase")
+
+        if self._main:
+            existing_order = self._main.orders.get(str(order_id))
+            if existing_order and existing_order.get("status") == "approved":
+                await asyncio.to_thread(
+                    self.db.update_fulfillment_status,
+                    tx_id=tx_id,
+                    status="fulfilled",
+                    error_message="",
+                )
+                return {"status": "already_approved", "reservation": reservation}
+
+        fulfillment_status, err_msg = await self._execute_fulfillment(
+            order_id=order_id,
+            order_type=order_type,
+        )
+        await asyncio.to_thread(
+            self.db.update_fulfillment_status,
+            tx_id=tx_id,
+            status=fulfillment_status,
+            error_message=err_msg,
+        )
+
+        parsed_summary = self._parsed_summary_from_tx(tx_row)
+        if not parsed_summary.get("amount_toman"):
+            parsed_summary["amount_toman"] = int(reservation.get("payable_amount") or 0)
+            parsed_summary["amount_rial"] = parsed_summary["amount_toman"] * 10
+
+        if fulfillment_status == "fulfilled":
+            await self._update_user_payment_message(reservation)
+            await self._notify_admin_approved(parsed_summary, reservation)
+        elif fulfillment_status == "failed_pending_retry":
+            await self._notify_admin_fulfillment_failed(parsed_summary, reservation, tx_id, err_msg)
+        elif fulfillment_status == "manual_fulfillment_required":
+            await self._notify_admin_manual_fulfillment(parsed_summary, reservation, tx_id, err_msg)
+
+        return {
+            "status": "verified_now",
+            "order_id": order_id,
+            "order_type": order_type,
+            "fulfillment": fulfillment_status,
+        }
+
     async def _execute_fulfillment(self, order_id: int, order_type: str) -> Tuple[str, str]:
         if not self._main:
             return "failed_pending_retry", "Main bot module not loaded"
@@ -1599,3 +1824,150 @@ Use the private token configured for your deployment. Never include real URLs or
             )
         else:
             await callback.answer(f"❌ خطا مجدداً رخ داد: {err_msg[:40]}", show_alert=True)
+
+    _verify_btn_cooldowns: Dict[Tuple[int, int], float] = {}
+
+    @dp.callback_query(F.data.startswith("verify_sms_pay_"))
+    async def verify_sms_payment_user_button(callback: CallbackQuery):
+        """دکمه «پرداخت کردم بررسی کن» روی رسید کارت به کارت هنگام فعال بودن تایید پیامکی"""
+        user_id = callback.from_user.id
+        lang = main_module.get_user(user_id).get("lang", "fa")
+
+        try:
+            order_id = int(callback.data.replace("verify_sms_pay_", "", 1))
+        except (ValueError, TypeError):
+            await callback.answer("❌ سفارش نامعتبر است." if lang == "fa" else "❌ Invalid order.", show_alert=True)
+            return
+
+        order = main_module.orders.get(str(order_id))
+        if not order or (order.get("user_id") != user_id and user_id != get_admin_id()):
+            await callback.answer("❌ سفارش یافت نشد." if lang == "fa" else "❌ Order not found.", show_alert=True)
+            return
+
+        now_mono = time.monotonic()
+        ckey = (user_id, order_id)
+        last_ts = _verify_btn_cooldowns.get(ckey, 0.0)
+        if (now_mono - last_ts) < 3.0:
+            await callback.answer(
+                "⏳ لطفاً چند ثانیه صبر کنید..." if lang == "fa" else "⏳ Please wait a few seconds...",
+                show_alert=False,
+            )
+            return
+        if len(_verify_btn_cooldowns) > 2000:
+            _verify_btn_cooldowns.clear()
+        _verify_btn_cooldowns[ckey] = now_mono
+
+        expired_msg = (
+            "⏰ رسید منقضی شده! لطفاً رسید جدید ثبت کنید و فیش واریزیتون رو بفرستید."
+            if lang == "fa"
+            else "⏰ This receipt has expired! Please create a new order and submit a new payment receipt."
+        )
+        pending_msg = (
+            "هنوز واریزیت به دستمون نرسیده. بعد از کارت به کارت یکی دو دقیقه صبر کن، خودکار تایید میشه."
+            if lang == "fa"
+            else "Your payment hasn't arrived yet. Wait 1–2 minutes after your transfer — it will be verified automatically."
+        )
+
+        order_status = order.get("status")
+        if order_status == "approved":
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await callback.answer(
+                "✅ پرداخت این سفارش قبلاً به صورت خودکار تأیید و فعال شده است!"
+                if lang == "fa"
+                else "✅ Payment for this order has already been verified and activated!",
+                show_alert=True,
+            )
+            return
+
+        if order_status in ("cancelled", "expired", "rejected"):
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await callback.answer(expired_msg, show_alert=True)
+            return
+
+        result = await sms_payment_manager.verify_payment_by_user_button(order_id)
+        res_status = result.get("status")
+
+        if res_status == "expired":
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await callback.answer(expired_msg, show_alert=True)
+            return
+
+        if res_status == "already_approved":
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await callback.answer(
+                "✅ پرداخت شما قبلاً به صورت خودکار تأیید و فعال شده است!"
+                if lang == "fa"
+                else "✅ Your payment has already been verified automatically!",
+                show_alert=True,
+            )
+            return
+
+        if res_status == "verified_now":
+            fulfillment = result.get("fulfillment", "")
+            otype = result.get("order_type", order.get("type", "purchase"))
+            if fulfillment == "fulfilled":
+                if otype == "balance_charge":
+                    ok_msg = (
+                        "✅ پرداخت شما تأیید شد و موجودی حساب شما شارژ گردید!"
+                        if lang == "fa"
+                        else "✅ Your payment was verified and your wallet balance has been credited!"
+                    )
+                else:
+                    ok_msg = (
+                        "✅ پرداخت شما با موفقیت تأیید و سرویس شما فعال شد!"
+                        if lang == "fa"
+                        else "✅ Your payment has been verified and your service is now active!"
+                    )
+                await callback.answer(ok_msg, show_alert=True)
+            elif fulfillment == "manual_fulfillment_required":
+                await callback.answer(
+                    "✅ پرداخت شما تأیید شد! سفارش جهت تحویل به ادمین ارسال شد."
+                    if lang == "fa"
+                    else "✅ Payment verified! Your order has been queued for admin delivery.",
+                    show_alert=True,
+                )
+            else:
+                await callback.answer(
+                    "✅ پرداخت شما تأیید شد، اما تحویل خودکار با خطای موقت پنل مواجه شد و به ادمین اطلاع داده شد."
+                    if lang == "fa"
+                    else "✅ Payment verified, but automatic panel delivery hit a temporary error; admin was notified.",
+                    show_alert=True,
+                )
+            return
+
+        if res_status == "test_matched":
+            await callback.answer(
+                "🧪 حالت تست فعال است: پیامک واریز تطبیق یافت ولی سفارش در حالت تست تایید نهایی نمی‌شود."
+                if lang == "fa"
+                else "🧪 Test mode is active: SMS matched, but live orders are not finalized in test mode.",
+                show_alert=True,
+            )
+            return
+
+        if res_status == "no_reservation":
+            created_raw = order.get("created_at") or order.get("date")
+            if created_raw:
+                try:
+                    created_dt = datetime.fromisoformat(str(created_raw).replace(" ", "T"))
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=TEHRAN_TZ)
+                    age_sec = (datetime.now(TEHRAN_TZ) - created_dt).total_seconds()
+                    if age_sec > sms_payment_manager.get_window_minutes() * 60:
+                        await callback.answer(expired_msg, show_alert=True)
+                        return
+                except Exception:
+                    pass
+
+        await callback.answer(pending_msg, show_alert=True)

@@ -415,6 +415,39 @@ async def increase_balance(callback: CallbackQuery):
     await safe_answer(callback)
 
 
+def _build_balance_card_receipt_keyboard(
+    order_id: int,
+    payable_num: int,
+    card_num_copy: str,
+    lang: str,
+    cancel_key: str = "cancel_payment_77ac7fd08e",
+) -> InlineKeyboardMarkup:
+    """Build inline keyboard for balance card receipts, including SMS check button when SMS auto-pay is ON."""
+    rows = [
+        [InlineKeyboardButton(
+            text=f"📋 {t('copy_amount_in_rial_2426b59317', lang)} ({payable_num * 10:,})",
+            copy_text=CopyTextButton(text=str(payable_num * 10))
+        )],
+        [InlineKeyboardButton(
+            text=f"💳 {t('copy_card_number_0a73534ca5', lang)}",
+            copy_text=CopyTextButton(text=card_num_copy)
+        )],
+    ]
+    sms_mgr = getattr(_main, "sms_payment_manager", None) if _main is not None else None
+    if sms_mgr and sms_mgr.is_enabled():
+        rows.append([InlineKeyboardButton(
+            text="✅ پرداخت کردم بررسی کن" if lang == "fa" else "✅ I Paid, Verify Now",
+            callback_data=f"verify_sms_pay_{order_id}",
+            style="success"
+        )])
+    rows.append([InlineKeyboardButton(
+        text=f"❌ {t(cancel_key, lang)}",
+        callback_data=f"cancel_order_{order_id}",
+        style="danger"
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def quick_amount_selected(callback: CallbackQuery):
     """انتخاب مبلغ پیشنهادی از دکمه‌ها"""
     if _main is None:
@@ -470,21 +503,13 @@ async def quick_amount_selected(callback: CallbackQuery):
     bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
     card_num_copy = bank_card_number.replace(' ', '').replace('-', '')
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"📋 {t('copy_amount_in_rial_2426b59317', lang)} ({payable_num * 10:,})",
-            copy_text=CopyTextButton(text=str(payable_num * 10))
-        )],
-        [InlineKeyboardButton(
-            text=f"💳 {t('copy_card_number_0a73534ca5', lang)}",
-            copy_text=CopyTextButton(text=card_num_copy)
-        )],
-        [InlineKeyboardButton(
-            text=f"❌ {t('cancel_payment_77ac7fd08e', lang)}",
-            callback_data=f"cancel_order_{order_id}",
-            style="danger"
-        )]
-    ])
+    keyboard = _build_balance_card_receipt_keyboard(
+        order_id=order_id,
+        payable_num=payable_num,
+        card_num_copy=card_num_copy,
+        lang=lang,
+        cancel_key="cancel_payment_77ac7fd08e",
+    )
 
     try:
         await callback.message.delete()
@@ -685,21 +710,13 @@ async def process_balance_amount(message: Message):
             bank_card_number = getattr(_main, 'BANK_CARD_NUMBER', '')
             card_num_copy = bank_card_number.replace(' ', '').replace('-', '')
 
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=f"📋 {t('copy_amount_in_rial_2426b59317', lang)} ({payable_num * 10:,})",
-                    copy_text=CopyTextButton(text=str(payable_num * 10))
-                )],
-                [InlineKeyboardButton(
-                    text=f"💳 {t('copy_card_number_0a73534ca5', lang)}",
-                    copy_text=CopyTextButton(text=card_num_copy)
-                )],
-                [InlineKeyboardButton(
-                    text=f"❌ {t('cancel_payment_cfa1dce634', lang)}",
-                    callback_data=f"cancel_order_{order_id}",
-                    style="danger"
-                )]
-            ])
+            keyboard = _build_balance_card_receipt_keyboard(
+                order_id=order_id,
+                payable_num=payable_num,
+                card_num_copy=card_num_copy,
+                lang=lang,
+                cancel_key="cancel_payment_cfa1dce634",
+            )
 
             payment_message = await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
             _main.update_order(order_id, payment_message_id=payment_message.message_id)

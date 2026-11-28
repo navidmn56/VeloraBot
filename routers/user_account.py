@@ -25,7 +25,9 @@ from user_manager import (
     clear_coupon_from_user_db,
     COUPONS,
     user_states,
+    format_coupon_category_discounts_lines,
 )
+from database import READY_PACKAGES
 from strings import t
 from utils.helpers import (
     safe_answer,
@@ -164,6 +166,12 @@ async def my_account(callback: CallbackQuery):
                 coupon_info += t('used_5caa8d1339', lang, fa_parts=lambda: (f'{user_used_count}', f'{max_usage}'), en_parts=lambda: (f'{user_used_count}', f'{max_usage}'))
             else:
                 coupon_info = t('b_active_coupon_b_code_code_0363e7e7c5', lang, fa_parts=lambda: (f"{premium_emoji('gift', '🏷️')}", f'{html.escape(coupon_code)}', f'{coupon_discount}'), en_parts=lambda: (f"{premium_emoji('gift', '🏷️')}", f'{html.escape(coupon_code)}', f'{coupon_discount}'))
+            cat_ov_lines = format_coupon_category_discounts_lines(
+                coupon_obj, READY_PACKAGES.get('categories', []), lang
+            )
+            if cat_ov_lines:
+                cat_hdr = "\n   📂 تخفیف اختصاصی دسته‌ها:" if lang == "fa" else "\n   📂 Per-category discounts:"
+                coupon_info += f"{cat_hdr}\n{cat_ov_lines}"
         else:
             logger.warning(f"⚠️ [my_account] Coupon {coupon_code} invalid: {reason}")
             if user_id in user_states:
@@ -619,6 +627,13 @@ async def coupon_status(callback: CallbackQuery):
         return
 
     coupon_type = coupon.get('coupon_type', 'normal')
+    cat_ov_lines = format_coupon_category_discounts_lines(
+        coupon, READY_PACKAGES.get('categories', []), lang
+    )
+    cat_ov_block = (
+        (f"\n📂 <b>تخفیف اختصاصی دسته‌ها:</b>\n{cat_ov_lines}\n" if lang == "fa" else f"\n📂 <b>Per-Category Discounts:</b>\n{cat_ov_lines}\n")
+        if cat_ov_lines else ""
+    )
 
     if coupon_type == 'admin_special':
         user_usage = coupon.get('user_usage', {})
@@ -636,6 +651,8 @@ async def coupon_status(callback: CallbackQuery):
                 pass
 
         text = t('b_your_admin_coupon_status_b_155aaf2b71', lang, fa_parts=lambda: (f"{premium_emoji('note', '📝')}", f'{coupon_code}', f"{premium_emoji('card', '💳')}", f'{coupon_discount}', f"{premium_emoji('cubes', '🔢')}", f'{user_used_count}', f'{max_usage}', f"{premium_emoji('star', '🎁')}", f'{remaining}', f"{premium_emoji('amar', '📊')}", f"{premium_emoji('calendar', '📅')}", f'{expiry_display}', f"{premium_emoji('admin', '👑')}", f"{premium_emoji('light', '💡')}", f'{remaining}'), en_parts=lambda: (f"{premium_emoji('note', '📝')}", f'{coupon_code}', f"{premium_emoji('card', '💳')}", f'{coupon_discount}', f"{premium_emoji('cubes', '🔢')}", f'{user_used_count}', f'{max_usage}', f"{premium_emoji('star', '🎁')}", f'{remaining}', f"{premium_emoji('amar', '📊')}", f"{premium_emoji('calendar', '📅')}", f'{expiry_display}', f"{premium_emoji('admin', '👑')}", f"{premium_emoji('light', '💡')}", f'{remaining}'))
+        if cat_ov_block:
+            text += cat_ov_block
 
         buttons = [
             [InlineKeyboardButton(
@@ -664,6 +681,8 @@ async def coupon_status(callback: CallbackQuery):
                 pass
 
         text = t('b_your_coupon_status_b_code_d70281ced3', lang, fa_parts=lambda: (f"{premium_emoji('note', '📝')}", f'{coupon_code}', f"{premium_emoji('card', '💳')}", f'{coupon_discount}', f"{premium_emoji('cubes', '🔢')}", f'{remaining}', f"{premium_emoji('amar', '📊')}", f"{('🟢 فعال' if not is_used else '🔴 استفاده شده')}", f"{premium_emoji('calendar', '📅')}", f'{expiry_display}', f"{premium_emoji('light', '💡')}"), en_parts=lambda: (f"{premium_emoji('note', '📝')}", f'{coupon_code}', f"{premium_emoji('card', '💳')}", f'{coupon_discount}', f"{premium_emoji('cubes', '🔢')}", f'{remaining}', f"{premium_emoji('amar', '📊')}", f"{('🟢 Active' if not is_used else '🔴 Used')}", f"{premium_emoji('calendar', '📅')}", f'{expiry_display}', f"{premium_emoji('light', '💡')}"))
+        if cat_ov_block:
+            text += cat_ov_block
 
         buttons = [
             [InlineKeyboardButton(

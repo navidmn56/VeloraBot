@@ -272,6 +272,10 @@ async def _process_pay_balance(callback: CallbackQuery, user_id: int):
         final_price = full_state.get('price', 0)
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
+        discount_source = full_state.get(
+            'discount_source',
+            'coupon' if (full_state.get('coupon_applied') and full_state.get('coupon_code') and discount_percent > 0) else 'none'
+        )
         category_id = full_state.get('category_id')
         package_id = full_state.get('package_id')
 
@@ -307,6 +311,7 @@ async def _process_pay_balance(callback: CallbackQuery, user_id: int):
         original_price = calculate_price(vol, days)
         final_price = original_price
         discount_percent = 0
+        discount_source = 'none'
         order_type = "purchase"
         category_name = None
         category_id = None
@@ -317,9 +322,11 @@ async def _process_pay_balance(callback: CallbackQuery, user_id: int):
         if coupon_applied and coupon_code:
             is_valid, reason = is_coupon_valid_for_user(coupon_code, user_id)
             if is_valid:
-                discount_percent = full_state.get('coupon_discount', 0)
+                coupon_obj = COUPONS.get(coupon_code)
+                discount_percent = (coupon_obj.get('discount', 0) if coupon_obj else full_state.get('coupon_discount', 0)) or 0
                 if discount_percent > 0:
-                    final_price = original_price - (original_price * discount_percent // 100)
+                    final_price = max(0, original_price - (original_price * discount_percent // 100))
+                    discount_source = 'coupon'
             else:
                 logger.warning(f"⚠️ [pay_balance] Invalid coupon: {reason}")
                 if user_id in user_states:
@@ -426,7 +433,14 @@ async def _process_pay_balance(callback: CallbackQuery, user_id: int):
     logger.info(f"📝 [pay_balance] order #{order_id} created - type: {order_type if not is_extend else 'extend'} - Volume: {vol}GB - price: {final_price:,}")
     
     # ✅ آپدیت اطلاعات پایه سفارش
-    update_order(order_id, inbound_id=inbound_ids, ip_limit=ip_limit)
+    update_order(
+        order_id,
+        inbound_id=inbound_ids,
+        ip_limit=ip_limit,
+        original_price=original_price,
+        discount_percent=discount_percent,
+        discount_source=discount_source,
+    )
     
     if is_ready_package:
         update_order(order_id, 
@@ -499,12 +513,14 @@ async def _process_pay_balance(callback: CallbackQuery, user_id: int):
                             payment_method='balance_extend',
                             payment_label='🔄 موجودی (تمدید)')
             else:
+                free_lbl = '🎁 رایگان (تخفیف دسته)' if discount_source == 'category' else '🎁 رایگان (تمدید)'
                 update_order(order_id, 
                             payment_method='free_coupon_extend',
-                            payment_label='🎁 رایگان (تمدید)')
+                            payment_label=free_lbl)
             
             record_purchase(user_id, final_price)
-            consume_coupon(user_id)
+            if discount_source == 'coupon':
+                consume_coupon(user_id)
             
             # پاکسازی state
             if user_id in user_states:
@@ -663,12 +679,14 @@ async def _process_pay_balance(callback: CallbackQuery, user_id: int):
                             payment_method='balance_pool',
                             payment_label='💰 موجودی حساب (مخزن)')
         else:
+            free_lbl = '🎁 رایگان (تخفیف دسته)' if discount_source == 'category' else '🎁 رایگان (کوپن)'
             update_order(order_id, 
                         payment_method='free_coupon',
-                        payment_label='🎁 رایگان (کوپن)')
+                        payment_label=free_lbl)
         
         record_purchase(user_id, final_price)
-        consume_coupon(user_id)
+        if discount_source == 'coupon':
+            consume_coupon(user_id)
         
         if final_price > 0:
             referral_result = await check_referral_bonus(user_id)
@@ -712,16 +730,18 @@ async def _process_pay_balance(callback: CallbackQuery, user_id: int):
                 reply_markup=get_feedback_keyboard(order_id, lang)
             )
         
-        # پاکسازی state
+        # پاکسازی state (کوپن فقط در صورت مصرف شدن یا ابطال پاک شود)
         if user_id in user_states:
             user_states[user_id].pop('is_ready_package', None)
             user_states[user_id].pop('price', None)
+            user_states[user_id].pop('discount_source', None)
             user_states[user_id].pop('inbound_id', None)
             user_states[user_id].pop('inbound_ids', None)
             user_states[user_id].pop('ip_limit', None)
-            user_states[user_id].pop('coupon_code', None)
-            user_states[user_id].pop('coupon_applied', None)
-            user_states[user_id].pop('coupon_discount', None)
+            if discount_source == 'coupon':
+                user_states[user_id].pop('coupon_code', None)
+                user_states[user_id].pop('coupon_applied', None)
+                user_states[user_id].pop('coupon_discount', None)
         
         volume_display_text = format_package_volume(vol, lang)
         if is_ready_package:

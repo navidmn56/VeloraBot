@@ -51,6 +51,8 @@ from user_manager import (
     save_coupon_to_user_db,
     is_coupon_valid_for_user,
     update_user,
+    get_coupon_discount_for_category,
+    format_coupon_category_discounts_lines,
 )
 from core.state_stores import (
     TEMP_INBOUND_SELECTION,
@@ -788,6 +790,7 @@ async def admin_coupon_create_process(message: Message):
             coupon_data['status'] = 'active'
             coupon_data['used_count'] = 0
             coupon_data['used_by'] = []
+            coupon_data['category_discounts'] = {}
             
             # ✅ فیلدهای مخصوص کوپن ادمین
             if coupon_data.get('coupon_type') == 'admin_special':
@@ -824,6 +827,11 @@ async def admin_coupon_create_process(message: Message):
             text = t('b_coupon_created_successfull_367bc33acb', lang, fa_parts=lambda: (f'{code}', f'{type_display}', f'{discount}', f'{limit_text}', f'{expiry_text}', f'{special_note}', f'{code}'), en_parts=lambda: (f'{code}', f'{type_display}', f'{discount}', f'{limit_text}', f'{expiry_text}', f'{special_note}', f'{code}'))
             
             buttons = [
+                [InlineKeyboardButton(
+                    text="🏷️ تخفیف جداگانه دسته‌ها" if lang == "fa" else "🏷️ Per-Category Discounts",
+                    callback_data=f"admin_coupon_cat_discounts_{code}",
+                    style="primary"
+                )],
                 [InlineKeyboardButton(text=t('create_another_ae5262f5e5', lang), callback_data="admin_coupon_create")],
                 [InlineKeyboardButton(text=t('coupons_list_2b3f1e787a', lang), callback_data="admin_coupons_list")],
                 [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_coupons")]
@@ -1074,6 +1082,8 @@ async def admin_coupons_list(callback: CallbackQuery):
         coupon_type = data.get('coupon_type', 'normal')
         discount = data.get('discount', 0)
         usage_limit = data.get('usage_limit', 0)
+        cat_override_count = len(data.get('category_discounts') or {})
+        cat_tag = f" [📂{cat_override_count}]" if cat_override_count else ""
         
         # ✅✅✅ نمایش متفاوت برای کوپن ادمین
         if coupon_type == 'admin_special':
@@ -1083,23 +1093,377 @@ async def admin_coupons_list(callback: CallbackQuery):
             limit_display = usage_limit if usage_limit > 0 else '∞'
             
             # نمایش 👑 برای کوپن ادمین
-            text += f"{status_emoji} 👑 <code>{code}</code> - {discount}% - {total_used}/{limit_display}\n"
+            text += f"{status_emoji} 👑 <code>{code}</code> - {discount}%{cat_tag} - {total_used}/{limit_display}\n"
         else:
             # برای کوپن معمولی
             used_count = data.get('used_count', 0)
             limit_display = usage_limit if usage_limit > 0 else '∞'
-            text += f"{status_emoji} <code>{code}</code> - {discount}% - {used_count}/{limit_display}\n"
+            text += f"{status_emoji} <code>{code}</code> - {discount}%{cat_tag} - {used_count}/{limit_display}\n"
     
     if len(COUPONS) > 20:
         text += f"\n... و {len(COUPONS) - 20} کوپن دیگر"
-    
-    buttons = [
+
+    hint_line = (
+        "\n\n💡 برای تنظیم تخفیف جداگانه دسته‌ها یا مدیریت هر کوپن، روی نام آن کلیک کنید:"
+        if lang == "fa"
+        else "\n\n💡 Tap a coupon below to manage or set per-category discounts:"
+    )
+    text += hint_line
+
+    buttons = []
+    row_pair = []
+    for code, data in sorted_coupons[:20]:
+        prefix = "👑 " if data.get('coupon_type') == 'admin_special' else "🏷️ "
+        has_cats = " 📂" if data.get('category_discounts') else ""
+        row_pair.append(
+            InlineKeyboardButton(
+                text=f"{prefix}{code} ({data.get('discount', 0)}%){has_cats}"[:28],
+                callback_data=f"admin_coupon_manage_{code}",
+            )
+        )
+        if len(row_pair) == 2:
+            buttons.append(row_pair)
+            row_pair = []
+    if row_pair:
+        buttons.append(row_pair)
+
+    buttons.extend([
         [InlineKeyboardButton(text=t('i18n_admin_coupon_create_button', lang), callback_data="admin_coupon_create")],
         [InlineKeyboardButton(text=t('delete_coupon_52c714868d', lang), callback_data="admin_coupon_delete")],
         [InlineKeyboardButton(text=t('back_14968ad63f', lang), callback_data="admin_coupons")]
-    ]
+    ])
     
     await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+def _normalize_persian_digits(raw: str) -> str:
+    trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    return str(raw or "").translate(trans)
+
+
+@router.callback_query(F.data.startswith("admin_coupon_manage_"))
+@admin_only
+async def admin_coupon_manage(callback: CallbackQuery):
+    """جزئیات و مدیریت یک کوپن (از جمله تخفیف جداگانه برای هر دسته)"""
+    code = callback.data.replace("admin_coupon_manage_", "", 1)
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    user_states.pop(callback.from_user.id, None)
+
+    if code not in COUPONS:
+        await callback.answer(t('coupon_not_found_a97baa7923', lang), show_alert=True)
+        await admin_coupons_list(callback)
+        return
+
+    coupon = COUPONS[code]
+    coupon_type = coupon.get('coupon_type', 'normal')
+    base_discount = coupon.get('discount', 0)
+    usage_limit = coupon.get('usage_limit', 0)
+    limit_display = str(usage_limit) if usage_limit > 0 else ('نامحدود' if lang == "fa" else 'Unlimited')
+
+    if coupon_type == 'admin_special':
+        type_label = "👑 کوپن اختصاصی ادمین" if lang == "fa" else "👑 Private Admin Coupon"
+        used_total = sum((coupon.get('user_usage') or {}).values())
+        locked_uid = coupon.get('locked_user_id')
+        lock_line = (
+            f"🔒 قفل روی کاربر: <code>{locked_uid}</code>\n" if locked_uid and lang == "fa"
+            else (f"🔒 Locked to user: <code>{locked_uid}</code>\n" if locked_uid else "")
+        )
+    else:
+        type_label = "🏷️ کوپن عادی" if lang == "fa" else "🏷️ Regular Coupon"
+        used_total = coupon.get('used_count', 0)
+        lock_line = ""
+
+    status_val = coupon.get('status', 'active')
+    status_display = ("🟢 فعال" if lang == "fa" else "🟢 Active") if status_val == 'active' else (f"🔴 {status_val}")
+
+    categories = READY_PACKAGES.get('categories', [])
+    cat_lines = format_coupon_category_discounts_lines(coupon, categories, lang)
+    if cat_lines:
+        cat_section = (
+            f"\n📂 <b>تخفیف اختصاصی دسته‌ها:</b>\n{cat_lines}"
+            if lang == "fa"
+            else f"\n📂 <b>Per-Category Discounts:</b>\n{cat_lines}"
+        )
+    else:
+        cat_section = (
+            "\n📂 تخفیف اختصاصی دسته‌ها: <i>ندارد (درصد پیش‌فرض برای همه دسته‌ها اعمال می‌شود)</i>"
+            if lang == "fa"
+            else "\n📂 Per-Category Discounts: <i>None (default percentage applies to all categories)</i>"
+        )
+
+    if lang == "fa":
+        text = (
+            f"🎟 <b>مدیریت کوپن <code>{html.escape(code)}</code></b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 نوع: {type_label}\n"
+            f"💰 تخفیف پیش‌فرض: <b>{base_discount}%</b>\n"
+            f"🔢 مصرف: <b>{used_total}/{limit_display}</b>\n"
+            f"📊 وضعیت: {status_display}\n"
+            f"{lock_line}"
+            f"{cat_section}"
+        )
+    else:
+        text = (
+            f"🎟 <b>Manage Coupon <code>{html.escape(code)}</code></b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 Type: {type_label}\n"
+            f"💰 Default Discount: <b>{base_discount}%</b>\n"
+            f"🔢 Usage: <b>{used_total}/{limit_display}</b>\n"
+            f"📊 Status: {status_display}\n"
+            f"{lock_line}"
+            f"{cat_section}"
+        )
+
+    buttons = [
+        [InlineKeyboardButton(
+            text="🏷️ تخفیف جداگانه دسته‌ها" if lang == "fa" else "🏷️ Per-Category Discounts",
+            callback_data=f"admin_coupon_cat_discounts_{code}",
+            style="primary"
+        )],
+        [InlineKeyboardButton(
+            text="🗑 حذف کوپن" if lang == "fa" else "🗑 Delete Coupon",
+            callback_data=f"admin_coupon_delete_confirm_{code}",
+            style="danger"
+        )],
+        [InlineKeyboardButton(
+            text="🔙 بازگشت به لیست کوپن‌ها" if lang == "fa" else "🔙 Back to Coupons List",
+            callback_data="admin_coupons_list"
+        )]
+    ]
+    await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("admin_coupon_cat_discounts_"))
+@admin_only
+async def admin_coupon_cat_discounts_menu(callback: CallbackQuery):
+    """نمایش لیست دسته‌ها برای تعیین تخفیف اختصاصی هر دسته در کوپن"""
+    code = callback.data.replace("admin_coupon_cat_discounts_", "", 1)
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    user_states.pop(callback.from_user.id, None)
+
+    if code not in COUPONS:
+        await callback.answer(t('coupon_not_found_a97baa7923', lang), show_alert=True)
+        await admin_coupons_list(callback)
+        return
+
+    coupon = COUPONS[code]
+    base_discount = coupon.get('discount', 0)
+    cat_discounts = coupon.get('category_discounts') or {}
+    categories = READY_PACKAGES.get('categories', [])
+
+    if not categories:
+        await callback.answer(
+            "هیچ دسته‌ای تعریف نشده است!" if lang == "fa" else "No categories found!",
+            show_alert=True
+        )
+        return
+
+    if lang == "fa":
+        text = (
+            f"🏷️ <b>تخفیف اختصاصی دسته‌ها برای کوپن <code>{html.escape(code)}</code></b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 تخفیف پیش‌فرض کوپن: <b>{base_discount}%</b>\n\n"
+            f"برای تنظیم یا تغییر درصد تخفیفِ جداگانه برای هر دسته، روی دسته موردنظر کلیک کنید:"
+        )
+    else:
+        text = (
+            f"🏷️ <b>Per-Category Discounts for Coupon <code>{html.escape(code)}</code></b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Default Coupon Discount: <b>{base_discount}%</b>\n\n"
+            f"Select a category to set a custom discount % for this coupon:"
+        )
+
+    buttons = []
+    for cat in categories:
+        cid = cat.get('id')
+        icon = cat.get('icon', '📦')
+        cname = (cat.get('name') if lang == "fa" else (cat.get('name_en') or cat.get('name'))) or f"#{cid}"
+        if str(cid) in cat_discounts:
+            pct = cat_discounts[str(cid)]
+            badge = f"⚡ {pct}%"
+        else:
+            badge = f"پیش‌فرض ({base_discount}%)" if lang == "fa" else f"Default ({base_discount}%)"
+        buttons.append([InlineKeyboardButton(
+            text=f"{icon} {cname} · {badge}"[:58],
+            callback_data=f"admin_coupon_cat_set_{cid}_{code}"
+        )])
+
+    if cat_discounts:
+        buttons.append([InlineKeyboardButton(
+            text="🗑 بازنشانی همه دسته‌ها به پیش‌فرض" if lang == "fa" else "🗑 Reset All to Default",
+            callback_data=f"admin_coupon_cat_clearall_{code}",
+            style="danger"
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
+        callback_data=f"admin_coupon_manage_{code}"
+    )])
+
+    await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+    await safe_answer(callback)
+
+
+@router.callback_query(F.data.startswith("admin_coupon_cat_clearall_"))
+@admin_only
+async def admin_coupon_cat_clearall(callback: CallbackQuery):
+    """پاک کردن همه تخفیف‌های اختصاصی دسته‌های یک کوپن"""
+    code = callback.data.replace("admin_coupon_cat_clearall_", "", 1)
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    if code not in COUPONS:
+        await callback.answer(t('coupon_not_found_a97baa7923', lang), show_alert=True)
+        return
+    COUPONS[code]['category_discounts'] = {}
+    save_coupons(COUPONS)
+    await callback.answer(
+        "✅ همه تخفیف‌های اختصاصی دسته‌ها پاک شد." if lang == "fa" else "✅ All per-category overrides cleared.",
+        show_alert=True
+    )
+    new_cb = callback.model_copy(update={'data': f"admin_coupon_cat_discounts_{code}"})
+    await admin_coupon_cat_discounts_menu(new_cb)
+
+
+@router.callback_query(F.data.startswith("admin_coupon_cat_set_"))
+@admin_only
+async def admin_coupon_cat_set_start(callback: CallbackQuery):
+    """شروع دریافت درصد تخفیف اختصاصی برای یک دسته در کوپن"""
+    rest = callback.data.replace("admin_coupon_cat_set_", "", 1)
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        cid_str, code = rest.split("_", 1)
+        cat_id = int(cid_str)
+    except (ValueError, IndexError):
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
+        return
+
+    if code not in COUPONS:
+        await callback.answer(t('coupon_not_found_a97baa7923', lang), show_alert=True)
+        return
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == cat_id), None)
+    if not category:
+        await callback.answer(t('category_not_found_04182ef028', lang), show_alert=True)
+        return
+
+    coupon = COUPONS[code]
+    base_discount = coupon.get('discount', 0)
+    cur_override = (coupon.get('category_discounts') or {}).get(str(cat_id))
+    cname = (category.get('name') if lang == "fa" else (category.get('name_en') or category.get('name'))) or f"#{cat_id}"
+
+    user_states[callback.from_user.id] = {
+        'awaiting_coupon_cat_discount': True,
+        'edit_coupon_code': code,
+        'category_id': cat_id,
+    }
+
+    cur_str = (
+        f"<b>{cur_override}%</b>" if cur_override is not None
+        else (f"پیش‌فرض کوپن ({base_discount}%)" if lang == "fa" else f"Coupon Default ({base_discount}%)")
+    )
+
+    if lang == "fa":
+        prompt = (
+            f"🏷️ <b>تنظیم تخفیف دسته «{safe_html(cname)}» برای کوپن <code>{html.escape(code)}</code></b>\n"
+            f"📊 مقدار فعلی: {cur_str}\n\n"
+            f"لطفاً عدد درصد تخفیف (از <code>0</code> تا <code>100</code>) را ارسال کنید:\n"
+            f"• مثلاً <code>15</code> یعنی ۱۵٪ تخفیف فقط برای این دسته\n"
+            f"• عدد <code>0</code> یعنی هیچ تخفیفی با این کوپن روی این دسته اعمال نشود\n"
+            f"• ارسال <code>-</code> یا <code>حذف</code> برای بازگشت به درصد پیش‌فرض کوپن ({base_discount}%)\n"
+            f"• یا <code>/cancel</code> برای انصراف"
+        )
+    else:
+        prompt = (
+            f"🏷️ <b>Set Discount for Category «{safe_html(cname)}» in Coupon <code>{html.escape(code)}</code></b>\n"
+            f"📊 Current: {cur_str}\n\n"
+            f"Send a discount percentage (<code>0</code> to <code>100</code>):\n"
+            f"• Example: <code>15</code> → 15% off this category\n"
+            f"• Send <code>0</code> → 0% discount with this coupon on this category\n"
+            f"• Send <code>-</code> or <code>clear</code> to revert to coupon default ({base_discount}%)\n"
+            f"• Or send <code>/cancel</code> to cancel"
+        )
+
+    await callback.message.answer(prompt, parse_mode=ParseMode.HTML)
+    await safe_answer(callback)
+
+
+@router.message(IsAdmin(), lambda m: user_states.get(m.from_user.id, {}).get('awaiting_coupon_cat_discount'))
+async def admin_coupon_cat_discount_save(message: Message):
+    """ذخیره درصد تخفیف اختصاصی دسته برای کوپن"""
+    admin_id = message.from_user.id
+    lang = get_user(admin_id).get('lang', 'fa')
+    state = user_states.get(admin_id, {})
+    code = state.get('edit_coupon_code') or state.get('coupon_code')
+    cat_id = state.get('category_id')
+
+    if message.text and message.text.strip() == '/cancel':
+        user_states.pop(admin_id, None)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="🔙 بازگشت" if lang == "fa" else "🔙 Back",
+                callback_data=f"admin_coupon_cat_discounts_{code}" if code else "admin_coupons_list"
+            )
+        ]])
+        await message.reply(t('cancelled_68c51319f6', lang), reply_markup=kb)
+        return
+
+    if not code or cat_id is None or code not in COUPONS:
+        user_states.pop(admin_id, None)
+        await message.reply(t('i18n_invalid_info', lang))
+        return
+
+    raw_text = _normalize_persian_digits((message.text or "").strip())
+    cat_discounts = COUPONS[code].setdefault('category_discounts', {})
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="📂 لیست دسته‌های کوپن" if lang == "fa" else "📂 Coupon Categories",
+            callback_data=f"admin_coupon_cat_discounts_{code}",
+            style="primary"
+        ),
+        InlineKeyboardButton(
+            text="🎟 جزئیات کوپن" if lang == "fa" else "🎟 Coupon Details",
+            callback_data=f"admin_coupon_manage_{code}"
+        )
+    ]])
+
+    if raw_text.lower() in ('-', 'clear', 'حذف', 'پاک', 'remove', 'default', 'پیش‌فرض'):
+        cat_discounts.pop(str(cat_id), None)
+        save_coupons(COUPONS)
+        user_states.pop(admin_id, None)
+        await message.reply(
+            "✅ تنظیم اختصاصی این دسته حذف شد و به درصد پیش‌فرض کوپن بازگشت."
+            if lang == "fa"
+            else "✅ Per-category override removed; reverted to coupon default.",
+            reply_markup=back_kb
+        )
+        return
+
+    try:
+        pct = int(raw_text.replace('%', '').replace('٪', '').strip())
+        if pct < 0 or pct > 100:
+            raise ValueError("out of range")
+    except ValueError:
+        await message.reply(
+            "❌ لطفاً یک عدد معتبر بین <code>0</code> تا <code>100</code> وارد کنید (یا <code>-</code> / <code>/cancel</code>)."
+            if lang == "fa"
+            else "❌ Please enter a valid number between <code>0</code> and <code>100</code> (or <code>-</code> / <code>/cancel</code>).",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    cat_discounts[str(cat_id)] = pct
+    save_coupons(COUPONS)
+    user_states.pop(admin_id, None)
+
+    cat_obj = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == cat_id), {})
+    cname = (cat_obj.get('name') if lang == "fa" else (cat_obj.get('name_en') or cat_obj.get('name'))) or f"#{cat_id}"
+    await message.reply(
+        f"✅ تخفیف کوپن <code>{html.escape(code)}</code> برای دسته «{safe_html(cname)}» روی <b>{pct}%</b> تنظیم شد."
+        if lang == "fa"
+        else f"✅ Coupon <code>{html.escape(code)}</code> discount for category «{safe_html(cname)}» set to <b>{pct}%</b>.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=back_kb
+    )
     
     
      
@@ -1130,7 +1494,9 @@ async def get_ready_packages_text(lang: str = "fa") -> tuple:
             for cat in categories:
                 status = t('i18n_ready_category_active', lang) if cat.get('is_active', True) else t('i18n_ready_category_inactive', lang)
                 pkg_count = len(cat.get('packages', []))
-                text += f"\n{cat.get('icon', '📦')} {safe_html(cat.get('name'))} - {status} ({pkg_count})\n"
+                cat_disc = int(cat.get('discount_percent') or 0)
+                disc_tag = f" · 🏷️ {cat_disc}%" if cat_disc > 0 else ""
+                text += f"\n{cat.get('icon', '📦')} {safe_html(cat.get('name'))} - {status} ({pkg_count}){disc_tag}\n"
                 for pkg in cat.get('packages', []):
                     pkg_status = "✅" if pkg.get('is_active', True) else "❌"
                     volume = pkg.get('volume', 0)
@@ -1187,7 +1553,9 @@ async def get_ready_packages_text(lang: str = "fa") -> tuple:
             for cat in categories:
                 status = t('i18n_ready_category_active', lang) if cat.get('is_active', True) else t('i18n_ready_category_inactive', lang)
                 pkg_count = len(cat.get('packages', []))
-                text += f"\n{cat.get('icon', '📦')} {safe_html(cat.get('name_en', cat.get('name')))} - {status} ({pkg_count})\n"
+                cat_disc = int(cat.get('discount_percent') or 0)
+                disc_tag = f" · 🏷️ {cat_disc}%" if cat_disc > 0 else ""
+                text += f"\n{cat.get('icon', '📦')} {safe_html(cat.get('name_en', cat.get('name')))} - {status} ({pkg_count}){disc_tag}\n"
                 for pkg in cat.get('packages', []):
                     pkg_status = "✅" if pkg.get('is_active', True) else "❌"
                     volume = pkg.get('volume', 0)
@@ -1670,6 +2038,8 @@ async def admin_category_add_process(message: Message):
                 raw_desc_en = ''
             category_data['description_en'] = raw_desc_en
             category_data['specs_photo'] = None
+            category_data['discount_percent'] = 0
+            category_data['button_style'] = 'primary'
             category_data['is_active'] = True
             category_data['inbound_id'] = None
             category_data['packages'] = []
@@ -1762,7 +2132,8 @@ async def admin_category_edit_field_start(callback: CallbackQuery):
         'name_en': (t('english_name_def200da34', lang)),
         'icon': (t('icon_3f64c6b19a', lang)),
         'description': (t('persian_description_89b952b8a1', lang)),
-        'description_en': (t('english_description_10a0f95218', lang))
+        'description_en': (t('english_description_10a0f95218', lang)),
+        'discount_percent': "🏷️ تخفیف دسته (%)" if lang == "fa" else "🏷️ Category Discount (%)",
     }
     
     current_value = category.get(field, '')
@@ -1775,14 +2146,31 @@ async def admin_category_edit_field_start(callback: CallbackQuery):
         'field': field
     }
     
-    safe_current = html.escape(str(current_value or ('ندارد' if lang == 'fa' else 'None')))
+    if field == 'discount_percent':
+        cur_pct = int(current_value or 0)
+        safe_current = f"{cur_pct}%"
+    else:
+        safe_current = html.escape(str(current_value or ('ندارد' if lang == 'fa' else 'None')))
     prompt = t(
         'b_edit_b_current_value_code_960c9fa333',
         lang,
         fa_parts=lambda: (f'{field_names.get(field, field)}', safe_current),
         en_parts=lambda: (f'{field_names.get(field, field)}', safe_current),
     )
-    if field in ('description', 'description_en'):
+    if field == 'discount_percent':
+        if lang == "en":
+            prompt += (
+                "\n\n💡 Enter a percentage from <code>0</code> to <code>99</code> "
+                "(applies automatically to all packages in this category without a coupon)."
+                "\n🗑 Send <code>0</code>, <code>-</code>, or <code>clear</code> to disable category discount."
+            )
+        else:
+            prompt += (
+                "\n\n💡 عدد درصد تخفیف را بین <code>0</code> تا <code>99</code> بفرستید "
+                "(بدون نیاز به کوپن، روی همه بسته‌های این دسته اعمال می‌شود)."
+                "\n🗑 برای حذف تخفیف دسته، عدد <code>0</code> یا <code>-</code> یا <code>حذف</code> را بفرستید."
+            )
+    elif field in ('description', 'description_en'):
         if lang == "en":
             prompt += (
                 "\n\n✨ <b>Telegram HTML Supported:</b> You can write HTML tags "
@@ -1919,6 +2307,107 @@ async def admin_category_specs_preview(callback: CallbackQuery):
     await safe_answer(callback)
 
 
+_CAT_STYLE_LABELS = {
+    None: ("⚪ پیش‌فرض", "⚪ Default"),
+    "primary": ("🔵 آبی", "🔵 Blue"),
+    "success": ("🟢 سبز", "🟢 Green"),
+    "danger": ("🔴 قرمز", "🔴 Red"),
+}
+
+
+@router.callback_query(F.data.startswith("admin_category_color_set_"))
+@admin_only
+async def admin_category_color_set(callback: CallbackQuery):
+    """ذخیره رنگ دکمه دسته‌بندی"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        parts = callback.data.split("_")
+        # admin_category_color_set_{category_id}_{style_token}
+        category_id = int(parts[4])
+        style_token = parts[5]
+    except (ValueError, IndexError):
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
+        return
+
+    style_val = None if style_token == "default" else style_token
+    if style_val not in _CAT_STYLE_LABELS:
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
+        return
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id), None)
+    if not category:
+        await callback.answer(t('category_not_found_04182ef028', lang), show_alert=True)
+        return
+
+    category['button_style'] = style_val
+    READY_PACKAGES['last_updated'] = now_tehran_iso()
+    configs_pool['ready_packages'] = READY_PACKAGES
+    schedule_save(2.0)
+
+    style_label = _CAT_STYLE_LABELS[style_val][0 if lang == "fa" else 1]
+    await callback.answer(
+        f"✅ رنگ دکمه دسته روی {style_label} تنظیم شد." if lang == "fa" else f"✅ Button color set to {style_label}.",
+        show_alert=True
+    )
+    edit_cb = callback.model_copy(update={'data': f"admin_category_edit_{category_id}"})
+    await admin_category_edit(edit_cb)
+
+
+@router.callback_query(F.data.startswith("admin_category_color_"))
+@admin_only
+async def admin_category_color_menu(callback: CallbackQuery):
+    """انتخاب رنگ دکمه برای دسته‌بندی"""
+    lang = get_user(callback.from_user.id).get('lang', 'fa')
+    try:
+        category_id = int(callback.data.split("_")[3])
+    except (ValueError, IndexError):
+        await callback.answer(t('i18n_process_error', lang), show_alert=True)
+        return
+
+    category = next((c for c in READY_PACKAGES.get('categories', []) if c.get('id') == category_id), None)
+    if not category:
+        await callback.answer(t('category_not_found_04182ef028', lang), show_alert=True)
+        return
+
+    current_style = category['button_style'] if 'button_style' in category else 'primary'
+    if current_style not in _CAT_STYLE_LABELS:
+        current_style = 'primary'
+    cname = (category.get('name') if lang == "fa" else (category.get('name_en') or category.get('name'))) or f"#{category_id}"
+    cur_label = _CAT_STYLE_LABELS[current_style][0 if lang == "fa" else 1]
+
+    text = (
+        f"🎨 <b>تغییر رنگ دکمه دسته «{safe_html(cname)}»</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"رنگ فعلی: <b>{cur_label}</b>\n\n"
+        f"رنگ مورد نظر را انتخاب کنید:"
+        if lang == "fa"
+        else f"🎨 <b>Button Color for Category «{safe_html(cname)}»</b>\n"
+             f"━━━━━━━━━━━━━━━━━━━━━━\n"
+             f"Current Color: <b>{cur_label}</b>\n\n"
+             f"Choose a color:"
+    )
+
+    buttons = []
+    for style_val, (fa_lbl, en_lbl) in _CAT_STYLE_LABELS.items():
+        token = "default" if style_val is None else style_val
+        lbl = fa_lbl if lang == "fa" else en_lbl
+        prefix = "✅ " if current_style == style_val else ""
+        btn_kwargs = {
+            "text": f"{prefix}{lbl}",
+            "callback_data": f"admin_category_color_set_{category_id}_{token}",
+        }
+        if style_val:
+            btn_kwargs["style"] = style_val
+        buttons.append([InlineKeyboardButton(**btn_kwargs)])
+
+    buttons.append([InlineKeyboardButton(
+        text=t('back_14968ad63f', lang),
+        callback_data=f"admin_category_edit_{category_id}"
+    )])
+    await safe_edit_message(callback, text, InlineKeyboardMarkup(inline_keyboard=buttons))
+    await safe_answer(callback)
+
+
 @router.callback_query(F.data.startswith("admin_category_edit_"))
 @admin_only
 async def admin_category_edit(callback: CallbackQuery):
@@ -1975,17 +2464,36 @@ async def admin_category_edit(callback: CallbackQuery):
     has_photo = bool(str(category.get('specs_photo') or '').strip())
     desc_fa_prev = _safe_desc_preview(category.get('description'), 'ندارد')
     desc_en_prev = _safe_desc_preview(category.get('description_en'), 'None')
+    try:
+        cat_discount = max(0, min(99, int(category.get('discount_percent') or 0)))
+    except (TypeError, ValueError):
+        cat_discount = 0
+    cur_style = category['button_style'] if 'button_style' in category else 'primary'
+    if cur_style not in _CAT_STYLE_LABELS:
+        cur_style = 'primary'
+    style_label = _CAT_STYLE_LABELS[cur_style][0 if lang == "fa" else 1]
+    discount_line = (
+        f"🏷️ تخفیف دسته: {f'🟢 {cat_discount}%' if cat_discount > 0 else '❌ ندارد (0%)'}\n"
+        if lang == "fa"
+        else f"🏷️ Category Discount: {f'🟢 {cat_discount}%' if cat_discount > 0 else '❌ None (0%)'}\n"
+    )
+    style_line = (
+        f"🎨 رنگ دکمه: {style_label}\n"
+        if lang == "fa"
+        else f"🎨 Button Color: {style_label}\n"
+    )
     photo_line = (
         f"🖼 تصویر مشخصات فنی: {'🟢 تنظیم شده' if has_photo else '❌ ندارد'}\n"
         if lang == "fa"
         else f"🖼 Specs Photo: {'🟢 Set' if has_photo else '❌ Not set'}\n"
     )
+    extra_block = f"{discount_line}{style_line}{photo_line}{inbound_info}"
     
     text = t(
         'b_edit_category_b_id_persian_c04ea7eccb',
         lang,
-        fa_parts=lambda: (f"{safe_html(category.get('name'))}", f"{category.get('id')}", f"{safe_html(category.get('name'))}", f"{safe_html(category.get('name_en'))}", f"{safe_html(category.get('icon', '📦'))}", desc_fa_prev, desc_en_prev, f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f"{photo_line}{inbound_info}"),
-        en_parts=lambda: (f"{safe_html(category.get('name_en') or category.get('name'))}", f"{category.get('id')}", f"{safe_html(category.get('name'))}", f"{safe_html(category.get('name_en'))}", f"{safe_html(category.get('icon', '📦'))}", desc_fa_prev, desc_en_prev, f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", f"{photo_line}{inbound_info}"),
+        fa_parts=lambda: (f"{safe_html(category.get('name'))}", f"{category.get('id')}", f"{safe_html(category.get('name'))}", f"{safe_html(category.get('name_en'))}", f"{safe_html(category.get('icon', '📦'))}", desc_fa_prev, desc_en_prev, f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", extra_block),
+        en_parts=lambda: (f"{safe_html(category.get('name_en') or category.get('name'))}", f"{category.get('id')}", f"{safe_html(category.get('name'))}", f"{safe_html(category.get('name_en'))}", f"{safe_html(category.get('icon', '📦'))}", desc_fa_prev, desc_en_prev, f'{status_text}', f"{category.get('order', 0)}", f"{len(category.get('packages', []))}", extra_block),
     )
     
     photo_row = [
@@ -2024,6 +2532,16 @@ async def admin_category_edit(callback: CallbackQuery):
             text=t('edit_english_description_3c5f3968b7', lang),
             callback_data=f"admin_category_edit_field_{category_id}_description_en"
         )],
+        [
+            InlineKeyboardButton(
+                text=f"🏷️ تخفیف دسته ({cat_discount}%)" if lang == "fa" else f"🏷️ Discount ({cat_discount}%)",
+                callback_data=f"admin_category_edit_field_{category_id}_discount_percent"
+            ),
+            InlineKeyboardButton(
+                text=f"🎨 رنگ دکمه ({style_label})" if lang == "fa" else f"🎨 Color ({style_label})",
+                callback_data=f"admin_category_color_{category_id}"
+            ),
+        ],
         photo_row,
         [InlineKeyboardButton(
             text="👁 پیش‌نمایش مشخصات فنی" if lang == "fa" else "👁 Preview Technical Specs",
@@ -3247,6 +3765,37 @@ async def admin_category_edit_field_save(message: Message):
             callback_data=f"admin_category_edit_{category_id}"
         )]
     ])
+
+    if field == 'discount_percent':
+        norm_input = _normalize_persian_digits(raw_input)
+        if norm_input.lower() in ('-', 'clear', 'حذف', 'پاک', 'remove'):
+            pct = 0
+        else:
+            try:
+                pct = int(norm_input.replace('%', '').replace('٪', '').strip())
+                if pct < 0 or pct > 99:
+                    raise ValueError("out of range")
+            except ValueError:
+                await message.reply(
+                    "❌ لطفاً یک عدد معتبر بین <code>0</code> تا <code>99</code> وارد کنید (یا <code>/cancel</code>)."
+                    if lang == "fa"
+                    else "❌ Please enter a valid percentage between <code>0</code> and <code>99</code> (or <code>/cancel</code>).",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+
+        category['discount_percent'] = pct
+        READY_PACKAGES['last_updated'] = now_tehran_iso()
+        configs_pool['ready_packages'] = READY_PACKAGES
+        schedule_save(2.0)
+        user_states.pop(admin_id, None)
+        msg_ok = (
+            (f"✅ تخفیف دسته روی <b>{pct}%</b> تنظیم شد." if pct > 0 else "🗑 تخفیف این دسته غیرفعال (۰٪) شد.")
+            if lang == "fa"
+            else (f"✅ Category discount set to <b>{pct}%</b>." if pct > 0 else "🗑 Category discount disabled (0%).")
+        )
+        await message.reply(msg_ok, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+        return
 
     if is_desc_field:
         if clearing:

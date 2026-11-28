@@ -1476,6 +1476,10 @@ async def pay_card(callback: CallbackQuery):
         final_price = full_state.get('price', 0)
         original_price = full_state.get('original_price', 0)
         discount_percent = full_state.get('discount_percent', 0)
+        discount_source = full_state.get(
+            'discount_source',
+            'coupon' if (coupon_applied and coupon_code and discount_percent > 0) else 'none'
+        )
         inbound_ids = full_state.get('inbound_ids', [])
         if not isinstance(inbound_ids, list):
             inbound_ids = [inbound_ids] if inbound_ids else []
@@ -1511,6 +1515,7 @@ async def pay_card(callback: CallbackQuery):
         original_price = calculate_price(vol, days)
         final_price = original_price
         discount_percent = 0
+        discount_source = 'none'
         order_type = "purchase"
         inbound_ids = []
         category_name = None
@@ -1518,13 +1523,14 @@ async def pay_card(callback: CallbackQuery):
         package_id = None
         ip_limit = 0
         if coupon_applied and coupon_code:
-            coupon = COUPONS.get(coupon_code)
-            if coupon and coupon.get('status') == 'active':
-                if user_id not in coupon.get('used_by', []):
-                    discount_percent = coupon_discount
-                    if discount_percent > 0:
-                        final_price = original_price - (original_price * discount_percent // 100)
-                        logger.info(f"🏷️ [pay_card] Discount {discount_percent}% applied: {original_price:,} → {final_price:,}")
+            is_valid, _reason = is_coupon_valid_for_user(coupon_code, user_id)
+            if is_valid:
+                coupon = COUPONS.get(coupon_code)
+                discount_percent = (coupon.get('discount', 0) if coupon else coupon_discount) or 0
+                if discount_percent > 0:
+                    final_price = max(0, original_price - (original_price * discount_percent // 100))
+                    discount_source = 'coupon'
+                    logger.info(f"🏷️ [pay_card] Discount {discount_percent}% applied: {original_price:,} → {final_price:,}")
         
         volume_display = (t('unlimited_b72dd6e126', lang)) if vol == 0 else f"{vol} GB"
         logger.info(f"🛒 [pay_card] Custom purchase: {vol}GB/{days}days - price: {final_price:,}tomans")
@@ -1566,7 +1572,10 @@ async def pay_card(callback: CallbackQuery):
                             status='approved',
                             approved_date=now_tehran().strftime("%Y-%m-%d %H:%M:%S"),
                             payment_method='free_coupon_extend',
-                            payment_label='🎁 رایگان (تمدید)',
+                            payment_label='🎁 رایگان (تخفیف دسته)' if discount_source == 'category' else '🎁 رایگان (تمدید)',
+                            original_price=original_price,
+                            discount_percent=discount_percent,
+                            discount_source=discount_source,
                             parent_order_id=extend_order_id,
                             is_extend=True)
                 if is_ready_package:
@@ -1577,7 +1586,8 @@ async def pay_card(callback: CallbackQuery):
                                 package_id=package_id,
                                 inbound_id=inbound_ids)
                 
-                consume_coupon(user_id)
+                if discount_source == 'coupon':
+                    consume_coupon(user_id)
                 if user_id in user_states:
                     user_states[user_id].pop('is_extend', None)
                     user_states[user_id].pop('extend_order_id', None)
@@ -1646,7 +1656,10 @@ async def pay_card(callback: CallbackQuery):
                     status='approved',
                     approved_date=now_tehran().strftime("%Y-%m-%d %H:%M:%S"),
                     payment_method='free_coupon',
-                    payment_label='🎁 رایگان (کوپن)')
+                    payment_label='🎁 رایگان (تخفیف دسته)' if discount_source == 'category' else '🎁 رایگان (کوپن)',
+                    original_price=original_price,
+                    discount_percent=discount_percent,
+                    discount_source=discount_source)
         
         if is_ready_package:
             update_order(order_id, 
@@ -1670,7 +1683,8 @@ async def pay_card(callback: CallbackQuery):
         if sub_link:
             update_order(order_id, config_link=sub_link, sub_link=sub_link, email=email)
             record_purchase(user_id, 0)
-            consume_coupon(user_id)
+            if discount_source == 'coupon':
+                consume_coupon(user_id)
             
             await send_config_with_qr_option(user_id, order_id, vol, days, 0, sub_link, lang)
             
@@ -1735,6 +1749,9 @@ async def pay_card(callback: CallbackQuery):
                     category_name_en=category_name_en,
                     package_id=package_id,
                     inbound_id=inbound_ids,
+                    original_price=original_price,
+                    discount_percent=discount_percent,
+                    discount_source=discount_source,
                     base_price=base_order_price,
                     payable_amount=payable_amount,
                     discount_offset=discount_offset,
@@ -1745,6 +1762,9 @@ async def pay_card(callback: CallbackQuery):
                     payment_label='💳 کارت به کارت')
     else:
         update_order(order_id,
+                    original_price=original_price,
+                    discount_percent=discount_percent,
+                    discount_source=discount_source,
                     base_price=base_order_price,
                     payable_amount=payable_amount,
                     discount_offset=discount_offset,
@@ -1782,7 +1802,7 @@ async def pay_card(callback: CallbackQuery):
     text = build_receipt_text(order, lang, mode="card")
     card_num_copy = BANK_CARD_NUMBER.replace(' ', '').replace('-', '')
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    kb_rows = [
         [InlineKeyboardButton(
             text=f"📋 {t('copy_amount_in_rial_2426b59317', lang)} ({final_price * 10:,})",
             copy_text=CopyTextButton(text=str(final_price * 10))
@@ -1791,12 +1811,19 @@ async def pay_card(callback: CallbackQuery):
             text=f"💳 {t('copy_card_number_0a73534ca5', lang)}",
             copy_text=CopyTextButton(text=card_num_copy)
         )],
-        [InlineKeyboardButton(
-            text=f"❌ {t('cancel_payment_77ac7fd08e', lang)}",
-            callback_data=f"cancel_order_{order_id}",
-            style="danger"
-        )]
-    ])
+    ]
+    if sms_payment_manager.is_enabled():
+        kb_rows.append([InlineKeyboardButton(
+            text="✅ پرداخت کردم بررسی کن" if lang == "fa" else "✅ I Paid, Verify Now",
+            callback_data=f"verify_sms_pay_{order_id}",
+            style="success"
+        )])
+    kb_rows.append([InlineKeyboardButton(
+        text=f"❌ {t('cancel_payment_77ac7fd08e', lang)}",
+        callback_data=f"cancel_order_{order_id}",
+        style="danger"
+    )])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     
     payment_message = await callback.message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
     update_order(order_id, payment_message_id=payment_message.message_id)

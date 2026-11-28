@@ -80,6 +80,7 @@ class AdminStates(StatesGroup):
     awaiting_package_add = State()
     awaiting_package_edit = State()
     awaiting_coupon_create = State()
+    awaiting_coupon_cat_discount = State()
     awaiting_shop_message = State()
     awaiting_user_search = State()
     awaiting_channel_id = State()
@@ -133,6 +134,7 @@ STATE_MAP: Dict[str, State] = {
     "awaiting_package_add": AdminStates.awaiting_package_add,
     "awaiting_package_edit": AdminStates.awaiting_package_edit,
     "awaiting_coupon_create": AdminStates.awaiting_coupon_create,
+    "awaiting_coupon_cat_discount": AdminStates.awaiting_coupon_cat_discount,
     "awaiting_shop_message": AdminStates.awaiting_shop_message,
     "awaiting_user_search": AdminStates.awaiting_user_search,
     "awaiting_channel_id": AdminStates.awaiting_channel_id,

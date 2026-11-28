@@ -806,6 +806,158 @@ def debug_coupon_state(user_id: int, location: str):
         logger.info(f"🔍 [{location}] Coupon in database: status={coupon.get('status')}, used_by={coupon.get('used_by', [])}")
 
 
+def get_coupon_discount_for_category(coupon: Optional[dict], category_id=None) -> int:
+    """Return effective discount percentage (0-100) for a coupon on a specific category."""
+    if not isinstance(coupon, dict):
+        return 0
+    try:
+        base_discount = max(0, min(100, int(coupon.get('discount', 0) or 0)))
+    except (TypeError, ValueError):
+        base_discount = 0
+    if category_id is not None:
+        cat_discounts = coupon.get('category_discounts') or {}
+        if isinstance(cat_discounts, dict):
+            cat_key = str(category_id)
+            if cat_key in cat_discounts:
+                try:
+                    return max(0, min(100, int(cat_discounts[cat_key])))
+                except (TypeError, ValueError):
+                    pass
+    return base_discount
+
+
+def format_coupon_category_discounts_lines(
+    coupon: Optional[dict],
+    categories: Optional[List[dict]],
+    lang: str = "fa",
+) -> str:
+    """Format per-category discount overrides configured on a coupon."""
+    if not isinstance(coupon, dict):
+        return ""
+    cat_discounts = coupon.get('category_discounts') or {}
+    if not isinstance(cat_discounts, dict) or not cat_discounts:
+        return ""
+    cat_by_id = {str(c.get('id')): c for c in (categories or []) if isinstance(c, dict)}
+    lines = []
+    for cid_str, pct in cat_discounts.items():
+        cat = cat_by_id.get(str(cid_str))
+        if cat:
+            icon = cat.get('icon', '📦')
+            name = (cat.get('name') if lang == "fa" else (cat.get('name_en') or cat.get('name'))) or f"#{cid_str}"
+            label = f"{icon} {name}"
+        else:
+            label = f"📦 دسته #{cid_str}" if lang == "fa" else f"📦 Category #{cid_str}"
+        lines.append(f"  • {label}: <b>{pct}%</b>")
+    return "\n".join(lines)
+
+
+def resolve_category_package_discount(
+    user_id: int,
+    category: Optional[dict],
+    user_state: Optional[dict] = None,
+) -> dict:
+    """
+    Resolve effective discount and banner source for a user purchasing from `category`.
+
+    Precedence:
+    1. Valid active `admin_special` coupon overrides category discounts completely.
+    2. Otherwise, category `discount_percent > 0` applies and blocks regular coupons.
+    3. Otherwise, valid active regular coupon applies (using per-category override or base %).
+    """
+    state = user_state if isinstance(user_state, dict) else user_states.get(user_id, {})
+    cat_id = category.get('id') if isinstance(category, dict) else None
+    try:
+        cat_discount = max(0, min(99, int((category or {}).get('discount_percent') or 0)))
+    except (TypeError, ValueError):
+        cat_discount = 0
+
+    coupon_code = state.get('coupon_code')
+    coupon_applied = bool(state.get('coupon_applied', False))
+
+    if not coupon_applied or not coupon_code:
+        loaded = load_coupon_from_user_db(user_id)
+        if loaded.get('coupon_applied') and loaded.get('coupon_code'):
+            coupon_code = loaded.get('coupon_code')
+            coupon_applied = True
+            if user_id not in user_states:
+                user_states[user_id] = {}
+            user_states[user_id]['coupon_code'] = coupon_code
+            user_states[user_id]['coupon_discount'] = loaded.get('coupon_discount', 0)
+            user_states[user_id]['coupon_applied'] = True
+
+    coupon_valid = False
+    coupon_obj = None
+    coupon_type = None
+    coupon_effective_discount = 0
+
+    if coupon_applied and coupon_code:
+        is_valid, _reason = is_coupon_valid_for_user(coupon_code, user_id)
+        if is_valid:
+            coupon_obj = COUPONS.get(coupon_code)
+            if coupon_obj:
+                coupon_valid = True
+                coupon_type = coupon_obj.get('coupon_type', 'normal')
+                coupon_effective_discount = get_coupon_discount_for_category(coupon_obj, cat_id)
+        else:
+            if user_id in user_states:
+                user_states[user_id].pop('coupon_code', None)
+                user_states[user_id].pop('coupon_discount', None)
+                user_states[user_id].pop('coupon_applied', None)
+            clear_coupon_from_user_db(user_id)
+            coupon_code = None
+
+    if coupon_valid and coupon_type == 'admin_special':
+        return {
+            'discount_percent': coupon_effective_discount,
+            'discount_source': 'coupon' if coupon_effective_discount > 0 else 'none',
+            'banner_mode': 'coupon',
+            'coupon_valid': True,
+            'coupon_code': coupon_code,
+            'coupon_type': 'admin_special',
+            'coupon_effective_discount': coupon_effective_discount,
+            'category_discount': cat_discount,
+            'is_admin_coupon': True,
+        }
+
+    if cat_discount > 0:
+        return {
+            'discount_percent': cat_discount,
+            'discount_source': 'category',
+            'banner_mode': 'category',
+            'coupon_valid': coupon_valid,
+            'coupon_code': coupon_code if coupon_valid else None,
+            'coupon_type': coupon_type if coupon_valid else None,
+            'coupon_effective_discount': coupon_effective_discount,
+            'category_discount': cat_discount,
+            'is_admin_coupon': False,
+        }
+
+    if coupon_valid:
+        return {
+            'discount_percent': coupon_effective_discount,
+            'discount_source': 'coupon' if coupon_effective_discount > 0 else 'none',
+            'banner_mode': 'coupon',
+            'coupon_valid': True,
+            'coupon_code': coupon_code,
+            'coupon_type': coupon_type or 'normal',
+            'coupon_effective_discount': coupon_effective_discount,
+            'category_discount': 0,
+            'is_admin_coupon': False,
+        }
+
+    return {
+        'discount_percent': 0,
+        'discount_source': 'none',
+        'banner_mode': 'none',
+        'coupon_valid': False,
+        'coupon_code': None,
+        'coupon_type': None,
+        'coupon_effective_discount': 0,
+        'category_discount': 0,
+        'is_admin_coupon': False,
+    }
+
+
 # ═══════════════════════════════════════════════════════════
 # User Updates, Purchases & Balance
 # ═══════════════════════════════════════════════════════════
